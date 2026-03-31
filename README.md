@@ -4,15 +4,6 @@ Extension for [pyRevit](https://github.com/eirannejad/pyRevit) — tools for ann
 
 ## Installation
 
-* Install [pyRevit](https://github.com/eirannejad/pyRevit) 4.8+
-* Clone this repo **as** `T3LabLite.extension` into your pyRevit extensions folder:
-  ```
-  git clone https://github.com/thanhtranarch/T3LabLite "%APPDATA%\pyRevit\Extensions\T3LabLite.extension"
-  ```
-  Or download the ZIP, extract, rename the folder to `T3LabLite.extension`, and place it in `%APPDATA%\pyRevit\Extensions\`
-* Reload pyRevit
-
-> **Note:** The repository root **is** the extension folder — there is no wrapper subdirectory.
 
 ## Tools
 

@@ -1,6 +1,6 @@
 # 🛠 T3Lab Lite 🛠
 
-**T3Lab Lite** is a FREE pyRevit extension built for Revit users who want to work faster.
+**T3Lab Lite** is a pyRevit extension built for Revit users who want to work faster.
 It covers annotation management, batch export, family tools, and an AI assistant that understands Vietnamese.
 
 ---

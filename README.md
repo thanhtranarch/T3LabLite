@@ -1,18 +1,19 @@
 # 🛠 T3Lab Lite 🛠
 
-A FREE pyRevit extension with tools for annotation, batch export, project utilities, and AI-assisted automation inside Autodesk Revit.
+**T3Lab Lite** is a FREE pyRevit extension built for Revit users who want to work faster.
+It covers annotation management, batch export, family tools, and an AI assistant that understands Vietnamese.
 
 ---
 
 ### 📦 Revit Versions 📦
 
-These tools are mainly developed for Revit 2019-2024.
+Developed and tested on Revit 2019 – 2024.
 
 ---
 
 #### 💠 Installation 💠
 
-T3Lab Lite is a pyRevit extension.
+T3Lab Lite is installed as a pyRevit extension.
 
     ▶ Install pyRevit
 
@@ -20,41 +21,44 @@ T3Lab Lite is a pyRevit extension.
 
     ▶ Add T3Lab Lite
 
-    ▶ Click on Install
+    ▶ Click Install
 
 ---
 
 ### 🧰 Tools
 
 #### Annotation Manager
-Unified window to find, delete, and rename Dimensions and Text Notes.
+Find, delete, and rename Dimensions and Text Notes from a single window.
 
 #### Dim Text / Upper Dim Text
-Edit and uppercase dimension text overrides on selected dimensions.
+Edit dimension text overrides and convert them to uppercase in one click.
 
 #### Grids
-Save and restore grid head/tail positions per view.
+Save and restore grid head/tail positions per view — useful before sharing or printing.
 
 #### Reset Overrides
-Resets all by-element graphic overrides and linework on selected elements in the active view.
+Remove all by-element graphic overrides and linework on selected elements in the active view.
 
 #### BatchOut
-Batch export sheets to PDF, DWG, DWF, DGN, IFC, NWD, and image formats.
+Export sheets to PDF, DWG, DWF, DGN, IFC, NWD, and image formats in batch.
+Supports combined PDF, custom naming patterns, sheet ordering, and revision tracking.
 
 #### Load Family
 Browse and load Revit families from local folders with category filtering and search.
 
 #### JSON to Family
-Generate parametric Revit families from a JSON schema. Must be run inside an open Family document.
+Build parametric Revit families from a JSON schema — parameters, reference planes, and geometry (Extrusion, Sweep, Revolve, Blend, Void). Must be run inside an open Family document.
 
 #### Property Line
 Create property lines from Lightbox parcel survey data.
 
 #### Workset
-Assign worksets to selected elements.
+Assign worksets to selected elements quickly.
 
 #### T3Lab Assistant
-Natural-language AI assistant — type commands in Vietnamese or English to open and control T3Lab tools. Supports Claude API or local Ollama for offline inference.
+An AI assistant built into Revit. Type commands in **Vietnamese or English** to open and control T3Lab tools.
+Works with the Claude API (your own Anthropic key) or local Ollama for fully offline use.
+Includes a local MCP server for AI-to-Revit communication.
 
 ---
 
@@ -62,8 +66,10 @@ Natural-language AI assistant — type commands in Vietnamese or English to open
 
 All connections are **user-initiated**. Nothing runs on extension load.
 
-* **T3Lab Assistant** → `api.anthropic.com` — only when the user sends a message with a saved Claude API key
-* **Load Family (Cloud)** → author's Vercel deployment — only when the user opens the cloud catalogue
-* **API Learner** → `revitapidocs.com` — reads public API docs to keep BatchOut compatible across Revit versions (30-day cache)
-* **Ollama** → `localhost:11434` — local machine only, never external
-* **MCP Server** → `localhost:8080` — only while MCP is running
+| Component | Destination | When |
+|---|---|---|
+| T3Lab Assistant | `api.anthropic.com` | User sends a message with a Claude API key saved |
+| Load Family (Cloud) | Author's Vercel deployment | User opens the cloud family catalogue |
+| API Learner | `revitapidocs.com` | Refreshes BatchOut API data (30-day cache, Fridays only) |
+| Ollama | `localhost:11434` | Local inference only — never external |
+| MCP Server | `localhost:8080` | Only while MCP is running |

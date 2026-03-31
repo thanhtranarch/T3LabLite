@@ -1,6 +1,7 @@
-# T3Lab Lite — pyRevit Extension for Autodesk Revit
+# T3Lab Lite
 
-A lightweight IronPython/pyRevit extension that adds productivity tools for annotation, export, project management, and AI-assisted automation directly inside Autodesk Revit.
+A pyRevit extension for Autodesk Revit that adds tools for annotation management,
+batch export, project utilities, and AI-assisted automation.
 
 **Author:** Tran Tien Thanh
 **Contact:** trantienthanh909@gmail.com
@@ -17,52 +18,40 @@ A lightweight IronPython/pyRevit extension that adds productivity tools for anno
 
 ## Installation
 
-1. Install [pyRevit](https://github.com/eirannejad/pyRevit)
-2. Clone this repository directly into your pyRevit extensions directory, naming the folder `T3LabLite.extension`:
-   ```
-   git clone https://github.com/thanhtranarch/T3Lab-Lite_RevitTools "%APPDATA%\pyRevit\Extensions\T3LabLite.extension"
-   ```
-   Or download the ZIP, extract it, and rename/move the folder to:
-   ```
-   %APPDATA%\pyRevit\Extensions\T3LabLite.extension
-   ```
-3. Reload pyRevit (`pyRevit > Reload`)
+The repository root **is** the extension folder. pyRevit requires the folder to be
+named `T3LabLite.extension`.
+
+**Option A — git clone (recommended)**
+
+```
+git clone https://github.com/thanhtranarch/T3LabLite "%APPDATA%\pyRevit\Extensions\T3LabLite.extension"
+```
+
+**Option B — ZIP download**
+
+1. Download and extract the ZIP
+2. Rename the extracted folder to `T3LabLite.extension`
+3. Move it to `%APPDATA%\pyRevit\Extensions\`
+
+Then reload pyRevit: **pyRevit tab → Reload**.
 
 ---
 
 ## Tools
 
-All tools are accessible from the **T3Lab Lite** tab in the Revit ribbon.
+All tools appear in the **T3LabLite** ribbon tab.
 
 ### Annotation Panel
 
-#### Dimension
 | Tool | Description |
 |------|-------------|
-| **Find Dim** | Find and select dimensions by type or value in the active view |
-| **Remove Dim** | Remove selected or all dimensions from the active view |
-| **Rename Dim** | Rename dimension types using find and replace |
-
-#### Text
-| Tool | Description |
-|------|-------------|
+| **Annotation Manager** | Unified window to find, delete, and rename Dimensions and Text Notes. Dimension tab: find by type keyword, delete instances, auto-rename types. Text Note tab: find by content, delete types, auto-rename types. |
 | **Dim Text** | Edit dimension text overrides on selected dimensions |
 | **Upper Dim Text** | Convert dimension text overrides to uppercase |
-| **Save Grids** | Save current grid head and tail positions for later restoration |
-| **Restore Grids** | Restore selected grid heads and tails to their saved positions |
-| **Restore All Grids** | Restore all grid heads and tails to their saved positions |
-
-#### Text Note
-| Tool | Description |
-|------|-------------|
-| **Find Text** | Find and select text notes by content in the active view |
-| **Remove Text** | Remove selected or filtered text notes from the active view |
-| **Rename Text** | Rename text note types using find and replace |
-
-#### Other
-| Tool | Description |
-|------|-------------|
-| **Reset Overrides** | Reset all graphic overrides on selected elements in the active view |
+| **Save Grids** | Save current grid head/tail positions for later restoration |
+| **Restore Grids** | Restore selected grids to their saved positions |
+| **Restore All Grids** | Restore all grids to their saved positions |
+| **Reset Overrides** | Reset all by-element graphic overrides and linework on selected elements in the active view |
 
 ---
 
@@ -70,7 +59,7 @@ All tools are accessible from the **T3Lab Lite** tab in the Revit ribbon.
 
 | Tool | Description |
 |------|-------------|
-| **Batch Out** | Batch export sheets to PDF, DWG, DWF, DGN, IFC, NWD and image formats with sheet filtering and bilingual (Vietnamese/English) support |
+| **BatchOut** | Batch export sheets to PDF, DWG, DWF, DGN, IFC, NWD, and image formats. Supports combined PDF, sheet ordering, custom naming patterns, and revision tracking. |
 
 ---
 
@@ -78,10 +67,10 @@ All tools are accessible from the **T3Lab Lite** tab in the Revit ribbon.
 
 | Tool | Description |
 |------|-------------|
-| **Load Family** | Load Revit families from local folders with category-based browsing and search (cloud feature currently disabled) |
-| **Para Sync** | Synchronize parameter values between selected elements |
-| **Property Line** | Create and manage property lines from survey data |
-| **Workset** | Manage and assign worksets to selected elements |
+| **Load Family** | Browse and load Revit families from local folders with category filtering and search. Optional cloud catalogue (see Network Traffic). |
+| **JSON to Family** | Generate parametric Revit families from a JSON schema — creates parameters, reference planes, and geometry (Extrusion, Sweep, Revolve, Blend, Void). Must be run inside an open Family document. |
+| **Property Line** | Create property lines from Lightbox parcel data |
+| **Workset** | Assign worksets to selected elements |
 
 ---
 
@@ -89,75 +78,62 @@ All tools are accessible from the **T3Lab Lite** tab in the Revit ribbon.
 
 | Tool | Description |
 |------|-------------|
-| **T3Lab Assistant** | Natural language AI assistant — type commands in Vietnamese or English to control Revit tools |
-| **Start MCP** | Start the local MCP server for AI-to-Revit communication |
-| **Stop MCP** | Stop the running MCP server |
-| **Settings** | Configure API keys and AI backend (Claude API or local Ollama) |
+| **T3Lab Assistant** | Natural-language assistant — type commands in Vietnamese or English to open and control T3Lab tools. Includes MCP server controls (Start / Stop) and a Settings button to configure the AI backend. |
 
-The AI assistant supports two backends:
-- **Claude API** — requires an Anthropic API key
-- **Local LLM** — uses [Ollama](https://ollama.com/) for fully offline inference (recommended models: `qwen2.5`, `llama3.2`, `phi3:mini`)
+Two AI backends are supported (configured via Settings inside the assistant):
+
+- **Claude API** — sends messages to `api.anthropic.com` using your own Anthropic API key
+- **Local LLM** — uses [Ollama](https://ollama.com/) running on `localhost:11434`, fully offline
 
 ---
 
 ## Project Structure
 
-The repository root **is** the extension folder. Clone/copy it with the name
-`T3LabLite.extension` and pyRevit will pick it up automatically.
+The repository root is the extension folder itself:
 
 ```
-T3LabLite.extension/   ← this repo's root
-├── extension.json           # pyRevit extension manifest
-├── T3LabLite.tab/           # Ribbon tab with all tools
+T3LabLite.extension/          ← this repository's root
+├── extension.json            # pyRevit extension manifest
+├── T3LabLite.tab/            # Ribbon tab definition
 │   ├── Annotation.panel/
 │   ├── Export.panel/
 │   ├── Project.panel/
 │   └── AI Connection.panel/
-├── checks/                  # Model quality check scripts
-├── commands/                # Standalone command scripts
-└── lib/                     # Shared libraries
-    ├── GUI/                 # WPF dialogs (XAML + Python)
-    ├── Renaming/            # Find & replace base classes
-    ├── Selection/           # Element selection utilities
-    ├── Snippets/            # Reusable API code snippets
-    ├── config/              # Settings management
-    ├── core/                # MCP server & tool registry
-    └── ui/                  # Button state & settings UI
+├── checks/                   # Model quality check scripts
+├── commands/                 # Standalone command scripts
+└── lib/                      # Shared Python libraries
+    ├── GUI/                  # WPF dialogs (.xaml + .py)
+    ├── Renaming/             # Find & replace base classes
+    ├── Selection/            # Element selection utilities
+    ├── Snippets/             # Reusable Revit API snippets
+    ├── config/               # Settings and learned patterns
+    ├── core/                 # Local MCP server
+    └── ui/                   # Button state and settings dialog
 ```
 
 ---
 
 ## Network Traffic
 
-All network activity is **opt-in or user-initiated**. Nothing phones home automatically.
+All outbound connections are **user-initiated or opt-in**. Nothing runs automatically
+on extension load.
 
-| Location | Destination | When / Condition |
-|---|---|---|
-| `lib/t3lab_assistant.py:362` | `https://api.anthropic.com/v1/messages` | Only when the user sends a message in T3Lab Assistant **and** has entered a Claude API key in Settings. Uses the user's own API key. |
-| `lib/GUI/FamilyLoaderCloudDialog.py:84–123` | `https://t3stu-dojk2t66r-tien-thanh-trans-projects.vercel.app/api/families` | Only when the user opens the **Load Family (Cloud)** dialog. Fetches a family catalogue JSON. Includes a hardcoded Vercel deployment-protection bypass token. |
-| `lib/GUI/FamilyLoaderCloudDialog.py:275–305` | Same Vercel deployment | Only when the user selects and loads a family from the cloud catalogue. Downloads the `.rfa` file to a local temp folder. |
-| `lib/local_llm.py:66` | `http://localhost:11434` | Only when Ollama backend is selected in Settings. **Local-only** — never leaves the machine. |
-| `lib/core/server.py:452` | Listens on `localhost:{port}` (default 8080) | Only when the user clicks **Start MCP**. Accepts connections from localhost only. `Access-Control-Allow-Origin: *` is set, meaning any local browser tab can reach it. |
+| File | Destination | Trigger |
+|------|-------------|---------|
+| `lib/t3lab_assistant.py:362` | `https://api.anthropic.com/v1/messages` | User sends a message in T3Lab Assistant **and** has saved a Claude API key in Settings. The user's own key is used; no data is stored by T3Lab. |
+| `lib/GUI/FamilyLoaderCloudDialog.py:84` | `https://t3stu-...vercel.app/api/families` | User opens the **Load Family (Cloud)** dialog. Fetches a family catalogue JSON from the author's Vercel deployment. A Vercel deployment-protection bypass token is hardcoded in the source at line 90. |
+| `lib/GUI/FamilyLoaderCloudDialog.py:275` | Same Vercel deployment | User selects and loads a cloud family. Downloads the `.rfa` file to a local temp folder. |
+| `lib/api_learner.py:64` | `https://www.revitapidocs.com/{version}/` | When BatchOut's SmartAPIAdapter refreshes its API compatibility cache (30-day TTL). Reads public documentation pages; no user data is sent. |
+| `lib/api_updater.py:63` | `https://www.revitapidocs.com` | Same cache refresh mechanism, also scheduled on Fridays. |
+| `lib/local_llm.py:66` | `http://localhost:11434` | Ollama backend only — **local machine only**, never leaves the host. |
+| `lib/core/server.py:452` | Listens on `localhost:{port}` (default 8080) | User clicks **Start MCP** inside T3Lab Assistant. Binds to localhost only. Note: `Access-Control-Allow-Origin: *` is set, so any local browser tab can connect to it while the server is running. |
 
-No analytics, telemetry, or automatic update checks are present in the codebase.
-
----
-
-## Known Issues
-
-### pyRevit Reload Error
-
-If you encounter an `IOError` when reloading pyRevit (file locking issue):
-
-```powershell
-# Run as Administrator
-PowerShell -ExecutionPolicy Bypass -File scripts/fix_pyrevit_reload.ps1
-```
-
-See [`PYREVIT_RELOAD_FIX.md`](PYREVIT_RELOAD_FIX.md) for details.
+No telemetry, analytics, or automatic update checks run on startup.
 
 ---
 
 ## License
 
-For other issues, please open an issue on GitHub.
+MIT License — see [LICENSE](LICENSE) for details.
+
+For bugs or feature requests, please [open an issue](https://github.com/thanhtranarch/T3LabLite/issues).

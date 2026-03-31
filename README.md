@@ -63,8 +63,3 @@ All connections are **user-initiated**. Nothing runs on extension load.
 * `lib/api_learner.py` + `lib/api_updater.py` → `https://www.revitapidocs.com` — reads public API docs to keep BatchOut's export calls compatible across Revit versions (30-day local cache, refreshes on Fridays)
 * `lib/local_llm.py` → `http://localhost:11434` — Ollama only, local machine, never external
 * `lib/core/server.py` → listens on `localhost:8080` — only while MCP is running; note `Access-Control-Allow-Origin: *` is set
-
-## Credits
-
-* [Ehsan Iran-Nejad](https://github.com/eirannejad) for pyRevit
-* Reset Overrides script based on original by Daria Ivanciucova

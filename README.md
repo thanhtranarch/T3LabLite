@@ -1,17 +1,11 @@
-# 🛠 T3Lab Lite 🛠
+# T3Lab Lite
 
 **T3Lab Lite** is a pyRevit extension built for Revit users who want to work faster.
 It covers annotation management, batch export, family tools, and an AI assistant that understands Vietnamese.
 
 ---
 
-### 📦 Revit Versions 📦
-
-Developed and tested on Revit 2019 – 2024.
-
----
-
-#### 💠 Installation 💠
+#### Installation
 
 T3Lab Lite is installed as a pyRevit extension.
 
@@ -25,7 +19,7 @@ T3Lab Lite is installed as a pyRevit extension.
 
 ---
 
-### 🧰 Tools
+### Tools
 
 #### Annotation Manager
 Find, delete, and rename Dimensions and Text Notes from a single window.
@@ -62,7 +56,7 @@ Includes a local MCP server for AI-to-Revit communication.
 
 ---
 
-### 🌐 Network Traffic
+### Network Traffic
 
 All connections are **user-initiated**. Nothing runs on extension load.
 

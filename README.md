@@ -18,10 +18,15 @@ A lightweight IronPython/pyRevit extension that adds productivity tools for anno
 ## Installation
 
 1. Install [pyRevit](https://github.com/eirannejad/pyRevit)
-2. Clone or download this repository
-3. Copy the `T3Lab_Lite.extension` folder to your pyRevit extensions directory
-   - Default path: `%APPDATA%\pyRevit\Extensions\`
-4. Reload pyRevit (`pyRevit > Reload`)
+2. Clone this repository directly into your pyRevit extensions directory, naming the folder `T3LabLite.extension`:
+   ```
+   git clone https://github.com/thanhtranarch/T3Lab-Lite_RevitTools "%APPDATA%\pyRevit\Extensions\T3LabLite.extension"
+   ```
+   Or download the ZIP, extract it, and rename/move the folder to:
+   ```
+   %APPDATA%\pyRevit\Extensions\T3LabLite.extension
+   ```
+3. Reload pyRevit (`pyRevit > Reload`)
 
 ---
 
@@ -97,9 +102,13 @@ The AI assistant supports two backends:
 
 ## Project Structure
 
+The repository root **is** the extension folder. Clone/copy it with the name
+`T3LabLite.extension` and pyRevit will pick it up automatically.
+
 ```
-T3Lab_Lite.extension/
-├── T3Lab_Lite.tab/          # Ribbon tab with all tools
+T3LabLite.extension/   ← this repo's root
+├── extension.json           # pyRevit extension manifest
+├── T3LabLite.tab/           # Ribbon tab with all tools
 │   ├── Annotation.panel/
 │   ├── Export.panel/
 │   ├── Project.panel/
@@ -115,6 +124,22 @@ T3Lab_Lite.extension/
     ├── core/                # MCP server & tool registry
     └── ui/                  # Button state & settings UI
 ```
+
+---
+
+## Network Traffic
+
+All network activity is **opt-in or user-initiated**. Nothing phones home automatically.
+
+| Location | Destination | When / Condition |
+|---|---|---|
+| `lib/t3lab_assistant.py:362` | `https://api.anthropic.com/v1/messages` | Only when the user sends a message in T3Lab Assistant **and** has entered a Claude API key in Settings. Uses the user's own API key. |
+| `lib/GUI/FamilyLoaderCloudDialog.py:84–123` | `https://t3stu-dojk2t66r-tien-thanh-trans-projects.vercel.app/api/families` | Only when the user opens the **Load Family (Cloud)** dialog. Fetches a family catalogue JSON. Includes a hardcoded Vercel deployment-protection bypass token. |
+| `lib/GUI/FamilyLoaderCloudDialog.py:275–305` | Same Vercel deployment | Only when the user selects and loads a family from the cloud catalogue. Downloads the `.rfa` file to a local temp folder. |
+| `lib/local_llm.py:66` | `http://localhost:11434` | Only when Ollama backend is selected in Settings. **Local-only** — never leaves the machine. |
+| `lib/core/server.py:452` | Listens on `localhost:{port}` (default 8080) | Only when the user clicks **Start MCP**. Accepts connections from localhost only. `Access-Control-Allow-Origin: *` is set, meaning any local browser tab can reach it. |
+
+No analytics, telemetry, or automatic update checks are present in the codebase.
 
 ---
 

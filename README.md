@@ -67,9 +67,3 @@ All connections are **user-initiated**. Nothing runs on extension load.
 * **API Learner** → `revitapidocs.com` — reads public API docs to keep BatchOut compatible across Revit versions (30-day cache)
 * **Ollama** → `localhost:11434` — local machine only, never external
 * **MCP Server** → `localhost:8080` — only while MCP is running
-
----
-
-### 🐛 Bugs
-
-If you come across any bugs or error messages, please open an Issue on GitHub so I can have a look and fix it.

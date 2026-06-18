@@ -98,13 +98,13 @@ class ParameterSelectorDialog(Window):
         self.Width = 700
         self.Height = 550
         self.WindowStartupLocation = WindowStartupLocation.CenterScreen
-        self.WindowStyle = WindowStyle.None
+        self.WindowStyle = getattr(WindowStyle, 'None')
         self.AllowsTransparency = True
         self.Background = System.Windows.Media.SolidColorBrush(
-            System.Windows.Media.Color.FromArgb(255, 250, 250, 250))
+            System.Windows.Media.Color.FromArgb(0, 0, 0, 0))
 
         # Load XAML
-        xaml_file = os.path.join(os.path.dirname(__file__), 'ParameterSelector.xaml')
+        xaml_file = os.path.join(os.path.dirname(__file__), 'Tools', 'ParameterSelector.xaml')
         try:
             with open(xaml_file, 'r') as f:
                 xaml_content = f.read()

@@ -475,6 +475,14 @@ class FamilyLoaderWindow(Window):
             Window.__init__(self)
             logger.debug("DEBUG: Step 1 - COMPLETED")
 
+            # Initialize instance variables
+            self.config = load_config()
+            self.current_folder = None
+            self.all_families = []
+            self._scan_thread = None
+            self._cancel_requested = False
+            self._thumb_cancel = False
+
             # Set Window properties
             logger.debug("DEBUG: Step 2 - Setting window properties")
             self.Title = "Load Autodesk Family"
@@ -510,7 +518,7 @@ class FamilyLoaderWindow(Window):
 
             # Load XAML
             logger.debug("DEBUG: Step 3 - Loading XAML")
-            xaml_path = os.path.join(os.path.dirname(__file__), 'FamilyLoader.xaml')
+            xaml_path = os.path.join(os.path.dirname(__file__), 'Tools', 'FamilyLoader.xaml')
             logger.info("DEBUG: XAML path: {}".format(xaml_path))
 
             if not os.path.exists(xaml_path):
@@ -521,7 +529,8 @@ class FamilyLoaderWindow(Window):
 
             try:
                 logger.debug("DEBUG: Step 3a - Reading XAML file")
-                with open(xaml_path, 'r') as f:
+                import io
+                with io.open(xaml_path, 'r', encoding='utf-8') as f:
                     xaml_content = f.read()
                 logger.debug("DEBUG: Step 3a - COMPLETED (read {} bytes)".format(len(xaml_content)))
 
@@ -669,141 +678,40 @@ class FamilyLoaderWindow(Window):
                 forms.alert("Error wiring event handlers:\n{}".format(str(event_ex)), exitscript=True)
                 raise
 
-            # Load logo
-            try:
-                from System import UriKind
-                logo_path = os.path.join(os.path.dirname(__file__), 'T3Lab_logo.png')
-                if os.path.exists(logo_path):
-                    bitmap = BitmapImage()
-                    bitmap.BeginInit()
-                    bitmap.UriSource = Uri(logo_path, UriKind.Absolute)
-                    bitmap.EndInit()
-                    self.Icon = bitmap
-                    if self.logo_image:
-                        self.logo_image.Source = bitmap
-                    logger.debug("DEBUG: Logo loaded")
-            except Exception as logo_ex:
-                logger.debug("DEBUG: Logo load skipped: {}".format(logo_ex))
-
-            # Initialize variables
-            logger.debug("DEBUG: Step 6 - Initializing variables")
-            try:
-                logger.debug("DEBUG: Step 6a - Loading config")
-                self.config = load_config()
-
-                logger.debug("DEBUG: Step 6b - Getting last folder")
-                self.current_folder = self.config.get('last_folder', None)
-
-                logger.debug("DEBUG: Step 6c - Initializing collections")
-                self.all_families = []
-                self.filtered_families = ObservableCollection[object]()
-                self.category_structure = {}
-
-                logger.debug("DEBUG: Step 6d - Initializing flags")
-                self._is_updating = False  # Flag to prevent UI updates during batch operations
-                self._cancel_requested = False  # Flag for cancellation
-                self._scan_thread = None  # Background scan thread
-                self._seen_family_names = {}  # Track duplicate family names
-                self._thumb_cancel = False  # Flag to cancel thumbnail worker
-
-                logger.debug("DEBUG: Step 6e - Binding ItemsControl")
-                self.items_families.ItemsSource = self.filtered_families
-
-                logger.debug("DEBUG: Step 6f - Initializing result list")
-                self.loaded_families = []
-
-                logger.debug("DEBUG: Step 6 - COMPLETED")
-            except Exception as var_ex:
-                logger.error("DEBUG: ERROR in Step 6 - Initializing variables: {}".format(str(var_ex)))
-                logger.error("DEBUG: Full traceback:\n{}".format(traceback.format_exc()))
-                forms.alert("Error initializing variables:\n{}".format(str(var_ex)), exitscript=True)
-                raise
-
             logger.info("=" * 80)
-            logger.info("DEBUG: Family Loader window initialized successfully")
-            if self.current_folder:
-                logger.info("DEBUG: Last used folder: {}".format(self.current_folder))
+            logger.info("DEBUG: FamilyLoaderWindow initialization completed")
             logger.info("=" * 80)
 
         except Exception as ex:
             logger.error("=" * 80)
-            logger.error("DEBUG: CRITICAL ERROR in FamilyLoaderWindow.__init__")
-            logger.error("DEBUG: Error: {}".format(ex))
-            logger.error("DEBUG: Full traceback:\n{}".format(traceback.format_exc()))
-            logger.error("=" * 80)
-            raise
-
-    # ╔═╗╦  ╦╔═╗╔╗╔╔╦╗  ╦ ╦╔═╗╔╗╔╔╦╗╦  ╔═╗╦═╗╔═╗
-    # ║╣ ╚╗╔╝║╣ ║║║ ║   ╠═╣╠═╣║║║ ║║║  ║╣ ╠╦╝╚═╗
-    # ╚═╝ ╚╝ ╚═╝╝╚╝ ╩   ╩ ╩╩ ╩╝╚╝═╩╝╩═╝╚═╝╩╚═╚═╝
-    #====================================================================================================
-
-    def window_loaded(self, sender, e):
-        """Handle window loaded event - auto-show folder dialog if no folder is set"""
-        try:
-            logger.info("=" * 80)
-            logger.info("DEBUG: window_loaded event triggered")
-            logger.info("=" * 80)
-
-            # Check if all UI elements are ready
-            logger.debug("DEBUG: Checking if UI elements are ready")
-            if not hasattr(self, 'txt_current_folder'):
-                logger.error("DEBUG: ERROR - txt_current_folder attribute not found")
-                return
-
-            if not self.txt_current_folder:
-                logger.error("DEBUG: ERROR - txt_current_folder is None")
-                return
-
-            logger.debug("DEBUG: UI elements are ready")
-
-            if self.current_folder:
-                logger.info("DEBUG: Saved folder found: {}".format(self.current_folder))
-
-                # Check if saved folder still exists
-                logger.debug("DEBUG: Checking if saved folder exists")
-                if os.path.exists(self.current_folder):
-                    logger.info("DEBUG: Folder exists, loading families from: {}".format(self.current_folder))
-
-                    try:
-                        logger.debug("DEBUG: Setting txt_current_folder.Text")
-                        self.txt_current_folder.Text = self.current_folder
-                        logger.debug("DEBUG: txt_current_folder.Text set successfully")
-
-                        logger.debug("DEBUG: Calling scan_families()")
-                        self.scan_families()
-                        logger.debug("DEBUG: scan_families() completed")
-                    except Exception as scan_ex:
-                        logger.error("DEBUG: ERROR scanning families: {}".format(scan_ex))
-                        logger.error("DEBUG: Full traceback:\n{}".format(traceback.format_exc()))
-                        forms.alert("Error loading families from saved folder:\n{}".format(str(scan_ex)), exitscript=False)
-                else:
-                    logger.warning("DEBUG: Saved folder no longer exists: {}".format(self.current_folder))
-                    self.current_folder = None
-
-                    # FIXED: Don't auto-show modal dialog during window initialization
-                    # This was causing crashes due to modal dialog conflicts with window rendering
-                    logger.info("DEBUG: Setting informational text (NOT showing dialog to prevent crash)")
-                    self.txt_current_folder.Text = "Saved folder no longer exists. Click 'Update Folder' to select a new folder."
-            else:
-                # No saved folder
-                logger.info("DEBUG: No saved folder found")
-
-                # FIXED: Don't auto-show modal dialog during window initialization
-                # This prevents modal dialog issues during window initialization that cause crashes
-                logger.info("DEBUG: Setting informational text (NOT auto-showing dialog to prevent crash)")
-                self.txt_current_folder.Text = "Click 'Update Folder' to select a folder or switch to Cloud mode"
-
-            logger.info("=" * 80)
-            logger.info("DEBUG: window_loaded event completed successfully")
-            logger.info("=" * 80)
-
-        except Exception as ex:
-            logger.error("=" * 80)
-            logger.error("DEBUG: ERROR in window_loaded: {}".format(ex))
+            logger.error("DEBUG: ERROR in __init__: {}".format(ex))
             logger.error("DEBUG: Full traceback:\n{}".format(traceback.format_exc()))
             logger.error("=" * 80)
             # Don't re-raise - allow window to continue loading
+
+    def window_loaded(self, sender, e):
+        """Handle Window.Loaded event - restore saved folder and initialize UI"""
+        try:
+            logger.info("=" * 80)
+            logger.info("DEBUG: window_loaded event fired")
+            saved_folder = self.config.get('last_folder', '')
+            if saved_folder:
+                if os.path.exists(saved_folder):
+                    self.current_folder = saved_folder
+                    self.txt_current_folder.Text = saved_folder
+                    logger.info("DEBUG: Restored saved folder: {}".format(saved_folder))
+                    self.scan_families()
+                else:
+                    self.current_folder = None
+                    self.txt_current_folder.Text = "Saved folder no longer exists. Click 'Update Folder' to select a new folder."
+                    logger.info("DEBUG: Saved folder no longer exists: {}".format(saved_folder))
+            else:
+                self.txt_current_folder.Text = "Click 'Update Folder' to select a folder or switch to Cloud mode"
+                logger.info("DEBUG: No saved folder found")
+            logger.info("=" * 80)
+        except Exception as ex:
+            logger.error("ERROR in window_loaded: {}".format(ex))
+            logger.error(traceback.format_exc())
 
     def data_source_changed(self, sender, e):
         """Handle data source toggle between Local and Cloud"""

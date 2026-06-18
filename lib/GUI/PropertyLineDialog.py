@@ -1187,27 +1187,14 @@ class PropertyLineDialog(forms.WPFWindow):
         # Build absolute path so forms.WPFWindow finds the XAML regardless of
         # which script calls this class (avoids the IronPython absolute-URI bug
         # that occurs with Application.LoadComponent + file:// URIs)
-        xaml_path = os.path.join(os.path.dirname(__file__), "PropertyLine.xaml")
+        xaml_path = os.path.join(os.path.dirname(__file__), "Tools", "PropertyLine.xaml")
         forms.WPFWindow.__init__(self, xaml_path)
 
         self._selected_parcel = None
         self._parcels = []
         self._zoning_data = None
 
-        # Load T3Lab logo (same pattern as BatchOut)
-        try:
-            from System.Windows.Media.Imaging import BitmapImage
-            from System import Uri, UriKind
-            logo_path = os.path.join(os.path.dirname(__file__), "T3Lab_logo.png")
-            if os.path.exists(logo_path):
-                bitmap = BitmapImage()
-                bitmap.BeginInit()
-                bitmap.UriSource = Uri(logo_path, UriKind.Absolute)
-                bitmap.EndInit()
-                self.Icon = bitmap
-                self.logo_image.Source = bitmap
-        except Exception:
-            pass
+
 
         # Load saved API key
         config = load_config()
@@ -1255,6 +1242,10 @@ class PropertyLineDialog(forms.WPFWindow):
                 u"Example: 123 Main St, Los Angeles CA 90001")
             return
         self._hide_address_warning()
+        try:
+            self.img_map_preview.Source = None
+        except Exception:
+            pass
 
         api_key = self.txt_api_key.Text.strip()
         if not api_key:
@@ -1342,6 +1333,10 @@ class PropertyLineDialog(forms.WPFWindow):
             self.btn_create.IsEnabled = False
             self.grp_parcel_details.Visibility = Visibility.Collapsed
             self.grp_setback.Visibility = Visibility.Collapsed
+            try:
+                self.img_map_preview.Source = None
+            except Exception:
+                pass
             return
 
         self._selected_parcel = item
@@ -1355,6 +1350,57 @@ class PropertyLineDialog(forms.WPFWindow):
             self.grp_setback.Visibility = Visibility.Visible
         else:
             self.grp_setback.Visibility = Visibility.Collapsed
+
+        # Async load map preview in search results card
+        self._load_map_preview(item)
+
+    def _load_map_preview(self, item):
+        """Async load map preview tiles and overlay boundary, then display in dialog."""
+        try:
+            self.img_map_preview.Source = None
+        except Exception:
+            pass
+
+        coords = get_polygon_coords(item.geometry)
+        if not coords:
+            return
+
+        # Prepare a temp path for preview PNG
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        safe_apn = item.parcel_id.replace("/", "_").replace("\\", "_")
+        temp_path = os.path.join(temp_dir, "t3lab_map_preview_{}.png".format(safe_apn))
+        area = item.area_sqft_raw or 0
+
+        def bg_map_preview():
+            try:
+                # Generate map PNG (OSM tiles + boundary)
+                generate_parcel_map(coords, temp_path, area_sqft=area)
+
+                def update_ui():
+                    try:
+                        if os.path.exists(temp_path):
+                            from System.Windows.Media.Imaging import BitmapImage, BitmapCacheOption
+                            from System import Uri
+                            bi = BitmapImage()
+                            bi.BeginInit()
+                            bi.UriSource = Uri(temp_path)
+                            bi.CacheOption = BitmapCacheOption.OnLoad
+                            bi.EndInit()
+                            self.img_map_preview.Source = bi
+                    except Exception as ui_ex:
+                        logger.warning("Failed to display map preview: {}".format(ui_ex))
+
+                self.Dispatcher.Invoke(
+                    DispatcherPriority.Normal,
+                    Action(update_ui)
+                )
+            except Exception as ex:
+                logger.warning("Background map preview failed: {}".format(ex))
+
+        t = threading.Thread(target=bg_map_preview)
+        t.daemon = True
+        t.start()
 
     def _show_parcel_details(self, item):
         self.grp_parcel_details.Visibility = Visibility.Visible
@@ -1594,6 +1640,21 @@ class PropertyLineDialog(forms.WPFWindow):
 # ╚═╝╩ ╩╚═╝╩═╝╩╚═╝ PUBLIC ENTRY POINT
 # ==================================================
 
+
+
+    def minimize_button_clicked(self, sender, e):
+        self.WindowState = WindowState.Minimized
+
+    def maximize_button_clicked(self, sender, e):
+        if self.WindowState == WindowState.Maximized:
+            self.WindowState = WindowState.Normal
+            self.btn_maximize.ToolTip = "Maximize"
+        else:
+            self.WindowState = WindowState.Maximized
+            self.btn_maximize.ToolTip = "Restore"
+
+    def close_button_clicked(self, sender, e):
+        self.Close()
 def show_property_line_dialog():
     """Show the Property Line dialog and return when closed."""
     try:

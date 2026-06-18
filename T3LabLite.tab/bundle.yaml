@@ -1,5 +1,7 @@
 layout:
-  - Project
   - Annotation
-  - Export
-  - AI Connection
+  - Project
+  - ViewsSheets
+  - Data
+  - Settings
+  - Support

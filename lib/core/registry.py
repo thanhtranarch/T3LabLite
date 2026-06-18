@@ -1,65 +1,85 @@
 # -*- coding: utf-8 -*-
 """
 Tool Registry
-
-Registry for managing and looking up available T3Lab tools.
+-------------
+Centralized registry for T3Lab tools accessible by the AI Agent.
 
 Author: Tran Tien Thanh
 Mail: trantienthanh909@gmail.com
-Linkedin: linkedin.com/in/sunarch7899/
 """
 
-__author__  = "Tran Tien Thanh"
-__title__   = "Tool Registry"
+import os
 
+class ToolRegistry:
+    def __init__(self, extension_path=None):
+        if extension_path is None:
+            # Assume we are in lib/core/registry.py
+            # Go up 3 levels to reach T3Lab.extension
+            self.base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        else:
+            self.base_path = extension_path
+            
+        self.tab_path = os.path.join(self.base_path, "T3Lab.tab")
+        self.tools = self._initialize_tools()
 
-class T3LabAIRegistry:
-    """Registry for MCP commands"""
-
-    _instance = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(T3LabAIRegistry, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self):
-        if self._initialized:
-            return
-
-        self._commands = {}
-        self._ai_enhanced_commands = set()
-        self._command_stats = {}
-        self._initialized = True
-
-    def register_command(self, name, handler, ai_enhanced=False):
-        """Register a new command"""
-        self._commands[name] = handler
-        if ai_enhanced:
-            self._ai_enhanced_commands.add(name)
-        self._command_stats[name] = 0
-
-    def get_command_statistics(self):
-        """Get command statistics"""
-        total_executions = sum(self._command_stats.values())
-        most_used = max(self._command_stats, key=self._command_stats.get) if self._command_stats else None
-
+    def _initialize_tools(self):
+        """Returns a dictionary of available tools with their metadata."""
         return {
-            'total_commands': len(self._commands),
-            'ai_enhanced_count': len(self._ai_enhanced_commands),
-            'most_used': most_used,
-            'total_executions': total_executions
+            "cad_to_beam": {
+                "name": "CAD to Beam",
+                "description": "Converts CAD lines to Revit beams with AI dimension detection from nearby TextNotes.",
+                "rel_path": "Project.panel/Create.stack/Create Elements.pulldown/Beam.pushbutton/script.py"
+            },
+            "annotation_manager": {
+                "name": "Annotation Manager",
+                "description": "Unified tool for managing Dimensions and Text Notes — find, delete, and auto-rename types and instances.",
+                "rel_path": "Annotation.panel/Text.stack/AnnotationManager.pushbutton/script.py"
+            },
+            "workset_manager": {
+                "name": "Workset Manager",
+                "description": "List, rename, and manage user worksets; remove unused worksets via a checklist.",
+                "rel_path": "Project.panel/Work.stack/WorksetManager.pushbutton/script.py"
+            },
+            "batch_export": {
+                "name": "BatchOut",
+                "description": "Batch export sheets to PDF, DWG, NWD, and IFC formats with custom naming and revision tracking.",
+                "rel_path": "Support.panel/BatchOut.pushbutton/script.py"
+            },
+            "load_family": {
+                "name": "Load Family",
+                "description": "Browse and load Revit families from local disk or Cloud (Vercel API).",
+                "rel_path": "Project.panel/Family Work 2.stack/Load Family.pushbutton/script.py"
+            },
+            "room_to_area": {
+                "name": "Room to Area",
+                "description": "Automatically convert room boundaries to area boundaries in the active area plan.",
+                "rel_path": "Project.panel/Areas.stack/Room to Area.pushbutton/script.py"
+            },
+            "create_plan_views": {
+                "name": "Create Plan Views",
+                "description": "Batch-generate individual floor plan views for each room with custom naming and template assignment.",
+                "rel_path": "ViewsSheets.panel/Create Room Plan/script.py"
+            }
         }
 
-    def get_available_commands(self):
-        """Get list of available command names"""
-        return list(self._commands.keys())
+    def get_tool(self, tool_id):
+        """Returns tool metadata by ID."""
+        return self.tools.get(tool_id)
 
-    def get_ai_enhanced_commands(self):
-        """Get list of AI-enhanced command names"""
-        return list(self._ai_enhanced_commands)
+    def get_all_tools(self):
+        """Returns all registered tools."""
+        return self.tools
 
+    def get_script_path(self, tool_id):
+        """Returns the absolute path to a tool's script."""
+        tool = self.get_tool(tool_id)
+        if tool:
+            return os.path.join(self.tab_path, tool["rel_path"].replace("/", os.sep))
+        return None
 
-# Singleton instance
-t3labai_registry = T3LabAIRegistry()
+    def list_tools_for_ai(self):
+        """Returns a simplified list of tools for LLM consumption."""
+        return [
+            {"id": tid, "name": t["name"], "description": t["description"]}
+            for tid, t in self.tools.items()
+        ]

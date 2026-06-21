@@ -1,0 +1,13 @@
+LOCATION MANAGER v2 BYPASS
+Script: D:\01. T3Lab\02 Revit Tools\t3lab-revit-api\T3Lab.extension\T3Lab.tab\Settings.panel\LocationManager.pushbutton\script.py
+Time: 2026-06-18T07:36:16.461000
+Size: 2024 bytes
+Version: 2.0 XamlReader.Load
+XAML_PATH: D:\01. T3Lab\02 Revit Tools\t3lab-revit-api\T3Lab.extension\lib\GUI\Tools\LocationManager.xaml
+XAML_EXISTS: True
+XAML_SIZE: 95053
+XAML_ERROR: The 'Window' start tag on line 2 position 2 does not match the end tag of 'Window.Resources'. Line 1164, position 7.
+Traceback (most recent call last):
+  File "D:\01. T3Lab\02 Revit Tools\t3lab-revit-api\T3Lab.extension\T3Lab.tab\Settings.panel\LocationManager.pushbutton\script.py", line 39, in <module>
+    window = XamlReader.Load(stream)
+SystemError: The 'Window' start tag on line 2 position 2 does not match the end tag of 'Window.Resources'. Line 1164, position 7.

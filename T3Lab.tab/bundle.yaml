@@ -1,8 +1,7 @@
 layout:
-  - Standards & Settings
-  - Annotation & Select
-  - Modeling & Datum
-  - Views & Sheets
-  - Data & IFC-SG
   - Support
-  - Standard
+  - Standards & Settings
+  - Data & IFC-SG
+  - Modeling & Datum
+  - Annotation & Select
+  - Views & Sheets

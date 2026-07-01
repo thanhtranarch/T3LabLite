@@ -13,7 +13,7 @@
         <WindowChrome CaptionHeight="64"
                        ResizeBorderThickness="5"
                        GlassFrameThickness="0"
-                       CornerRadius="8"
+                       CornerRadius="22"
                        UseAeroCaptionButtons="False"/>
     </WindowChrome.WindowChrome>
 
@@ -1087,28 +1087,23 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="1"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Custom Title Bar -->
-        <Grid Grid.Row="0" Background="White" Height="64">
+        <Grid Grid.Row="0" Background="#F4F4F6" Height="64">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Title -->
-            <StackPanel Grid.Column="0" Orientation="Vertical" Margin="16,0,0,0" VerticalAlignment="Center"
+            <!-- Title and Subtitle -->
+            <StackPanel Grid.Column="0" Orientation="Vertical" Margin="22,0,0,0" VerticalAlignment="Center"
                         WindowChrome.IsHitTestVisibleInChrome="True">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="T3Lab" FontSize="11" FontWeight="Bold"
-                               Foreground="#0F172A" VerticalAlignment="Bottom" Margin="0,0,6,3"/>
-                    <TextBlock Text="Image To Drafting" FontSize="18" FontWeight="Bold"
-                               Foreground="#0F172A"/>
-                </StackPanel>
-                <Separator Height="1" Background="#E2E8F0" Margin="0,2,0,2"/>
+                <TextBlock Text="Image To Drafting" FontSize="15" FontWeight="Bold" Foreground="#18181B"/>
                 <TextBlock Text="Convert images or clipboard screenshots to detail vector lines"
-                           FontSize="10" Foreground="#64748B" FontStyle="Italic"/>
+                           FontSize="12.5" Foreground="#71717A" Margin="0,2,0,0"/>
             </StackPanel>
 
             <!-- Window Control Buttons -->
@@ -1139,7 +1134,7 @@
         </Grid>
 
         <!-- Header Separator -->
-        <Border Grid.Row="1" Background="#ECF0F1"/>
+        <Border Grid.Row="1" Background="#DCDCE0"/>
 
         <!-- Main Content -->
         <Grid Grid.Row="2" Margin="16,16,16,16">
@@ -1302,8 +1297,10 @@
             <Button Grid.Row="3" x:Name="CreateBtn" Content="▶  Create Drafting View"
                     Height="42" Style="{StaticResource PrimaryButton}" Click="Create_Click"/>
         </Grid>
-        <!-- Copyright added automatically -->
-        <TextBlock Text="Â© Copyright by T3Lab" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,14,8" Foreground="#F59E0B" FontSize="11" IsHitTestVisible="False" Panel.ZIndex="999" Grid.RowSpan="99" Grid.ColumnSpan="99"/>
+        <!-- Footer -->
+        <Border Grid.Row="3" Background="#F4F4F6" BorderBrush="#DCDCE0" BorderThickness="0,1,0,0" Padding="20,14">
+            <TextBlock Text="© Copyright by T3Lab" FontSize="11" Foreground="#F59E0B" VerticalAlignment="Center"/>
+        </Border>
 </Grid>
 
     </Border>

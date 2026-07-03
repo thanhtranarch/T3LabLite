@@ -87,6 +87,13 @@ CONVERSATION RULES:
   e.g., user asks "batchout là gì?" then "nó xuất được những gì?" → use context.
 - Be concise, friendly, professional. Reply in the same language as the user.
 - If unsure between tool and chat → prefer tool if there is a clear keyword.
+- CRITICAL: greetings, thanks, or small talk alone ("morning", "hello", "ok",
+  "thanks", "chào"...) are NEVER tool commands. Always answer them with
+  greet/chat — never return an open_* or export intent for them.
+- CRITICAL: if the user asks whether a tool/feature EXISTS ("có tool nào để X
+  không?", "do you have a tool for X?"), answer ONLY from the tool lists in
+  this prompt: name the matching tool(s), or say clearly that none exists.
+  NEVER invent a tool name.
 
 RESPONSE FORMAT (JSON only, no markdown, no extra text):
 {
@@ -145,11 +152,11 @@ def inject_discovered_tools(tools):
     _EXTRA_TOOLS_SECTION = '\n'.join(lines)
 
 
-def _build_system_prompt():
+def _build_system_prompt(revit_context=u""):
     """Return the comprehensive agent-aware system prompt, with auto-discovered tools appended."""
     try:
         from Intelligence.t3lab_agent import build_system_prompt
-        base = build_system_prompt()
+        base = build_system_prompt(revit_context=revit_context)
     except Exception:
         # Fallback to static prompt if t3lab_agent is unavailable
         base = SYSTEM_PROMPT
@@ -202,6 +209,15 @@ def learn_pattern(raw, intent, params, message=''):
     _skip = {'help', 'chat', 'greet', 'unknown', None}
     if intent in _skip:
         return
+    # Never learn small talk as a tool command. Without this gate, a single
+    # LLM hallucination (e.g. "morning" → open_cadtoelements) gets recorded
+    # and then replayed forever with top priority by find_learned_match().
+    try:
+        from Intelligence.nlu_engine import is_conversational
+        if is_conversational(raw):
+            return
+    except Exception:
+        pass
     try:
         key = _normalize_key(raw)
         if not key or len(key.split()) < 1:
@@ -232,9 +248,21 @@ def find_learned_match(raw):
     """Check learned patterns for a fuzzy match.
 
     Returns result dict {intent, params, message} or None.
-    Uses Jaccard similarity on normalized word sets (threshold 0.65).
+    Uses Jaccard similarity on normalized word sets (threshold 0.8), plus a
+    minimum-2-shared-words requirement once the stored pattern has 3+ words.
+    The old 0.65 threshold was too permissive for the short 2-4 word
+    commands typical here: a single shared word was often enough to clear
+    it (e.g. "open material" vs a stored "material select" pattern scores
+    1/3 ≈ 0.67 — a false positive that silently launches the wrong tool
+    with high confidence, which is worse than falling through to the LLM).
     """
     try:
+        # Conversational input (greetings, thanks, "ok"...) must never be
+        # answered from learned tool patterns — even if an old poisoned
+        # entry is still on disk, it is ignored here.
+        from Intelligence.nlu_engine import is_conversational
+        if is_conversational(raw):
+            return None
         patterns = load_learned_patterns()
         if not patterns:
             return None
@@ -250,14 +278,16 @@ def find_learned_match(raw):
             stored_words = set(stored_key.split()) if stored_key else set()
             if not stored_words:
                 continue
-            inter = len(key_words & stored_words)
-            union = len(key_words | stored_words)
-            score = inter / union if union else 0.0
+            inter = key_words & stored_words
+            if len(stored_words) >= 3 and len(inter) < 2:
+                continue
+            union = key_words | stored_words
+            score = len(inter) / len(union) if union else 0.0
             if score > best_score:
                 best_score = score
                 best_data  = data
 
-        if best_score >= 0.65 and best_data:
+        if best_score >= 0.8 and best_data:
             return {
                 'intent':  best_data['intent'],
                 'params':  best_data.get('params', {}),
@@ -274,6 +304,8 @@ def _normalize_key(text):
     try:
         nfd = unicodedata.normalize('NFD', text)
         ascii_text = ''.join(c for c in nfd if unicodedata.category(c) != 'Mn')
+        # NFD does not decompose đ/Đ — fold explicitly (see nlu_engine._strip_diacritics)
+        ascii_text = ascii_text.replace(u'đ', 'd').replace(u'Đ', 'D')
     except Exception:
         ascii_text = text
     # Lowercase, keep alphanumeric
@@ -404,6 +436,47 @@ def get_provider_display_label():
         return "AI"
 
 
+# ─── No-provider setup guidance ────────────────────────────────────────────────
+# Shown instead of the generic "didn't understand" reply whenever NO LLM
+# provider is configured at all (offline NLU/keyword matching still handles
+# tool commands fine — this only fires for open-ended chat that genuinely
+# needs a model). Also shown once as a proactive nudge on a fresh chat.
+
+def get_setup_guidance_message(viet=True):
+    """Return a detailed, step-by-step setup guide covering every provider option."""
+    if viet:
+        return (
+            u"🤖 Hiện chưa có AI nào được kết nối, nên tôi chỉ hiểu được lệnh cụ thể "
+            u"(vd: 'mở batchout', 'xuất pdf G sheet'). Để trò chuyện tự nhiên hơn, "
+            u"nhấn ⚙ ở góc trên rồi chọn 1 trong 2 cách:\n\n"
+            u"1️⃣ Dùng AI trên mây (Claude / OpenAI / DeepSeek) — trả lời nhanh, "
+            u"không cần máy mạnh:\n"
+            u"   • Mở phần Cài đặt → chọn Provider → dán API Key vào ô tương ứng.\n"
+            u"   • Lấy API Key tại: Claude → console.anthropic.com | "
+            u"OpenAI → platform.openai.com | DeepSeek → platform.deepseek.com\n\n"
+            u"2️⃣ Dùng AI cục bộ (Ollama) — miễn phí, chạy ngay trên máy, không cần internet:\n"
+            u"   • Cài đặt tại ollama.ai, sau đó mở terminal chạy:\n"
+            u"     ollama pull qwen2.5:1.5b\n"
+            u"   • Mở lại T3Lab Assistant — hệ thống tự nhận diện model đã cài.\n\n"
+            u"Trong lúc chưa kết nối, tôi vẫn mở được các tool T3Lab và xuất sheet "
+            u"theo lệnh cụ thể như bình thường."
+        )
+    return (
+        u"🤖 No AI provider is connected yet, so I can only understand specific "
+        u"commands (e.g. 'open batchout', 'export pdf G sheet'). For more natural "
+        u"conversation, click ⚙ at the top and pick one of two options:\n\n"
+        u"1️⃣ Cloud AI (Claude / OpenAI / DeepSeek) — fast, no local hardware needed:\n"
+        u"   • Open Settings → pick a Provider → paste your API key.\n"
+        u"   • Get a key at: Claude → console.anthropic.com | "
+        u"OpenAI → platform.openai.com | DeepSeek → platform.deepseek.com\n\n"
+        u"2️⃣ Local AI (Ollama) — free, runs on your machine, no internet needed:\n"
+        u"   • Install from ollama.ai, then in a terminal run:\n"
+        u"     ollama pull qwen2.5:1.5b\n"
+        u"   • Reopen T3Lab Assistant — it will auto-detect the installed model.\n\n"
+        u"Meanwhile I can still open T3Lab tools and export sheets from specific commands."
+    )
+
+
 # ─── Keyword fallback ─────────────────────────────────────────────────────────
 
 def keyword_parse(raw):
@@ -429,7 +502,8 @@ def keyword_parse(raw):
     # ── Greetings ─────────────────────────────────────────────────────────────
     greet_kws = ['chao', 'chào', 'hello', 'hi ', 'hey ', 'xin chao', 'good morning',
                  'good afternoon', 'howdy']
-    if any(k in cmd for k in greet_kws) or cmd.strip() in ('hi', 'hello', 'hey'):
+    if any(k in cmd for k in greet_kws) or cmd.strip() in (
+            'hi', 'hello', 'hey', 'morning', 'afternoon', 'evening', 'yo'):
         if viet:
             msg = u"Xin chào! Tôi là T3Lab Assistant. Cần giúp gì không?"
         else:
@@ -507,19 +581,22 @@ def keyword_parse(raw):
         return {"intent": "open_grids", "params": {},
                 "message": u"Đang mở Grids..." if viet else "Opening Grids..."}
 
-    # ── Auto-discovered tools (from tool_registry.json) ───────────────────────
+    # ── Auto-discovered tools — ranked resolver, never first-substring ────────
+    # The old loop returned whichever registry entry had ANY generic keyword
+    # ("manager", "elements", "auto"...) appear first — wrong tool half the
+    # time. resolve_tool() scores the whole catalog and only answers when one
+    # tool clearly wins.
     try:
-        from Services.tool_discovery import get_registered_tools
-        for tool in get_registered_tools():
-            for kw in tool.get('keywords', []):
-                if kw and len(kw) > 2 and kw in cmd:
-                    label = tool.get('title', tool['intent'])
-                    return {
-                        'intent':  tool['intent'],
-                        'params':  {},
-                        'message': (u"Đang mở {}...".format(label) if viet
-                                    else u"Opening {}...".format(label)),
-                    }
+        from Intelligence.nlu_engine import resolve_tool
+        match, _cands = resolve_tool(raw)
+        if match:
+            label = match.get('title', match['intent'])
+            return {
+                'intent':  match['intent'],
+                'params':  {},
+                'message': (u"Đang mở {}...".format(label) if viet
+                            else u"Opening {}...".format(label)),
+            }
     except Exception:
         pass
 
@@ -622,7 +699,29 @@ def _get_local_llm():
 
 
 def has_local_llm():
-    """Return True if Ollama is running AND has at least one model installed."""
+    """Return True if a local provider (Ollama or LM Studio) is usable.
+
+    Delegates to LLMRouter's provider adapters — the SAME check that drives
+    the "Ready" status shown in Settings — instead of the old standalone
+    local_llm.py probe. That probe only ever tried OLLAMA_HOST verbatim
+    (default "http://localhost:11434") with no fallback, while
+    OllamaProvider tries "http://127.0.0.1:11434" too. On setups where
+    "localhost" doesn't resolve cleanly (common enough on Windows), the two
+    checks disagreed: Settings showed Ollama "Ready" while this gate
+    returned False, silently skipping the LLM path for EVERY message and
+    making a correctly-connected assistant look broken.
+    """
+    try:
+        from Intelligence.llm_router import LLMRouter
+        router = LLMRouter()
+        for name in router.get_local_provider_names():   # ["ollama", "lmstudio"]
+            provider = router.get_provider(name)
+            if provider and provider.check_health():
+                return True
+        return False
+    except Exception:
+        pass
+    # Fallback to the legacy probe only if the router itself is unavailable.
     mod = _get_local_llm()
     if not mod:
         return False
@@ -633,7 +732,17 @@ def has_local_llm():
 
 
 def get_local_model_name():
-    """Return the name of the best available Ollama model, or None."""
+    """Return the active local (Ollama/LM Studio) model name, or None."""
+    try:
+        from Intelligence.llm_router import LLMRouter
+        router = LLMRouter()
+        for name in router.get_local_provider_names():
+            provider = router.get_provider(name)
+            if provider and provider.check_health():
+                return provider.get_active_model()
+        return None
+    except Exception:
+        pass
     mod = _get_local_llm()
     if not mod:
         return None

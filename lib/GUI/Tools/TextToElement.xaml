@@ -1,8 +1,8 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="T3Lab — Text to Element"
-        Height="620" Width="760"
-        MinHeight="520" MinWidth="640"
+        Title="Text to Element"
+        Height="880" Width="760"
+        MinHeight="750" MinWidth="640"
         WindowStartupLocation="CenterScreen"
         Background="#E4E4E7"
         FontFamily="Hanken Grotesk"
@@ -49,11 +49,11 @@
         <Style x:Key="TertiaryButton" TargetType="Button">
             <Setter Property="Background"      Value="#ECECEF"/>
             <Setter Property="Foreground"      Value="#27272A"/>
-            <Setter Property="Padding"         Value="14,7"/>
+            <Setter Property="Padding"         Value="12,5"/>
             <Setter Property="FontSize"        Value="13.5"/>
             <Setter Property="FontFamily"      Value="Hanken Grotesk"/>
             <Setter Property="FontWeight"      Value="SemiBold"/>
-            <Setter Property="Height"          Value="40"/>
+            <Setter Property="Height"          Value="28"/>
             <Setter Property="Cursor"          Value="Hand"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Template">
@@ -412,11 +412,11 @@
         <Style x:Key="PrimaryButton" TargetType="Button">
             <Setter Property="Background"      Value="#18181B"/>
             <Setter Property="Foreground"      Value="White"/>
-            <Setter Property="Padding"         Value="14,7"/>
+            <Setter Property="Padding"         Value="12,5"/>
             <Setter Property="FontSize"        Value="13.5"/>
             <Setter Property="FontFamily"      Value="Hanken Grotesk"/>
             <Setter Property="FontWeight"      Value="SemiBold"/>
-            <Setter Property="Height"          Value="40"/>
+            <Setter Property="Height"          Value="28"/>
             <Setter Property="Cursor"          Value="Hand"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Template">
@@ -448,11 +448,11 @@
         <Style x:Key="SecondaryButton" TargetType="Button">
             <Setter Property="Background"      Value="#FFFFFF"/>
             <Setter Property="Foreground"      Value="#27272A"/>
-            <Setter Property="Padding"         Value="14,7"/>
+            <Setter Property="Padding"         Value="12,5"/>
             <Setter Property="FontSize"        Value="13.5"/>
             <Setter Property="FontFamily"      Value="Hanken Grotesk"/>
             <Setter Property="FontWeight"      Value="SemiBold"/>
-            <Setter Property="Height"          Value="40"/>
+            <Setter Property="Height"          Value="28"/>
             <Setter Property="Cursor"          Value="Hand"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="BorderBrush"     Value="#DEDEE2"/>
@@ -488,11 +488,11 @@
         <Style x:Key="GhostButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="#52525B"/>
-            <Setter Property="Padding" Value="14,7"/>
+            <Setter Property="Padding" Value="12,5"/>
             <Setter Property="FontSize" Value="13.5"/>
             <Setter Property="FontFamily" Value="Hanken Grotesk"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Height" Value="40"/>
+            <Setter Property="Height" Value="28"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Template">
@@ -1104,7 +1104,8 @@
                 </StackPanel>
 
                 <!-- Right: Window controls -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Margin="0,0,16,0"
                             WindowChrome.IsHitTestVisibleInChrome="True">
                     <Button x:Name="btn_minimize" Style="{StaticResource WinCtrlButton}"
                             ToolTip="Minimize">
@@ -1125,7 +1126,7 @@
             </Grid>
 
             <!-- ═══ CONTENT AREA ═══ -->
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                           Background="White">
                 <StackPanel Margin="16,16,16,16">
 
@@ -1188,40 +1189,43 @@
                     <!-- PREVIEW SECTION -->
                     <TextBlock Text="Preview (intersections found):" FontWeight="SemiBold" FontSize="13"
                                Foreground="#18181B" Margin="0,16,0,6"/>
-                    <DataGrid x:Name="dg_preview"
-                              Background="White"
-                              BorderBrush="#E4E4E7"
-                              BorderThickness="1"
-                              AutoGenerateColumns="False"
-                              AlternatingRowBackground="#F4F4F6"
-                              CanUserAddRows="False"
-                              IsReadOnly="True"
-                              Height="180"
-                              GridLinesVisibility="Horizontal"
-                              HorizontalGridLinesBrush="#F1F5F9"
-                              HeadersVisibility="Column"
-                              RowHeight="28"
-                              FontFamily="Inter"
-                              FontSize="12"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Auto">
-                        <DataGrid.ColumnHeaderStyle>
-                            <Style TargetType="DataGridColumnHeader">
-                                <Setter Property="Background" Value="#F4F4F6"/>
-                                <Setter Property="Foreground" Value="#18181B"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
-                                <Setter Property="Height" Value="34"/>
-                                <Setter Property="BorderBrush" Value="#E4E4E7"/>
-                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                                <Setter Property="Padding" Value="8,0"/>
-                            </Style>
-                        </DataGrid.ColumnHeaderStyle>
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Text Content" Binding="{Binding TextContent}" Width="*"/>
-                            <DataGridTextColumn Header="Element" Binding="{Binding ElementName}" Width="*"/>
-                            <DataGridTextColumn Header="Element ID" Binding="{Binding ElementId}" Width="120"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
+                    <Border BorderBrush="#CBD5E1" BorderThickness="1" CornerRadius="8" Background="#F8FAFC">
+                        <DataGrid x:Name="dg_preview"
+                                  Background="White"
+                                  BorderThickness="0"
+                                  AutoGenerateColumns="False"
+                                  AlternatingRowBackground="#F8FAFC"
+                                  CanUserAddRows="False"
+                                  IsReadOnly="True"
+                                  Height="180"
+                                  GridLinesVisibility="Horizontal"
+                                  HorizontalGridLinesBrush="#F1F5F9"
+                                  HeadersVisibility="Column"
+                                  RowHeight="28"
+                                  FontFamily="Inter"
+                                  FontSize="12"
+                                  Foreground="#27272A"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Auto">
+                            <DataGrid.ColumnHeaderStyle>
+                                <Style TargetType="DataGridColumnHeader">
+                                    <Setter Property="Background" Value="#FFFFFF"/>
+                                    <Setter Property="Foreground" Value="#9A9AA2"/>
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                    <Setter Property="FontSize" Value="11"/>
+                                    <Setter Property="Height" Value="34"/>
+                                    <Setter Property="BorderBrush" Value="#E2E8F0"/>
+                                    <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                    <Setter Property="Padding" Value="8,0"/>
+                                </Style>
+                            </DataGrid.ColumnHeaderStyle>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Text Content" Binding="{Binding TextContent}" Width="*"/>
+                                <DataGridTextColumn Header="Element" Binding="{Binding ElementName}" Width="*"/>
+                                <DataGridTextColumn Header="Element ID" Binding="{Binding ElementId}" Width="120"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
 
                     <!-- ACTION BUTTONS -->
                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">

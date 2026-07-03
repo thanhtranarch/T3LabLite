@@ -72,7 +72,7 @@ lib_dir    = os.path.join(EXT_DIR, 'lib')
 if lib_dir not in sys.path:
     sys.path.append(lib_dir)
 
-XAML_FILE  = os.path.join(EXT_DIR, 'lib', 'GUI', 'Tools', 'PointCloudModel.xaml')
+XAML_FILE  = os.path.join(EXT_DIR, 'lib', 'GUI', 'Tools', 'PointCloud.xaml')
 
 # DEFINE VARIABLES
 # ==============================================================================
@@ -1438,16 +1438,16 @@ class PointCloudModelWindow(forms.WPFWindow):
         total = len(elems)
         self.pnl_empty_state.Visibility = Visibility.Collapsed
         if total > 0:
-            self.results_grid.ItemsSource  = elems
-            self.results_grid.Visibility   = Visibility.Visible
-            self.pnl_no_results.Visibility = Visibility.Collapsed
-            self.btn_generate.IsEnabled    = True
-            self.btn_generate.Content      = u"Generate {} Selected".format(total)
+            self.results_grid.ItemsSource     = elems
+            self.results_grid_card.Visibility = Visibility.Visible
+            self.pnl_no_results.Visibility    = Visibility.Collapsed
+            self.btn_generate.IsEnabled       = True
+            self.btn_generate.Content         = u"Generate {} Selected".format(total)
         else:
-            self.results_grid.Visibility   = Visibility.Collapsed
-            self.pnl_no_results.Visibility = Visibility.Visible
-            self.btn_generate.IsEnabled    = False
-            self.btn_generate.Content      = u"Generate"
+            self.results_grid_card.Visibility = Visibility.Collapsed
+            self.pnl_no_results.Visibility    = Visibility.Visible
+            self.btn_generate.IsEnabled       = False
+            self.btn_generate.Content         = u"Generate"
 
     # ── Step 2 handlers ────────────────────────────────────────────────────────
 

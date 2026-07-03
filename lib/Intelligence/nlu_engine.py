@@ -21,10 +21,17 @@ import unicodedata
 # ─── Diacritics helper ────────────────────────────────────────────────────────
 
 def _strip_diacritics(text):
-    """Remove all combining diacritic marks (works for Vietnamese, etc.)."""
+    """Remove all combining diacritic marks (works for Vietnamese, etc.).
+
+    NFD does NOT decompose đ/Đ (letter D with stroke — a standalone letter,
+    not base+mark), so they are folded to d/D explicitly. Without this,
+    "được" normalises to "đuoc" and later regex cleaning eats the đ,
+    silently breaking every rule containing "duoc", "dong bo", "doc"...
+    """
     try:
         nfd = unicodedata.normalize('NFD', text)
-        return ''.join(c for c in nfd if unicodedata.category(c) != 'Mn')
+        out = ''.join(c for c in nfd if unicodedata.category(c) != 'Mn')
+        return out.replace(u'đ', 'd').replace(u'Đ', 'D')
     except Exception:
         return text
 
@@ -42,9 +49,13 @@ _ABBREVS = [
     # ── Tool name normalisations ───────────────────────────────────────────────
     # BatchOut
     ("batch out",       "batchout"),
-    ("batcho",          "batchout"),
+    (" batcho ",        " batchout "),  # word-boundary padded: "batcho" is a
+                                         # substring PREFIX of "batchout" itself,
+                                         # so an unpadded rule here self-mangles
+                                         # the correct word into "batchoutut"
     ("b.out",           "batchout"),
-    ("bo ",             "batchout "),   # trailing space avoids "bo override"
+    # NOTE: the risky bare "bo " -> "batchout " shorthand is intentionally
+    # NOT here — see the end of this list for why.
     # ParaSync
     ("para sync",       "parasync"),
     ("dong bo tham so", "parasync"),
@@ -54,12 +65,17 @@ _ABBREVS = [
     ("parameter sync",  "parasync"),
     (" ps ",            " parasync "),
     # Load Family Cloud
+    ("load family cloud","loadfamilycloud"),
     ("load fam cloud",  "loadfamilycloud"),
     ("tai family cloud","loadfamilycloud"),
     ("load cloud",      "loadfamilycloud"),
     (" lfc ",           " loadfamilycloud "),
     # Load Family
-    ("load fam",        "loadfamily"),
+    ("load family",     "loadfamily"),
+    (" load fam ",      " loadfamily "),  # word-boundary padded: unpadded "load
+                                           # fam" is a substring PREFIX of "load
+                                           # family" and would mangle it into
+                                           # "loadfamilyily"
     ("tai family",      "loadfamily"),
     ("nap family",      "loadfamily"),
     ("keo family",      "loadfamily"),
@@ -182,6 +198,25 @@ _ABBREVS = [
     ("image",           "img"),
     ("picture",         "img"),
 
+    # ── "What can you do" capability-query normalisation ─────────────────────
+    # English capability questions are made of nothing but stopwords
+    # ("what", "can", "you", "do") once tokenised, so without this they score
+    # zero on every intent and fall through to the generic "didn't understand"
+    # reply. Collapse the whole phrase to one non-stopword marker up front.
+    ("what can you do",         "capabilities query"),
+    ("what can u do",           "capabilities query"),
+    ("what do you do",          "capabilities query"),
+    ("what could you do",      "capabilities query"),
+    ("what are you capable of","capabilities query"),
+    ("what can this do",        "capabilities query"),
+    ("what can this tool do",   "capabilities query"),
+    ("what features do you have","capabilities query"),
+    ("what tools do you have",  "capabilities query"),
+    ("how can you help me",     "capabilities query"),
+    ("how can you help",        "capabilities query"),
+    ("who are you",             "capabilities query"),
+    ("what are you",            "capabilities query"),
+
     # ── Greeting shortcuts ────────────────────────────────────────────────────
     ("chao buoi sang",  "chao"),
     ("chao buoi chieu", "chao"),
@@ -231,6 +266,15 @@ _ABBREVS = [
     # ── Vietnamese "open" at word boundary ───────────────────────────────────
     ("mo ",             "open "),
     ("mo\n",            "open\n"),
+
+    # ── Bare "bo" -> BatchOut shorthand (LAST on purpose) ─────────────────────
+    # "bo" is dangerously short and collides with real Vietnamese words that
+    # end in "bo" after diacritics are stripped, most importantly "toàn bộ"
+    # ("all") -> "toan bo". Every rule above this point already consumes its
+    # own "bo" first (dong bo/parasync, bo override/resetoverrides, toan bo/
+    # all, tat ca/all, etc.), so by the time this runs, any leftover
+    # standalone "bo" can only be the actual BatchOut shorthand.
+    ("bo ",             "batchout "),
 ]
 
 
@@ -327,7 +371,7 @@ _TRIGGERS = {
         ("open",                2),
     ],
 
-    "open_loadfamilycloud": [
+    "open_loadfamily_cloud": [
         ("loadfamilycloud",    35),
         ("open loadfamilycloud", 40),
         ("mo loadfamilycloud", 40),
@@ -399,7 +443,13 @@ _TRIGGERS = {
         ("hi ban",             25),
         ("hey ban",            25),
         ("good morning",       20),    # also handled by ABBREVS
-        ("morning",            12),
+        # Bare time-of-day greetings must clear the 18 threshold on their own:
+        # at 12, a lone "morning" fell through to the LLM, which once
+        # hallucinated a tool intent that then got permanently mis-learned.
+        ("morning",            20),
+        ("afternoon",          20),
+        ("evening",            20),
+        ("yo",                 18),
         ("chao buoi",          25),
         # Farewell (treat as greet-class conversational)
         ("tam biet",           22),
@@ -473,6 +523,20 @@ _TRIGGERS = {
         ("xin loi",            20),    # sorry/excuse me
         ("sorry",              15),
         ("pardon",             12),
+        # ── Frustration / insult directed at the assistant ────────────────────
+        # Not tool-related — give an honest, de-escalating reply instead of the
+        # generic "didn't understand" message (see _build_message).
+        ("stupid",             22),
+        ("dumb",               20),
+        ("useless",            22),
+        ("garbage",            20),
+        ("trash",              18),
+        ("suck",               18),
+        ("sucks",              18),
+        ("ngu",                20),
+        ("vo dung",            22),
+        ("te qua",             20),
+        ("qua te",             20),
     ],
 
     "help": [
@@ -502,6 +566,7 @@ _TRIGGERS = {
         ("lam sao de xuat",    28),
         ("lam sao de mo",      28),
         # ── "What can you do?" ────────────────────────────────────────────────
+        ("capabilities query", 30),   # normalised from EN phrasing via _ABBREVS
         ("lam duoc gi",        25),
         ("dung duoc gi",       25),
         ("ho tro gi",          25),
@@ -566,7 +631,7 @@ _THRESHOLDS = {
     "export_direct":             18,
     "open_batchout_configured":  25,   # needs both open+batchout+params
     "open_parasync":             18,
-    "open_loadfamilycloud":      25,
+    "open_loadfamily_cloud":     25,
     "open_loadfamily":           18,
     "open_projectname":          18,
     "open_workset":              18,
@@ -578,6 +643,65 @@ _THRESHOLDS = {
     "chat":                      18,
     "help":                      18,
 }
+
+
+# ─── Conversational-input gate ────────────────────────────────────────────────
+# Distinguishes pure small talk (greeting / thanks / acknowledgement / emotion)
+# from tool commands. This is the safety gate that keeps the higher layers
+# honest: learned patterns must never be recorded for — or matched against —
+# conversational input, and no tool may be launched from it, regardless of
+# what an LLM hallucinated.
+
+# Any of these words present → definitely a command, never small talk.
+_COMMAND_WORDS = {
+    "batchout", "parasync", "loadfamily", "loadfamilycloud", "projectname",
+    "workset", "dimtext", "upperdimtext", "resetoverrides", "grids", "grid",
+    "export", "open", "print", "sheet", "sheets", "family", "luoi", "truc",
+    "pdf", "dwg", "dwf", "dgn", "ifc", "nwd", "img", "in",
+    "capabilities", "query",   # normalised capability-question marker
+}
+
+
+def _build_conversational_words():
+    """Lexicon of small-talk words, derived from the greet/chat trigger tables
+    so it stays in sync, plus bare words those tables only contain inside
+    multi-word phrases."""
+    words = set()
+    for intent in ("greet", "chat"):
+        for feat, _w in _TRIGGERS[intent]:
+            words.update(feat.split())
+    words.update({
+        "morning", "afternoon", "evening", "night", "yo", "sup",
+        "gm", "gn", "haha", "hihi", "lol", "ban", "buoi",
+        "please", "welcome", "greetings",
+    })
+    return words - _COMMAND_WORDS
+
+
+_CONVERSATIONAL_WORDS = _build_conversational_words()
+
+
+def is_conversational(user_input):
+    """Return True when the input is pure small talk and contains no
+    tool/command keyword (e.g. "morning", "cảm ơn nhé", "ok roi").
+
+    Conservative by design: any command word, any unknown meaningful word,
+    or anything longer than 6 tokens → False (treat as a possible command).
+    """
+    if not user_input or not user_input.strip():
+        return False
+    expanded = _expand(_norm(user_input))
+    clean = re.sub(r'[^a-z0-9\s]', ' ', expanded)
+    tokens = clean.split()
+    if not tokens or len(tokens) > 6:
+        return False
+    for t in tokens:
+        if t in _COMMAND_WORDS:
+            return False
+    meaningful = [t for t in tokens if t not in _STOPWORDS and len(t) >= 2]
+    if not meaningful:
+        return True   # nothing but filler words → chit-chat
+    return all(t in _CONVERSATIONAL_WORDS for t in meaningful)
 
 
 # ─── Slot extraction ──────────────────────────────────────────────────────────
@@ -646,7 +770,7 @@ _TOOL_LABELS = {
     "open_batchout_configured":"BatchOut",
     "open_parasync":          "ParaSync",
     "open_loadfamily":        "Load Family",
-    "open_loadfamilycloud":   "Load Family Cloud",
+    "open_loadfamily_cloud":  "Load Family Cloud",
     "open_projectname":       "Project Name",
     "open_workset":           "Workset",
     "open_dimtext":           "Dim Text",
@@ -659,7 +783,7 @@ _TOOL_LABELS = {
 _TOOL_KEYWORDS = {
     "batchout":       "open_batchout",
     "parasync":       "open_parasync",
-    "loadfamilycloud":"open_loadfamilycloud",
+    "loadfamilycloud":"open_loadfamily_cloud",
     "loadfamily":     "open_loadfamily",
     "projectname":    "open_projectname",
     "workset":        "open_workset",
@@ -668,6 +792,370 @@ _TOOL_KEYWORDS = {
     "resetoverrides": "open_resetoverrides",
     "grids":          "open_grids",
 }
+
+
+# ─── Deterministic tool resolver ─────────────────────────────────────────────
+# Ranks the user's text against EVERY known tool (builtin + auto-discovered)
+# and only answers when one tool clearly wins. This replaces the old
+# first-keyword-substring match, which returned whichever registry entry
+# happened to be iterated first (e.g. "mở mcp control" → CAD to Elements,
+# because a generic keyword matched earlier in the dict).
+
+# Builtin tools (already covered by _TRIGGERS, listed here so the resolver
+# sees one unified catalog):
+#   (intent, title, joined-name, [name aliases], function description)
+# Aliases cover every name a tool goes by: button folder, XAML file, old
+# names — so "mở export manager" (BatchOut's XAML) opens the right tool.
+_BUILTIN_TOOLS = [
+    ("open_batchout", "BatchOut", "batchout",
+     ["Batch Out", "Export Manager"],
+     u"Xuất sheet hàng loạt sang PDF / DWG / DWF / IFC (batch export sheets)"),
+    ("open_parasync", "ParaSync", "parasync",
+     ["Para Sync", "Parameter Sync"],
+     u"Đồng bộ tham số giữa các element (sync parameters)"),
+    ("open_loadfamily", "Load Family", "loadfamily",
+     ["Family Loader"],
+     u"Tải family từ thư viện vào project (load family from library)"),
+    ("open_loadfamily_cloud", "Load Family Cloud", "loadfamilycloud",
+     ["Family Loader Cloud", "Load Fam Cloud"],
+     u"Tải family từ thư viện cloud (load family from cloud library)"),
+    ("open_projectname", "Project Name", "projectname",
+     ["Rename Project"],
+     u"Đổi tên / quản lý thông tin project (rename project)"),
+    ("open_workset", "Workset", "workset",
+     ["Workset Management"],
+     u"Quản lý workset (manage worksets)"),
+    ("open_dimtext", "Dim Text", "dimtext",
+     ["Dimension Text"],
+     u"Chỉnh sửa dimension text (edit dimension text)"),
+    ("open_upperdimtext", "Upper Dim Text", "upperdimtext",
+     ["Upper All", "Upper Dimension Text"],
+     u"Chuyển dimension text thành chữ hoa (uppercase dimension text)"),
+    ("open_resetoverrides", "Reset Overrides", "resetoverrides",
+     ["Reset Graphic Overrides"],
+     u"Xóa graphic override trong view (reset graphic overrides)"),
+    ("open_grids", "Grids", "grids",
+     ["Grid Manager"],
+     u"Quản lý lưới trục (manage grids)"),
+]
+
+# Verbs that signal "open this tool" (post-_expand, so "mở/bật/chạy" → open)
+_OPEN_VERBS = {"open", "launch", "start", "run", "show"}
+
+
+def _singularise(w):
+    """Fold trivial English plurals so 'views' matches 'view' etc."""
+    if len(w) >= 4 and w.endswith("s") and not w.endswith("ss"):
+        return w[:-1]
+    return w
+
+
+def _camel_split(text):
+    """'DWGManagement' → 'DWG Management' — word boundaries for camel names."""
+    return re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', text)
+
+
+def _name_variants(text):
+    """Return (joined_names, word_set) for ONE tool name, covering the raw,
+    camel-split, and _expand()-normalised forms (so "ImageToDrafting" yields
+    words {image, drafting} and also matches input ABBREVS rewrote to
+    "img to drafting")."""
+    joined, words = set(), set()
+    for base in (text, _camel_split(text)):
+        for form in (_norm(base), _expand(_norm(base))):
+            j = re.sub(r'[^a-z0-9]', '', form)
+            if j:
+                joined.add(j)
+            for w in re.findall(r'[a-z0-9]+', form):
+                if w not in _STOPWORDS and len(w) >= 2:
+                    words.add(_singularise(w))
+    return joined, words
+
+
+def _desc_words(desc):
+    """Normalised word set from a function description (for capability Q&A)."""
+    out = set()
+    for w in re.findall(r'[a-z0-9]+', _norm(_camel_split(desc or ''))):
+        if w not in _STOPWORDS and len(w) >= 2:
+            out.add(_singularise(w))
+    return out
+
+
+def _tool_entry(intent, title, names, desc='', panel='', extra_words=None):
+    """Build one catalog entry. `names` is EVERY name the tool goes by
+    (title, button folder, XAML basenames, aliases) — kept as separate
+    variants so exact matching works per-name, plus a word union for fuzzy."""
+    joined_all, variants, union = set(), [], set()
+    for name in names:
+        if not name:
+            continue
+        j, w = _name_variants(name)
+        joined_all |= j
+        if w and frozenset(w) not in variants:
+            variants.append(frozenset(w))
+        union |= w
+    dwords = _desc_words(desc)
+    if extra_words:
+        dwords |= set(extra_words)
+    return {'intent': intent, 'title': title, 'desc': (desc or '').strip(),
+            'panel': panel, 'joined': joined_all, 'variants': variants,
+            'words': union, 'desc_words': dwords}
+
+
+def _tool_catalog():
+    """Return every known tool — builtin + auto-discovered — with all its
+    names (title / button folder / XAML / aliases) unified per tool."""
+    catalog = []
+    for intent, title, joined, aliases, desc in _BUILTIN_TOOLS:
+        e = _tool_entry(intent, title, [title] + list(aliases), desc,
+                        panel=u"Core")
+        e['joined'].add(joined)
+        catalog.append(e)
+    try:
+        from Services.tool_discovery import get_registered_tools
+        tools = get_registered_tools()
+    except Exception:
+        tools = []
+    for t in tools:
+        title = ((t.get('title') or '')
+                 .replace('&amp;', ' ').replace('&', ' ').strip())
+        btn   = (t.get('button') or '').replace('.pushbutton', '')
+        names = [title, btn] + list(t.get('xaml') or [])
+        kw_words = set()
+        for kw in (t.get('keywords') or []):
+            for w in re.findall(r'[a-z0-9]+', _norm(kw)):
+                if w not in _STOPWORDS and len(w) >= 2:
+                    kw_words.add(_singularise(w))
+        e = _tool_entry(t.get('intent'), title or btn, names,
+                        t.get('doc') or '',
+                        panel=(t.get('panel') or '').replace('.panel', ''),
+                        extra_words=kw_words)
+        if e['words'] or e['joined']:
+            catalog.append(e)
+    return catalog
+
+
+def resolve_tool(user_input, exact_only=False):
+    """Deterministically resolve a tool-open request against the full catalog.
+
+    Returns (match, candidates):
+      match      – {'intent','title',...} when exactly one tool clearly wins
+      candidates – up to 3 plausible tools when the request is ambiguous
+
+    Exact wins are judged on ALL tokens minus open-verbs, KEEPING stopwords —
+    so "workset manager" is exactly Workset Manager, while "mcp control la gi"
+    is NOT exact (the question words survive and block it, letting the help
+    intent handle it). Exact = whole query joins to a tool's joined name
+    ("mcpcontrol", "cadtoelements"), or the token set equals the tool's word
+    set in any order ("manager dwg"). Fuzzy wins need score ≥ 0.75 AND a
+    ≥ 0.2 lead over the runner-up — otherwise the request is reported
+    ambiguous instead of guessed.
+    """
+    if not user_input or not user_input.strip():
+        return None, []
+    expanded = _expand(_norm(user_input))
+    clean = re.sub(r'[^a-z0-9\s]', ' ', expanded)
+    tokens_all = [w for w in clean.split() if w not in _OPEN_VERBS]
+    if not tokens_all or len(tokens_all) > 8:
+        return None, []
+    qjoined_all = "".join(tokens_all)
+    qset_all    = set(_singularise(w) for w in tokens_all)
+    # Stopword-free set for fuzzy scoring only
+    qset = set(_singularise(w) for w in tokens_all if w not in _STOPWORDS)
+
+    scored = []
+    for tool in _tool_catalog():
+        exact = (qjoined_all in tool['joined']
+                 or any(qset_all == v for v in tool['variants'])
+                 or (len(tokens_all) == 1 and tokens_all[0] in tool['joined']))
+        if exact:
+            scored.append((1.0, True, tool))
+            continue
+        inter = qset & tool['words']
+        if inter:
+            cov_tool  = len(inter) / float(len(tool['words']))
+            cov_query = len(inter) / float(len(qset))
+            # Fuzzy can reach 1.0 on perfect two-way coverage (e.g. "batchout
+            # là gì" covers the word "batchout" fully) — that is NOT an exact
+            # name hit, so it must stay distinguishable from exact=True.
+            scored.append((0.6 * cov_tool + 0.4 * cov_query, False, tool))
+
+    if not scored:
+        return None, []
+    scored.sort(key=lambda x: (-x[0], not x[1]))
+    top_score, top_exact, top = scored[0]
+    runner_up = scored[1][0] if len(scored) > 1 else 0.0
+
+    if top_exact:
+        # Two DIFFERENT tools both exact (e.g. shared XAML alias) → ambiguous
+        exact_intents = set(t['intent'] for s, e, t in scored if e)
+        if len(exact_intents) > 1:
+            return None, [t for s, e, t in scored if e][:3]
+        return top, []
+    if exact_only:
+        return None, []
+    if top_score >= 0.75 and (top_score - runner_up) >= 0.2:
+        return top, []
+    candidates = [t for s, e, t in scored[:3] if s >= 0.45]
+    return None, candidates
+
+
+def _has_open_verb(expanded):
+    """True if the expanded text contains an explicit open verb."""
+    return bool(set(expanded.split()) & _OPEN_VERBS)
+
+
+# ─── Capability questions ─────────────────────────────────────────────────────
+# "Có tool nào để X không?" / "Do you have a tool for X?" must be answered
+# from the REAL tool catalog — name the matching tools, or say honestly that
+# none exists. Never left to the LLM to invent an answer.
+
+_CAP_RES = [
+    re.compile(r'\bco\s+(?:tool|cong cu|chuc nang|tinh nang|lenh)\b'),
+    re.compile(r'\b(?:tool|cong cu|lenh)\s+nao\b'),
+    re.compile(r'\b(?:tool|cong cu)\s+(?:de|giup|ho tro|cho)\b'),
+    re.compile(r'\btool\s+(?:for|to)\b'),
+    re.compile(r'\bdo\s+you\s+have\b'),
+    re.compile(r'\bis\s+there\s+(?:a|an|any)\b'),
+    re.compile(r'\b(?:which|what)\s+tool\b'),
+    re.compile(r'\bany\s+tool\b'),
+    re.compile(r'\bhave\s+a\s+tool\b'),
+    # Generic "what can you do" (EN forms were collapsed by _ABBREVS)
+    re.compile(r'\bcapabilities query\b'),
+    re.compile(r'\blam duoc gi\b'),
+    re.compile(r'\bdung duoc gi\b'),
+    re.compile(r'\bho tro gi\b'),
+    re.compile(r'\bbiet lam gi\b'),
+    re.compile(r'\bgiup duoc gi\b'),
+]
+
+# Question boilerplate stripped before matching the FUNCTION words
+# (many of these are already stopwords; listed for safety)
+_CAP_BOILERPLATE = {
+    "tool", "cong", "cu", "chuc", "nang", "tinh", "lenh", "nao",
+    "have", "there", "which", "what", "any", "capabilities", "query",
+    "biet", "ung", "dung", "ban", "assistant", "t3lab", "co", "khong",
+    "gi", "giup", "ho", "tro", "lam", "duoc", "thuc", "hien", "does",
+    "function", "feature", "help", "the",
+}
+
+
+def is_capability_question(expanded):
+    """True if the (expanded) input asks whether a tool/feature exists."""
+    clean = re.sub(r'[^a-z0-9\s]', ' ', expanded)
+    padded = u" " + u" ".join(clean.split()) + u" "
+    return any(r.search(padded) for r in _CAP_RES)
+
+
+def _capabilities_overview(viet):
+    """Full tool list grouped by ribbon panel — for 'what can you do?'."""
+    groups, order = {}, []
+    for tool in _tool_catalog():
+        panel = tool.get('panel') or (u"Khác" if viet else u"Other")
+        if panel not in groups:
+            groups[panel] = []
+            order.append(panel)
+        groups[panel].append(tool['title'])
+    lines = []
+    total = 0
+    for panel in order:
+        titles = groups[panel]
+        total += len(titles)
+        shown = u", ".join(titles[:8])
+        if len(titles) > 8:
+            shown += (u" +{} tool khác".format(len(titles) - 8) if viet
+                      else u" +{} more".format(len(titles) - 8))
+        lines.append(u"**{}**: {}".format(panel, shown))
+    if viet:
+        return (u"🧰 T3Lab có {} tool:\n{}\n\n"
+                u"Ngoài ra tôi xuất sheet trực tiếp được ('xuất pdf G sheet').\n"
+                u"Gõ 'mở <tên tool>' để mở, hoặc hỏi "
+                u"'có tool nào để ... không?'").format(total, u"\n".join(lines))
+    return (u"🧰 T3Lab has {} tools:\n{}\n\n"
+            u"I can also export sheets directly ('export pdf G sheet').\n"
+            u"Type 'open <tool name>' to open one, or ask "
+            u"'is there a tool for ...?'").format(total, u"\n".join(lines))
+
+
+def answer_capability_question(user_input, viet):
+    """Answer 'do you have a tool for X?' from the real catalog.
+
+    Returns a result dict {intent, params, message, _nlu, _authoritative}.
+    _authoritative tells the pipeline NOT to let an LLM override this —
+    the catalog is the ground truth for what tools exist.
+    """
+    expanded = _expand(_norm(user_input))
+    clean = re.sub(r'[^a-z0-9\s]', ' ', expanded)
+    func = set()
+    for w in clean.split():
+        if (w in _STOPWORDS or w in _CAP_BOILERPLATE or w in _OPEN_VERBS
+                or len(w) < 2):
+            continue
+        func.add(_singularise(w))
+
+    # No function words left → generic capability question → full overview
+    if not func:
+        msg = _capabilities_overview(viet)
+        return {"intent": "help", "params": {"answer": msg}, "message": msg,
+                "_nlu": True, "_authoritative": True}
+
+    catalog = _tool_catalog()
+    # Document frequency — words appearing in ≤2 tools are distinctive
+    df = {}
+    vocabs = []
+    for tool in catalog:
+        vocab = tool['words'] | tool['desc_words']
+        vocabs.append(vocab)
+        for w in vocab:
+            df[w] = df.get(w, 0) + 1
+
+    matches, near = [], []
+    for tool, vocab in zip(catalog, vocabs):
+        inter = func & vocab
+        if not inter:
+            continue
+        score  = len(inter) / float(len(func))
+        strong = any(df.get(w, 99) <= 2 and len(w) >= 3 for w in inter)
+        if score >= 0.5 or strong:
+            matches.append((score + (0.5 if strong else 0.0), tool))
+        else:
+            near.append((score, tool))
+    matches.sort(key=lambda x: -x[0])
+    near.sort(key=lambda x: -x[0])
+
+    if matches:
+        # "bạn có thể mở X không?" — exact tool named + open verb → just open
+        if _has_open_verb(expanded) and matches[0][0] >= 1.4:
+            top = matches[0][1]
+            msg = (u"Đang mở {}...".format(top['title']) if viet
+                   else u"Opening {}...".format(top['title']))
+            return {"intent": top['intent'], "params": {}, "message": msg,
+                    "_nlu": True, "_authoritative": True}
+        lines = []
+        for s, t in matches[:3]:
+            d = (t.get('desc') or u'').strip()
+            lines.append(u"• **{}**{}".format(t['title'],
+                                              u" — " + d if d else u""))
+        if viet:
+            msg = (u"✅ Có! Tool phù hợp:\n{}\n\n"
+                   u"Gõ 'mở <tên tool>' để mở nhé.").format(u"\n".join(lines))
+        else:
+            msg = (u"✅ Yes! Matching tools:\n{}\n\n"
+                   u"Type 'open <tool name>' to launch.").format(u"\n".join(lines))
+    else:
+        near_txt = u", ".join(t['title'] for s, t in near[:3])
+        if viet:
+            msg = u"❌ Hiện T3Lab chưa có tool riêng cho chức năng đó."
+            if near_txt:
+                msg += u"\nGần nhất có thể là: {}.".format(near_txt)
+            msg += u"\nGõ 'bạn làm được gì' để xem toàn bộ danh sách tool."
+        else:
+            msg = u"❌ T3Lab doesn't have a dedicated tool for that yet."
+            if near_txt:
+                msg += u"\nClosest options: {}.".format(near_txt)
+            msg += u"\nType 'what can you do' to see the full tool list."
+    return {"intent": "help", "params": {"answer": msg}, "message": msg,
+            "_nlu": True, "_authoritative": True}
 
 
 def _last_tool_from_history(history):
@@ -690,15 +1178,32 @@ def _is_pronoun_query(normed_expanded):
 
 # ─── Scoring ──────────────────────────────────────────────────────────────────
 
-def _score(intent, unigrams, bigrams):
-    """Compute weighted match score for one intent."""
+def _score(intent, unigrams, bigrams, padded_expanded):
+    """Compute weighted match score for one intent.
+
+    Single-word features are matched against the stopword-filtered unigram
+    set (keeps the existing noise reduction for generic bag-of-words scoring).
+    Multi-word features (2+ words, joined by a space) are matched as a literal
+    phrase against the padded expanded text instead of via the bigram set:
+    many curated phrases here (e.g. "lam duoc gi", "huong dan su dung") are
+    built entirely from short Vietnamese filler words that _tokenise() strips
+    as stopwords, so a bigram/trigram for them could never form otherwise —
+    they would silently never match.
+    """
     score = 0
     all_features = unigrams | bigrams
     for feature, weight in _TRIGGERS.get(intent, []):
-        if feature in all_features:
+        if " " in feature:
+            if (" " + feature + " ") in padded_expanded:
+                score += weight
+        elif feature in all_features:
             score += weight
     for feature, penalty in _PENALTIES.get(intent, []):
-        if feature in all_features:
+        if " " in feature:
+            matched = (" " + feature + " ") in padded_expanded
+        else:
+            matched = feature in all_features
+        if matched:
             score += penalty   # penalty is already negative
     return score
 
@@ -768,7 +1273,7 @@ _MESSAGES_VI = {
     "open_batchout_configured": u"Mở BatchOut đã cấu hình...",
     "open_parasync":          u"Đang mở ParaSync...",
     "open_loadfamily":        u"Đang mở Load Family...",
-    "open_loadfamilycloud":   u"Đang mở Load Family (Cloud)...",
+    "open_loadfamily_cloud":  u"Đang mở Load Family (Cloud)...",
     "open_projectname":       u"Đang mở Project Name...",
     "open_workset":           u"Đang mở Workset...",
     "open_dimtext":           u"Đang mở Dim Text...",
@@ -790,7 +1295,7 @@ _MESSAGES_EN = {
     "open_batchout_configured": "Opening BatchOut (pre-configured)...",
     "open_parasync":          "Opening ParaSync...",
     "open_loadfamily":        "Opening Load Family...",
-    "open_loadfamilycloud":   "Opening Load Family (Cloud)...",
+    "open_loadfamily_cloud":  "Opening Load Family (Cloud)...",
     "open_projectname":       "Opening Project Name...",
     "open_workset":           "Opening Workset...",
     "open_dimtext":           "Opening Dim Text...",
@@ -845,6 +1350,19 @@ def _build_message(intent, slots, viet, raw_input=""):
         if any(k in normed_raw for k in farewell_kws):
             return (_MESSAGES_VI if viet else _MESSAGES_EN).get("farewell",
                     u"Tạm biệt! 👋" if viet else "Goodbye! 👋")
+        # Frustration / insult directed at the assistant itself — acknowledge
+        # honestly instead of the generic "didn't understand" reply, and point
+        # at a concrete next step (works with or without an LLM connected).
+        insult_kws = ["stupid", "dumb", "useless", "garbage", "trash", "suck",
+                      "ngu", "vo dung", "te qua", "qua te"]
+        if any(k in normed_raw for k in insult_kws):
+            if viet:
+                return (u"Xin lỗi vì trải nghiệm chưa tốt! Ở chế độ offline tôi chỉ nhận "
+                        u"diện được lệnh cụ thể — thử 'mở batchout', 'parasync'... "
+                        u"hoặc kết nối AI trong phần Cài đặt để trả lời tự nhiên hơn.")
+            return ("Sorry that reply wasn't good enough! In offline mode I can only "
+                    "recognise specific commands — try 'open batchout', 'parasync'... "
+                    "or connect an AI provider in Settings for smarter answers.")
         # Error/complaint
         error_kws = ["loi", "bi hong", "khong chay", "khong hoat dong", "error",
                      "broken", "not working"]
@@ -908,11 +1426,36 @@ def classify(user_input, history=None):
             return {"intent": last_tool, "params": {}, "message": msg,
                     "_nlu": True}
 
+    # ── Exact tool-name hit → deterministic resolver first ───────────────────
+    # A message that IS a tool name (with or without "mở/open") must always
+    # open exactly that tool — the trigger tables below only know the builtin
+    # tools and the LLM guesses. Exactness consumes every token, so commands
+    # with extra words ("mở batchout G sheet pdf" → configured export,
+    # "mcp control là gì" → help) still fall through to normal scoring.
+    _tool, _ = resolve_tool(user_input, exact_only=True)
+    if _tool:
+        msg = (u"Đang mở {}...".format(_tool['title']) if viet
+               else u"Opening {}...".format(_tool['title']))
+        return {"intent": _tool['intent'], "params": {}, "message": msg,
+                "_nlu": True}
+
+    # ── Capability questions → answered from the real catalog ────────────────
+    # "Có tool nào để X không?" gets a truthful yes (with the matching tools)
+    # or a truthful no — never an LLM guess.
+    if is_capability_question(expanded):
+        return answer_capability_question(user_input, viet)
+
     # ── Tokenise ─────────────────────────────────────────────────────────────
     unigrams, bigrams = _tokenise(expanded)
+    # Punctuation-stripped, whitespace-normalised text for the multi-word
+    # phrase matcher in _score() — must match what _tokenise() sees, or a
+    # trailing "?"/"." blocks the closing word-boundary space and the phrase
+    # never matches (e.g. "what can you do?").
+    _clean = re.sub(r'[^a-z0-9\s]', ' ', expanded)
+    padded_expanded = u" " + u" ".join(_clean.split()) + u" "
 
     # ── Score every intent ───────────────────────────────────────────────────
-    scores = {intent: _score(intent, unigrams, bigrams)
+    scores = {intent: _score(intent, unigrams, bigrams, padded_expanded)
               for intent in _TRIGGERS}
 
     # ── Extract slots (needed for disambiguation) ────────────────────────────
@@ -920,6 +1463,28 @@ def classify(user_input, history=None):
 
     # ── Disambiguate ─────────────────────────────────────────────────────────
     best = _disambiguate(dict(scores), unigrams, bigrams, slots)
+
+    # ── Ranked tool resolver (offline, no LLM round-trip needed) ─────────────
+    # Nothing in the trigger tables matched — try the full tool catalog with
+    # confidence + margin rules. A clear winner opens; an ambiguous "open X"
+    # asks the user to pick instead of guessing (or letting the LLM guess).
+    if best is None:
+        _tool, _cands = resolve_tool(user_input)
+        if _tool:
+            msg = (u"Đang mở {}...".format(_tool['title']) if viet
+                   else u"Opening {}...".format(_tool['title']))
+            return {"intent": _tool['intent'], "params": {}, "message": msg,
+                    "_nlu": True}
+        if _cands and _has_open_verb(expanded):
+            names = u"\n".join(u"• {}".format(c['title']) for c in _cands)
+            if viet:
+                msg = (u"Bạn muốn mở tool nào? Tôi tìm thấy các tool gần giống:\n"
+                       u"{}\nGõ đúng tên tool để mở chính xác nhé!".format(names))
+            else:
+                msg = ("Which tool do you mean? Closest matches:\n"
+                       "{}\nType the exact tool name to open it!".format(names))
+            return {"intent": "chat", "params": {}, "message": msg,
+                    "_nlu": True, "_authoritative": True}
 
     # ── Soft fallback for conversational input that scored nothing ────────────
     # If classification failed but the input looks conversational (no tool
@@ -941,7 +1506,12 @@ def classify(user_input, history=None):
                 msg = ("Sorry, I didn't understand. You can try:\n"
                        "• 'open batchout' / 'export pdf G sheet'\n"
                        "• 'parasync', 'load family', 'workset'...")
-            return {"intent": "chat", "params": {}, "message": msg, "_nlu": True}
+            # _generic_fallback marks this as a placeholder guess, not a real
+            # answer — script.py uses it to avoid masking a clearer "the AI
+            # didn't respond" message behind this same canned text whenever
+            # the LLM call itself times out or errors.
+            return {"intent": "chat", "params": {}, "message": msg, "_nlu": True,
+                    "_generic_fallback": True}
         return None
 
     # ── Build result ─────────────────────────────────────────────────────────

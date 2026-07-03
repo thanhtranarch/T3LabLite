@@ -53,7 +53,7 @@ from System.Windows import WindowState
 from pyrevit import revit, forms, script
 
 SCRIPT_DIR = os.path.dirname(__file__)
-EXT_DIR    = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
+EXT_DIR    = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
 lib_dir    = os.path.join(EXT_DIR, 'lib')
 if lib_dir not in sys.path:
     sys.path.append(lib_dir)
@@ -1482,6 +1482,7 @@ class TileLayoutWindow(forms.WPFWindow):
         self._rows   = []        # [FloorRowVM] (parallel to _floors)
         self._params = {}
         self._step   = STEP_BOUNDARIES
+        self._max_step = STEP_BOUNDARIES   # furthest step reached — gates sidebar nav
         self._selection_buttons = {}   # (floor_idx, option_id) → Border
         self._pattern_ctrls     = []   # [(ComboBox, TextBox)] per floor
         self._applied = False
@@ -1509,26 +1510,25 @@ class TileLayoutWindow(forms.WPFWindow):
     def close_button_clicked(self, sender, args):
         self.Close()
 
+    # ── sidebar step navigation ──────────────────────────────────────────────
+    def step_nav_clicked(self, sender, args):
+        """Sidebar step icon clicked — jump back to an already-reached step."""
+        target = {"step1_toggle": STEP_BOUNDARIES,
+                  "step2_toggle": STEP_PATTERN,
+                  "step3_toggle": STEP_CONCEPTS}.get(sender.Name)
+        if target is not None and target <= self._max_step:
+            self._step = target
+        self._refresh_step_ui()
+
     # ── step indicator / action-bar refresh ──────────────────────────────────
     def _refresh_step_ui(self):
-        """Update step circles, Back/Next button state and labels."""
-        from System.Windows.Media import SolidColorBrush, Color as WColor
-        active = SolidColorBrush(WColor.FromRgb(52, 152, 219))   # #3498DB
-        inactive = SolidColorBrush(WColor.FromRgb(189, 195, 199)) # #BDC3C7
-        active_text = SolidColorBrush(WColor.FromRgb(44, 62, 80))
-        inactive_text = SolidColorBrush(WColor.FromRgb(127, 140, 141))
+        """Update sidebar step toggles, Back/Next button state and labels."""
+        self._max_step = max(self._max_step, self._step)
 
-        circles = [self.step1_circle, self.step2_circle, self.step3_circle]
-        labels  = [self.step1_label,  self.step2_label,  self.step3_label]
-        for i, (c, lb) in enumerate(zip(circles, labels)):
-            if i <= self._step:
-                c.Background = active
-                lb.Foreground = active_text
-                lb.FontWeight = __import__('System').Windows.FontWeights.SemiBold
-            else:
-                c.Background = inactive
-                lb.Foreground = inactive_text
-                lb.FontWeight = __import__('System').Windows.FontWeights.Normal
+        toggles = [self.step1_toggle, self.step2_toggle, self.step3_toggle]
+        for i, tb in enumerate(toggles):
+            tb.IsChecked = (i == self._step)
+            tb.IsEnabled = (i <= self._max_step)
 
         self.wizard_tabs.SelectedIndex = self._step
         self.btn_back.IsEnabled = self._step > STEP_BOUNDARIES
@@ -2406,9 +2406,31 @@ class TileLayoutWindow(forms.WPFWindow):
 # ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _get_all_floors():
+    """Every Floor instance in the model (used as the default Step 1 list)."""
+    return list(FilteredElementCollector(doc)
+                .OfCategory(BuiltInCategory.OST_Floors)
+                .WhereElementIsNotElementType()
+                .ToElements())
+
+
 def _pick_floors_from_revit():
-    """Run PickObjects on the clean main UI thread (no modal window open)."""
-    # Honour a live pre-selection if it already contains floors.
+    """Run PickObjects on the clean main UI thread (no modal window open).
+    Used only by the "Pick Floors in Model" button's repick cycle — always
+    an interactive pick, never falls back to listing every floor."""
+    try:
+        refs = uidoc.Selection.PickObjects(
+            ObjectType.Element, _FloorFilter(),
+            "Select floor(s) for tile layout — press Finish when done")
+    except Exception:
+        return []
+    return [doc.GetElement(r.ElementId) for r in refs]
+
+
+def _initial_floors():
+    """Default floor set when the wizard first opens: honour a live
+    pre-selection if it already contains floors, otherwise list every
+    floor in the model so the user doesn't have to pick anything first."""
     try:
         sel_ids = list(uidoc.Selection.GetElementIds())
     except Exception:
@@ -2421,19 +2443,13 @@ def _pick_floors_from_revit():
             pre.append(el)
     if pre:
         return pre
-
-    try:
-        refs = uidoc.Selection.PickObjects(
-            ObjectType.Element, _FloorFilter(),
-            "Select floor(s) for tile layout — press Finish when done")
-    except Exception:
-        return []
-    return [doc.GetElement(r.ElementId) for r in refs]
+    return _get_all_floors()
 
 
 def run():
-    """Driver loop: pick → show dialog → maybe re-pick."""
-    floors = _pick_floors_from_revit()
+    """Driver loop: list all floors (or honour pre-selection) → show dialog
+    → user may re-pick specific floors via "Pick Floors in Model"."""
+    floors = _initial_floors()
     while True:
         win = TileLayoutWindow(preselected_floors=floors)
         win.ShowDialog()

@@ -44,6 +44,50 @@ if not _USE_NET:
 HAS_HTTP = _USE_NET or _HAS_URLLIB
 
 
+def _http_error_detail(ex):
+    """Pull the response body out of a failed HTTP call.
+
+    Vendors put the ACTUAL reason in the error body ("Model Not Exist",
+    "Insufficient Balance", "does not support function calling", ...) —
+    without this, every API rejection surfaces as a bare WebException/
+    HTTPError and the UI can only say "the model didn't respond".
+    """
+    # .NET WebException carries the response object
+    try:
+        resp = getattr(ex, "Response", None)
+        if resp is not None:
+            from System.IO import StreamReader
+            reader = StreamReader(resp.GetResponseStream(), _NetEncoding.UTF8)
+            try:
+                body = reader.ReadToEnd()
+            finally:
+                reader.Close()
+            if body:
+                return body[:400]
+    except Exception:
+        pass
+    # urllib2.HTTPError is itself file-like
+    try:
+        read = getattr(ex, "read", None)
+        if callable(read):
+            body = read()
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", "replace")
+            if body:
+                return body[:400]
+    except Exception:
+        pass
+    return None
+
+
+def _raise_with_detail(ex):
+    """Re-raise a transport error, upgrading it to carry the API error body."""
+    detail = _http_error_detail(ex)
+    if detail:
+        raise RuntimeError(u"API error: {}".format(detail))
+    raise ex
+
+
 def http_get_auth(url, headers=None, timeout_ms=8000):
     """
     Authenticated GET request with optional headers.
@@ -125,7 +169,10 @@ def http_post(url, payload, headers=None, timeout_ms=60000):
             rs.Write(body_bytes, 0, body_bytes.Length)
         finally:
             rs.Close()
-        resp = req.GetResponse()
+        try:
+            resp = req.GetResponse()
+        except Exception as ex:
+            _raise_with_detail(ex)
         try:
             reader = StreamReader(resp.GetResponseStream(), _NetEncoding.UTF8)
             try:
@@ -144,7 +191,10 @@ def http_post(url, payload, headers=None, timeout_ms=60000):
         if headers:
             req_headers.update(headers)
         req = Request(url, body_bytes, req_headers)
-        resp = urlopen(req, timeout=float(timeout_ms) / 1000.0)
+        try:
+            resp = urlopen(req, timeout=float(timeout_ms) / 1000.0)
+        except Exception as ex:
+            _raise_with_detail(ex)
         raw = resp.read()
         return raw.decode("utf-8") if isinstance(raw, bytes) else raw
 
@@ -223,7 +273,10 @@ def http_post_stream(url, payload, headers=None, on_line=None, timeout_ms=120000
         finally:
             rs.Close()
 
-        resp = req.GetResponse()
+        try:
+            resp = req.GetResponse()
+        except Exception as ex:
+            _raise_with_detail(ex)
         try:
             reader = StreamReader(resp.GetResponseStream(), _NetEncoding.UTF8)
             try:
@@ -244,8 +297,11 @@ def http_post_stream(url, payload, headers=None, on_line=None, timeout_ms=120000
         req_headers = {"Content-Type": "application/json; charset=utf-8"}
         if headers:
             req_headers.update(headers)
-        req  = Request(url, body_bytes, req_headers)
-        resp = urlopen(req, timeout=120)
+        req = Request(url, body_bytes, req_headers)
+        try:
+            resp = urlopen(req, timeout=120)
+        except Exception as ex:
+            _raise_with_detail(ex)
         for raw_line in resp:
             line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
             if on_line is not None:
@@ -303,6 +359,78 @@ def parse_openai_stream_line(line):
         return delta.get("content")
     except Exception:
         return None
+
+
+# ─── Native tool calling (OpenAI wire format — shared by OpenAI/DeepSeek) ──────
+
+def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
+                      max_tokens=1500, timeout_ms=180000):
+    """One blocking agentic turn against an OpenAI-compatible /chat/completions.
+
+    `messages` must be OpenAI-native (may contain assistant tool_calls and
+    role:"tool" results from earlier iterations) and already end with the
+    latest user / tool turn. Raises on transport failure — callers wrap.
+
+    Returns the uniform chat_agent dict:
+        {"text", "tool_calls":[{"id","name","args"}], "assistant_msg", "stop_reason"}
+    """
+    msgs = []
+    if system_prompt:
+        msgs.append({"role": "system", "content": system_prompt})
+    msgs.extend(list(messages or []))
+
+    payload = {"model": model, "messages": msgs, "max_tokens": max_tokens}
+    if tools:
+        payload["tools"] = tools
+
+    resp_text = http_post(url, payload, headers, timeout_ms=timeout_ms)
+    data = json.loads(resp_text)
+    msg  = (data.get("choices") or [{}])[0].get("message", {}) or {}
+
+    text = msg.get("content") or u""
+    # Reasoning models may in-line their chain of thought — never show it.
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+
+    raw_calls  = msg.get("tool_calls") or []
+    tool_calls = []
+    for c in raw_calls:
+        fn = c.get("function", {}) or {}
+        raw_args = fn.get("arguments")
+        if isinstance(raw_args, dict):          # some servers send an object
+            args = raw_args
+        else:
+            try:
+                args = json.loads(raw_args) if raw_args else {}
+            except Exception:
+                args = {}
+        tool_calls.append({"id": c.get("id", ""),
+                           "name": fn.get("name", ""), "args": args})
+
+    assistant_msg = {"role": "assistant", "content": msg.get("content") or None}
+    if raw_calls:
+        assistant_msg["tool_calls"] = raw_calls
+
+    return {
+        "text":          text,
+        "tool_calls":    tool_calls,
+        "assistant_msg": assistant_msg,
+        "stop_reason":   "tool_use" if tool_calls else "end_turn",
+    }
+
+
+def openai_agent_tool_results(tool_calls, result_strs):
+    """OpenAI format: one role:"tool" message per call, matched by id.
+
+    `result_strs` are pre-serialized JSON strings (agent_loop truncates them);
+    missing entries (cancelled run) are padded to keep the transcript valid.
+    """
+    out = []
+    for i, tc in enumerate(tool_calls):
+        res = result_strs[i] if i < len(result_strs) else u'{"cancelled": true}'
+        out.append({"role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": res})
+    return out
 
 
 class StreamingJSONExtractor(object):
@@ -387,6 +515,26 @@ class BaseLLMProvider(object):
 
     # True if this provider can handle image content blocks
     SUPPORTS_VISION = False
+
+    def _record_error(self, msg):
+        """Remember the most recent failure AND debug-log it.
+
+        chat()/chat_agent() return None on any failure, which the UI can only
+        render as a generic "the model didn't respond". The chat window reads
+        get_last_error() to show the user the API's real reason instead.
+        """
+        try:
+            self._last_error = u"{}".format(msg)[:300]
+        except Exception:
+            self._last_error = u"unknown error"
+        self._debug_log(msg)
+
+    def get_last_error(self):
+        """Most recent failure message, or None. Cleared on each new call."""
+        return getattr(self, "_last_error", None)
+
+    def _clear_error(self):
+        self._last_error = None
 
     def _debug_log(self, msg):
         """Best-effort debug log via pyRevit's logger; never raises.

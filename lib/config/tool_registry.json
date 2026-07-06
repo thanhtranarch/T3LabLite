@@ -1,635 +1,635 @@
 {
-  "version": 2,
   "tools": {
     "AutoDimension.pushbutton": {
-      "button": "AutoDimension.pushbutton",
-      "panel": "Annotation & Select.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\AutoDimension.pushbutton\\script.py",
-      "title": "Auto Dimension",
-      "doc": "Auto Dimension — automatically create dimension chains for selected elements.",
-      "xaml": [],
-      "intent": "open_autodimension",
+      "button": "AutoDimension.pushbutton", 
+      "doc": "Auto Dimension \u2014 automatically create dimension chains for selected elements.", 
+      "intent": "open_autodimension", 
       "keywords": [
-        "auto dimension",
-        "autodimension",
-        "dimension",
+        "auto dimension", 
+        "autodimension", 
+        "dimension", 
         "auto"
-      ]
-    },
-    "ManaDWG.pushbutton": {
-      "button": "ManaDWG.pushbutton",
-      "panel": "Annotation & Select.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\ManaDWG.pushbutton\\script.py",
-      "title": "DWG Manager",
-      "doc": "DWG Management",
-      "xaml": [
-        "DWGManagement"
-      ],
-      "intent": "open_manadwg",
-      "keywords": [
-        "dwgmanagement",
-        "dwg manager",
-        "manager",
-        "manadwg",
-        "mana",
-        "dwg"
-      ]
-    },
-    "ManaSelect.pushbutton": {
-      "button": "ManaSelect.pushbutton",
-      "panel": "Annotation & Select.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\ManaSelect.pushbutton\\script.py",
-      "title": "Mana Select",
-      "doc": "ManaSelect — Unified smart selection manager.",
-      "xaml": [],
-      "intent": "open_manaselect",
-      "keywords": [
-        "mana select",
-        "manaselect",
-        "select",
-        "mana"
-      ]
-    },
-    "ManaAnno.pushbutton": {
-      "button": "ManaAnno.pushbutton",
-      "panel": "Annotation & Select.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\ManaAnno.pushbutton\\script.py",
-      "title": "Mana Anno",
-      "doc": "ManaAnno — Unified annotation and text note manager.",
-      "xaml": [],
-      "intent": "open_manaanno",
-      "keywords": [
-        "mana anno",
-        "manaanno",
-        "mana",
-        "anno"
-      ]
-    },
-    "BCF Reader.pushbutton": {
-      "button": "BCF Reader.pushbutton",
-      "panel": "Data & IFC-SG.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\BCF Reader.pushbutton\\script.py",
-      "title": "BCF Reader",
-      "doc": "DQT BCF Reader (v2 - pyRevit WPFWindow modeless)",
-      "xaml": [
-        "BCFReader"
-      ],
-      "intent": "open_bcf_reader",
-      "keywords": [
-        "bcf reader",
-        "bcfreader",
-        "reader",
-        "bcf"
-      ]
-    },
-    "Foundation Volume.pushbutton": {
-      "button": "Foundation Volume.pushbutton",
-      "panel": "Data & IFC-SG.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\Foundation Volume.pushbutton\\script.py",
-      "title": "Foundation Volume",
-      "doc": "Write Revit computed volume into a selected shared parameter on Structural Foundation elements.",
-      "xaml": [
-        "FoundationVolume"
-      ],
-      "intent": "open_foundation_volume",
-      "keywords": [
-        "foundation volume",
-        "foundationvolume",
-        "foundation",
-        "volume"
-      ]
-    },
-    "IFC-SG.pushbutton": {
-      "button": "IFC-SG.pushbutton",
-      "panel": "Data & IFC-SG.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\IFC-SG.pushbutton\\script.py",
-      "title": "IFC-SG Suite",
-      "doc": "Unified IFC-SG manager: Assign subtypes and verify parameter compliance.",
-      "xaml": [],
-      "intent": "open_ifc_sg",
-      "keywords": [
-        "ifc-sg suite",
-        "ifc-sg",
-        "suite",
-        "ifc",
-        "sg"
-      ]
-    },
-    "ManaContains.pushbutton": {
-      "button": "ManaContains.pushbutton",
-      "panel": "Data & IFC-SG.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaContains.pushbutton\\script.py",
-      "title": "Contains Manager",
-      "doc": "Find elements in spatial containers or collect element data into spatial elements.",
-      "xaml": [],
-      "intent": "open_manacontains",
-      "keywords": [
-        "contains manager",
-        "manacontains",
-        "contains",
-        "manager",
-        "mana"
-      ]
-    },
-    "ManaPara.pushbutton": {
-      "button": "ManaPara.pushbutton",
-      "panel": "Data & IFC-SG.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaPara.pushbutton\\script.py",
-      "title": "Parameter Manager",
-      "doc": "Parameter Manager — Transfer, Text-to-Element, and Values-to-Region tools.",
-      "xaml": [],
-      "intent": "open_manapara",
-      "keywords": [
-        "parameter manager",
-        "parameter",
-        "manapara",
-        "manager",
-        "para",
-        "mana"
-      ]
-    },
-    "ManaSched.pushbutton": {
-      "button": "ManaSched.pushbutton",
-      "panel": "Data & IFC-SG.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaSched.pushbutton\\script.py",
-      "title": "Schedule Manager",
-      "doc": "Schedule Manager — unified Export/Import Excel and Schedule Duplication tool.",
-      "xaml": [],
-      "intent": "open_manasched",
-      "keywords": [
-        "schedule manager",
-        "manasched",
-        "schedule",
-        "manager",
-        "sched",
-        "mana"
-      ]
-    },
-    "CADToElements.pushbutton": {
-      "button": "CADToElements.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\CADToElements.pushbutton\\script.py",
-      "title": "CAD to Elements",
-      "doc": "CAD to Elements — Convert CAD linework into Walls, Floors, or Beams.",
-      "xaml": [],
-      "intent": "open_cadtoelements",
-      "keywords": [
-        "cad to elements",
-        "cadtoelements",
-        "elements",
-        "cadto",
-        "cad",
-        "to"
-      ]
-    },
-    "DoorThreshold.pushbutton": {
-      "button": "DoorThreshold.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\DoorThreshold.pushbutton\\script.py",
-      "title": "Door Threshold",
-      "doc": "Create threshold floors under selected doors.",
-      "xaml": [
-        "DoorThreshold"
-      ],
-      "intent": "open_doorthreshold",
-      "keywords": [
-        "door threshold",
-        "doorthreshold",
-        "threshold",
-        "door"
-      ]
-    },
-    "ImageToDrafting.pushbutton": {
-      "button": "ImageToDrafting.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\ImageToDrafting.pushbutton\\script.py",
-      "title": "Image To Drafting",
-      "doc": "Image To Drafting View  v4.0",
-      "xaml": [
-        "ImageToDrafting"
-      ],
-      "intent": "open_imagetodrafting",
-      "keywords": [
-        "image to drafting",
-        "imagetodrafting",
-        "drafting",
-        "image",
-        "to"
-      ]
-    },
-    "PointCloud.pushbutton": {
-      "button": "PointCloud.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\PointCloud.pushbutton\\script.py",
-      "title": "Point Cloud to Model",
-      "doc": "Scan-to-BIM wizard: extract point cloud data, detect Walls, Floors,",
-      "xaml": [
-        "PointCloud"
-      ],
-      "intent": "open_pointcloud",
-      "keywords": [
-        "point cloud to model",
-        "pointcloud",
-        "point",
-        "model",
-        "cloud",
-        "to"
-      ]
-    },
-    "RoomToFloor.pushbutton": {
-      "button": "RoomToFloor.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\RoomToFloor.pushbutton\\script.py",
-      "title": "Room To Floor",
-      "doc": "Create architectural or structural floors from selected room boundaries.",
-      "xaml": [
-        "RoomToFloor"
-      ],
-      "intent": "open_roomtofloor",
-      "keywords": [
-        "room to floor",
-        "roomtofloor",
-        "floor",
-        "room",
-        "to"
-      ]
-    },
-    "Text to Element.pushbutton": {
-      "button": "Text to Element.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\Text to Element.pushbutton\\script.py",
-      "title": "Text to Element",
-      "doc": "Text to Element — transfer text note content to element parameters via",
-      "xaml": [],
-      "intent": "open_text_to_element",
-      "keywords": [
-        "text to element",
-        "element",
-        "text",
-        "to"
-      ]
-    },
-    "Tile Layout.pushbutton": {
-      "button": "Tile Layout.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Tile Layout.pushbutton\\script.py",
-      "title": "Tile Layout",
-      "doc": "3-step wizard:",
-      "xaml": [
-        "TileLayout"
-      ],
-      "intent": "open_tile_layout",
-      "keywords": [
-        "tile layout",
-        "tilelayout",
-        "layout",
-        "tile"
-      ]
-    },
+      ], 
+      "panel": "Annotation & Select.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\AutoDimension.pushbutton\\script.py", 
+      "title": "Auto Dimension", 
+      "xaml": []
+    }, 
     "AutoJoin.pushbutton": {
-      "button": "AutoJoin.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\AutoJoin.pushbutton\\script.py",
-      "title": "Auto Join",
-      "doc": "Automatically join intersecting Revit elements by category rules.",
+      "button": "AutoJoin.pushbutton", 
+      "doc": "Automatically join intersecting Revit elements by category rules.", 
+      "intent": "open_autojoin", 
+      "keywords": [
+        "auto join", 
+        "autojoin", 
+        "join", 
+        "auto"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\AutoJoin.pushbutton\\script.py", 
+      "title": "Auto Join", 
       "xaml": [
         "AutoJoin"
-      ],
-      "intent": "open_autojoin",
-      "keywords": [
-        "auto join",
-        "autojoin",
-        "auto",
-        "join"
       ]
-    },
-    "SplitElements.pushbutton": {
-      "button": "SplitElements.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\SplitElements.pushbutton\\script.py",
-      "title": "Split Elements",
-      "doc": "Split Elements — Split Walls, Columns, or Floors at selected levels.",
-      "xaml": [],
-      "intent": "open_splitelements",
-      "keywords": [
-        "split elements",
-        "splitelements",
-        "elements",
-        "split"
-      ]
-    },
-    "Wall Cut Profile.pushbutton": {
-      "button": "Wall Cut Profile.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\Wall Cut Profile.pushbutton\\script.py",
-      "title": "Wall Profile Cut from Link",
-      "doc": "Cut wall profiles or create openings based on linked element intersections",
-      "xaml": [],
-      "intent": "open_wall_cut_profile",
-      "keywords": [
-        "wall profile cut from link",
-        "wall cut profile",
-        "profile",
-        "link",
-        "wall",
-        "from",
-        "cut"
-      ]
-    },
-    "Wall_Adjust Base.pushbutton": {
-      "button": "Wall_Adjust Base.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\Wall_Adjust Base.pushbutton\\script.py",
-      "title": "Auto Adjust Base Offset",
-      "doc": "\"",
-      "xaml": [],
-      "intent": "open_wall_adjust_base",
-      "keywords": [
-        "auto adjust base offset",
-        "wall_adjust base",
-        "adjust",
-        "offset",
-        "wall",
-        "auto",
-        "base"
-      ]
-    },
-    "FamiGen.pushbutton": {
-      "button": "FamiGen.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\FamiGen.pushbutton\\script.py",
-      "title": "FamiGen",
-      "doc": "FamiGen — Create Revit families from CAD blocks, JSON schema, or presets.",
-      "xaml": [],
-      "intent": "open_famigen",
-      "keywords": [
-        "famigen",
-        "fami",
-        "gen"
-      ]
-    },
-    "ManaFami.pushbutton": {
-      "button": "ManaFami.pushbutton",
-      "panel": "Modeling & Datum.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ManaFami.pushbutton\\script.py",
-      "title": "Family Manager",
-      "doc": "Family Manager — Manage families and load new families in one dialog.",
-      "xaml": [],
-      "intent": "open_manafami",
-      "keywords": [
-        "family manager",
-        "manafami",
-        "manager",
-        "family",
-        "fami",
-        "mana"
-      ]
-    },
+    }, 
     "AutoWork.pushbutton": {
-      "button": "AutoWork.pushbutton",
-      "panel": "Standard.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standard.panel\\AutoWork.pushbutton\\script.py",
-      "title": "Auto Work",
-      "doc": "Quick Click: automate repetitive clicks at a fixed screen coordinate.",
+      "button": "AutoWork.pushbutton", 
+      "doc": "Quick Click: automate repetitive clicks at a fixed screen coordinate.", 
+      "intent": "open_autowork", 
+      "keywords": [
+        "auto work", 
+        "autowork", 
+        "auto", 
+        "work"
+      ], 
+      "panel": "Standard.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standard.panel\\AutoWork.pushbutton\\script.py", 
+      "title": "Auto Work", 
       "xaml": [
         "AutoWork"
-      ],
-      "intent": "open_autowork",
-      "keywords": [
-        "auto work",
-        "autowork",
-        "auto",
-        "work"
       ]
-    },
-    "UIShowcase.pushbutton": {
-      "button": "UIShowcase.pushbutton",
-      "panel": "Standard.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standard.panel\\UIShowcase.pushbutton\\script.py",
-      "title": "UIShowcase",
-      "doc": "",
-      "xaml": [],
-      "intent": "open_uishowcase",
+    }, 
+    "BCF Reader.pushbutton": {
+      "button": "BCF Reader.pushbutton", 
+      "doc": "DQT BCF Reader (v2 - pyRevit WPFWindow modeless)", 
+      "intent": "open_bcf_reader", 
       "keywords": [
-        "uishowcase"
-      ]
-    },
-    "ManaLoca.pushbutton": {
-      "button": "ManaLoca.pushbutton",
-      "panel": "Standards & Settings.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaLoca.pushbutton\\script.py",
-      "title": "Location Manager",
-      "doc": "Location Manager (Modeless)",
+        "bcf reader", 
+        "bcfreader", 
+        "reader", 
+        "bcf"
+      ], 
+      "panel": "Data & IFC-SG.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\BCF Reader.pushbutton\\script.py", 
+      "title": "BCF Reader", 
       "xaml": [
-        "ManaLoca"
-      ],
-      "intent": "open_manaloca",
-      "keywords": [
-        "location manager",
-        "manaloca",
-        "location",
-        "manager",
-        "loca",
-        "mana"
+        "BCFReader"
       ]
-    },
-    "ManaStyles.pushbutton": {
-      "button": "ManaStyles.pushbutton",
-      "panel": "Standards & Settings.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaStyles.pushbutton\\script.py",
-      "title": "Visual & Styles",
-      "doc": "Visual & Style Manager — Manage fill patterns, line styles, line patterns, color splasher overrides, and coordinate locations.",
-      "xaml": [],
-      "intent": "open_manastyles",
+    }, 
+    "BG Theme.pushbutton": {
+      "button": "BG Theme.pushbutton", 
+      "doc": "\"", 
+      "intent": "open_bg_theme", 
       "keywords": [
-        "visual & styles",
-        "manastyles",
-        "styles",
-        "visual",
-        "mana"
-      ]
-    },
-    "ManaWorkset.pushbutton": {
-      "button": "ManaWorkset.pushbutton",
-      "panel": "Standards & Settings.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaWorkset.pushbutton\\script.py",
-      "title": "Workset Manager",
-      "doc": "Manage Revit worksets using a rule-based assignment interface.",
+        "background theme", 
+        "background", 
+        "bg theme", 
+        "theme", 
+        "bg"
+      ], 
+      "panel": "Support.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\BG Theme.pushbutton\\script.py", 
+      "title": "Background Theme", 
+      "xaml": []
+    }, 
+    "CADToElements.pushbutton": {
+      "button": "CADToElements.pushbutton", 
+      "doc": "CAD to Elements \u2014 Convert CAD linework into Walls, Floors, or Beams.", 
+      "intent": "open_cadtoelements", 
+      "keywords": [
+        "cad to elements", 
+        "cadtoelements", 
+        "elements", 
+        "cadto", 
+        "cad", 
+        "to"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\CADToElements.pushbutton\\script.py", 
+      "title": "CAD to Elements", 
+      "xaml": []
+    }, 
+    "DoorThreshold.pushbutton": {
+      "button": "DoorThreshold.pushbutton", 
+      "doc": "Create threshold floors under selected doors.", 
+      "intent": "open_doorthreshold", 
+      "keywords": [
+        "door threshold", 
+        "doorthreshold", 
+        "threshold", 
+        "door"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\DoorThreshold.pushbutton\\script.py", 
+      "title": "Door Threshold", 
       "xaml": [
-        "ManaWorkset"
-      ],
-      "intent": "open_manaworkset",
-      "keywords": [
-        "workset manager",
-        "manaworkset",
-        "manager",
-        "workset",
-        "mana"
+        "DoorThreshold"
       ]
-    },
-    "ModelAuditor.pushbutton": {
-      "button": "ModelAuditor.pushbutton",
-      "panel": "Standards & Settings.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ModelAuditor.pushbutton\\script.py",
-      "title": "Model Auditor",
-      "doc": "Model Auditor — Model check, warnings, in-place models, and material lists.",
-      "xaml": [],
-      "intent": "open_modelauditor",
+    }, 
+    "FamiGen.pushbutton": {
+      "button": "FamiGen.pushbutton", 
+      "doc": "FamiGen \u2014 Create Revit families from CAD blocks, JSON schema, or presets.", 
+      "intent": "open_famigen", 
       "keywords": [
-        "model auditor",
-        "modelauditor",
-        "auditor",
-        "model"
-      ]
-    },
+        "famigen", 
+        "fami", 
+        "gen"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\FamiGen.pushbutton\\script.py", 
+      "title": "FamiGen", 
+      "xaml": []
+    }, 
     "Feedback.pushbutton": {
-      "button": "Feedback.pushbutton",
-      "panel": "Support.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\Feedback.pushbutton\\script.py",
-      "title": "Send Feedback",
-      "doc": "Popup window that lets the user send feedback or suggestions about T3Lab",
+      "button": "Feedback.pushbutton", 
+      "doc": "Popup window that lets the user send feedback or suggestions about T3Lab", 
+      "intent": "open_feedback", 
+      "keywords": [
+        "send feedback", 
+        "feedback", 
+        "send"
+      ], 
+      "panel": "Support.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\Feedback.pushbutton\\script.py", 
+      "title": "Send Feedback", 
       "xaml": [
         "Feedback"
-      ],
-      "intent": "open_feedback",
-      "keywords": [
-        "send feedback",
-        "feedback",
-        "send"
       ]
-    },
+    }, 
+    "Foundation Volume.pushbutton": {
+      "button": "Foundation Volume.pushbutton", 
+      "doc": "Write Revit computed volume into a selected shared parameter on Structural Foundation elements.", 
+      "intent": "open_foundation_volume", 
+      "keywords": [
+        "foundation volume", 
+        "foundationvolume", 
+        "foundation", 
+        "volume"
+      ], 
+      "panel": "Data & IFC-SG.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\Foundation Volume.pushbutton\\script.py", 
+      "title": "Foundation Volume", 
+      "xaml": [
+        "FoundationVolume"
+      ]
+    }, 
+    "IFC-SG.pushbutton": {
+      "button": "IFC-SG.pushbutton", 
+      "doc": "Unified IFC-SG manager: Assign subtypes and verify parameter compliance.", 
+      "intent": "open_ifc_sg", 
+      "keywords": [
+        "ifc-sg suite", 
+        "ifc-sg", 
+        "suite", 
+        "ifc", 
+        "sg"
+      ], 
+      "panel": "Data & IFC-SG.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\IFC-SG.pushbutton\\script.py", 
+      "title": "IFC-SG Suite", 
+      "xaml": []
+    }, 
+    "ImageToDrafting.pushbutton": {
+      "button": "ImageToDrafting.pushbutton", 
+      "doc": "Image To Drafting View  v4.0", 
+      "intent": "open_imagetodrafting", 
+      "keywords": [
+        "image to drafting", 
+        "imagetodrafting", 
+        "drafting", 
+        "image", 
+        "to"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\ImageToDrafting.pushbutton\\script.py", 
+      "title": "Image To Drafting", 
+      "xaml": [
+        "ImageToDrafting"
+      ]
+    }, 
     "MCPControl.pushbutton": {
-      "button": "MCPControl.pushbutton",
-      "panel": "Support.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\MCPControl.pushbutton\\script.py",
-      "title": "MCP Control",
-      "doc": "Unified control panel for the T3Lab MCP server.",
-      "xaml": [],
-      "intent": "open_mcpcontrol",
+      "button": "MCPControl.pushbutton", 
+      "doc": "Unified control panel for the T3Lab MCP server.", 
+      "intent": "open_mcpcontrol", 
       "keywords": [
-        "mcp control",
-        "mcpcontrol",
-        "control",
+        "mcp control", 
+        "mcpcontrol", 
+        "control", 
         "mcp"
-      ]
-    },
-    "PDF import.pushbutton": {
-      "button": "PDF import.pushbutton",
-      "panel": "Support.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\PDF import.pushbutton\\script.py",
-      "title": "PDF Import",
-      "doc": "Import PDF pages into Revit views sequentially.",
-      "xaml": [],
-      "intent": "open_pdf_import",
+      ], 
+      "panel": "Support.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\MCPControl.pushbutton\\script.py", 
+      "title": "MCP Control", 
+      "xaml": []
+    }, 
+    "ManaAnno.pushbutton": {
+      "button": "ManaAnno.pushbutton", 
+      "doc": "ManaAnno \u2014 Unified annotation and text note manager.", 
+      "intent": "open_manaanno", 
       "keywords": [
-        "pdf import",
-        "import",
-        "pdf"
-      ]
-    },
-    "BG Theme.pushbutton": {
-      "button": "BG Theme.pushbutton",
-      "panel": "Support.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\BG Theme.pushbutton\\script.py",
-      "title": "Background Theme",
-      "doc": "\"",
-      "xaml": [],
-      "intent": "open_bg_theme",
+        "mana anno", 
+        "manaanno", 
+        "anno", 
+        "mana"
+      ], 
+      "panel": "Annotation & Select.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\ManaAnno.pushbutton\\script.py", 
+      "title": "Mana Anno", 
+      "xaml": []
+    }, 
+    "ManaContains.pushbutton": {
+      "button": "ManaContains.pushbutton", 
+      "doc": "Find elements in spatial containers or collect element data into spatial elements.", 
+      "intent": "open_manacontains", 
       "keywords": [
-        "background theme",
-        "background",
-        "bg theme",
-        "theme",
-        "bg"
-      ]
-    },
-    "ManaTabs.pushbutton": {
-      "button": "ManaTabs.pushbutton",
-      "panel": "Support.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\ManaTabs.pushbutton\\script.py",
-      "title": "Tab Manager",
-      "doc": "Extension Tab Manager",
-      "xaml": [],
-      "intent": "open_manatabs",
+        "contains manager", 
+        "manacontains", 
+        "contains", 
+        "manager", 
+        "mana"
+      ], 
+      "panel": "Data & IFC-SG.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaContains.pushbutton\\script.py", 
+      "title": "Contains Manager", 
+      "xaml": []
+    }, 
+    "ManaDWG.pushbutton": {
+      "button": "ManaDWG.pushbutton", 
+      "doc": "DWG Management", 
+      "intent": "open_manadwg", 
       "keywords": [
-        "tab manager",
-        "manatabs",
-        "manager",
-        "tabs",
-        "mana",
-        "tab"
+        "dwgmanagement", 
+        "dwg manager", 
+        "manadwg", 
+        "manager", 
+        "mana", 
+        "dwg"
+      ], 
+      "panel": "Annotation & Select.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\ManaDWG.pushbutton\\script.py", 
+      "title": "DWG Manager", 
+      "xaml": [
+        "DWGManagement"
       ]
-    },
-    "Ribbon Names.pushbutton": {
-      "button": "Ribbon Names.pushbutton",
-      "panel": "Support.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\Ribbon Names.pushbutton\\script.py",
-      "title": "Ribbon Name Manager",
-      "doc": "\"",
-      "xaml": [],
-      "intent": "open_ribbon_names",
+    }, 
+    "ManaFami.pushbutton": {
+      "button": "ManaFami.pushbutton", 
+      "doc": "Family Manager \u2014 Manage families and load new families in one dialog.", 
+      "intent": "open_manafami", 
       "keywords": [
-        "ribbon name manager",
-        "ribbon names",
-        "manager",
-        "ribbon",
-        "names",
-        "name"
+        "family manager", 
+        "manafami", 
+        "manager", 
+        "family", 
+        "mana", 
+        "fami"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ManaFami.pushbutton\\script.py", 
+      "title": "Family Manager", 
+      "xaml": []
+    }, 
+    "ManaLoca.pushbutton": {
+      "button": "ManaLoca.pushbutton", 
+      "doc": "Location Manager (Modeless)", 
+      "intent": "open_manaloca", 
+      "keywords": [
+        "location manager", 
+        "manaloca", 
+        "location", 
+        "manager", 
+        "loca", 
+        "mana"
+      ], 
+      "panel": "Standards & Settings.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaLoca.pushbutton\\script.py", 
+      "title": "Location Manager", 
+      "xaml": [
+        "ManaLoca"
       ]
-    },
+    }, 
+    "ManaPara.pushbutton": {
+      "button": "ManaPara.pushbutton", 
+      "doc": "Parameter Manager \u2014 Transfer, Text-to-Element, and Values-to-Region tools.", 
+      "intent": "open_manapara", 
+      "keywords": [
+        "parameter manager", 
+        "parameter", 
+        "manapara", 
+        "manager", 
+        "para", 
+        "mana"
+      ], 
+      "panel": "Data & IFC-SG.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaPara.pushbutton\\script.py", 
+      "title": "Parameter Manager", 
+      "xaml": []
+    }, 
+    "ManaSched.pushbutton": {
+      "button": "ManaSched.pushbutton", 
+      "doc": "Schedule Manager \u2014 unified Export/Import Excel and Schedule Duplication tool.", 
+      "intent": "open_manasched", 
+      "keywords": [
+        "schedule manager", 
+        "manasched", 
+        "schedule", 
+        "manager", 
+        "sched", 
+        "mana"
+      ], 
+      "panel": "Data & IFC-SG.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaSched.pushbutton\\script.py", 
+      "title": "Schedule Manager", 
+      "xaml": []
+    }, 
+    "ManaSelect.pushbutton": {
+      "button": "ManaSelect.pushbutton", 
+      "doc": "ManaSelect \u2014 Unified smart selection manager.", 
+      "intent": "open_manaselect", 
+      "keywords": [
+        "mana select", 
+        "manaselect", 
+        "select", 
+        "mana"
+      ], 
+      "panel": "Annotation & Select.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\ManaSelect.pushbutton\\script.py", 
+      "title": "Mana Select", 
+      "xaml": []
+    }, 
     "ManaSheets.pushbutton": {
-      "button": "ManaSheets.pushbutton",
-      "panel": "Views & Sheets.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\ManaSheets.pushbutton\\script.py",
-      "title": "Sheet Manager",
-      "doc": "Unified tool to manage sheets, sets, views on sheets, parameters, and re-number sheets.",
-      "xaml": [],
-      "intent": "open_manasheets",
+      "button": "ManaSheets.pushbutton", 
+      "doc": "Unified tool to manage sheets, sets, views on sheets, parameters, and re-number sheets.", 
+      "intent": "open_manasheets", 
       "keywords": [
-        "sheet manager",
-        "manasheets",
-        "manager",
-        "sheets",
-        "sheet",
+        "sheet manager", 
+        "manasheets", 
+        "manager", 
+        "sheets", 
+        "sheet", 
         "mana"
-      ]
-    },
+      ], 
+      "panel": "Views & Sheets.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\ManaSheets.pushbutton\\script.py", 
+      "title": "Sheet Manager", 
+      "xaml": []
+    }, 
+    "ManaStyles.pushbutton": {
+      "button": "ManaStyles.pushbutton", 
+      "doc": "Visual & Style Manager \u2014 Manage fill patterns, line styles, line patterns, color splasher overrides, and coordinate locations.", 
+      "intent": "open_manastyles", 
+      "keywords": [
+        "visual & styles", 
+        "manastyles", 
+        "styles", 
+        "visual", 
+        "mana"
+      ], 
+      "panel": "Standards & Settings.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaStyles.pushbutton\\script.py", 
+      "title": "Visual & Styles", 
+      "xaml": []
+    }, 
+    "ManaTabs.pushbutton": {
+      "button": "ManaTabs.pushbutton", 
+      "doc": "Extension Tab Manager", 
+      "intent": "open_manatabs", 
+      "keywords": [
+        "tab manager", 
+        "manatabs", 
+        "manager", 
+        "tabs", 
+        "mana", 
+        "tab"
+      ], 
+      "panel": "Support.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\ManaTabs.pushbutton\\script.py", 
+      "title": "Tab Manager", 
+      "xaml": []
+    }, 
     "ManaViews.pushbutton": {
-      "button": "ManaViews.pushbutton",
-      "panel": "Views & Sheets.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\ManaViews.pushbutton\\script.py",
-      "title": "View Manager",
-      "doc": "Unified tool to manage views and view templates.",
-      "xaml": [],
-      "intent": "open_manaviews",
+      "button": "ManaViews.pushbutton", 
+      "doc": "Unified tool to manage views and view templates.", 
+      "intent": "open_manaviews", 
       "keywords": [
-        "view manager",
-        "manaviews",
-        "manager",
-        "views",
-        "view",
+        "view manager", 
+        "manaviews", 
+        "manager", 
+        "views", 
+        "view", 
         "mana"
+      ], 
+      "panel": "Views & Sheets.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\ManaViews.pushbutton\\script.py", 
+      "title": "View Manager", 
+      "xaml": []
+    }, 
+    "ManaWorkset.pushbutton": {
+      "button": "ManaWorkset.pushbutton", 
+      "doc": "Manage Revit worksets using a rule-based assignment interface.", 
+      "intent": "open_manaworkset", 
+      "keywords": [
+        "workset manager", 
+        "manaworkset", 
+        "workset", 
+        "manager", 
+        "mana"
+      ], 
+      "panel": "Standards & Settings.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaWorkset.pushbutton\\script.py", 
+      "title": "Workset Manager", 
+      "xaml": [
+        "ManaWorkset"
       ]
-    },
+    }, 
+    "ModelAuditor.pushbutton": {
+      "button": "ModelAuditor.pushbutton", 
+      "doc": "Model Auditor \u2014 Model check, warnings, in-place models, and material lists.", 
+      "intent": "open_modelauditor", 
+      "keywords": [
+        "model auditor", 
+        "modelauditor", 
+        "auditor", 
+        "model"
+      ], 
+      "panel": "Standards & Settings.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ModelAuditor.pushbutton\\script.py", 
+      "title": "Model Auditor", 
+      "xaml": []
+    }, 
+    "PDF import.pushbutton": {
+      "button": "PDF import.pushbutton", 
+      "doc": "Import PDF pages into Revit views sequentially.", 
+      "intent": "open_pdf_import", 
+      "keywords": [
+        "pdf import", 
+        "import", 
+        "pdf"
+      ], 
+      "panel": "Support.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\PDF import.pushbutton\\script.py", 
+      "title": "PDF Import", 
+      "xaml": []
+    }, 
+    "PointCloud.pushbutton": {
+      "button": "PointCloud.pushbutton", 
+      "doc": "Scan-to-BIM wizard: extract point cloud data, detect Walls, Floors,", 
+      "intent": "open_pointcloud", 
+      "keywords": [
+        "point cloud to model", 
+        "pointcloud", 
+        "cloud", 
+        "model", 
+        "point", 
+        "to"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\PointCloud.pushbutton\\script.py", 
+      "title": "Point Cloud to Model", 
+      "xaml": [
+        "PointCloud"
+      ]
+    }, 
+    "Ribbon Names.pushbutton": {
+      "button": "Ribbon Names.pushbutton", 
+      "doc": "\"", 
+      "intent": "open_ribbon_names", 
+      "keywords": [
+        "ribbon name manager", 
+        "ribbon names", 
+        "manager", 
+        "ribbon", 
+        "names", 
+        "name"
+      ], 
+      "panel": "Support.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\Ribbon Names.pushbutton\\script.py", 
+      "title": "Ribbon Name Manager", 
+      "xaml": []
+    }, 
+    "RoomToFloor.pushbutton": {
+      "button": "RoomToFloor.pushbutton", 
+      "doc": "Create architectural or structural floors from selected room boundaries.", 
+      "intent": "open_roomtofloor", 
+      "keywords": [
+        "room to floor", 
+        "roomtofloor", 
+        "floor", 
+        "room", 
+        "to"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\RoomToFloor.pushbutton\\script.py", 
+      "title": "Room To Floor", 
+      "xaml": [
+        "RoomToFloor"
+      ]
+    }, 
     "SheetGen.pushbutton": {
-      "button": "SheetGen.pushbutton",
-      "panel": "Views & Sheets.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\SheetGen.pushbutton\\script.py",
-      "title": "Create Plan Views",
-      "doc": "Create Room Plan",
+      "button": "SheetGen.pushbutton", 
+      "doc": "Create Room Plan", 
+      "intent": "open_sheetgen", 
+      "keywords": [
+        "create plan views", 
+        "sheetgen", 
+        "create", 
+        "views", 
+        "sheet", 
+        "plan", 
+        "gen"
+      ], 
+      "panel": "Views & Sheets.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\SheetGen.pushbutton\\script.py", 
+      "title": "Create Plan Views", 
       "xaml": [
         "SheetGen"
-      ],
-      "intent": "open_sheetgen",
-      "keywords": [
-        "create plan views",
-        "sheetgen",
-        "create",
-        "views",
-        "sheet",
-        "plan",
-        "gen"
       ]
+    }, 
+    "SplitElements.pushbutton": {
+      "button": "SplitElements.pushbutton", 
+      "doc": "Split Elements \u2014 Split Walls, Columns, or Floors at selected levels.", 
+      "intent": "open_splitelements", 
+      "keywords": [
+        "split elements", 
+        "splitelements", 
+        "elements", 
+        "split"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\SplitElements.pushbutton\\script.py", 
+      "title": "Split Elements", 
+      "xaml": []
+    }, 
+    "Text to Element.pushbutton": {
+      "button": "Text to Element.pushbutton", 
+      "doc": "Text to Element \u2014 transfer text note content to element parameters via", 
+      "intent": "open_text_to_element", 
+      "keywords": [
+        "text to element", 
+        "element", 
+        "text", 
+        "to"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\Text to Element.pushbutton\\script.py", 
+      "title": "Text to Element", 
+      "xaml": []
+    }, 
+    "Tile Layout.pushbutton": {
+      "button": "Tile Layout.pushbutton", 
+      "doc": "3-step wizard:", 
+      "intent": "open_tile_layout", 
+      "keywords": [
+        "tile layout", 
+        "tilelayout", 
+        "layout", 
+        "tile"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Tile Layout.pushbutton\\script.py", 
+      "title": "Tile Layout", 
+      "xaml": [
+        "TileLayout"
+      ]
+    }, 
+    "UIShowcase.pushbutton": {
+      "button": "UIShowcase.pushbutton", 
+      "doc": "", 
+      "intent": "open_uishowcase", 
+      "keywords": [
+        "uishowcase"
+      ], 
+      "panel": "Standard.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standard.panel\\UIShowcase.pushbutton\\script.py", 
+      "title": "UIShowcase", 
+      "xaml": []
+    }, 
+    "Wall Cut Profile.pushbutton": {
+      "button": "Wall Cut Profile.pushbutton", 
+      "doc": "Cut wall profiles or create openings based on linked element intersections", 
+      "intent": "open_wall_cut_profile", 
+      "keywords": [
+        "wall profile cut from link", 
+        "wall cut profile", 
+        "profile", 
+        "wall", 
+        "link", 
+        "from", 
+        "cut"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\Wall Cut Profile.pushbutton\\script.py", 
+      "title": "Wall Profile Cut from Link", 
+      "xaml": []
+    }, 
+    "Wall_Adjust Base.pushbutton": {
+      "button": "Wall_Adjust Base.pushbutton", 
+      "doc": "\"", 
+      "intent": "open_wall_adjust_base", 
+      "keywords": [
+        "auto adjust base offset", 
+        "wall_adjust base", 
+        "adjust", 
+        "offset", 
+        "wall", 
+        "base", 
+        "auto"
+      ], 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\Wall_Adjust Base.pushbutton\\script.py", 
+      "title": "Auto Adjust Base Offset", 
+      "xaml": []
     }
-  }
+  }, 
+  "version": 2
 }

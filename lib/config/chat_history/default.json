@@ -1,0 +1,15 @@
+{
+  "doc_key": "default", 
+  "messages": [
+    {
+      "content": "hello", 
+      "role": "user", 
+      "ts": "2026-07-06 11:40:30"
+    }, 
+    {
+      "content": "Hello! I'm T3Lab Assistant \ud83d\udc4b\nWhat would you like to do today?", 
+      "role": "assistant", 
+      "ts": "2026-07-06 11:40:31"
+    }
+  ]
+}

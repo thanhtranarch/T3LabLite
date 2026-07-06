@@ -75,6 +75,7 @@ ESSENTIAL_TOOL_NAMES = frozenset([
     "get_parameter", "get_all_parameters", "get_model_warnings",
     "get_model_health", "analyze_model_statistics", "get_schedule_data",
     "get_available_family_types",
+    "list_open_documents", "switch_active_document",
     # Modify
     "set_parameter", "bulk_set_parameter", "rename_element",
     "select_elements", "color_elements", "revit_override_color",

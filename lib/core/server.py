@@ -13,9 +13,24 @@ __author__  = "Tran Tien Thanh"
 __title__   = "MCP Server"
 
 import os
+import sys
 import threading
 import json
 import uuid
+
+try:
+    import queue as _queue_mod            # CPython 3
+except ImportError:
+    import Queue as _queue_mod            # IronPython 2.7
+
+# Process-wide anchor for the server singleton. Stored on the `sys` module —
+# which is never re-imported — so the live server survives a pyRevit reload
+# (a reload re-imports core.server, resetting the class-level _instance to
+# None). Without this, start_server() on the fresh instance would find the
+# old port still held by the orphaned server thread and bind a SECOND port in
+# the same Revit process: one Revit, two ports, which the bridge then mistakes
+# for two Revit windows. One Revit process must expose exactly one port.
+_PROCESS_SINGLETON_KEY = '_t3lab_mcp_server_singleton'
 
 from Snippets._compat import eid_value
 try:
@@ -27,33 +42,73 @@ except ImportError:
 
 # External Event Handler for thread-safe Revit API calls
 HAS_REVIT_UI = False
+
+
+class _ToolTask(object):
+    """One tool call marshalled onto Revit's UI thread via ExternalEvent.
+
+    claim() decides who executes the task — the ExternalEvent handler ('ui')
+    or the read-tool fallback on the calling thread ('fallback') — so a call
+    can never run twice even if Revit fires the event at the same moment the
+    fallback grace period expires.
+    """
+
+    def __init__(self, tool_name, arguments):
+        self.tool_name = tool_name
+        self.arguments = arguments
+        self.result = None
+        self.exception = None
+        self.done = threading.Event()
+        self._claim_lock = threading.Lock()
+        self._claimed_by = None
+
+    def claim(self, who):
+        with self._claim_lock:
+            if self._claimed_by is None:
+                self._claimed_by = who
+                return True
+            return False
+
+
 try:
     import clr
     clr.AddReference('RevitAPIUI')
     from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
-    
+
     class MCPExternalEventHandler(IExternalEventHandler):
         def __init__(self, server):
             self.server = server
-            self.tool_name = None
-            self.arguments = None
-            self.result = None
-            self.exception = None
-            self._lock = threading.Event()
+            self.tasks = _queue_mod.Queue()
 
         def Execute(self, app):
-            try:
-                self.result = self.server._execute_tool_in_context(self.tool_name, self.arguments)
-                self.exception = None
-            except Exception as e:
-                self.exception = e
-                self.result = None
-            finally:
-                self._lock.set()
+            # Drain everything queued: ExternalEvent coalesces multiple
+            # Raise() calls into one Execute, and several callers (HTTP
+            # worker + assistant thread) may be waiting at once.
+            while True:
+                try:
+                    task = self.tasks.get_nowait()
+                except _queue_mod.Empty:
+                    break
+                if not task.claim('ui'):
+                    continue  # read fallback or timeout already consumed it
+                is_write = task.tool_name in self.server._WRITE_TOOLS
+                if is_write:
+                    self.server._write_in_progress = True
+                try:
+                    task.result = self.server._execute_tool_in_context(
+                        task.tool_name, task.arguments)
+                    task.exception = None
+                except Exception as e:
+                    task.exception = e
+                    task.result = None
+                finally:
+                    if is_write:
+                        self.server._write_in_progress = False
+                    task.done.set()
 
         def GetName(self):
             return "T3Lab MCP External Event Handler"
-            
+
     HAS_REVIT_UI = True
 except Exception as e:
     pass
@@ -165,7 +220,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         server._register_client(client_id)
 
         # Send endpoint event for MCP protocol
-        endpoint_url = "http://localhost:{}/message".format(server.port)
+        endpoint_url = "http://127.0.0.1:{}/message".format(server.port)
         self._send_sse_event('endpoint', endpoint_url)
 
         try:
@@ -250,11 +305,27 @@ class T3LabAIServer(object):
     _lock = threading.Lock()
 
     def __new__(cls):
+        # A prior instance stashed on `sys` (from before a pyRevit reload)
+        # wins over a fresh class-level _instance. Returning an instance of a
+        # DIFFERENT (old) class means Python skips __init__, so the already-
+        # running server — its port, HTTP thread and ExternalEvent — is reused
+        # untouched instead of a second one being spun up. A full Revit restart
+        # (required to load edited server code anyway) starts clean.
+        existing = getattr(sys, _PROCESS_SINGLETON_KEY, None)
+        if existing is not None:
+            cls._instance = existing
+            return existing
         if cls._instance is None:
             with cls._lock:
+                existing = getattr(sys, _PROCESS_SINGLETON_KEY, None)
+                if existing is not None:
+                    cls._instance = existing
+                    return existing
                 if cls._instance is None:
-                    cls._instance = super(T3LabAIServer, cls).__new__(cls)
-                    cls._instance._initialized = False
+                    inst = super(T3LabAIServer, cls).__new__(cls)
+                    inst._initialized = False
+                    cls._instance = inst
+                    setattr(sys, _PROCESS_SINGLETON_KEY, inst)
         return cls._instance
 
     def __init__(self):
@@ -272,6 +343,7 @@ class T3LabAIServer(object):
         self._tools = {}
         self._external_event = None
         self._event_handler = None
+        self._write_in_progress = False
         self._token = self._get_or_create_token()
         self._pinned_doc_title = None
         # Open TransactionGroup for the current assistant request (B4) — owned
@@ -1416,6 +1488,39 @@ class T3LabAIServer(object):
                 'description': 'Get current Revit context: active view, selected elements, open document info',
                 'inputSchema': {'type': 'object', 'properties': {}, 'required': []}
             },
+            'list_open_documents': {
+                'name': 'list_open_documents',
+                'description': ('List all documents open in this Revit instance (title, file path, '
+                                'which one is active, which one is pinned as the tool target). '
+                                'Use switch_active_document to retarget tool calls to another document.'),
+                'inputSchema': {'type': 'object', 'properties': {}, 'required': []}
+            },
+            'switch_active_document': {
+                'name': 'switch_active_document',
+                'description': ('Switch the target document for ALL subsequent tool calls '
+                                '(get_revit_context, revit_list_views, element edits, exports, ...). '
+                                'Matches an open document by title or file path, pins it as the tool '
+                                'target, and brings its window to the front when possible. '
+                                'If nothing matches but path_or_title is an existing .rvt file path, '
+                                'the file is OPENED from disk in this Revit window (large models may '
+                                'exceed the 120s tool timeout — the file keeps opening in Revit; '
+                                'verify with list_open_documents). Documents open in another Revit '
+                                'window (separate instance) are reachable too — the T3Lab bridge '
+                                're-routes the connection automatically. '
+                                'Use list_open_documents first to see what is open.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'path_or_title': {
+                            'type': 'string',
+                            'description': ('Document title (e.g. "Project1"), file name '
+                                            '(e.g. "Tower_A.rvt") or full .rvt file path. '
+                                            'A full path to a not-yet-open file opens it from disk.')
+                        }
+                    },
+                    'required': ['path_or_title']
+                }
+            },
             'show_assistant_pane': {
                 'name': 'show_assistant_pane',
                 'description': 'Show or hide the T3Lab Assistant dockable pane',
@@ -1515,6 +1620,7 @@ class T3LabAIServer(object):
                     continue
                 docs.append({
                     'title': d.Title,
+                    'path': d.PathName or '(unsaved)',
                     'is_active': d.Title == active_title,
                     'is_pinned': d.Title == self._pinned_doc_title,
                 })
@@ -1534,8 +1640,17 @@ class T3LabAIServer(object):
         """Return the pinned document title, or None if unpinned."""
         return self._pinned_doc_title
 
-    def _resolve_target_document(self, doc, uidoc):
+    def _resolve_target_document(self, doc, uidoc, allow_ui_switch=True):
         """Return (doc, uidoc) to use for this tool call.
+
+        Target precedence (user rule: the explicit choice made through the
+        AI client or the MCP Control dialog always wins over ambient focus):
+          1. Pinned document — set by Claude via switch_active_document or by
+             the MCP Control document picker.
+          2. The active view's document (pyrevit.revit.doc).
+          3. The single open document, when only one is open
+             (_recover_active_document).
+          4. An actionable error listing open documents — never a guess.
 
         If a document is pinned and it isn't the currently active one,
         redirect tool execution onto the pinned document: build a UIDocument
@@ -1570,13 +1685,16 @@ class T3LabAIServer(object):
             # file path — there is NO Document overload; passing the Document
             # object, as the previous implementation did, silently threw and
             # left the pin completely ineffective). Already-open paths are
-            # activated in place rather than reopened.
-            try:
-                path = target_doc.PathName
-                if path:
-                    uiapp.OpenAndActivateDocument(path)
-            except Exception:
-                pass
+            # activated in place rather than reopened. Skipped when
+            # allow_ui_switch is False: this is a UI mutation that is illegal
+            # off the Revit main thread (the read-fallback path).
+            if allow_ui_switch:
+                try:
+                    path = target_doc.PathName
+                    if path:
+                        uiapp.OpenAndActivateDocument(path)
+                except Exception:
+                    pass
 
             # Resolve a UIDocument that actually points at the pinned document.
             # This is what genuinely redirects the tool call, independent of
@@ -1600,6 +1718,57 @@ class T3LabAIServer(object):
         except Exception:
             pass
         return doc, uidoc
+
+    def _recover_active_document(self, uidoc):
+        """Best-effort (doc, uidoc, error) when no active document resolved.
+
+        pyrevit.revit.doc is None when Revit sits on the start page, when no
+        document tab has focus yet, and sometimes on the read-fallback worker
+        thread (ActiveUIDocument is only reliable inside an API context).
+        Prefer the active view's document; failing that, the single open
+        document when the choice is unambiguous; otherwise return an
+        actionable error dict instead of letting every tool crash with
+        "'NoneType' object has no attribute 'Title'".
+        """
+        try:
+            from pyrevit import HOST_APP
+            uiapp = HOST_APP.uiapp
+
+            active = None
+            try:
+                active = uiapp.ActiveUIDocument
+            except Exception:
+                pass
+            if active is not None and active.Document is not None:
+                return active.Document, active, None
+
+            docs = [d for d in uiapp.Application.Documents if not d.IsLinked]
+            if len(docs) == 1:
+                target = docs[0]
+                target_uidoc = uidoc
+                try:
+                    from Autodesk.Revit.UI import UIDocument
+                    target_uidoc = UIDocument(target)
+                except Exception:
+                    pass
+                return target, target_uidoc, None
+            if not docs:
+                return None, None, {
+                    'error': ('No document is open in this Revit instance '
+                              '(start page). Open a project in Revit, or call '
+                              'switch_active_document with a full .rvt file '
+                              'path to open one.'),
+                    'open_documents': [],
+                }
+            return None, None, {
+                'error': ('No active document — several documents are open in '
+                          'this Revit instance but none has focus, so the '
+                          'target is ambiguous. Click a document tab in Revit, '
+                          'or call switch_active_document first.'),
+                'open_documents': [d.Title for d in docs],
+            }
+        except Exception as e:
+            return None, None, {'error': 'No active document: {}'.format(e)}
 
     def _handle_initialize(self, params):
         """Handle MCP initialize request"""
@@ -1670,10 +1839,23 @@ class T3LabAIServer(object):
         'create_schedule', 'duplicate_view', 'apply_view_template',
         'create_view_filter', 'place_views_on_sheets', 'export_dwg', 'export_image',
         'create_project_parameter', 'room_to_floor', 'purge_unused', 'create_workset',
+        # switch_active_document calls UIApplication.OpenAndActivateDocument,
+        # which throws "outside of API context" from the HTTP worker thread.
+        'switch_active_document',
         # Internal pseudo-tools (agent request TransactionGroup) — NOT in the
         # public registry, but they open/close a TransactionGroup so they must
         # run on the Revit main thread like any other write tool.
         '__begin_action_group', '__end_action_group',
+    ])
+
+    # Tools that never touch the target document — they must keep working
+    # when this Revit instance has NO active document (start page, or no
+    # document tab focused), because they are exactly what the AI client
+    # needs to diagnose and fix that state (list what's open, switch/open a
+    # document, ping the connection).
+    _DOCLESS_TOOLS = frozenset([
+        'say_hello', 'list_open_documents', 'switch_active_document',
+        'show_assistant_pane', 'file_watcher_status',
     ])
 
     def ensure_external_event(self):
@@ -1702,23 +1884,49 @@ class T3LabAIServer(object):
             self._external_event = None
             return False, str(e)
 
+    # Grace period (s) a read-only tool waits for the ExternalEvent before
+    # falling back to direct execution. When Revit is idle the event fires in
+    # well under a second; when Revit is busy (modal dialog open, user
+    # mid-command, window minimized) it may not fire for minutes — reads must
+    # not hang behind that. Pure reads off the UI thread are the same path
+    # already used when no ExternalEvent exists at all.
+    _READ_FALLBACK_WAIT = 2.0
+
     def _execute_tool(self, tool_name, arguments):
         """Execute a Revit tool in a thread-safe manner using External Events."""
         if self._external_event:
-            self._event_handler.tool_name = tool_name
-            self._event_handler.arguments = arguments
-            self._event_handler._lock.clear()
+            task = _ToolTask(tool_name, arguments)
+            self._event_handler.tasks.put(task)
             self._external_event.Raise()
 
-            # Wait for main UI thread execution. Large operations (framing
-            # systems, PDF export, bulk deletes) legitimately take far longer
-            # than 10s, so allow up to 120s before giving up.
-            success = self._event_handler._lock.wait(timeout=120)
-            if not success:
+            is_write = tool_name in self._WRITE_TOOLS
+            # Wait for main UI thread execution. Large write operations
+            # (framing systems, PDF export, bulk deletes) legitimately take
+            # far longer than 10s, so allow up to 120s before giving up.
+            # Reads only wait the short grace period, then run directly.
+            finished = task.done.wait(120 if is_write else self._READ_FALLBACK_WAIT)
+            if not finished and not is_write:
+                # Never read concurrently with a write mutating the model on
+                # the UI thread — in that case keep waiting like a write would.
+                if not self._write_in_progress and task.claim('fallback'):
+                    # Revit is busy — run the read directly on this thread
+                    # instead of hanging until Revit next goes idle. Off the UI
+                    # thread we must NOT touch the window (allow_ui_switch):
+                    # target precedence is unchanged — a document explicitly
+                    # chosen through Claude (switch_active_document) or the
+                    # MCP Control picker (pin) still wins over the active
+                    # view; only the window-focus switch is skipped.
+                    return self._execute_tool_in_context(
+                        tool_name, arguments, allow_ui_switch=False)
+                finished = task.done.wait(120)
+            if not finished:
+                # If still unclaimed, mark it consumed so the UI thread skips
+                # it when the event finally fires after this timeout report.
+                task.claim('abandoned')
                 return {'error': 'Execution timed out waiting for Revit thread context', 'tool': tool_name}
-            if self._event_handler.exception:
-                return {'error': str(self._event_handler.exception), 'tool': tool_name}
-            return self._event_handler.result
+            if task.exception:
+                return {'error': str(task.exception), 'tool': tool_name}
+            return task.result
         else:
             # No ExternalEvent — we're stuck on the HTTP worker thread. Read
             # tools tolerate this, but any write tool would throw a cryptic
@@ -1733,7 +1941,10 @@ class T3LabAIServer(object):
                     'tool': tool_name,
                     'external_event_ready': False,
                 }
-            return self._execute_tool_in_context(tool_name, arguments)
+            # Read tool with no ExternalEvent at all — also off the UI thread,
+            # so never trigger a window switch here either.
+            return self._execute_tool_in_context(
+                tool_name, arguments, allow_ui_switch=False)
 
     # ── Shared tool helpers ────────────────────────────────────────────────
     def _bic_map(self):
@@ -1818,8 +2029,18 @@ class T3LabAIServer(object):
         except Exception as e:
             return False, str(e)
 
-    def _execute_tool_in_context(self, tool_name, arguments):
-        """Execute a Revit tool directly (must be inside Revit context thread)"""
+    def _execute_tool_in_context(self, tool_name, arguments, allow_ui_switch=True):
+        """Execute a Revit tool directly (must be inside Revit context thread).
+
+        allow_ui_switch: when False, target-document resolution never brings a
+        pinned document's window to the front (OpenAndActivateDocument). Set
+        False on the read-tool fallback paths, which run on the HTTP worker
+        thread where UI operations aren't allowed. Target PRECEDENCE is the
+        same on every path: 1) the document explicitly chosen by the AI
+        client / MCP Control dialog (pin), 2) the active view's document,
+        3) the single open document when unambiguous, 4) an actionable error.
+        Only the window-focus switch is skipped off-thread.
+        """
         try:
             from Autodesk.Revit.DB import (FilteredElementCollector, ViewSheet,
                                            BuiltInCategory, Level, ElementId,
@@ -1827,7 +2048,13 @@ class T3LabAIServer(object):
             from pyrevit import revit
             doc = revit.doc
             uidoc = revit.uidoc
-            doc, uidoc = self._resolve_target_document(doc, uidoc)
+            doc, uidoc = self._resolve_target_document(
+                doc, uidoc, allow_ui_switch=allow_ui_switch)
+            if doc is None and tool_name not in self._DOCLESS_TOOLS:
+                doc, uidoc, no_doc_err = self._recover_active_document(uidoc)
+                if no_doc_err is not None:
+                    no_doc_err['tool'] = tool_name
+                    return no_doc_err
         except ImportError:
             return {'error': 'Revit API not available', 'tool': tool_name}
 
@@ -3299,7 +3526,7 @@ class T3LabAIServer(object):
 
         # ── store_project_data ───────────────────────────────────────────────
         elif tool_name == 'store_project_data':
-            import os, json as _json
+            import json as _json
             info = doc.ProjectInformation
             data = {
                 'name': info.Name,
@@ -3321,7 +3548,7 @@ class T3LabAIServer(object):
 
         # ── store_room_data ──────────────────────────────────────────────────
         elif tool_name == 'store_room_data':
-            import os, json as _json
+            import json as _json
             rooms_out = []
             for room in FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Rooms).WhereElementIsNotElementType():
                 try:
@@ -3353,7 +3580,7 @@ class T3LabAIServer(object):
 
         # ── query_stored_data ────────────────────────────────────────────────
         elif tool_name == 'query_stored_data':
-            import os, json as _json
+            import json as _json
             data_type = arguments.get('data_type', 'project')
             out_dir   = os.path.join(os.path.dirname(doc.PathName) if doc.PathName else os.path.expanduser('~'), 'T3Lab_AI_Data')
             fname     = 'project_data.json' if data_type == 'project' else 'room_data.json'
@@ -4084,6 +4311,120 @@ class T3LabAIServer(object):
                 return ctx
             except Exception as e:
                 return {'error': str(e)}
+
+        # ── list_open_documents ──────────────────────────────────────────────
+        elif tool_name == 'list_open_documents':
+            try:
+                docs = self.get_open_documents()
+                return {
+                    'documents': docs,
+                    'count': len(docs),
+                    'pinned_document': self._pinned_doc_title,
+                    'note': ('Tool calls target the pinned document when one is set, '
+                             'otherwise the Revit-active document. Use '
+                             'switch_active_document to change the target.'),
+                }
+            except Exception as e:
+                return {'error': str(e), 'tool': tool_name}
+
+        # ── switch_active_document ───────────────────────────────────────────
+        elif tool_name == 'switch_active_document':
+            try:
+                from pyrevit import HOST_APP
+                query = (arguments.get('path_or_title') or '').strip()
+                if not query:
+                    return {'error': 'path_or_title is required.'}
+
+                uiapp = HOST_APP.uiapp
+                open_docs = [d for d in uiapp.Application.Documents if not d.IsLinked]
+
+                def _norm(p):
+                    return os.path.normcase(os.path.normpath(p)) if p else ''
+
+                q_lower = query.lower()
+                q_path  = _norm(query)
+
+                # Match precedence: exact title → exact file path → file name
+                # (with or without .rvt) → unique title substring.
+                target = None
+                for d in open_docs:
+                    if d.Title.lower() == q_lower:
+                        target = d
+                        break
+                if target is None:
+                    for d in open_docs:
+                        if d.PathName and _norm(d.PathName) == q_path:
+                            target = d
+                            break
+                if target is None:
+                    for d in open_docs:
+                        base = os.path.basename(d.PathName) if d.PathName else ''
+                        if base and (base.lower() == q_lower or
+                                     os.path.splitext(base)[0].lower() == q_lower):
+                            target = d
+                            break
+                if target is None:
+                    partial = [d for d in open_docs if q_lower in d.Title.lower()]
+                    if len(partial) == 1:
+                        target = partial[0]
+                    elif len(partial) > 1:
+                        return {'error': 'Ambiguous document "{}" — several open documents match.'.format(query),
+                                'candidates': [d.Title for d in partial]}
+
+                if target is None:
+                    # Not open in this Revit instance — if the query is a real
+                    # file on disk, open it here instead of failing.
+                    if os.path.isfile(query):
+                        try:
+                            new_uidoc = uiapp.OpenAndActivateDocument(query)
+                            new_doc = new_uidoc.Document
+                            self.pin_document(new_doc.Title)
+                            return {
+                                'success': True,
+                                'document': new_doc.Title,
+                                'path': new_doc.PathName or query,
+                                'opened_from_disk': True,
+                                'window_activated': True,
+                                'pinned': True,
+                                'note': ('Opened "{}" from disk; all subsequent tool calls '
+                                         'now target it.').format(new_doc.Title),
+                            }
+                        except Exception as e:
+                            return {'error': 'Failed to open "{}" from disk: {}'.format(query, str(e)),
+                                    'tool': tool_name}
+                    return {'error': ('No open document matches "{}" and it is not an existing '
+                                      'file path. Pass the title of an open document, or a full '
+                                      '.rvt path to open the file from disk.').format(query),
+                            'open_documents': [d.Title for d in open_docs]}
+
+                # Pin FIRST — this is what actually retargets every subsequent
+                # tool call (via _resolve_target_document), independent of
+                # whether the window activation below succeeds.
+                self.pin_document(target.Title)
+
+                # Best-effort: bring the document's window to the front so the
+                # visible Revit view matches. Only saved documents can be
+                # activated (OpenAndActivateDocument takes a file path).
+                activated = False
+                try:
+                    path = target.PathName
+                    if path:
+                        uiapp.OpenAndActivateDocument(path)
+                        activated = True
+                except Exception:
+                    activated = False
+
+                return {
+                    'success': True,
+                    'document': target.Title,
+                    'path': target.PathName or '(unsaved)',
+                    'window_activated': activated,
+                    'pinned': True,
+                    'note': ('All subsequent tool calls now target "{}". Call '
+                             'switch_active_document again to retarget.').format(target.Title),
+                }
+            except Exception as e:
+                return {'error': str(e), 'tool': tool_name}
 
         # ── show_assistant_pane ──────────────────────────────────────────────
         elif tool_name == 'show_assistant_pane':
@@ -5325,7 +5666,10 @@ class T3LabAIServer(object):
 
         def run_server():
             try:
-                self._http_server = HTTPServer(('localhost', self._port), MCPRequestHandler)
+                # Bind 127.0.0.1 explicitly — binding 'localhost' leaves the
+                # address family to the resolver (IPv4 vs ::1), and clients
+                # that resolve the other family pay a ~2s fallback per request.
+                self._http_server = HTTPServer(('127.0.0.1', self._port), MCPRequestHandler)
                 self._http_server.mcp_server = self
                 self._is_running = True
                 self._http_server.serve_forever()

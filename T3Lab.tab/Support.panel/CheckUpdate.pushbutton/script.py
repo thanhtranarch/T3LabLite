@@ -26,13 +26,15 @@ __version__ = "1.0.0"
 # IMPORT LIBRARIES
 # ==============================================================================
 import os
+import time
 import shutil
 import tempfile
 import clr
 
 clr.AddReference('System')
 
-from System.Net import WebClient, ServicePointManager, SecurityProtocolType
+from System.Net import (WebClient, ServicePointManager,
+                        SecurityProtocolType, CredentialCache)
 from System.Text import Encoding
 from System.Diagnostics import Process, ProcessStartInfo
 
@@ -46,8 +48,15 @@ GITHUB_REPO   = "thanhtranarch/T3LabLite"
 GITHUB_BRANCH = "main"
 VERSION_FILE  = "version.txt"
 
-REMOTE_VERSION_URL = "https://raw.githubusercontent.com/{repo}/{branch}/{vfile}".format(
-    repo=GITHUB_REPO, branch=GITHUB_BRANCH, vfile=VERSION_FILE)
+# Several sources for the same file -- raw.githubusercontent.com rate-limits
+# per IP (HTTP 429), which shared office networks hit easily. jsDelivr is a
+# CDN mirror of the repository and is effectively rate-limit free.
+REMOTE_VERSION_URLS = [
+    "https://raw.githubusercontent.com/{repo}/{branch}/{vfile}".format(
+        repo=GITHUB_REPO, branch=GITHUB_BRANCH, vfile=VERSION_FILE),
+    "https://cdn.jsdelivr.net/gh/{repo}@{branch}/{vfile}".format(
+        repo=GITHUB_REPO, branch=GITHUB_BRANCH, vfile=VERSION_FILE),
+]
 REMOTE_ZIP_URL = "https://github.com/{repo}/archive/refs/heads/{branch}.zip".format(
     repo=GITHUB_REPO, branch=GITHUB_BRANCH)
 
@@ -80,14 +89,63 @@ def _read_local_version():
         return "0.0.0"
 
 
-def _fetch_remote_version():
+def _clean_version_text(text):
+    return (text or "").strip().lstrip(u'\ufeff').strip()
+
+
+def _new_web_client():
+    """WebClient with headers and proxy credentials for corporate networks."""
     client = WebClient()
+    client.Encoding = Encoding.UTF8
     try:
-        client.Encoding = Encoding.UTF8
-        text = client.DownloadString(REMOTE_VERSION_URL)
-        return text.strip().lstrip(u'\ufeff').strip()
-    finally:
-        client.Dispose()
+        client.Headers.Add("User-Agent", "T3Lab-CheckUpdate/1.0")
+        client.Headers.Add("Cache-Control", "no-cache")
+        client.UseDefaultCredentials = True
+        if client.Proxy is not None:
+            client.Proxy.Credentials = CredentialCache.DefaultCredentials
+    except Exception:
+        pass
+    return client
+
+
+def _fetch_remote_version_git():
+    """Read the remote version through git -- immune to web rate limits."""
+    code, _, _ = _run_command(
+        "git", "fetch origin {}".format(GITHUB_BRANCH), cwd=extension_dir)
+    if code != 0:
+        return None
+    code, stdout, _ = _run_command(
+        "git", "show origin/{}:{}".format(GITHUB_BRANCH, VERSION_FILE),
+        cwd=extension_dir)
+    if code != 0:
+        return None
+    return _clean_version_text(stdout) or None
+
+
+def _fetch_remote_version():
+    # Preferred: ask git directly when the extension is a clone
+    if _git_usable():
+        text = _fetch_remote_version_git()
+        if text:
+            return text
+        logger.debug("git version check failed, falling back to HTTP")
+
+    last_error = None
+    for attempt in range(2):
+        if attempt:
+            time.sleep(3)  # brief pause before the retry round
+        for url in REMOTE_VERSION_URLS:
+            client = _new_web_client()
+            try:
+                text = _clean_version_text(client.DownloadString(url))
+                if text:
+                    return text
+            except Exception as ex:
+                last_error = ex
+                logger.debug("version check failed for %s: %s", url, ex)
+            finally:
+                client.Dispose()
+    raise last_error or Exception("No version source was reachable.")
 
 
 def _parse_version(text):
@@ -153,7 +211,7 @@ def _update_with_zip():
     os.makedirs(work_dir)
 
     zip_path = os.path.join(work_dir, "t3lab_latest.zip")
-    client = WebClient()
+    client = _new_web_client()
     try:
         client.DownloadFile(REMOTE_ZIP_URL, zip_path)
     finally:
@@ -252,7 +310,8 @@ def main():
         logger.error("Version check failed: %s", ex)
         forms.alert(
             "Could not check the latest version online.\n"
-            "Please check your internet connection and try again.\n\n{}".format(ex),
+            "The server may be busy or rate-limited -- please try again "
+            "in a few minutes.\n\n{}".format(ex),
             title="Check Update",
             exitscript=True)
         return

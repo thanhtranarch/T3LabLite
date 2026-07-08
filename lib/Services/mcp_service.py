@@ -79,6 +79,55 @@ def _get_bridge_path():
     return (deployed or _source_bridge_path()).replace('\\', '/')
 
 
+def _is_appexec_alias(path):
+    """
+    True for Windows app-execution aliases — zero-byte reparse points,
+    typically %LOCALAPPDATA%/Microsoft/WindowsApps/python.exe.
+
+    The alias is ambiguous: with Store Python or the python.org install
+    manager it runs a real interpreter, but on a machine without Python it
+    is a pre-installed stub that opens the Microsoft Store and exits
+    immediately. os.path.isfile() is True either way, so a naive PATH scan
+    happily writes the dead stub into the Claude config — the MCP client
+    spawns it, it dies, and Claude Desktop shows "Could not attach to MCP
+    server" / "Server disconnected". Alias candidates are therefore only
+    trusted after _python_works confirms them conclusively (True, not None).
+    """
+    norm = path.replace('\\', '/').lower()
+    if '/windowsapps/' in norm:
+        return True
+    try:
+        return os.path.getsize(path) == 0
+    except Exception:
+        return False
+
+
+def _python_works(exe):
+    """
+    Run exe to confirm it is a CPython 3.6+ (what bridge.py needs).
+
+    Returns True (confirmed), False (conclusive failure — the process
+    could not be spawned, or ran and reported an older Python), or None
+    (couldn't check: subprocess quirks under this engine). Callers treat
+    None as acceptable for real files but NOT for app-execution aliases.
+    """
+    try:
+        import subprocess
+    except Exception:
+        return None
+    cmd = [exe, '-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 6) else 1)']
+    # CREATE_NO_WINDOW — without it every probe flashes a console over
+    # Revit. Retried without the flag for engines that don't support it.
+    for kwargs in ({'creationflags': 0x08000000}, {}):
+        try:
+            return subprocess.call(cmd, **kwargs) == 0
+        except TypeError:
+            continue
+        except Exception:
+            return False
+    return None
+
+
 def _find_python_executable():
     """
     Locate a CPython 3 interpreter to run core/bridge.py.
@@ -88,9 +137,17 @@ def _find_python_executable():
     bare "python" command isn't guaranteed to resolve on every machine
     (e.g. python.org installs that only register "python3", or a PATH
     that hasn't picked up a fresh install yet). Search PATH first, then
-    fall back to common per-user/system install locations, and only use
-    the bare command name as a last resort so Claude Desktop still gets
-    something to try.
+    fall back to common per-user/system install locations and the py.exe
+    launcher, and only use the bare command name as a last resort so
+    Claude Desktop still gets something to try.
+
+    Every candidate is verified to actually run Python 3.6+ before being
+    used (see _python_works) — an unverified path written into the Claude
+    config is exactly what produced "Could not attach" on machines without
+    a real Python install: the pre-installed Microsoft Store stub
+    (WindowsApps/python.exe) passes an isfile() test but dies on launch.
+    Real files are preferred; app-execution aliases (see _is_appexec_alias)
+    are used last and only when a run-test conclusively succeeds.
 
     The resolved path is read from / written to mcp_paths.json (see
     core/paths.py) so the scan only runs once per machine and the result
@@ -100,52 +157,73 @@ def _find_python_executable():
     paths = _get_paths_module()
     cached_path = paths.load_settings().get('python_executable')
     if cached_path and os.path.isfile(cached_path):
-        return cached_path
+        if not _is_appexec_alias(cached_path) or _python_works(cached_path) is True:
+            return cached_path
 
     is_windows = os.name == 'nt'
     exe_names = ['python.exe', 'python3.exe'] if is_windows else ['python3', 'python']
-    found = None
 
-    # 1) Search PATH directories for a real interpreter.
-    path_dirs = os.environ.get('PATH', '').split(os.pathsep)
-    for d in path_dirs:
+    # 1) PATH directories, in order.
+    candidates = []
+    for d in os.environ.get('PATH', '').split(os.pathsep):
         for name in exe_names:
-            candidate = os.path.join(d, name)
-            if os.path.isfile(candidate):
-                found = candidate
-                break
-        if found:
-            break
+            candidates.append(os.path.join(d, name))
 
     # 2) Common install locations not always present on PATH.
-    if not found:
-        home = os.path.expanduser('~')
-        fallback_globs = []
-        if is_windows:
-            fallback_globs.append(os.path.join(home, 'AppData', 'Local', 'Programs', 'Python', 'Python*', 'python.exe'))
-            fallback_globs.append(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Microsoft', 'WindowsApps', 'python.exe'))
-            fallback_globs.append('C:/Python*/python.exe')
-            fallback_globs.append('C:/Program Files/Python*/python.exe')
-        else:
-            fallback_globs.append('/usr/local/bin/python3')
-            fallback_globs.append('/usr/bin/python3')
-            fallback_globs.append(os.path.join(home, '.pyenv', 'shims', 'python3'))
+    home = os.path.expanduser('~')
+    if is_windows:
+        local_appdata = os.environ.get(
+            'LOCALAPPDATA', os.path.join(home, 'AppData', 'Local'))
+        fallback_globs = [
+            # classic python.org installer (per-user)
+            os.path.join(local_appdata, 'Programs', 'Python', 'Python*', 'python.exe'),
+            # python.org install manager, Python 3.13+ (pythoncore-3.14-64, ...)
+            os.path.join(local_appdata, 'Python', '*', 'python.exe'),
+            'C:/Python*/python.exe',
+            'C:/Program Files/Python*/python.exe',
+        ]
+    else:
+        fallback_globs = [
+            '/usr/local/bin/python3',
+            '/usr/bin/python3',
+            os.path.join(home, '.pyenv', 'shims', 'python3'),
+        ]
+    try:
+        import glob
+        for pattern in fallback_globs:
+            candidates.extend(sorted(glob.glob(pattern), reverse=True))
+    except Exception:
+        pass
 
-        try:
-            import glob
-            for pattern in fallback_globs:
-                matches = sorted(glob.glob(pattern), reverse=True)
-                if matches:
-                    found = matches[0]
-                    break
-        except Exception:
-            pass
+    # 3) The py.exe launcher — the classic python.org installer puts it in
+    # %WINDIR% even when "Add python to PATH" was left unticked, and it
+    # forwards "py bridge.py 48884" to the newest installed Python 3.
+    if is_windows:
+        candidates.append(os.path.join(
+            os.environ.get('WINDIR', 'C:/Windows'), 'py.exe'))
 
-    if found:
-        paths.set_setting('python_executable', found)
-        return found
+    # Real files first; ambiguous app-execution aliases (could be Store
+    # Python, could be the dead Store stub) are kept for a second pass.
+    aliases = []
+    for candidate in candidates:
+        if not os.path.isfile(candidate):
+            continue
+        if _is_appexec_alias(candidate):
+            aliases.append(candidate)
+            continue
+        if _python_works(candidate) is False:
+            continue
+        paths.set_setting('python_executable', candidate)
+        return candidate
 
-    # 3) Give up — return the bare command name and let the OS PATH try.
+    # 4) No real interpreter found — accept an alias only when running it
+    # conclusively proves it is Python 3 (the dead stub exits non-zero).
+    for candidate in aliases:
+        if _python_works(candidate) is True:
+            paths.set_setting('python_executable', candidate)
+            return candidate
+
+    # 5) Give up — return the bare command name and let the OS PATH try.
     # Not cached: it isn't a real resolved path, so nothing to reuse.
     return 'python' if is_windows else 'python3'
 

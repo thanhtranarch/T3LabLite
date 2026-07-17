@@ -9,7 +9,8 @@ latest release.
 How it works:
     1. Reads the installed version from <extension>/version.txt
     2. Downloads version.txt from the GitHub repository (main branch)
-    3. If a newer version exists, updates the extension:
+    3. If a newer version exists, shows "What's new" from CHANGELOG.md
+       and updates the extension:
          - 'git pull' when the extension is a git clone and git is available
          - otherwise downloads the repository zip and copies it over
     4. Offers to reload pyRevit so the new version is active immediately
@@ -44,9 +45,10 @@ extension_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
 
 # DEFINE VARIABLES
 # ==============================================================================
-GITHUB_REPO   = "thanhtranarch/T3LabLite"
-GITHUB_BRANCH = "main"
-VERSION_FILE  = "version.txt"
+GITHUB_REPO    = "thanhtranarch/T3LabLite"
+GITHUB_BRANCH  = "main"
+VERSION_FILE   = "version.txt"
+CHANGELOG_FILE = "CHANGELOG.md"
 
 # Several sources for the same file -- raw.githubusercontent.com rate-limits
 # per IP (HTTP 429), which shared office networks hit easily. jsDelivr is a
@@ -56,6 +58,12 @@ REMOTE_VERSION_URLS = [
         repo=GITHUB_REPO, branch=GITHUB_BRANCH, vfile=VERSION_FILE),
     "https://cdn.jsdelivr.net/gh/{repo}@{branch}/{vfile}".format(
         repo=GITHUB_REPO, branch=GITHUB_BRANCH, vfile=VERSION_FILE),
+]
+REMOTE_CHANGELOG_URLS = [
+    "https://raw.githubusercontent.com/{repo}/{branch}/{cfile}".format(
+        repo=GITHUB_REPO, branch=GITHUB_BRANCH, cfile=CHANGELOG_FILE),
+    "https://cdn.jsdelivr.net/gh/{repo}@{branch}/{cfile}".format(
+        repo=GITHUB_REPO, branch=GITHUB_BRANCH, cfile=CHANGELOG_FILE),
 ]
 REMOTE_ZIP_URL = "https://github.com/{repo}/archive/refs/heads/{branch}.zip".format(
     repo=GITHUB_REPO, branch=GITHUB_BRANCH)
@@ -155,6 +163,83 @@ def _parse_version(text):
         digits = ''.join(ch for ch in token if ch.isdigit())
         parts.append(int(digits) if digits else 0)
     return tuple(parts) if parts else (0,)
+
+
+# ============================================================
+# CHANGELOG ("WHAT'S NEW") HELPERS
+# ============================================================
+def _fetch_remote_changelog():
+    """Return the CHANGELOG.md text from the repository, or None."""
+    if _git_usable():
+        # origin was already fetched by the version check
+        code, stdout, _ = _run_command(
+            "git", "show origin/{}:{}".format(GITHUB_BRANCH, CHANGELOG_FILE),
+            cwd=extension_dir)
+        if code == 0 and stdout.strip():
+            return stdout
+
+    for url in REMOTE_CHANGELOG_URLS:
+        client = _new_web_client()
+        try:
+            text = client.DownloadString(url)
+            if text and text.strip():
+                return text
+        except Exception as ex:
+            logger.debug("changelog fetch failed for %s: %s", url, ex)
+        finally:
+            client.Dispose()
+    return None
+
+
+def _extract_whats_new(changelog_text, local_version, max_lines=20):
+    """Collect changelog lines for every release newer than local_version.
+
+    Expects Keep-a-Changelog style headings: '## [x.y.z] - date'.
+    Returns a list of display lines (may be empty).
+    """
+    local = _parse_version(local_version)
+    include = False
+    out = []
+    for raw in (changelog_text or "").replace('\r\n', '\n').split('\n'):
+        line = raw.strip()
+        if line.startswith('## '):
+            header = line[3:].strip()
+            ver_text = header.lstrip('[').split(']')[0].strip()
+            # skip non-release headings such as [Unreleased]
+            if not any(ch.isdigit() for ch in ver_text):
+                include = False
+                continue
+            include = _parse_version(ver_text) > local
+            if include:
+                if out:
+                    out.append(u"")
+                out.append(u"Version " + header.replace('[', '').replace(']', ''))
+        elif include:
+            if line.startswith('### '):
+                out.append(line[4:].strip() + u":")
+            elif line.startswith('- ') or line.startswith('* '):
+                out.append(u"  • " + line[2:].strip())
+            elif line and out and out[-1].startswith(u"  • "):
+                # continuation of a wrapped bullet line
+                out[-1] += u" " + line
+    if len(out) > max_lines:
+        out = out[:max_lines] + [u"  ..."]
+    return [item.replace(u"**", u"") for item in out]
+
+
+def _get_whats_new_text(local_version):
+    """'What's new' block for the update prompt; empty string on any problem."""
+    try:
+        changelog = _fetch_remote_changelog()
+        if not changelog:
+            return u""
+        notes = _extract_whats_new(changelog, local_version)
+        if not notes:
+            return u""
+        return u"\n\nWhat's new:\n" + u"\n".join(notes)
+    except Exception as ex:
+        logger.debug("could not build what's-new text: %s", ex)
+        return u""
 
 
 # ============================================================
@@ -325,10 +410,11 @@ def main():
         return
 
     res = forms.alert(
-        "A new version of T3Lab is available!\n\n"
-        "Installed version:  {}\n"
-        "Latest version:      {}\n\n"
-        "Update now?".format(local_text, remote_text),
+        u"A new version of T3Lab is available!\n\n"
+        u"Installed version:  {}\n"
+        u"Latest version:      {}{}\n\n"
+        u"Update now?".format(local_text, remote_text,
+                              _get_whats_new_text(local_text)),
         title="Check Update",
         options=["Update now", "Not now"])
     if res == "Update now":

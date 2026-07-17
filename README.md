@@ -3,6 +3,8 @@
 **T3Lab Lite** is a pyRevit extension built for Revit users who want to work faster.
 It covers batch export, sheet & view management, family tools, IFC-SG compliance, CAD-to-BIM conversion, model auditing, and an AI assistant that understands Vietnamese.
 
+See [CHANGELOG.md](CHANGELOG.md) for what's new in each release.
+
 ---
 
 #### Installation

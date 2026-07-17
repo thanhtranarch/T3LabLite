@@ -2,6 +2,7 @@ title: "Check\nUpdate"
 tooltip: "Check for a new T3Lab version and update to the latest release."
 description: |
   Compares the installed T3Lab version with the latest version on GitHub
+  Shows what's new in the latest release (from CHANGELOG.md)
   Updates automatically via git pull, or direct download as fallback
   Offers to reload pyRevit so the new version is active immediately
 author: "Tran Tien Thanh"

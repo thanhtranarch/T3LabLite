@@ -15,6 +15,13 @@ Releasing a new version:
 2. Set the same version number in `version.txt`.
 3. Commit and push -- Check Update on user machines will pick it up.
 
+## [Unreleased]
+
+### Removed
+- **MCP**: `show_assistant_pane` tool — the T3Lab Assistant pane no longer
+  appears in the MCP client's tool list (the pane itself was already retired
+  in favour of the MCP-based workflow).
+
 ## [1.2.0] - 2026-07-17
 
 ### Added

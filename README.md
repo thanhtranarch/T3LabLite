@@ -1,7 +1,7 @@
 # T3Lab Lite
 
 **T3Lab Lite** is a pyRevit extension built for Revit users who want to work faster.
-It covers batch export, sheet & view management, family tools, IFC-SG compliance, CAD-to-BIM conversion, model auditing, and an AI assistant that understands Vietnamese.
+It covers batch export, sheet & view management, family tools, IFC-SG compliance, CAD-to-BIM conversion, model auditing, and MCP integration that lets Claude AI work with Revit directly.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's new in each release.
 
@@ -28,10 +28,6 @@ The ribbon is organised into six panels: **Support**, **Standards & Settings**, 
 ---
 
 ### Support
-
-#### T3Lab Assistant
-An AI assistant built into Revit. Type commands in **Vietnamese or English** to open and control T3Lab tools.
-Works with Claude, OpenAI, or DeepSeek (your own API key), or fully offline with local Ollama / LM Studio.
 
 #### MCP Control
 Start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit.
@@ -176,11 +172,6 @@ All connections are **user-initiated**. Nothing runs on extension load.
 
 | Component | Destination | When |
 |---|---|---|
-| T3Lab Assistant — Claude | `api.anthropic.com` | User sends a message with a Claude API key saved |
-| T3Lab Assistant — OpenAI | `api.openai.com` | User sends a message with an OpenAI API key saved |
-| T3Lab Assistant — DeepSeek | `api.deepseek.com` | User sends a message with a DeepSeek API key saved |
-| T3Lab Assistant — Ollama | `localhost:11434` | Local inference only — never external |
-| T3Lab Assistant — LM Studio | `localhost:1234` | Local inference only — never external |
 | MCP Server | `localhost:8080` (host/port configurable) | Only while the MCP server is running |
 | ManaFami (Cloud) | User-configured Vercel URL in `~/.t3lab/family_loader_config.json` | User opens the cloud family catalogue |
 | Feedback | None — opens a `mailto:` link in the default email client | User sends feedback |

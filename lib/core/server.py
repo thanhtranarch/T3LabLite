@@ -1614,24 +1614,6 @@ class T3LabAIServer(object):
                                 'open_document with it.'),
                 'inputSchema': {'type': 'object', 'properties': {}, 'required': []}
             },
-            'show_assistant_pane': {
-                'name': 'show_assistant_pane',
-                'description': 'Show or hide the T3Lab Assistant dockable pane',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'action': {
-                            'type': 'string',
-                            'description': '"show" (default) or "hide"'
-                        },
-                        'message': {
-                            'type': 'string',
-                            'description': 'Optional message to inject into the pane chat'
-                        }
-                    },
-                    'required': []
-                }
-            },
             # ── Export ────────────────────────────────────────────────────────
             'export_sheets_pdf': {
                 'name': 'export_sheets_pdf',
@@ -1834,7 +1816,7 @@ class T3LabAIServer(object):
         'rename_element', 'create_sheet', 'add_view_to_sheet', 'create_text_note',
         'set_element_workset', 'load_family', 'send_code_to_revit',
         'store_project_data', 'store_room_data', 'export_sheets_pdf', 'say_hello',
-        'show_assistant_pane', 'split_curve', 'split_element', 'join_geometry',
+        'split_curve', 'split_element', 'join_geometry',
         'bulk_set_parameter', 'select_elements', 'tag_elements', 'create_dimension',
         'create_schedule', 'duplicate_view', 'apply_view_template',
         'create_view_filter', 'place_views_on_sheets', 'export_dwg', 'export_image',
@@ -1856,7 +1838,7 @@ class T3LabAIServer(object):
     _DOCLESS_TOOLS = frozenset([
         'say_hello', 'list_open_documents', 'switch_active_document',
         'open_document', 'close_document', 'list_recent_documents',
-        'show_assistant_pane', 'file_watcher_status',
+        'file_watcher_status',
     ])
 
     def ensure_external_event(self):
@@ -4586,40 +4568,6 @@ class T3LabAIServer(object):
                 }
             except Exception as e:
                 return {'error': str(e), 'tool': tool_name}
-
-        # ── show_assistant_pane ──────────────────────────────────────────────
-        elif tool_name == 'show_assistant_pane':
-            try:
-                from System import Guid as SysGuid
-                from Autodesk.Revit.UI import DockablePaneId
-                from pyrevit import HOST_APP
-                action  = arguments.get('action', 'show').lower()
-                message = arguments.get('message', '')
-                pane_guid = SysGuid('7F3A9B2E-C4D1-4E8F-A6B5-1234567890AB')
-                pane_id   = DockablePaneId(pane_guid)
-                uiapp     = HOST_APP.uiapp
-                pane      = uiapp.GetDockablePane(pane_id)
-                if pane is None:
-                    return {'error': 'DockablePane not registered. Restart Revit after installing T3Lab.'}
-                if action == 'hide':
-                    pane.Hide()
-                    return {'success': True, 'action': 'hide'}
-                else:
-                    pane.Show()
-                    result = {'success': True, 'action': 'show'}
-                # Inject message into pane if provided
-                if message:
-                    try:
-                        from GUI.AssistantPaneControl import get_pane_controller
-                        ctrl = get_pane_controller()
-                        if ctrl:
-                            ctrl.add_message(message, is_user=False)
-                            result['message_injected'] = True
-                    except Exception:
-                        result['message_injected'] = False
-                return result
-            except Exception as e:
-                return {'error': str(e)}
 
         # ── export_sheets_pdf ────────────────────────────────────────────────
         elif tool_name == 'export_sheets_pdf':

@@ -19,6 +19,19 @@ T3Lab Lite is installed as a pyRevit extension.
 
     ▶ Click Install
 
+#### Staying up to date
+
+On the first Revit start of each day, T3Lab checks GitHub for a newer release
+and downloads it in the background. Revit keeps running the version it loaded,
+so the update takes effect the next time you start Revit (or click
+pyRevit ▸ Reload) — a notification tells you when that is worth doing.
+
+A clone with local commits or edits is only ever fast-forwarded, never
+overwritten. To turn the daily check off, set `"auto_update": false` in
+`%APPDATA%\T3LabAI\mcp_paths.json`. **Check Update** on the Support panel
+still works either way, and `%APPDATA%\T3LabAI\update.log` records what
+happened.
+
 ---
 
 ### Tools
@@ -168,10 +181,12 @@ Supports combined PDF, custom naming patterns, sheet ordering, and revision trac
 
 ### Network Traffic
 
-All connections are **user-initiated**. Nothing runs on extension load.
+Every connection is either **user-initiated** or the once-a-day update check,
+which can be switched off (see [Staying up to date](#staying-up-to-date)).
 
 | Component | Destination | When |
 |---|---|---|
+| Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each day, unless `"auto_update": false` |
 | MCP Server | `localhost:8080` (host/port configurable) | Only while the MCP server is running |
 | ManaFami (Cloud) | User-configured Vercel URL in `~/.t3lab/family_loader_config.json` | User opens the cloud family catalogue |
 | Feedback | None — opens a `mailto:` link in the default email client | User sends feedback |

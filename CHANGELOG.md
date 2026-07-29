@@ -17,6 +17,17 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Added
+- **Auto-update**: the first Revit start of each day checks GitHub for a newer
+  release and downloads it in the background. The new version becomes active on
+  the next Revit start (or pyRevit reload); a toast says so. Opt out with
+  `"auto_update": false` in `%APPDATA%\T3LabAI\mcp_paths.json`.
+
+### Changed
+- **Check Update**: version lookup, changelog reading and the git/zip update
+  strategies moved into `lib/core/updater.py`, shared with the daily automatic
+  check. The button behaves as before.
+
 ### Removed
 - **MCP**: `show_assistant_pane` tool — the T3Lab Assistant pane no longer
   appears in the MCP client's tool list (the pane itself was already retired

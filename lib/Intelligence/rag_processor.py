@@ -8,6 +8,9 @@ to the Claude API as context (Retrieval-Augmented Generation).
 Supported inputs:
   - PDF  (.pdf)  → extracted plain text via .NET or fallback byte-scan
   - Image (.png, .jpg, .jpeg, .bmp, .gif, .webp) → base64-encoded bytes
+  - Text (.txt, .md, .json, .csv, .log, .xml, .html, .ini, .yml ...) → decoded
+    text, HTML/XML stripped to prose. Covers files the user attaches directly
+    and the ones link_reader downloads from a pasted URL.
 
 Author: Tran Tien Thanh
 """
@@ -15,6 +18,7 @@ Author: Tran Tien Thanh
 from __future__ import unicode_literals
 
 import os
+import re
 import base64
 
 # ── .NET / IronPython imports ─────────────────────────────────────────────────
@@ -32,7 +36,14 @@ except Exception:
 IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'}
 PDF_EXT    = '.pdf'
 
-SUPPORTED_EXTS = IMAGE_EXTS | {PDF_EXT}
+# Plain-text-ish documents. Read as-is (HTML/XML get their tags stripped) —
+# no parsing beyond decoding, so a malformed JSON still reaches the model as
+# text it can reason about instead of failing the whole turn.
+TEXT_EXTS = {'.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.log',
+             '.xml', '.html', '.htm', '.ini', '.cfg', '.yaml', '.yml',
+             '.py', '.sql', '.bat', '.ps1'}
+
+SUPPORTED_EXTS = IMAGE_EXTS | TEXT_EXTS | {PDF_EXT}
 
 # MIME map for Claude vision content blocks
 _MIME_MAP = {
@@ -48,6 +59,8 @@ _MIME_MAP = {
 MAX_IMAGE_BYTES = 5 * 1024 * 1024   # 5 MB
 MAX_PDF_BYTES   = 20 * 1024 * 1024  # 20 MB
 MAX_PDF_CHARS   = 12000             # truncate extracted text to this length
+MAX_TEXT_BYTES  = 8 * 1024 * 1024   # 8 MB on disk
+MAX_TEXT_CHARS  = 12000             # same prompt budget as a PDF
 
 
 # ─── File validation ──────────────────────────────────────────────────────────
@@ -67,32 +80,132 @@ def is_pdf(file_path):
     return os.path.splitext(file_path)[1].lower() == PDF_EXT
 
 
+def is_text_file(file_path):
+    ext = os.path.splitext(file_path)[1].lower()
+    return ext in TEXT_EXTS
+
+
 # ─── PDF text extraction ──────────────────────────────────────────────────────
 
-def extract_pdf_text(pdf_path):
-    """Extract readable text from a PDF file.
+def extract_pdf_pages(pdf_path, max_pages=200):
+    """Extract text per page from a PDF file.
 
     Tries (in order):
-      1. iTextSharp (if available in Revit environment)
-      2. Byte-level ASCII scan (fallback — catches plain-text streams)
+      1. iTextSharp (if available in Revit environment) — real page numbers
+      2. pdf_text: pure-Python inflate + content-stream parse — real page
+         numbers, handles FlateDecode/ObjStm/ToUnicode
+      3. Byte-level ASCII scan (last resort) — one pseudo-page numbered 0,
+         signalling "page unknown / partial extraction" to callers.
+
+    Step 2 exists because step 3 CANNOT read a compressed PDF: it used to
+    return raw deflate bytes and PDF dictionary fragments as if they were
+    text, poisoning the RAG index and the folder digests. The byte scan now
+    only runs when both real parsers come back empty, and its output is
+    rejected when it doesn't look like prose (see _looks_like_text).
 
     Returns:
-        str: Extracted text (may be empty if PDF is scanned/image-only).
+        list of (page_no, unicode_text) tuples; [] if nothing extractable.
     """
-    # Guard: file exists and not too large
     if not os.path.isfile(pdf_path):
-        return u''
+        return []
     try:
         size = os.path.getsize(pdf_path)
     except Exception:
         size = 0
     if size == 0 or size > MAX_PDF_BYTES:
+        return []
+    return extract_pdf_pages_ex(pdf_path, max_pages)[0]
+
+
+def extract_pdf_pages_ex(pdf_path, max_pages=200):
+    """extract_pdf_pages plus a diagnosis: ([(page_no, text)], reason).
+
+    `reason` is '' on success, otherwise a human-readable cause taken from the
+    pure-Python parser ('encrypted and needs a user password', 'no text layer
+    (image-only - needs OCR)', ...). Collapsing every failure into "no text"
+    is what made an owner-password-protected manual look like a scan.
+    """
+    if not os.path.isfile(pdf_path):
+        return [], 'file not found'
+    try:
+        size = os.path.getsize(pdf_path)
+    except Exception:
+        size = 0
+    if size == 0:
+        return [], 'empty file (0 bytes)'
+    if size > MAX_PDF_BYTES:
+        return [], 'larger than the {0} MB limit'.format(
+            MAX_PDF_BYTES // (1024 * 1024))
+
+    pages = _itextsharp_pages(pdf_path, max_pages)
+    if pages:
+        return pages, ''
+    reason = ''
+    try:
+        from Intelligence.knowledge import pdf_text as _pt
+        pages, reason = _pt.extract_pages_ex(pdf_path, max_pages=max_pages)
+        if pages:
+            return pages, ''
+    except Exception as ex:
+        reason = 'parser error ({0})'.format(ex)
+    text = _fallback_byte_scan(pdf_path)
+    if text and _looks_like_text(text):
+        return [(0, text)], ''
+    return [], reason or 'no extractable text'
+
+
+# Very common words. Real prose is ~10-25% of these; compressed-binary noise
+# and PDF object dictionaries (/Type/Catalog/Pages 2 0 R) contain almost none —
+# a letter/symbol ratio alone does NOT separate them, since both are full of
+# ASCII letters.
+_STOPWORDS_EN = set((
+    'the and for of to in is are with this that all shall be as on by or from '
+    'not it its at any each such which when where must may can will use used '
+    'file name project model drawing document number code'
+).split())
+_STOPWORDS_VI = set((
+    'va cua cho cac la duoc trong theo khi den tu mot nhung voi tai ban ten'
+).split())
+_COMMON_WORDS = _STOPWORDS_EN | _STOPWORDS_VI
+
+
+def _looks_like_text(text, min_common=0.05, max_symbol=0.06):
+    """Guard against the byte scan returning compressed-binary noise.
+
+    Judged on WORD content, not character classes: inflate output and PDF
+    dictionaries are full of ASCII letters, so a printable-ratio test passes
+    them happily (that is exactly how `/Type/Catalog/Pages 2 0 R` and
+    `|* Q9nG%6bHiw?` ended up in the index).
+    """
+    sample = (text or '')[:4000]
+    if len(sample) < 60:
+        return False
+    words = re.findall(r"[A-Za-z]{2,}", sample.lower())
+    if len(words) < 20:
+        return False
+    common = sum(1 for w in words if w in _COMMON_WORDS)
+    if common / float(len(words)) < min_common:
+        return False
+    # PDF syntax / binary is dense in these; prose is not
+    symbols = sum(1 for ch in sample if ch in '/<>[]{}\\|~^`')
+    return symbols / float(len(sample)) <= max_symbol
+
+
+def extract_pdf_text(pdf_path):
+    """Extract readable text from a PDF file (joined over pages).
+
+    Returns:
+        str: Extracted text truncated to MAX_PDF_CHARS (may be empty if
+        the PDF is scanned/image-only).
+    """
+    try:
+        size = os.path.getsize(pdf_path) if os.path.isfile(pdf_path) else 0
+    except Exception:
+        size = 0
+    if size > MAX_PDF_BYTES:
         return u'[PDF quá lớn để xử lý — tối đa {} MB]'.format(MAX_PDF_BYTES // (1024 * 1024))
 
-    text = _try_itextsharp(pdf_path)
-    if not text:
-        text = _fallback_byte_scan(pdf_path)
-
+    text = u'\n\n'.join(t for _, t in extract_pdf_pages(pdf_path))
     if text:
         text = text.strip()
         if len(text) > MAX_PDF_CHARS:
@@ -100,8 +213,8 @@ def extract_pdf_text(pdf_path):
     return text or u''
 
 
-def _try_itextsharp(pdf_path):
-    """Attempt to use iTextSharp for PDF text extraction (Revit may have it)."""
+def _itextsharp_pages(pdf_path, max_pages=200):
+    """Per-page extraction via iTextSharp (Revit may provide the assembly)."""
     try:
         clr.AddReference('itextsharp')
         from iTextSharp.text.pdf import PdfReader
@@ -110,17 +223,17 @@ def _try_itextsharp(pdf_path):
         reader = PdfReader(pdf_path)
         pages  = []
         n = reader.NumberOfPages
-        for i in range(1, min(n + 1, 51)):   # max 50 pages
+        for i in range(1, min(n + 1, max_pages + 1)):
             try:
                 page_text = PdfTextExtractor.GetTextFromPage(reader, i)
-                if page_text:
-                    pages.append(page_text.strip())
+                if page_text and page_text.strip():
+                    pages.append((i, page_text.strip()))
             except Exception:
                 pass
         reader.Close()
-        return u'\n\n'.join(pages)
+        return pages
     except Exception:
-        return u''
+        return []
 
 
 def _fallback_byte_scan(pdf_path):
@@ -152,6 +265,82 @@ def _fallback_byte_scan(pdf_path):
         return u' '.join(r.strip() for r in runs[:200])
     except Exception:
         return u''
+
+
+# ─── Plain-text / JSON / HTML extraction ──────────────────────────────────────
+
+_TAG_RE     = re.compile(r'<[^>]+>')
+_SCRIPT_RE  = re.compile(r'(?is)<(script|style)[^>]*>.*?</\1>')
+_WS_RE      = re.compile(r'[ \t]*\n\s*\n\s*')
+
+
+def strip_html(html):
+    """Reduce an HTML/XML document to readable prose.
+
+    Deliberately regex-based: IronPython 2.7 has no lxml/bs4 here, and the
+    goal is only to stop tags and script bodies from eating the prompt budget.
+    """
+    if not html:
+        return u''
+    text = _SCRIPT_RE.sub(u' ', html)
+    text = _TAG_RE.sub(u' ', text)
+    for ent, ch in ((u'&nbsp;', u' '), (u'&amp;', u'&'), (u'&lt;', u'<'),
+                    (u'&gt;', u'>'), (u'&quot;', u'"'), (u'&#39;', u"'")):
+        text = text.replace(ent, ch)
+    text = re.sub(r'[ \t]{2,}', u' ', text)
+    return _WS_RE.sub(u'\n\n', text).strip()
+
+
+def extract_text_file(path):
+    """Decode a text-ish file (.txt/.md/.json/.csv/.xml/.html/...).
+
+    Tries UTF-8 (with and without BOM) before latin-1, because a JSON export
+    from Revit or a Bluebeam comment dump is UTF-8 far more often than not and
+    a silent latin-1 read turns every Vietnamese diacritic into mojibake.
+    Returns u'' when the file is missing, empty or over the size cap.
+    """
+    if not os.path.isfile(path):
+        return u''
+    try:
+        size = os.path.getsize(path)
+    except Exception:
+        size = 0
+    if size == 0 or size > MAX_TEXT_BYTES:
+        return u''
+    try:
+        with open(path, 'rb') as f:
+            raw = f.read(MAX_TEXT_BYTES)
+    except Exception:
+        return u''
+
+    text = None
+    for enc in ('utf-8-sig', 'utf-8', 'utf-16', 'latin-1'):
+        try:
+            text = raw.decode(enc)
+            break
+        except Exception:
+            continue
+    if text is None:
+        return u''
+
+    if os.path.splitext(path)[1].lower() in ('.html', '.htm', '.xml'):
+        text = strip_html(text)
+
+    text = text.strip()
+    if len(text) > MAX_TEXT_CHARS:
+        text = text[:MAX_TEXT_CHARS] + u'\n[... nội dung bị cắt ngắn ...]'
+    return text
+
+
+def _text_file_block(path):
+    """One '=== Nội dung <name> ===' section for a text-ish file."""
+    name = os.path.basename(path)
+    text = extract_text_file(path)
+    if text:
+        return u'=== Nội dung {}: {} ===\n{}\n=== Hết {} ==='.format(
+            os.path.splitext(name)[1].lstrip('.').upper() or u'FILE',
+            name, text, name)
+    return u'[Không đọc được nội dung "{}"]'.format(name)
 
 
 # ─── Image encoding ───────────────────────────────────────────────────────────
@@ -205,6 +394,8 @@ def build_text_context(attached_files):
                 )
             else:
                 parts.append(u'[PDF "{}" không trích xuất được văn bản]'.format(name))
+        elif is_text_file(path):
+            parts.append(_text_file_block(path))
         elif is_image(path):
             parts.append(u'[Hình ảnh đính kèm: {} — xem phần vision bên dưới]'.format(name))
     return u'\n\n'.join(parts)
@@ -242,6 +433,11 @@ def build_vision_content_blocks(user_text, attached_files):
                     "type": "text",
                     "text": u'[PDF "{}" không trích xuất được văn bản — có thể là PDF scan]'.format(name)
                 })
+
+    # 1b. Text-ish files (.json / .txt / .md / .csv / .html ...)
+    for path in attached_files:
+        if is_text_file(path):
+            blocks.append({"type": "text", "text": _text_file_block(path)})
 
     # 2. Image blocks
     for path in attached_files:

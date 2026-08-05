@@ -1,0 +1,32 @@
+---
+name: annotation-standard
+description: Dimension, tag and text note conventions on drawings
+triggers: dim, kich thuoc, ghi kich thuoc, danh tag, tag tuong, tag elements, tag tat ca, tag toan bo, danh dim, ghi dim, dat dim, ghi chu, text note, annotation, dimension, chuoi dim, tag room, tag phong, general notes
+agents: revit_action, general
+tools: create_dimension, tag_elements, tag_all_walls, tag_all_rooms, create_text_note
+standard: project
+---
+# Quy ước Dim / Tag / Ghi chú (T3Lab)
+
+> **⚠️ Nguồn chuẩn — đọc trước khi áp dụng**
+> Mọi mã, tiền tố, cách đánh số, tên gọi và ngưỡng viết trong tài liệu này chỉ là **mẫu tham khảo chung của ngành**, KHÔNG phải chuẩn của dự án. Chuẩn thật phụ thuộc từng công ty/chủ đầu tư.
+> 1. **Ưu tiên tuyệt đối**: BEP / EIR / tiêu chuẩn nội bộ của dự án có trong knowledge base — áp dụng đúng theo đó và ghi rõ tên file nguồn đã lấy quy tắc.
+> 2. **Nếu chưa có file chuẩn**: nói rõ một câu "chưa tìm thấy BEP/tiêu chuẩn dự án trong knowledge base", rồi đề nghị người dùng bổ sung theo một trong các cách: **Settings → Projects → Link folder** (link thẳng thư mục BEP/tiêu chuẩn của dự án — quét tại chỗ, tự sinh file `context/CONTEXT.md`), **Settings → Projects → Add files** (copy file BEP/standard vào project), hoặc **Settings → Knowledge → Add folder** (thư mục tiêu chuẩn dùng chung cho mọi dự án). Sau đó chạy lại yêu cầu.
+> 3. **Không tự bịa** mã dự án, tiền tố bộ môn, mã revision/suitability hay yêu cầu LOD. Nếu model hiện tại đã có quy ước sẵn thì được phép theo quy ước quan sát được — nhưng phải nói rõ là suy ra từ model, không phải từ tài liệu chuẩn.
+
+## Dim (kích thước)
+- Thứ tự chuỗi dim mặt bằng từ ngoài vào: (1) tổng, (2) trục–trục, (3) mảng tường/lỗ mở chi tiết.
+- Dim bám grid và mặt kết cấu, KHÔNG dim vào mặt hoàn thiện trừ bản vẽ hoàn thiện.
+- `create_dimension` cho từng chuỗi; sau khi tạo báo số chuỗi dim đã thêm theo view.
+
+## Tag
+- Tag phải lấy dữ liệu từ element (không text đè tay). Tường dùng `tag_all_walls`, room dùng `tag_all_rooms`, còn lại `tag_elements` theo category.
+- Tag không được đè lên nhau hoặc đè lên đối tượng; nếu dày đặc, đề xuất tag theo cụm/điển hình.
+- Thiếu thông tin trong tag (type name rỗng, mark trùng) → báo danh sách element lỗi thay vì tag bừa.
+
+## Text note
+- `create_text_note` chỉ dùng cho ghi chú chung (general notes) hoặc chú thích không lấy được từ dữ liệu model. Nội dung tiếng Việt có dấu, ngắn gọn, chữ HOA cho tiêu đề.
+- Không dùng text để "sửa" thông tin sai lệch với model — phải sửa model.
+
+## Sau khi thao tác
+- Tóm tắt: view nào, bao nhiêu dim/tag/note đã thêm.

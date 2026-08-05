@@ -2,14 +2,25 @@
   "doc_key": "default", 
   "messages": [
     {
-      "content": "hello", 
       "role": "user", 
-      "ts": "2026-07-06 11:40:30"
+      "ts": "2026-08-05 10:15:43", 
+      "content": "create"
     }, 
     {
-      "content": "Hello! I'm T3Lab Assistant \ud83d\udc4b\nWhat would you like to do today?", 
       "role": "assistant", 
-      "ts": "2026-07-06 11:40:31"
+      "ts": "2026-08-05 10:15:56", 
+      "content": "You want to create something. What would you like to create? A room, a wall, a view, or something else?"
+    }, 
+    {
+      "role": "user", 
+      "ts": "2026-08-05 10:16:00", 
+      "content": "create 3d views for each rooms in project with margin = 100mm"
+    }, 
+    {
+      "role": "assistant", 
+      "ts": "2026-08-05 10:16:04", 
+      "content": "Opening Create Plan Views..."
     }
-  ]
+  ], 
+  "summary": ""
 }

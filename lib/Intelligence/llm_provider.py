@@ -363,8 +363,44 @@ def parse_openai_stream_line(line):
 
 # ─── Native tool calling (OpenAI wire format — shared by OpenAI/DeepSeek) ──────
 
+# ─── Local reasoning-model sampling ────────────────────────────────────────────
+# Substrings that mark a hybrid/reasoning local model (Qwen3, QwQ, DeepSeek-R1,
+# Magistral, etc.). These models are trained with sampled decoding and DEGRADE
+# under greedy (temperature 0): Qwen's own guidance is explicit that greedy
+# decoding in thinking mode causes endless repetition and quality drops. The
+# whole codebase historically pinned temperature 0.0 for determinism of tool
+# JSON — correct for instruct models, actively harmful for these.
+_REASONING_MODEL_HINTS = (
+    "qwen3", "qwq", "deepseek-r1", "-r1", "r1-", "magistral",
+    "reasoning", "thinker", "marco-o1", "openthinker", "phi-4-reasoning",
+)
+
+
+def is_reasoning_model(model_name):
+    """True when the model name looks like a hybrid/reasoning local model."""
+    if not model_name:
+        return False
+    low = u"{}".format(model_name).lower()
+    return any(h in low for h in _REASONING_MODEL_HINTS)
+
+
+def local_sampling_params(model_name):
+    """Recommended sampling options for a local model, by family.
+
+    Reasoning models (Qwen3 thinking, DeepSeek-R1, ...) get the vendor-
+    recommended non-greedy profile (temp 0.6 / top_p 0.95 / top_k 20 / min_p 0)
+    so thinking mode doesn't collapse into repetition. Plain instruct models
+    keep the deterministic low-temperature profile that makes tool-call JSON
+    stable. Returns a dict of raw option names (temperature/top_p/top_k/min_p)
+    — each provider maps them onto its own payload shape.
+    """
+    if is_reasoning_model(model_name):
+        return {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0}
+    return {"temperature": 0.0, "top_p": 0.9}
+
+
 def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
-                      max_tokens=1500, timeout_ms=180000):
+                      max_tokens=1500, timeout_ms=180000, extra_payload=None):
     """One blocking agentic turn against an OpenAI-compatible /chat/completions.
 
     `messages` must be OpenAI-native (may contain assistant tool_calls and
@@ -382,6 +418,10 @@ def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
     payload = {"model": model, "messages": msgs, "max_tokens": max_tokens}
     if tools:
         payload["tools"] = tools
+    # extra_payload carries provider-specific knobs (sampling for local
+    # reasoning models, tool_choice, ...) without changing OpenAI's defaults.
+    if extra_payload:
+        payload.update(extra_payload)
 
     resp_text = http_post(url, payload, headers, timeout_ms=timeout_ms)
     data = json.loads(resp_text)
@@ -415,6 +455,108 @@ def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
         "tool_calls":    tool_calls,
         "assistant_msg": assistant_msg,
         "stop_reason":   "tool_use" if tool_calls else "end_turn",
+    }
+
+
+def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools,
+                             max_tokens=1500, timeout_ms=180000, on_delta=None,
+                             extra_payload=None):
+    """Streaming variant of openai_chat_agent for OpenAI-compatible servers.
+
+    Streams visible text through on_delta as it arrives AND accumulates the
+    tool_call deltas (which arrive fragmented by index, with `arguments`
+    streamed as partial JSON strings) into whole calls. Returns the same
+    uniform chat_agent dict. Raises on transport failure so callers can fall
+    back to the blocking openai_chat_agent.
+    """
+    msgs = []
+    if system_prompt:
+        msgs.append({"role": "system", "content": system_prompt})
+    msgs.extend(list(messages or []))
+
+    payload = {"model": model, "messages": msgs,
+               "max_tokens": max_tokens, "stream": True}
+    if tools:
+        payload["tools"] = tools
+    if extra_payload:
+        payload.update(extra_payload)
+
+    state = {"text": [], "tool": {}, "order": [], "finish": None}
+
+    def _on_line(line):
+        if not line:
+            return
+        line = line.strip()
+        if not line.startswith("data:"):
+            return
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            return
+        try:
+            obj = json.loads(data)
+        except Exception:
+            return
+        choices = obj.get("choices") or []
+        if not choices:
+            return
+        ch    = choices[0]
+        delta = ch.get("delta") or {}
+
+        c = delta.get("content")
+        if c:
+            state["text"].append(c)
+            if on_delta:
+                try:
+                    on_delta(c)
+                except Exception:
+                    pass
+
+        for tc in (delta.get("tool_calls") or []):
+            idx  = tc.get("index", 0)
+            slot = state["tool"].get(idx)
+            if slot is None:
+                slot = {"id": tc.get("id", ""), "name": u"", "args": []}
+                state["tool"][idx] = slot
+                state["order"].append(idx)
+            if tc.get("id"):
+                slot["id"] = tc["id"]
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                slot["name"] = fn["name"]
+            if fn.get("arguments"):
+                slot["args"].append(fn["arguments"])
+
+        if ch.get("finish_reason"):
+            state["finish"] = ch["finish_reason"]
+
+    http_post_stream(url, payload, headers, _on_line, timeout_ms=timeout_ms)
+
+    raw_text = u"".join(state["text"])
+    text     = re.sub(r"<think>[\s\S]*?</think>", "", raw_text).strip()
+
+    tool_calls = []
+    raw_calls  = []
+    for idx in state["order"]:
+        slot     = state["tool"][idx]
+        args_str = u"".join(slot["args"])
+        try:
+            args = json.loads(args_str) if args_str.strip() else {}
+        except Exception:
+            args = {}
+        tool_calls.append({"id": slot["id"], "name": slot["name"], "args": args})
+        raw_calls.append({"id": slot["id"], "type": "function",
+                          "function": {"name": slot["name"],
+                                       "arguments": args_str or "{}"}})
+
+    assistant_msg = {"role": "assistant", "content": raw_text or None}
+    if raw_calls:
+        assistant_msg["tool_calls"] = raw_calls
+
+    return {
+        "text":          text,
+        "tool_calls":    tool_calls,
+        "assistant_msg": assistant_msg,
+        "stop_reason":   "tool_use" if tool_calls else (state["finish"] or "end_turn"),
     }
 
 
@@ -533,6 +675,54 @@ class BaseLLMProvider(object):
         """Most recent failure message, or None. Cleared on each new call."""
         return getattr(self, "_last_error", None)
 
+    # ── Silent-failure guards ─────────────────────────────────────────────────
+    # chat()/chat_stream()/chat_agent() all bail out with a bare `return None`
+    # when there is no key or no resolvable model. Those two paths are the ONLY
+    # ways the providers can fail without touching the network, and because
+    # they recorded nothing, the chat window's "the model didn't respond"
+    # branch had no reason to show — the user got a generic failure with no
+    # Details line and no way to tell "your key is missing" from "the vendor
+    # timed out". Route every such bail-out through these instead.
+
+    def _fail(self, reason):
+        """Record `reason` as the last error and return None (never raises)."""
+        self._record_error(reason)
+        return None
+
+    def _fail_no_key(self, where="chat"):
+        return self._fail(
+            u"{}: no API key saved for {} — add it in Settings → LLMs Setting"
+            .format(where, self.DISPLAY_NAME))
+
+    def _fail_no_model(self, where="chat"):
+        return self._fail(
+            u"{}: no usable model for {} — the live model list came back empty "
+            u"(key not verified, no credit, or the /models request was blocked "
+            u"by the network/proxy)".format(where, self.DISPLAY_NAME))
+
+    def _fail_no_http(self, where="chat"):
+        return self._fail(
+            u"{}: HTTP transport unavailable in this engine".format(where))
+
+    def is_configured(self):
+        """True when this provider has credentials — WITHOUT any network call.
+
+        Deliberately distinct from check_health(), which for the cloud
+        providers does a live GET /models on every call. Behind a corporate
+        proxy that probe fails intermittently, and callers that gated the whole
+        LLM path on it silently fell back to offline canned replies: the
+        assistant told the user to go connect an AI they had already connected.
+        Gate on THIS, attempt the real call, and let the API's own error reach
+        the user when it genuinely fails.
+
+        Local providers (no API key) override it — for them reachability is the
+        only meaningful signal.
+        """
+        try:
+            return bool(self._get_api_key())
+        except Exception:
+            return False
+
     def _clear_error(self):
         self._last_error = None
 
@@ -550,6 +740,23 @@ class BaseLLMProvider(object):
             script.get_logger().debug(u"{}: {}".format(self.NAME, msg))
         except Exception:
             pass
+
+    @staticmethod
+    def _wants_json(response_format):
+        """True when a caller asked for a JSON-only reply.
+
+        Accepts every shape used across the codebase: the OpenAI-style
+        {"type": "json_object"} dict that the assistant's tool loop sends, and
+        the bare "json" string. Providers that constrain decoding server-side
+        (Ollama's `format`) use this so JSON mode is opt-in per call instead of
+        forced on paths that need prose.
+        """
+        if not response_format:
+            return False
+        if isinstance(response_format, dict):
+            return u"json" in u"{}".format(
+                response_format.get("type", "")).lower()
+        return u"json" in u"{}".format(response_format).lower()
 
     def chat(self, messages, system_prompt, user_content, max_tokens=400, **kwargs):
         """
@@ -602,6 +809,14 @@ class BaseLLMProvider(object):
 
     def get_active_model(self):
         """Return the model name currently in use, or None."""
+        return None
+
+    def pick_fast_model(self):
+        """Fastest/cheapest model for tiny utility calls (classification).
+
+        Providers override this from their CACHED live model list; None means
+        "no faster option known — use the active model".
+        """
         return None
 
     def set_model(self, model_name):

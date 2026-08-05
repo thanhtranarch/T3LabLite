@@ -1,7 +1,7 @@
 # T3Lab Lite
 
 **T3Lab Lite** is a pyRevit extension built for Revit users who want to work faster.
-It covers batch export, sheet & view management, family tools, IFC-SG compliance, CAD-to-BIM conversion, model auditing, and MCP integration that lets Claude AI work with Revit directly.
+It covers batch export, sheet & view management, family tools, IFC-SG compliance, CAD-to-BIM conversion, model auditing, a built-in AI assistant that runs Revit tools from plain Vietnamese or English, and MCP integration that lets Claude AI work with Revit directly.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's new in each release.
 
@@ -38,13 +38,26 @@ happened.
 
 The ribbon is organised into six panels: **Support**, **Standards & Settings**, **Data & IFC-SG**, **Modeling & Datum**, **Annotation & Select**, and **Views & Sheets**.
 
+Tools that process many elements — Model Auditor, ManaSheets, ManaViews, SheetGen, FamiGen, IFC-SG, Tile Layout, Auto Join, Room To Floor, Image to Drafting, CAD to Elements and BatchOut — show a progress bar with **Pause** and **Stop** while they run, so a long batch can be paused or cancelled without killing Revit.
+
 ---
 
 ### Support
 
-#### MCP Control
-Start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit.
-Configure host, port, and authentication settings.
+#### T3Lab Assistant
+The AI assistant, in Revit. Ask about the model or tell it what to change, in Vietnamese or English — it calls real Revit tools, opens T3Lab tools for you, and by default presents a plan and waits for your confirmation before changing the model (deletes always ask). It opens as a window, docks as a native Revit pane beside Properties / Project Browser, and is also in the right-click menu (Revit 2025+).
+
+- **Skills** — reusable instruction packs that activate on what you ask, 25 built in (ISO 19650 naming, LOD, worksets, QA checklist, BEP, COBie handover, clash coordination, sheet & annotation standards, …). Type `/skill-name` to force one, or install more from a GitHub repo — Claude's `SKILL.md` format is read as-is.
+- **Knowledge (RAG)** — index folders of PDF / TXT / MD and get answers with citations. Keyword search works offline; semantic search is optional and runs on a local Ollama embedding model.
+- **Projects** — per-project chat history, custom instructions, default model, knowledge folders, remembered facts, and daily scheduled prompts.
+- **Context & attachments** — the assistant sees the active view and current selection, and accepts attached files and images.
+- **PDF comments** — read markups from a PDF, trace them to the matching sheet, and resolve them item by item.
+- **Spell check** — proofread every Text Note in the model or just the active view.
+
+#### Assistant Tools
+- **MCP Control** — start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit. Configure host, port, and authentication settings.
+- **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, DeepSeek, Ollama, LM Studio), model, API key or local server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs.
+- **Feedback** — send feedback or suggestions to the T3Lab team directly from Revit.
 
 #### PDF Import
 Import PDF pages into selected Revit views sequentially. Supports 150 / 300 / 600 DPI.
@@ -54,8 +67,8 @@ Import PDF pages into selected Revit views sequentially. Supports 150 / 300 / 60
 - **Ribbon Names** — shorten or restore ribbon tab names with inline editing and saved mappings.
 - **BG Theme** — set the model-view background colour. Presets, RGB sliders, HEX input, and live preview. SHIFT+Click cycles Black → Gray → White.
 
-#### Send Feedback
-Send feedback or suggestions to the T3Lab team directly from Revit.
+#### Check Update
+Compare the installed version with the latest release on GitHub and update via git or direct download — see [Staying up to date](#staying-up-to-date).
 
 #### Cloud Links
 Quick links to Autodesk Forma, Autodesk Health dashboard, and Bluebeam Status.
@@ -187,7 +200,13 @@ which can be switched off (see [Staying up to date](#staying-up-to-date)).
 | Component | Destination | When |
 |---|---|---|
 | Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each day, unless `"auto_update": false` |
+| T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `api.deepseek.com` — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
+| Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
+| Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |
 | MCP Server | `localhost:8080` (host/port configurable) | Only while the MCP server is running |
 | ManaFami (Cloud) | User-configured Vercel URL in `~/.t3lab/family_loader_config.json` | User opens the cloud family catalogue |
 | Feedback | None — opens a `mailto:` link in the default email client | User sends feedback |
 | Cloud Links | `acc.autodesk.com` / `health.autodesk.com` / `status.bluebeam.com` | Opens in the default browser on click |
+
+API keys, chat history, projects, attachments and the knowledge index stay on
+the machine under `%APPDATA%\T3LabAI`.

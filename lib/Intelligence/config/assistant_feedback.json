@@ -1,0 +1,18 @@
+{
+  "negative": {
+    "anh dung model nhanh phan tang tich": {
+      "count": 1, 
+      "intents": []
+    }, 
+    "anh dung model phan tich": {
+      "count": 2, 
+      "intents": []
+    }, 
+    "placed project rooms this were which": {
+      "count": 5, 
+      "intents": [], 
+      "specialist": "general"
+    }
+  }, 
+  "skills": {}
+}

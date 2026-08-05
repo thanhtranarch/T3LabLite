@@ -217,6 +217,29 @@ _ABBREVS = [
     ("who are you",             "capabilities query"),
     ("what are you",            "capabilities query"),
 
+    # ── Vietnamese → English capability verbs ────────────────────────────────
+    # The tool catalog is named in English ("DWG Manager", "rename"), so a
+    # Vietnamese ask for the same capability found nothing: "có tool nào quản
+    # lý project không" and "đổi tên view" both answered "chưa có tool".
+    # Placed AFTER the specific phrases above ("quan ly workset" → workset,
+    # "quan ly luoi" → grids), which are consumed first and keep their meaning.
+    # Deliberately verbs only — object nouns are left alone because their
+    # diacritic-folded forms collide ("cua" = door AND the possessive "của",
+    # "san" = floor AND "sản"), and a wrong noun rewrite corrupts whole
+    # sentences instead of just missing a match.
+    ("quan ly",         "manager"),
+    ("quan li",         "manager"),
+    ("doi ten",         "rename"),
+    ("thay ten",        "rename"),
+    ("dat ten",         "rename"),
+    ("thu vien",        "library"),
+    ("sao chep",        "copy"),
+    ("di chuyen",       "move"),
+    ("thong ke",        "schedule"),
+    (" tao ",           " create "),
+    (" chon ",          " select "),
+    (" loc ",           " filter "),
+
     # ── Greeting shortcuts ────────────────────────────────────────────────────
     ("chao buoi sang",  "chao"),
     ("chao buoi chieu", "chao"),
@@ -281,12 +304,33 @@ _ABBREVS = [
 ]
 
 
+# Multi-word abbreviations are applied on WORD BOUNDARIES; single-token ones
+# keep plain substring semantics because several are deliberate stems ("image"
+# must also rewrite "images") or already carry their own padding (" batcho ").
+#
+# Without the boundary, a phrase key ate into the next word: "what are you"
+# rewrote the start of "what are your capabilities" and left the nonsense
+# "capabilities queryr capabilities", so the capability frame no longer matched
+# and the question fell through to the LLM.
+_ABBREV_RULES = []
+for _src, _dst in _ABBREVS:
+    if ' ' in _src.strip() and _src[-1:].isalnum() and _src[:1].isalnum():
+        _ABBREV_RULES.append((re.compile(r'(?<![a-z0-9])' + re.escape(_src)
+                                         + r'(?![a-z0-9])'), _dst, True))
+    else:
+        _ABBREV_RULES.append((_src, _dst, False))
+
+
 def _expand(text):
     """Apply abbreviation / synonym substitutions to normalised text."""
     # Pad with spaces to allow boundary matching
     t = " " + text + " "
-    for src, dst in _ABBREVS:
-        t = t.replace(src, dst)
+    for src, dst, is_re in _ABBREV_RULES:
+        if is_re:
+            # lambda replacement: keeps backslashes in `dst` literal
+            t = src.sub(lambda m, _d=dst: _d, t)
+        else:
+            t = t.replace(src, dst)
     return t.strip()
 
 
@@ -367,19 +411,6 @@ _TRIGGERS = {
         ("open",                3),
     ],
 
-    "open_parasync": [
-        ("parasync",           30),
-        ("open parasync",      35),
-        ("mo parasync",        35),
-        ("open",                2),
-    ],
-
-    "open_loadfamily_cloud": [
-        ("loadfamilycloud",    35),
-        ("open loadfamilycloud", 40),
-        ("mo loadfamilycloud", 40),
-    ],
-
     "open_loadfamily": [
         ("loadfamily",         30),
         ("open loadfamily",    35),
@@ -388,50 +419,14 @@ _TRIGGERS = {
         ("open",                2),
     ],
 
-    "open_projectname": [
-        ("projectname",        30),
-        ("open projectname",   35),
-        ("mo projectname",     35),
-        ("project",             8),
-        ("open",                2),
-    ],
-
-    "open_workset": [
-        ("workset",            30),
-        ("open workset",       35),
-        ("mo workset",         35),
-        ("open",                2),
-    ],
-
-    "open_upperdimtext": [
-        ("upperdimtext",       30),
-        ("open upperdimtext",  35),
-        ("mo upperdimtext",    35),
-        ("upper",               8),
-    ],
-
-    "open_dimtext": [
-        ("dimtext",            28),
-        ("open dimtext",       35),
-        ("mo dimtext",         35),
-        ("dim",                10),
-    ],
-
-    "open_resetoverrides": [
-        ("resetoverrides",     30),
-        ("open resetoverrides",35),
-        ("mo resetoverrides",  35),
-        ("reset",              12),
-        ("override",           12),
-    ],
-
-    "open_grids": [
-        ("grids",              30),
-        ("open grids",         35),
-        ("mo grids",           35),
-        ("grid",               12),
-        ("luoi",               12),
-    ],
+    # NOTE — 2026-07-28: trigger blocks for open_parasync,
+    # open_loadfamily_cloud, open_projectname, open_workset,
+    # open_upperdimtext, open_dimtext, open_resetoverrides and open_grids were
+    # removed. Their pushbuttons no longer exist, and because these triggers
+    # scored high they beat resolve_tool() for the tools that replaced them —
+    # "mo workset" matched open_workset (35) and never reached ManaWorkset.
+    # Only tools with a dedicated launcher belong here; auto-discovered tools
+    # are resolved from the registry by resolve_tool().
 
     "check_spelling": [
         # Proofread all Text Notes in the model (diacritics stripped by _norm:
@@ -644,10 +639,6 @@ _PENALTIES = {
     # open_batchout loses if there's no "open" at all (pure export wins)
     "open_batchout":             [("export", -8)],
     "open_batchout_configured":  [("export", -8)],
-    # Avoid lower-precedence dimtext when upper is present
-    "open_dimtext":              [("upper", -20)],
-    # Avoid loadfamily if cloud is there
-    "open_loadfamily":           [("cloud", -20), ("loadfamilycloud", -30)],
     # Create/delete verbs mean the user wants to WRITE notes, not proofread
     "check_spelling":            [("tao", -25), ("create", -25), ("them", -20),
                                   ("add", -20), ("xoa", -25), ("delete", -25),
@@ -659,15 +650,7 @@ _THRESHOLDS = {
     "open_batchout":             18,
     "export_direct":             18,
     "open_batchout_configured":  25,   # needs both open+batchout+params
-    "open_parasync":             18,
-    "open_loadfamily_cloud":     25,
     "open_loadfamily":           18,
-    "open_projectname":          18,
-    "open_workset":              18,
-    "open_upperdimtext":         22,
-    "open_dimtext":              18,
-    "open_resetoverrides":       18,
-    "open_grids":                18,
     # ≥ 28 so "text note"(12) + "tieng anh"(15) alone can't fire it —
     # needs a real proofread cue (spelling / chinh ta / loi tieng anh ...)
     "check_spelling":            28,
@@ -793,38 +776,41 @@ def _extract_slots(raw):
 
 # ─── Context / pronoun resolution ─────────────────────────────────────────────
 
-# Pronouns that refer to the most-recently-mentioned tool
-_PRONOUNS = {"no", "no ay", "cai do", "cai nay", "tool do", "it", "that", "this"}
+# Pronouns that can refer back to the most-recently-mentioned tool.
+# Split by shape because they are matched differently (see _is_pronoun_query):
+# a single word is anaphoric only when NO noun follows it, while these phrases
+# are unambiguous references on their own. The old flat set mixed both and was
+# matched by token intersection, so the multi-word entries could never fire
+# while bare "this"/"that" fired inside ordinary determiner phrases.
+_PRONOUN_WORDS   = {"no", "it", "that", "this"}
+_PRONOUN_PHRASES = ("cai nay", "cai do", "cai ay", "no ay",
+                    "tool nay", "tool do", "tool ay")
 
-# Maps intent → tool label (for pronoun resolution messages)
+# Intent → tool label, for pronoun-resolution messages ("mở nó" → "BatchOut").
+# Only the intents with a dedicated launcher are fixed; every other label comes
+# from the live registry via _tool_label(). The hardcoded rest used to name
+# eight tools that had been deleted from the extension.
 _TOOL_LABELS = {
-    "open_batchout":          "BatchOut",
-    "export_direct":          "BatchOut",
-    "open_batchout_configured":"BatchOut",
-    "open_parasync":          "ParaSync",
-    "open_loadfamily":        "Load Family",
-    "open_loadfamily_cloud":  "Load Family Cloud",
-    "open_projectname":       "Project Name",
-    "open_workset":           "Workset",
-    "open_dimtext":           "Dim Text",
-    "open_upperdimtext":      "Upper Dim Text",
-    "open_resetoverrides":    "Reset Overrides",
-    "open_grids":             "Grids",
+    "open_batchout":            "BatchOut",
+    "export_direct":            "BatchOut",
+    "open_batchout_configured": "BatchOut",
+    "open_loadfamily":          "Family Loader",
 }
 
-# Tool keywords used to detect last-mentioned tool in history
-_TOOL_KEYWORDS = {
-    "batchout":       "open_batchout",
-    "parasync":       "open_parasync",
-    "loadfamilycloud":"open_loadfamily_cloud",
-    "loadfamily":     "open_loadfamily",
-    "projectname":    "open_projectname",
-    "workset":        "open_workset",
-    "upperdimtext":   "open_upperdimtext",
-    "dimtext":        "open_dimtext",
-    "resetoverrides": "open_resetoverrides",
-    "grids":          "open_grids",
-}
+
+def _tool_label(intent):
+    """Display label for an intent — fixed map first, then the live registry."""
+    if intent in _TOOL_LABELS:
+        return _TOOL_LABELS[intent]
+    for t in _tool_catalog():
+        if t.get('intent') == intent:
+            return t.get('title') or intent
+    return intent
+
+
+# NOTE: the old `_tool_keywords()` (joined-name → intent, scanned as substrings
+# over the chat history) was removed — `_last_tool_from_history` now resolves
+# the referent through the catalog resolver instead. See its docstring.
 
 
 # ─── Deterministic tool resolver ─────────────────────────────────────────────
@@ -839,45 +825,35 @@ _TOOL_KEYWORDS = {
 #   (intent, title, joined-name, [name aliases], function description)
 # Aliases cover every name a tool goes by: button folder, XAML file, old
 # names — so "mở export manager" (BatchOut's XAML) opens the right tool.
+# Tools that are NOT auto-discovered because script.py launches them through a
+# dedicated entry point (_SPECIAL_LAUNCHERS). Everything else reaches the
+# resolver via the tool_discovery registry in _tool_catalog() below.
+#
+# 2026-07-28: eight entries were removed from this table (ParaSync,
+# LoadFamilyCloud, ProjectName, Workset, DimText, UpperDimText, ResetOverrides,
+# Grids). Their pushbuttons had been deleted or renamed, but the resolver kept
+# offering them, so the assistant confidently answered "Opening ParaSync..." for
+# a tool that no longer shipped. Do not add a tool here unless it genuinely has
+# a special launcher — an auto-discovered tool needs no entry.
 _BUILTIN_TOOLS = [
     ("open_batchout", "BatchOut", "batchout",
      ["Batch Out", "Export Manager"],
      u"Xuất sheet hàng loạt sang PDF / DWG / DWF / IFC (batch export sheets)"),
-    ("open_parasync", "ParaSync", "parasync",
-     ["Para Sync", "Parameter Sync"],
-     u"Đồng bộ tham số giữa các element (sync parameters)"),
-    ("open_loadfamily", "Load Family", "loadfamily",
-     ["Family Loader"],
+    ("open_loadfamily", "Family Loader", "loadfamily",
+     ["Load Family", "Family Manager", "ManaFami"],
      u"Tải family từ thư viện vào project (load family from library)"),
-    ("open_loadfamily_cloud", "Load Family Cloud", "loadfamilycloud",
-     ["Family Loader Cloud", "Load Fam Cloud"],
-     u"Tải family từ thư viện cloud (load family from cloud library)"),
-    ("open_projectname", "Project Name", "projectname",
-     ["Rename Project"],
-     u"Đổi tên / quản lý thông tin project (rename project)"),
-    ("open_workset", "Workset", "workset",
-     ["Workset Management"],
-     u"Quản lý workset (manage worksets)"),
-    ("open_dimtext", "Dim Text", "dimtext",
-     ["Dimension Text"],
-     u"Chỉnh sửa dimension text (edit dimension text)"),
-    ("open_upperdimtext", "Upper Dim Text", "upperdimtext",
-     ["Upper All", "Upper Dimension Text"],
-     u"Chuyển dimension text thành chữ hoa (uppercase dimension text)"),
-    ("open_resetoverrides", "Reset Overrides", "resetoverrides",
-     ["Reset Graphic Overrides"],
-     u"Xóa graphic override trong view (reset graphic overrides)"),
-    ("open_grids", "Grids", "grids",
-     ["Grid Manager"],
-     u"Quản lý lưới trục (manage grids)"),
 ]
 
 # Verbs that signal "open this tool" (post-_expand, so "mở/bật" → open).
 # Vietnamese verbs that CANNOT be globally rewritten to "open" by _ABBREVS
 # (e.g. "chạy" would corrupt the "không chạy được" complaint trigger) are
 # stripped here instead, so "chạy autojoin" still resolves to the tool.
+# NOTE: "dung" is intentionally ABSENT: after diacritics folding it is both
+# "dùng" (use → open verb) and "dựng" (build/model) — keeping it hijacked
+# every modeling request ("dựng model" → "which tool do you want to open?").
+# "dùng X" now falls through to the LLM path, which handles it fine.
 _OPEN_VERBS = {"open", "launch", "start", "run", "show",
-               "chay", "dung", "xai"}
+               "chay", "xai"}
 
 
 def _singularise(w):
@@ -909,12 +885,34 @@ def _name_variants(text):
     return joined, words
 
 
+# Words that describe the IMPLEMENTATION, not the capability. Tool docstrings
+# are written for developers ("DQT BCF Reader (v2 - pyRevit WPFWindow
+# modeless)"), and every one of those words used to be a matchable capability
+# topic — so "modeless"/"window"/"script" could name a tool to the user.
+_DESC_NOISE = {
+    "py", "pyrevit", "ironpython", "wpf", "wpfwindow", "window", "modeless",
+    "modal", "script", "dialog", "form", "gui", "ui", "xaml", "class",
+    "module", "version", "tool", "revit", "button", "pushbutton", "panel",
+    "dqt", "t3lab", "todo", "wip", "deprecated",
+}
+
+# Prose glue kept OUT of _STOPWORDS on the query side (Vietnamese "in" = print)
+# but meaningless inside an English description ("in-place models", "into").
+_DESC_PREPS = {"in", "into", "onto", "over", "under", "per", "via", "within"}
+
+
 def _desc_words(desc):
-    """Normalised word set from a function description (for capability Q&A)."""
+    """Normalised word set from a function description (for capability Q&A).
+
+    Implementation jargon and prose glue are dropped: a description word is
+    only useful here if it names WHAT the tool does for the user.
+    """
     out = set()
     for w in re.findall(r'[a-z0-9]+', _norm(_camel_split(desc or ''))):
-        if w not in _STOPWORDS and len(w) >= 2:
-            out.add(_singularise(w))
+        if (len(w) < 2 or w in _STOPWORDS or w in _DESC_NOISE
+                or w in _DESC_PREPS or re.match(r'^v?\d+$', w)):
+            continue
+        out.add(_singularise(w))
     return out
 
 
@@ -931,45 +929,99 @@ def _tool_entry(intent, title, names, desc='', panel='', extra_words=None):
         if w and frozenset(w) not in variants:
             variants.append(frozenset(w))
         union |= w
-    dwords = _desc_words(desc)
-    if extra_words:
-        dwords |= set(extra_words)
+    # Two evidence tiers for capability matching:
+    #   identity = the names the tool goes by + its curated registry keywords
+    #              → a hit here IDENTIFIES the tool
+    #   topic    = words from its description → prose can mention anything, so
+    #              a hit here is only weak evidence
     return {'intent': intent, 'title': title, 'desc': (desc or '').strip(),
             'panel': panel, 'joined': joined_all, 'variants': variants,
-            'words': union, 'desc_words': dwords}
+            'words': union, 'kw_words': set(extra_words or ()),
+            'desc_words': _desc_words(desc)}
+
+
+# Building the catalog runs every tool name through _name_variants/_expand, so
+# it is far too expensive to redo several times per chat turn (resolve_tool,
+# the capability answer and the history referent all need it). Cached against a
+# signature of the live registry, so a rebuilt/renamed registry still refreshes.
+_CATALOG_CACHE = {"sig": None, "value": None}
 
 
 def _tool_catalog():
     """Return every known tool — builtin + auto-discovered — with all its
     names (title / button folder / XAML / aliases) unified per tool."""
+    try:
+        from Services.tool_discovery import get_registered_tools
+        tools = get_registered_tools()
+    except Exception:
+        tools = []
+
+    sig = tuple(sorted(u"{}|{}".format(t.get('intent') or '',
+                                       t.get('title') or '') for t in tools))
+    if _CATALOG_CACHE["value"] is not None and _CATALOG_CACHE["sig"] == sig:
+        return _CATALOG_CACHE["value"]
+
     catalog = []
     for intent, title, joined, aliases, desc in _BUILTIN_TOOLS:
         e = _tool_entry(intent, title, [title] + list(aliases), desc,
                         panel=u"Core")
         e['joined'].add(joined)
         catalog.append(e)
-    try:
-        from Services.tool_discovery import get_registered_tools
-        tools = get_registered_tools()
-    except Exception:
-        tools = []
     for t in tools:
-        title = ((t.get('title') or '')
-                 .replace('&amp;', ' ').replace('&', ' ').strip())
-        btn   = (t.get('button') or '').replace('.pushbutton', '')
-        names = [title, btn] + list(t.get('xaml') or [])
+        # The ampersand-stripped form is a MATCHING name only. Displaying it
+        # printed "Visual   Styles" back at the user for "Visual & Styles".
+        raw_title = (t.get('title') or '').strip()
+        title = raw_title.replace('&amp;', ' ').replace('&', ' ').strip()
+        btn   = re.sub(r'\.(push|smart|url)button$', '', t.get('button') or '')
+        # `aliases` carries the RIBBON label when it differs from the script's
+        # __title__ ("Auto Adj Base Offset" vs "Auto Adjust Base Offset") —
+        # the user types what the ribbon shows them.
+        names = ([raw_title, title, btn] + list(t.get('xaml') or [])
+                 + list(t.get('aliases') or []))
         kw_words = set()
         for kw in (t.get('keywords') or []):
             for w in re.findall(r'[a-z0-9]+', _norm(kw)):
                 if w not in _STOPWORDS and len(w) >= 2:
                     kw_words.add(_singularise(w))
-        e = _tool_entry(t.get('intent'), title or btn, names,
+        e = _tool_entry(t.get('intent'), raw_title or btn, names,
                         t.get('doc') or '',
                         panel=(t.get('panel') or '').replace('.panel', ''),
                         extra_words=kw_words)
         if e['words'] or e['joined']:
             catalog.append(e)
+
+    _CATALOG_CACHE["sig"] = sig
+    _CATALOG_CACHE["value"] = catalog
     return catalog
+
+
+# Words that name MUTUALLY EXCLUSIVE things. The fuzzy score below rewards
+# overlap and is blind to conflict: for "create 3d view" vs the tool "Create
+# Plan Views" the shared {create, view} scored 0.67 and "Create Plan Views"
+# came back as the one and only suggestion — 3d and plan cancelled out as
+# merely "unmatched" instead of "these are different drawings". A user asking
+# for a 3D view should be told no tool matches, not handed the plan tool.
+#
+# One group per axis; two words from the SAME group on opposite sides is a
+# contradiction. Words absent from every group are unaffected, so this only
+# ever removes candidates that were already wrong.
+_CONTRADICTION_GROUPS = [
+    frozenset(['3d', 'plan', 'section', 'elevation', 'schedule', 'legend',
+               'sheet']),
+    frozenset(['wall', 'floor', 'ceiling', 'roof', 'column', 'beam', 'room',
+               'door', 'window']),
+    frozenset(['pdf', 'dwg', 'ifc', 'nwc', 'image']),
+]
+
+
+def _contradicts(qset, tool_words):
+    """True when query and tool name DIFFERENT members of one group."""
+    for group in _CONTRADICTION_GROUPS:
+        q = qset & group
+        t = tool_words & group
+        if q and t and not (q & t):
+            return True
+    return False
 
 
 def resolve_tool(user_input, exact_only=False):
@@ -1007,6 +1059,8 @@ def resolve_tool(user_input, exact_only=False):
                  or (len(tokens_all) == 1 and tokens_all[0] in tool['joined']))
         if exact:
             scored.append((1.0, True, tool))
+            continue
+        if _contradicts(qset, tool['words']):
             continue
         inter = qset & tool['words']
         if inter:
@@ -1064,6 +1118,30 @@ _CAP_RES = [
     re.compile(r'\bho tro gi\b'),
     re.compile(r'\bbiet lam gi\b'),
     re.compile(r'\bgiup duoc gi\b'),
+    # Asking for the LIST rather than asking whether one exists. These reach
+    # the same answer — the curated, registry-validated catalog — and missing
+    # them is the expensive failure: the question still gets answered, just by
+    # the LLM from memory, which is exactly how a truncated tool list becomes
+    # a confident claim of full coverage.
+    re.compile(r'\b(?:liet ke|danh sach|list)\s+(?:cac\s+|nhung\s+|the\s+)?'
+               r'(?:tool|cong cu|lenh|chuc nang|tinh nang)\b'),
+    re.compile(r'\b(?:chuc nang|tinh nang)\s+(?:cua|of)\s+'
+               r'(?:assistant|t3lab|extension|ban|you)\b'),
+    re.compile(r'\bgioi thieu\s+(?:cac\s+|nhung\s+)?(?:tool|chuc nang|tinh nang)\b'),
+    re.compile(r'\b(?:extension|t3lab|assistant)\s+(?:nay\s+)?co\s+gi\b'),
+    # Productive forms the fixed _ABBREVS phrases can't cover ("what ELSE can
+    # you do"). Deliberately anchored on the ability verb: "what can you DO" is
+    # a capability question, "what can you tell me about walls" is not, and
+    # "what DO you think" must stay out of here entirely.
+    re.compile(r'\b(?:what|which)\s+(?:\w+\s+){0,2}(?:can|could)'
+               r'\s+(?:you|u|t3lab|this|it)\s+do\b'),
+    re.compile(r'\bwhat\s+are\s+your\s+(?:capabilit|feature|function|skill)'),
+    re.compile(r'\b(?:list|show)\s+(?:me\s+)?(?:(?:your|all|the|my)\s+){1,2}'
+               r'(?:tool|feature|capabilit|function|skill)'),
+    # Vietnamese, subject-anchored so "tôi phải làm gì bây giờ" stays out
+    re.compile(r'\bco\s+the\s+lam\s+(?:duoc\s+)?gi\b'),
+    re.compile(r'\b(?:ban|t3lab|assistant)\s+(?:co\s+the\s+)?'
+               r'(?:lam|ho tro|giup|xu ly)\s+(?:duoc\s+)?(?:nhung\s+)?gi\b'),
 ]
 
 # Question boilerplate stripped before matching the FUNCTION words
@@ -1076,6 +1154,72 @@ _CAP_BOILERPLATE = {
     "function", "feature", "help", "the",
 }
 
+# ─── Semantic roles inside a question ────────────────────────────────────────
+# A capability question decomposes as   FRAME( PREDICATE [ SCOPE ] ):
+#   FRAME      "có tool nào để … không", "is there a tool for …", "what can you do"
+#   PREDICATE  the function asked about — "xuất pdf", "load family", "đổi tên"
+#   SCOPE      where it applies — "with this project", "trong model này", "in Revit"
+# Only the PREDICATE may select a tool. SCOPE names the working environment, not
+# an operation, so it must never justify a match on its own: that role confusion
+# is what answered "what can you do with this project" with "Family Loader"
+# (whose doc merely reads "…vào project"), and what made the Vietnamese form
+# ("bạn làm được gì với dự án này") reply "no such tool".
+#
+# Scope is stripped on the QUERY side only. On the TOOL side "model"/"project"
+# stay meaningful (Model Auditor, Project Name) — the asymmetry is deliberate.
+_SCOPE_PHRASES = (
+    # Multi-word scope, stripped before tokenising so a homograph inside them
+    # ("tại" in "hiện tại" vs "tải" = load) can't leak in as a predicate word.
+    "hien tai", "hien nay", "luc nay", "bay gio", "o day", "trong nay",
+    "du an", "right now", "at the moment",
+)
+
+_SCOPE_WORDS = {
+    # environment nouns — the container the work happens in
+    "project", "model", "file", "revit", "document", "doc",
+    # demonstratives / deixis
+    "this", "these", "that", "those", "here", "current",
+    "nay", "day", "kia",
+}
+
+# Determiners — a pronoun followed by one of these (or by a scope noun) is
+# being used as a DETERMINER ("this project"), not as anaphora ("mở nó").
+_DETERMINERS = {
+    "the", "a", "an", "this", "that", "these", "those",
+    "my", "our", "your", "its", "cac", "nhung",
+}
+
+
+def _predicate_words(expanded):
+    """Content words naming the FUNCTION the user is asking about.
+
+    Strips the question frame, open verbs, stopwords and the scope phrase from
+    already-`_expand`ed text, so what remains is only what the user wants DONE.
+    An empty result means the question carried no predicate at all — i.e. it is
+    the generic "what can you do?", whatever scope was appended to it.
+    """
+    padded = u" " + u" ".join(
+        re.sub(r'[^a-z0-9\s]', ' ', expanded).split()) + u" "
+    for phrase in _SCOPE_PHRASES:
+        padded = padded.replace(u" " + phrase + u" ", u" ")
+    tokens = padded.split()
+
+    out = set()
+    for i, w in enumerate(tokens):
+        if (len(w) < 2 or w in _STOPWORDS or w in _CAP_BOILERPLATE
+                or w in _SCOPE_WORDS or w in _OPEN_VERBS):
+            continue
+        # "in" is a homograph: Vietnamese "in" = print (a real predicate —
+        # "có tool nào để in sheet không"), English "in" = the preposition that
+        # introduces the scope ("in this model"). It is the preposition exactly
+        # when a determiner or a scope noun follows it.
+        if w == "in":
+            nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+            if nxt and (nxt in _DETERMINERS or nxt in _SCOPE_WORDS):
+                continue
+        out.add(_singularise(w))
+    return out
+
 
 def is_capability_question(expanded):
     """True if the (expanded) input asks whether a tool/feature exists."""
@@ -1084,34 +1228,271 @@ def is_capability_question(expanded):
     return any(r.search(padded) for r in _CAP_RES)
 
 
-def _capabilities_overview(viet):
-    """Full tool list grouped by ribbon panel — for 'what can you do?'."""
+# ─── Practical capability overview (grouped by workflow, verified live) ───────
+# The assistant's real power is acting DIRECTLY on the open model through the
+# MCP tool registry (core/server.py). "What can you do?" is answered from a
+# CURATED, workflow-grouped map with concrete notes — the practical style users
+# expect — but every line is VALIDATED against the live registry at render time:
+#   • a line whose tools are ALL gone is dropped (no advertising dead names —
+#     the drift trap documented in Intelligence/t3lab_agent.py); and
+#   • any registered tool the map doesn't mention is surfaced under "Khác/Other"
+#     so a newly-added tool is never silently hidden.
+# Curated notes were checked against the tool schemas in core/server.py, e.g.
+# purge_unused/delete_element dry_run, export_sheets_pdf `combined`, create_grid
+# auto x_labels/y_labels, split_* geometry preservation, create_point_based host.
+
+def _live_tool_names():
+    """Set of MCP tool names currently registered, or an empty set when the
+    registry is unreachable (running outside Revit / offline tests)."""
+    try:
+        from Intelligence.t3lab_agent import _get_mcp_tools
+        return set(t.get("name", "") for t in _get_mcp_tools())
+    except Exception:
+        return set()
+
+
+def _live_skills():
+    """[(name, description)] of enabled assistant skills, or [] if none/error."""
+    try:
+        from Intelligence.skills_engine import get_skills_engine
+        return [(s.get("name") or s.get("id"), s.get("description") or u"")
+                for s in get_skills_engine().get_catalog(enabled_only=True)]
+    except Exception:
+        return []
+
+
+def _user_display_name():
+    """User's set display name, or '' (no fallback — used only to personalise)."""
+    try:
+        from config.user_profile import get_profile
+        return (get_profile().get_name(fallback=False) or u"").strip()
+    except Exception:
+        return u""
+
+
+# Internal/plumbing tools deliberately kept out of the user-facing overview
+# (and out of the "Other" catch-all) — they aren't things a user asks for.
+_CAP_HIDE = frozenset([
+    u"say_hello", u"show_assistant_pane", u"file_watcher_status",
+])
+
+# Curated capability map. Each section: (emoji, vi_title, en_title, lines).
+# Each line: (names_tuple, vi_markdown, en_markdown). The line renders when the
+# registry is unknown (offline) OR at least one of its names is registered;
+# every name feeds the "covered" set that drives the anti-drift catch-all.
+_CAP_MAP = [
+    (u"📖", u"ĐỌC / QUERY", u"READ / QUERY", [
+        ((u"ai_element_filter",),
+         u"`ai_element_filter` — lọc element theo category + parameter (Walls, Doors, Rooms, Grids, Pipes…)",
+         u"`ai_element_filter` — filter elements by category + parameter (Walls, Doors, Rooms, Grids, Pipes…)"),
+        ((u"get_all_parameters", u"get_parameter", u"revit_get_element_info"),
+         u"`get_all_parameters` / `get_parameter` / `revit_get_element_info` — đọc mọi param & thông tin của 1 element",
+         u"`get_all_parameters` / `get_parameter` / `revit_get_element_info` — read every parameter & info of an element"),
+        ((u"get_elements_by_level", u"get_current_view_elements", u"get_current_view_info", u"revit_get_active_view", u"get_element_bounding_box"),
+         u"`get_elements_by_level`, `get_current_view_elements`, `get_current_view_info` / `revit_get_active_view`, `get_element_bounding_box`",
+         u"`get_elements_by_level`, `get_current_view_elements`, `get_current_view_info` / `revit_get_active_view`, `get_element_bounding_box`"),
+        ((u"revit_get_selected_elements", u"select_elements", u"get_available_family_types"),
+         u"`revit_get_selected_elements`, `select_elements` (chọn theo category+filter, zoom tới được), `get_available_family_types`",
+         u"`revit_get_selected_elements`, `select_elements` (select by category+filter, can zoom to them), `get_available_family_types`"),
+        ((u"get_schedule_data", u"get_material_quantities"),
+         u"`get_schedule_data` — đọc schedule ra JSON (row_count + column_totals chính xác), `get_material_quantities`",
+         u"`get_schedule_data` — read a schedule as JSON (exact row_count + column_totals), `get_material_quantities`"),
+        ((u"list_levels", u"revit_list_views", u"revit_list_sheets", u"list_worksets"),
+         u"`list_levels`, `revit_list_views`, `revit_list_sheets`, `list_worksets`",
+         u"`list_levels`, `revit_list_views`, `revit_list_sheets`, `list_worksets`"),
+        ((u"get_revit_context", u"revit_get_project_info", u"analyze_model_statistics"),
+         u"`get_revit_context`, `revit_get_project_info`, `analyze_model_statistics` — tổng quan model",
+         u"`get_revit_context`, `revit_get_project_info`, `analyze_model_statistics` — model overview"),
+    ]),
+    (u"✏️", u"TẠO / SỬA", u"CREATE / MODIFY", [
+        ((u"place_wall", u"create_surface_based_element"),
+         u"**Walls / Floors / Ceilings / Roofs** — `place_wall`, `create_surface_based_element`",
+         u"**Walls / Floors / Ceilings / Roofs** — `place_wall`, `create_surface_based_element`"),
+        ((u"create_point_based_element",),
+         u"**Doors / Windows / Furniture** — `create_point_based_element` (host được vào wall)",
+         u"**Doors / Windows / Furniture** — `create_point_based_element` (can be hosted into a wall)"),
+        ((u"create_line_based_element", u"create_structural_framing_system"),
+         u"**Beams / Pipes / Ducts** — `create_line_based_element`, `create_structural_framing_system`",
+         u"**Beams / Pipes / Ducts** — `create_line_based_element`, `create_structural_framing_system`"),
+        ((u"create_grid", u"create_level", u"create_room", u"load_family", u"room_to_floor"),
+         u"**Grids / Levels / Rooms** — `create_grid` (tự đặt label A/B/C · 1/2/3), `create_level`, `create_room`, `load_family`, `room_to_floor`",
+         u"**Grids / Levels / Rooms** — `create_grid` (auto labels A/B/C · 1/2/3), `create_level`, `create_room`, `load_family`, `room_to_floor`"),
+        ((u"move_elements", u"copy_elements", u"rotate_element", u"split_element", u"split_curve"),
+         u"`move_elements`, `copy_elements`, `rotate_element`, `split_element` / `split_curve` (giữ đúng arc/spline, không flatten)",
+         u"`move_elements`, `copy_elements`, `rotate_element`, `split_element` / `split_curve` (keeps arcs/splines exact, no flattening)"),
+        ((u"edit_elements",),
+         u"`edit_elements` — mirror (lật đối xứng), đổi type hàng loạt, group / ungroup",
+         u"`edit_elements` — mirror, bulk type swap (change_type), group / ungroup"),
+        ((u"join_geometry", u"delete_element", u"operate_element"),
+         u"`join_geometry` (join/unjoin), `delete_element` (có `dry_run` xem trước), `operate_element` (hide / isolate / bỏ isolate / ẩn cả category / pin / unpin / halftone / trong suốt / chọn tương tự / reset màu)",
+         u"`join_geometry` (join/unjoin), `delete_element` (`dry_run` preview), `operate_element` (hide / isolate / reset temporary / hide a whole category / pin / unpin / halftone / transparency / select similar / reset color)"),
+        ((u"bulk_set_parameter", u"set_parameter", u"rename_element"),
+         u"`bulk_set_parameter` — set 1 param cho hàng trăm element cùng lúc (filter được); `set_parameter`, `rename_element` cho từng element",
+         u"`bulk_set_parameter` — set one parameter across hundreds of elements at once (filterable); `set_parameter`, `rename_element` for a single element"),
+        ((u"create_project_parameter", u"create_workset", u"set_element_workset"),
+         u"`create_project_parameter`, `create_workset`, `set_element_workset`",
+         u"`create_project_parameter`, `create_workset`, `set_element_workset`"),
+    ]),
+    (u"📁", u"VIEW / SHEET / ANNOTATION", u"VIEW / SHEET / ANNOTATION", [
+        ((u"create_view", u"duplicate_view", u"apply_view_template", u"create_view_filter", u"set_active_view"),
+         u"`create_view` (plan sàn / trần / kết cấu / area, 3D, section, elevation, drafting, legend), `duplicate_view` (plain / with detailing / dependent), `apply_view_template`, `create_view_filter`, `set_active_view`",
+         u"`create_view` (floor / ceiling / structural / area plan, 3D, section, elevation, drafting, legend), `duplicate_view` (plain / with detailing / dependent), `apply_view_template`, `create_view_filter`, `set_active_view`"),
+        ((u"manage_sheet", u"manage_revision"),
+         u"`manage_sheet` — nhân bản sheet, đánh lại số sheet, xem print set; `manage_revision` — liệt kê / tạo revision, gán revision vào sheet, đánh dấu đã phát hành",
+         u"`manage_sheet` — duplicate sheets, renumber, list print sets; `manage_revision` — list / create revisions, assign to sheets, mark issued"),
+        ((u"manage_material", u"create_detail_annotation", u"manage_document"),
+         u"`manage_material` — liệt kê vật liệu, xem vật liệu của element; `create_detail_annotation` — filled region / detail line; `manage_document` — save, save as, sync with central (sync mặc định TẮT)",
+         u"`manage_material` — list materials, read an element's materials; `create_detail_annotation` — filled region / detail line; `manage_document` — save, save as, sync with central (sync is OFF by default)"),
+        ((u"manage_links",),
+         u"`manage_links` — liệt kê link Revit & CAD, reload / unload / xoá / pin",
+         u"`manage_links` — list Revit & CAD links, reload / unload / delete / pin"),
+        ((u"manage_view", u"manage_view_template"),
+         u"`manage_view` — đổi scale / detail level / discipline / crop box; `manage_view_template` — liệt kê, đếm view đang dùng, đổi tên, nhân bản, xoá view template",
+         u"`manage_view` — set scale / detail level / discipline / crop box; `manage_view_template` — list, usage count, rename, duplicate, delete view templates"),
+        ((u"create_schedule", u"create_sheet", u"place_views_on_sheets", u"add_view_to_sheet"),
+         u"`create_schedule`, `create_sheet`, `place_views_on_sheets`, `add_view_to_sheet`",
+         u"`create_schedule`, `create_sheet`, `place_views_on_sheets`, `add_view_to_sheet`"),
+        ((u"create_dimension", u"create_text_note", u"tag_elements", u"tag_all_rooms", u"tag_all_walls"),
+         u"`create_dimension`, `create_text_note`, `tag_elements` / `tag_all_rooms` / `tag_all_walls`",
+         u"`create_dimension`, `create_text_note`, `tag_elements` / `tag_all_rooms` / `tag_all_walls`"),
+        ((u"color_elements", u"revit_override_color"),
+         u"`color_elements` — tô màu theo giá trị parameter (rất hay để QA); `revit_override_color`",
+         u"`color_elements` — color-code by parameter value (great for QA); `revit_override_color`"),
+    ]),
+    (u"📤", u"EXPORT", u"EXPORT", [
+        ((u"export_sheets_pdf", u"export_dwg", u"export_image", u"export_room_data"),
+         u"`export_sheets_pdf` (gộp thành 1 file được), `export_dwg`, `export_image` (PNG), `export_room_data`",
+         u"`export_sheets_pdf` (can combine into one file), `export_dwg`, `export_image` (PNG), `export_room_data`"),
+        ((u"export_model",),
+         u"`export_model` — IFC, NWC (Navisworks), DWF, DGN",
+         u"`export_model` — IFC, NWC (Navisworks), DWF, DGN"),
+    ]),
+    (u"🔍", u"QA / MODEL HEALTH", u"QA / MODEL HEALTH", [
+        ((u"check_bad_geometry",),
+         u"`check_bad_geometry` — tìm hình học lỗi (sliver, zero-area, singular point) làm crash export PDF/DWG",
+         u"`check_bad_geometry` — find the degenerate geometry (slivers, zero-area faces, singular points) that crashes PDF/DWG export"),
+        ((u"audit_model", u"get_model_warnings", u"get_model_health", u"analyze_model_statistics"),
+         u"`audit_model`, `get_model_warnings`, `get_model_health`, `analyze_model_statistics`",
+         u"`audit_model`, `get_model_warnings`, `get_model_health`, `analyze_model_statistics`"),
+        ((u"purge_unused",),
+         u"`purge_unused` — mặc định dry-run (chỉ báo cáo); set `dry_run=false` mới thật sự xoá",
+         u"`purge_unused` — dry-run by default (report only); set `dry_run=false` to actually purge"),
+    ]),
+    (u"⚡", u"ADVANCED", u"ADVANCED", [
+        ((u"send_code_to_revit",),
+         u"`send_code_to_revit` — chạy **IronPython trực tiếp** trong Revit context (full API) → mạnh nhất, làm được cả những gì tool có sẵn chưa cover",
+         u"`send_code_to_revit` — run **IronPython directly** in the Revit context (full API) → the most powerful path, does what the built-in tools don't cover yet"),
+        ((u"store_project_data", u"store_room_data", u"query_stored_data"),
+         u"Lưu / truy vấn dữ liệu bền vững trong model: `store_project_data`, `store_room_data`, `query_stored_data`",
+         u"Persist / query data inside the model: `store_project_data`, `store_room_data`, `query_stored_data`"),
+        ((u"switch_active_document", u"open_document", u"close_document", u"list_open_documents", u"list_recent_documents"),
+         u"Làm việc trên nhiều model đang mở: `switch_active_document`, `open_document`, `close_document`, `list_open_documents`, `list_recent_documents`",
+         u"Work across open models: `switch_active_document`, `open_document`, `close_document`, `list_open_documents`, `list_recent_documents`"),
+    ]),
+]
+
+
+def _ribbon_tools_section(viet):
+    """Every openable ribbon tool, grouped by its panel.
+
+    Named in full, not counted: "I can open 44 ribbon tools" told the user
+    nothing about WHICH ones, so the only way to find a tool was to guess its
+    name at the prompt. Built from the same live catalog the resolver uses, so
+    the list and what actually opens can never disagree.
+    """
     groups, order = {}, []
     for tool in _tool_catalog():
-        panel = tool.get('panel') or (u"Khác" if viet else u"Other")
+        panel = (tool.get('panel') or u"").strip() or (u"Khác" if viet else u"Other")
+        title = (tool.get('title') or u"").strip()
+        if not title:
+            continue
         if panel not in groups:
             groups[panel] = []
             order.append(panel)
-        groups[panel].append(tool['title'])
-    lines = []
-    total = 0
-    for panel in order:
-        titles = groups[panel]
-        total += len(titles)
-        shown = u", ".join(titles[:8])
-        if len(titles) > 8:
-            shown += (u" +{} tool khác".format(len(titles) - 8) if viet
-                      else u" +{} more".format(len(titles) - 8))
-        lines.append(u"**{}**: {}".format(panel, shown))
+        if title not in groups[panel]:
+            groups[panel].append(title)
+    if not groups:
+        return u""
+
+    total = sum(len(v) for v in groups.values())
+    head = (u"\n📂 **{} tool trên ribbon** mình mở được — gõ *mở <tên tool>*:"
+            if viet else
+            u"\n📂 **{} ribbon tools** I can open — type *open <tool name>*:")
+    lines = [head.format(total)]
+    # "Core" (BatchOut / Family Loader) first, then panels alphabetically.
+    for panel in sorted(order, key=lambda p: (p != u"Core", p.lower())):
+        lines.append(u"• **{}** — {}".format(
+            panel, u", ".join(sorted(groups[panel], key=lambda s: s.lower()))))
+    return u"\n".join(lines)
+
+
+def _capabilities_overview(viet):
+    """Practical, workflow-grouped overview of what the assistant can DO on the
+    live model — curated notes validated against the MCP registry, plus live
+    skills and the full list of openable ribbon tools. See _CAP_MAP."""
+    live = _live_tool_names()   # empty set when offline → show every line
+
     if viet:
-        return (u"🧰 T3Lab có {} tool:\n{}\n\n"
-                u"Ngoài ra tôi xuất sheet trực tiếp được ('xuất pdf G sheet').\n"
-                u"Gõ 'mở <tên tool>' để mở, hoặc hỏi "
-                u"'có tool nào để ... không?'").format(total, u"\n".join(lines))
-    return (u"🧰 T3Lab has {} tools:\n{}\n\n"
-            u"I can also export sheets directly ('export pdf G sheet').\n"
-            u"Type 'open <tool name>' to open one, or ask "
-            u"'is there a tool for ...?'").format(total, u"\n".join(lines))
+        out = [u"Đây là những gì mình làm được **trực tiếp trên model Revit** "
+               u"(qua T3Lab connector):"]
+    else:
+        out = [u"Here's what I can do **directly on the Revit model** "
+               u"(via the T3Lab connector):"]
+
+    covered = set()
+    for emoji, vi_title, en_title, lines in _CAP_MAP:
+        rendered = []
+        for names, vi_line, en_line in lines:
+            covered.update(names)
+            if live and not (set(names) & live):
+                continue   # every referenced tool is gone → drop the line
+            rendered.append(u"• " + (vi_line if viet else en_line))
+        if rendered:
+            out.append(u"\n{} **{}**\n{}".format(
+                emoji, vi_title if viet else en_title, u"\n".join(rendered)))
+
+    # ── Anti-drift safety net: registered tools the curated map never named ──
+    if live:
+        extra = sorted(live - covered - _CAP_HIDE)
+        if extra:
+            chips = u", ".join(u"`{}`".format(n) for n in extra)
+            out.append((u"\n🧩 **Khác** (tool mới, chưa xếp nhóm): {}" if viet
+                        else u"\n🧩 **Other** (newer tools, not yet grouped): {}"
+                        ).format(chips))
+
+    # ── Skills (live from SkillsEngine), personalised if a name is set ───────
+    skills = _live_skills()
+    if skills:
+        name = _user_display_name()
+        if viet:
+            hdr = (u"\n🎯 **SKILLS chuyên biệt đã cài cho {}**:".format(name)
+                   if name else u"\n🎯 **SKILLS chuyên biệt đã cài**:")
+        else:
+            hdr = (u"\n🎯 **Custom skills set up for {}**:".format(name)
+                   if name else u"\n🎯 **Custom skills installed**:")
+        s_lines = [hdr]
+        for sname, sdesc in skills[:12]:
+            s_lines.append(u"• **{}** — {}".format(sname, sdesc) if sdesc
+                           else u"• **{}**".format(sname))
+        rest = skills[12:]
+        if rest:
+            names = u", ".join(sn for sn, _ in rest)
+            s_lines.append((u"• …+{} skill nữa: {}" if viet
+                            else u"• …+{} more: {}").format(len(rest), names))
+        out.append(u"\n".join(s_lines))
+
+    # ── Every openable ribbon tool, by panel + quick affordances ─────────────
+    ribbon = _ribbon_tools_section(viet)
+    if ribbon:
+        out.append(ribbon)
+    if viet:
+        out.append(u"\nCũng có thể hỏi *có tool nào để … không?* hoặc xuất "
+                   u"nhanh *xuất pdf G sheet*.")
+    else:
+        out.append(u"\nYou can also ask *is there a tool for …?* or quick-"
+                   u"export *export pdf G sheets*.")
+
+    return u"\n".join(out)
 
 
 def answer_capability_question(user_input, viet):
@@ -1122,54 +1503,84 @@ def answer_capability_question(user_input, viet):
     the catalog is the ground truth for what tools exist.
     """
     expanded = _expand(_norm(user_input))
-    clean = re.sub(r'[^a-z0-9\s]', ' ', expanded)
-    func = set()
-    for w in clean.split():
-        if (w in _STOPWORDS or w in _CAP_BOILERPLATE or w in _OPEN_VERBS
-                or len(w) < 2):
-            continue
-        func.add(_singularise(w))
+    pred = _predicate_words(expanded)
 
-    # No function words left → generic capability question → full overview
-    if not func:
+    # Frame + scope only, no predicate → the user asked what the assistant can
+    # do AT ALL ("what can you do with this project", "bạn làm được gì với dự
+    # án này") → the full overview, never a keyword guess off the scope noun.
+    if not pred:
         msg = _capabilities_overview(viet)
         return {"intent": "help", "params": {"answer": msg}, "message": msg,
                 "_nlu": True, "_authoritative": True}
 
+    # ── Evidence-tiered matching ─────────────────────────────────────────────
+    # An identity hit (tool name / curated keyword) IDENTIFIES a tool; a topic
+    # hit (description prose) is weak — prose can mention anything.
+    #
+    # Each hit is damped by how widely the word is shared: "manager" sits in
+    # 16 of 44 tool names, so "quản lý project" must NOT confidently answer
+    # with the first three managers in the catalog. Note this is the INVERSE of
+    # the old rule, which read a low document frequency as proof of
+    # distinctiveness — on a catalog this small that made "project" (one single
+    # description) look like a precise request. Rarity may only damp evidence
+    # here, never manufacture it.
     catalog = _tool_catalog()
-    # Document frequency — words appearing in ≤2 tools are distinctive
     df = {}
-    vocabs = []
     for tool in catalog:
-        vocab = tool['words'] | tool['desc_words']
-        vocabs.append(vocab)
-        for w in vocab:
+        for w in (tool['words'] | tool['kw_words'] | tool['desc_words']):
             df[w] = df.get(w, 0) + 1
+    size = float(max(1, len(catalog)))
+
+    def rarity(w):
+        share = df.get(w, 1) / size
+        if share <= 0.05:                 # names a couple of tools → selective
+            return 1.0
+        if share <= 0.12:
+            return 0.6
+        if share <= 0.25:
+            return 0.25
+        return 0.05                       # "manager", "element" → says nothing
 
     matches, near = [], []
-    for tool, vocab in zip(catalog, vocabs):
-        inter = func & vocab
-        if not inter:
+    for tool in catalog:
+        id_hits    = pred & (tool['words'] | tool['kw_words'])
+        topic_hits = (pred & tool['desc_words']) - id_hits
+        hits = id_hits | topic_hits
+        if not hits:
             continue
-        score  = len(inter) / float(len(func))
-        strong = any(df.get(w, 99) <= 2 and len(w) >= 3 for w in inter)
-        if score >= 0.5 or strong:
-            matches.append((score + (0.5 if strong else 0.0), tool))
+        coverage = len(hits) / float(len(pred))
+        evidence = (2.0 * sum(rarity(w) for w in id_hits)
+                    + sum(rarity(w) for w in topic_hits))
+        strong_enough = (evidence >= 0.5
+                         and (id_hits or len(topic_hits) >= 2
+                              or coverage >= 0.5))
+        if strong_enough:
+            matches.append((evidence + coverage, bool(id_hits), coverage, tool))
         else:
-            near.append((score, tool))
+            near.append((coverage, tool))
     matches.sort(key=lambda x: -x[0])
     near.sort(key=lambda x: -x[0])
 
+    # Nothing selective survived, yet every predicate word IS in the catalog —
+    # the ask is real but too generic to pin down ("quản lý project"). The
+    # honest answer is the whole overview, not three arbitrary managers and not
+    # "no such tool".
+    if not matches and pred and all(w in df and rarity(w) <= 0.05 for w in pred):
+        msg = _capabilities_overview(viet)
+        return {"intent": "help", "params": {"answer": msg}, "message": msg,
+                "_nlu": True, "_authoritative": True}
+
     if matches:
-        # "bạn có thể mở X không?" — exact tool named + open verb → just open
-        if _has_open_verb(expanded) and matches[0][0] >= 1.4:
-            top = matches[0][1]
+        # "bạn có thể mở X không?" — the tool is named outright (identity hit
+        # covering the whole predicate) and an open verb is present → just open.
+        top_score, top_is_id, top_cov, top = matches[0]
+        if _has_open_verb(expanded) and top_is_id and top_cov >= 0.999:
             msg = (u"Đang mở {}...".format(top['title']) if viet
                    else u"Opening {}...".format(top['title']))
             return {"intent": top['intent'], "params": {}, "message": msg,
                     "_nlu": True, "_authoritative": True}
         lines = []
-        for s, t in matches[:3]:
+        for s, _is_id, _cov, t in matches[:3]:
             d = (t.get('desc') or u'').strip()
             lines.append(u"• **{}**{}".format(t['title'],
                                               u" — " + d if d else u""))
@@ -1195,22 +1606,102 @@ def answer_capability_question(user_input, viet):
             "_nlu": True, "_authoritative": True}
 
 
+# The assistant's own tool line ("Đang mở BatchOut..." / "Opening BatchOut...").
+# Matched on _norm()-only text (no _expand, which would rewrite "mở" → "open"
+# and mangle the title that follows). What the assistant actually DID is the
+# strongest referent for a later "nó" / "it".
+_OPENED_LINE_RE = re.compile(r'(?:opening|dang mo)\s+([a-z0-9][a-z0-9 ]*)')
+
+
+def _tool_by_title(text):
+    """Catalog entry whose TITLE is exactly `text` (normalised), else None.
+
+    Used for the assistant's own "Opening <title>..." line, where the title is
+    printed verbatim — so it resolves even when two tools share an alias and
+    the generic resolver has to call the name ambiguous.
+    """
+    key = u" ".join(_norm(text).split())
+    if not key:
+        return None
+    for tool in _tool_catalog():
+        if u" ".join(_norm(tool['title']).split()) == key:
+            return tool
+    return None
+
+
 def _last_tool_from_history(history):
-    """Scan recent conversation history and return the last tool intent mentioned."""
+    """Intent of the tool the conversation last actually referred to.
+
+    Two sources, most-recent entry first:
+      1. the assistant's own "Opening X..." line — the tool it really launched;
+      2. a message that IS a tool request ("mở dwg management", "batchout"),
+         resolved through the catalog's exact matcher.
+
+    Both require the whole message (minus open verbs) to be about that tool.
+    The old test was a bare substring scan for concatenated names, which bound
+    "nó" to any tool whose name merely appeared inside prose ("thanks for the
+    feedback" → Send Feedback) while missing every spaced name ("DWG Manager").
+    """
     if not history:
         return None
     for entry in reversed(history[-6:]):
-        content = _norm(_expand(_norm(entry.get("content", ""))))
-        for kw, intent in _TOOL_KEYWORDS.items():
-            if kw in content:
-                return intent
+        raw = entry.get("content", "") or ""
+        content = _norm(raw)
+
+        # "Opening X..." is the assistant announcing what it just launched —
+        # only the assistant's own lines count. A user message that happens to
+        # contain that phrase ("... dang mo dwg management ...") must not be
+        # mistaken for the assistant having opened that tool.
+        if entry.get("role") == "assistant":
+            m = _OPENED_LINE_RE.search(content)
+            if m:
+                named = m.group(1).strip()
+                tool = _tool_by_title(named)
+                if tool:
+                    return tool['intent']
+                tool, _ = resolve_tool(named, exact_only=True)
+                if tool:
+                    return tool['intent']
+
+        tool, _ = resolve_tool(raw, exact_only=True)
+        if tool:
+            return tool['intent']
     return None
 
 
 def _is_pronoun_query(normed_expanded):
-    """Return True if the input looks like a pronoun reference (e.g., 'nó là gì?')."""
-    tokens = set(normed_expanded.split())
-    return bool(tokens & _PRONOUNS)
+    """True when the input REFERS BACK to the tool just discussed — anaphora
+    ("mở nó", "nó là gì?", "cái này là gì", "what is it") — so the pipeline may
+    resolve it against the conversation history.
+
+    A pronoun word is only anaphoric when it stands IN PLACE OF the noun. In
+    "what can you do with this project" / "that view is wrong", the same word is
+    a DETERMINER in front of a noun, and resolving it to the last-opened tool
+    silently hijacks a request that was never about that tool. The old check was
+    a bare set intersection, so every sentence containing "this"/"that" was
+    treated as a reference to whatever tool the history last mentioned.
+
+    Also bounded in length: anaphora is short. A long sentence that happens to
+    contain "nó" carries its own subject and does not need the history.
+    """
+    tokens = re.sub(r'[^a-z0-9\s]', ' ', normed_expanded).split()
+    if not tokens or len(tokens) > 6:
+        return False
+
+    padded = u" " + u" ".join(tokens) + u" "
+    if any((u" " + p + u" ") in padded for p in _PRONOUN_PHRASES):
+        return True
+
+    for i, w in enumerate(tokens):
+        if w not in _PRONOUN_WORDS:
+            continue
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+        # Followed by a content word → determiner ("this project"), not anaphora.
+        if nxt and len(nxt) >= 2 and nxt not in _STOPWORDS \
+                and nxt not in _CAP_BOILERPLATE:
+            continue
+        return True
+    return False
 
 
 # ─── Scoring ──────────────────────────────────────────────────────────────────
@@ -1305,25 +1796,20 @@ def _disambiguate(scores, unigrams, bigrams, slots):
 
 # ─── Message builder ──────────────────────────────────────────────────────────
 
+# Per-intent canned messages. Only intents WITHOUT a registry entry need one —
+# an auto-discovered tool gets "Đang mở <title>..." / "Opening <title>..."
+# built from its live title in _build_message().
 _MESSAGES_VI = {
     "open_batchout":          u"Đang mở BatchOut...",
     "open_batchout_configured": u"Mở BatchOut đã cấu hình...",
-    "open_parasync":          u"Đang mở ParaSync...",
-    "open_loadfamily":        u"Đang mở Load Family...",
-    "open_loadfamily_cloud":  u"Đang mở Load Family (Cloud)...",
-    "open_projectname":       u"Đang mở Project Name...",
-    "open_workset":           u"Đang mở Workset...",
-    "open_dimtext":           u"Đang mở Dim Text...",
-    "open_upperdimtext":      u"Đang mở Upper Dim Text...",
-    "open_resetoverrides":    u"Đang mở Reset Overrides...",
-    "open_grids":             u"Đang mở Grids...",
+    "open_loadfamily":        u"Đang mở Family Loader...",
     "check_spelling":         u"Đang quét Text Note trong model để kiểm tra chính tả tiếng Anh...",
-    "greet":  u"Xin chào! Tôi là T3Lab Assistant 👋\nBạn muốn làm gì hôm nay?",
-    "farewell": u"Tạm biệt! Gặp lại bạn sau nhé 👋",
+    "greet":  u"Xin chào! Tôi là T3Lab Assistant.\nBạn muốn làm gì hôm nay?",
+    "farewell": u"Tạm biệt! Gặp lại bạn sau nhé.",
     "chat":   u"Không có gì! Cần gì cứ hỏi tôi nhé.",
     "help":   (u"Tôi có thể giúp bạn:\n"
                u"• Xuất sheet: 'xuất pdf G sheet', 'in tất cả sang dwg'\n"
-               u"• Mở tool: 'mở batchout', 'parasync', 'load family'\n"
+               u"• Mở tool: 'mở batchout', 'load family', 'mở manaviews'\n"
                u"• Cấu hình nhanh: 'mở batchout G sheet pdf'\n"
                u"Gõ tên tool hoặc mô tả điều bạn muốn làm!"),
 }
@@ -1331,22 +1817,14 @@ _MESSAGES_VI = {
 _MESSAGES_EN = {
     "open_batchout":          "Opening BatchOut...",
     "open_batchout_configured": "Opening BatchOut (pre-configured)...",
-    "open_parasync":          "Opening ParaSync...",
-    "open_loadfamily":        "Opening Load Family...",
-    "open_loadfamily_cloud":  "Opening Load Family (Cloud)...",
-    "open_projectname":       "Opening Project Name...",
-    "open_workset":           "Opening Workset...",
-    "open_dimtext":           "Opening Dim Text...",
-    "open_upperdimtext":      "Opening Upper Dim Text...",
-    "open_resetoverrides":    "Opening Reset Overrides...",
-    "open_grids":             "Opening Grids...",
+    "open_loadfamily":        "Opening Family Loader...",
     "check_spelling":         "Scanning model Text Notes for English spelling errors...",
-    "greet":   "Hello! I'm T3Lab Assistant 👋\nWhat would you like to do today?",
-    "farewell": "Goodbye! See you later 👋",
+    "greet":   "Hello! I'm T3Lab Assistant.\nWhat would you like to do today?",
+    "farewell": "Goodbye! See you later.",
     "chat":    "You're welcome! Let me know if you need anything.",
     "help":    ("I can help you:\n"
                 "• Export sheets: 'export pdf G sheet', 'print all to dwg'\n"
-                "• Open tools: 'open batchout', 'parasync', 'load family'\n"
+                "• Open tools: 'open batchout', 'load family', 'open manaviews'\n"
                 "• Quick config: 'open batchout G sheet pdf'\n"
                 "Type a tool name or describe what you want to do!"),
 }
@@ -1356,6 +1834,48 @@ def _is_viet(raw):
     viet_chars = (u"àáâãèéêìíòóôõùúýăđơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợ"
                   u"ụủứừửữựỳỵỷỹ")
     return any(c in viet_chars for c in raw.lower())
+
+
+def _kw_hit(raw_input, normed_raw, keywords):
+    """Whole-word keyword test for the canned chat replies below.
+
+    These lists used to be tested with a plain `k in normed_raw` substring
+    match, which reads far more text than it should once diacritics are
+    stripped: "tạo 1 phòng ngủ 4x6" became an INSULT ("ngu" inside "ngủ"),
+    "lối đi" became an error report ("loi"), and any word containing "ty"
+    ("quantity") became a thank-you.
+
+    Two rules fix it:
+      * whole words only, never a fragment inside a longer word;
+      * when the user types WITH diacritics, matching is accent-exact — "ngủ"
+        is a bedroom, "ngu" is the insult, and stripping the accent to compare
+        destroys the only thing that tells them apart. Diacritic-stripped
+        matching is kept only for messages typed without accents at all, where
+        it is the sole way to recognise "may ngu the".
+    """
+    low     = (raw_input or u"").lower()
+    accents = _is_viet(low)
+    for kw in keywords:
+        kw = (kw or u"").strip().lower()
+        if not kw:
+            continue
+        pat = r'(?<!\w)' + re.escape(kw) + r'(?!\w)'
+        try:
+            if re.search(pat, low, re.UNICODE):
+                return True
+            if not accents and kw == _norm(kw) \
+                    and re.search(pat, normed_raw, re.UNICODE):
+                return True
+        except Exception:
+            if kw in normed_raw:            # never fail the turn on a regex
+                return True
+    return False
+
+
+# A reaction ("stupid", "great", "how are you") is a handful of words. A
+# 12-word instruction is a REQUEST that happens to contain one of those words,
+# so the reaction branches below stay out of its way.
+_REACTION_MAX_WORDS = 6
 
 
 def _build_message(intent, slots, viet, raw_input=""):
@@ -1384,17 +1904,20 @@ def _build_message(intent, slots, viet, raw_input=""):
 
     # ── Contextual chat responses ─────────────────────────────────────────────
     if intent == "chat":
+        _short = len((raw_input or u"").split()) <= _REACTION_MAX_WORDS
         # Farewell
-        farewell_kws = ["tam biet", "bye", "bai ", "see you", "hen gap", "goodbye"]
-        if any(k in normed_raw for k in farewell_kws):
+        farewell_kws = ["tam biet", "tạm biệt", "bye", "bai", "bài",
+                        "see you", "hen gap", "hẹn gặp", "goodbye"]
+        if _short and _kw_hit(raw_input, normed_raw, farewell_kws):
             return (_MESSAGES_VI if viet else _MESSAGES_EN).get("farewell",
-                    u"Tạm biệt! 👋" if viet else "Goodbye! 👋")
+                    u"Tạm biệt!" if viet else "Goodbye!")
         # Frustration / insult directed at the assistant itself — acknowledge
         # honestly instead of the generic "didn't understand" reply, and point
         # at a concrete next step (works with or without an LLM connected).
         insult_kws = ["stupid", "dumb", "useless", "garbage", "trash", "suck",
-                      "ngu", "vo dung", "te qua", "qua te"]
-        if any(k in normed_raw for k in insult_kws):
+                      "ngu", "vo dung", "vô dụng", "te qua", "tệ quá",
+                      "qua te", "quá tệ"]
+        if _short and _kw_hit(raw_input, normed_raw, insult_kws):
             if viet:
                 return (u"Xin lỗi vì trải nghiệm chưa tốt! Ở chế độ offline khả năng "
                         u"của tôi hạn chế — kết nối AI trong phần Cài đặt để trả "
@@ -1402,9 +1925,10 @@ def _build_message(intent, slots, viet, raw_input=""):
             return ("Sorry that reply wasn't good enough! Offline mode is limited — "
                     "connect an AI provider in Settings for smarter answers.")
         # Error/complaint
-        error_kws = ["loi", "bi hong", "khong chay", "khong hoat dong", "error",
-                     "broken", "not working"]
-        if any(k in normed_raw for k in error_kws):
+        error_kws = ["loi", "lỗi", "bi hong", "bị hỏng", "khong chay",
+                     "không chạy", "khong hoat dong", "không hoạt động",
+                     "error", "broken", "not working"]
+        if _kw_hit(raw_input, normed_raw, error_kws):
             if viet:
                 return (u"Xin lỗi bạn gặp vấn đề! Bạn có thể thử:\n"
                         u"• Đóng và mở lại tool\n"
@@ -1413,22 +1937,34 @@ def _build_message(intent, slots, viet, raw_input=""):
                     "• Close and reopen the tool\n"
                     "• Check the Revit console for error details")
         # Positive reaction
-        positive_kws = ["tuyet", "tot", "ngon", "perfect", "great", "awesome", "nice"]
-        if any(k in normed_raw for k in positive_kws):
-            return u"Cảm ơn bạn! 😊 Cần gì cứ hỏi nhé." if viet else "Thank you! 😊 Let me know if you need anything."
+        positive_kws = ["tuyet", "tuyệt", "tot", "tốt", "ngon", "perfect",
+                        "great", "awesome", "nice"]
+        if _short and _kw_hit(raw_input, normed_raw, positive_kws):
+            return u"Cảm ơn bạn! Cần gì cứ hỏi nhé." if viet else "Thank you! Let me know if you need anything."
         # Thanks
-        thanks_kws = ["cam on", "thank", "tks", "thks", "ty"]
-        if any(k in normed_raw for k in thanks_kws):
+        thanks_kws = ["cam on", "cảm ơn", "thank", "thanks", "tks", "thks"]
+        if _kw_hit(raw_input, normed_raw, thanks_kws):
             return u"Không có gì! Cần gì cứ hỏi tôi nhé." if viet else "You're welcome! Let me know if you need anything."
         # State question
-        state_kws = ["khoe", "met", "buon", "chan", "sao vay", "stress"]
-        if any(k in normed_raw for k in state_kws):
-            return (u"Cảm ơn bạn hỏi thăm! Tôi ổn 😊 Bạn cần tôi giúp gì không?"
-                    if viet else "Thanks for asking! I'm fine 😊 How can I help?")
+        state_kws = ["khoe", "khỏe", "met", "mệt", "buon", "buồn", "chan",
+                     "chán", "sao vay", "sao vậy", "stress"]
+        if _short and _kw_hit(raw_input, normed_raw, state_kws):
+            return (u"Cảm ơn bạn hỏi thăm! Tôi ổn. Bạn cần tôi giúp gì không?"
+                    if viet else "Thanks for asking! I'm fine. How can I help?")
 
-    if viet:
-        return _MESSAGES_VI.get(intent, u"Đang xử lý...")
-    return _MESSAGES_EN.get(intent, "Processing...")
+    table = _MESSAGES_VI if viet else _MESSAGES_EN
+    if intent in table:
+        return table[intent]
+
+    # Auto-discovered tools have no canned message — build it from the live
+    # registry title so a newly added pushbutton reads correctly without a
+    # matching entry in the tables above.
+    if intent and intent.startswith("open_"):
+        label = _tool_label(intent)
+        return (u"Đang mở {}...".format(label) if viet
+                else u"Opening {}...".format(label))
+
+    return u"Đang xử lý..." if viet else "Processing..."
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -1453,12 +1989,19 @@ def classify(user_input, history=None):
     normed   = _norm(user_input)
     expanded = _expand(normed)
 
+    # ── Capability questions → answered from the real catalog ────────────────
+    # Checked BEFORE anaphora: an explicit capability frame states its own
+    # subject ("what can this do", "cái này làm được gì"), so resolving its
+    # pronoun against the history would open a tool instead of answering.
+    if is_capability_question(expanded):
+        return answer_capability_question(user_input, viet)
+
     # ── Pronoun resolution ───────────────────────────────────────────────────
     if _is_pronoun_query(expanded) and history:
         last_tool = _last_tool_from_history(history)
         if last_tool:
             slots = _extract_slots(user_input)
-            label = _TOOL_LABELS.get(last_tool, last_tool)
+            label = _tool_label(last_tool)
             msg = (u"Đang mở {}...".format(label) if viet
                    else "Opening {}...".format(label))
             return {"intent": last_tool, "params": {}, "message": msg,
@@ -1476,12 +2019,6 @@ def classify(user_input, history=None):
                else u"Opening {}...".format(_tool['title']))
         return {"intent": _tool['intent'], "params": {}, "message": msg,
                 "_nlu": True}
-
-    # ── Capability questions → answered from the real catalog ────────────────
-    # "Có tool nào để X không?" gets a truthful yes (with the matching tools)
-    # or a truthful no — never an LLM guess.
-    if is_capability_question(expanded):
-        return answer_capability_question(user_input, viet)
 
     # ── Tokenise ─────────────────────────────────────────────────────────────
     unigrams, bigrams = _tokenise(expanded)

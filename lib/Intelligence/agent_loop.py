@@ -33,7 +33,7 @@ __title__  = "Agent Loop"
 import json
 import time
 
-from Intelligence.tool_schema import LAUNCHER_TOOL_NAME
+from Intelligence.tool_schema import LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME
 
 
 # ─── Result truncation ─────────────────────────────────────────────────────────
@@ -43,18 +43,228 @@ from Intelligence.tool_schema import LAUNCHER_TOOL_NAME
 _MAX_RESULT_CHARS = 4000
 
 
+def _json_safe(obj):
+    """Recursively coerce byte strings to unicode. Never raises.
+
+    A Revit/OS string that arrives as Windows code-page bytes is the one
+    input json's encoder cannot handle — it decodes byte strings as UTF-8 —
+    and under IronPython 2.7 the `u"{}".format(...)` fallback below fails on
+    exactly the same bytes, so the guard guarded nothing.
+    """
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode('utf-8')
+        except Exception:
+            return obj.decode('latin-1', 'replace')
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            out[_json_safe(k)] = _json_safe(v)
+        return out
+    if isinstance(obj, (list, tuple, set)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 def _result_to_json(result):
     try:
-        s = json.dumps(result, ensure_ascii=False)
+        s = json.dumps(_json_safe(result), ensure_ascii=False)
     except Exception:
-        s = u"{}".format(result)
+        try:
+            s = u"{}".format(_json_safe(result))
+        except Exception:
+            s = u"<unserializable {}>".format(type(result).__name__)
     if len(s) > _MAX_RESULT_CHARS:
         s = s[:_MAX_RESULT_CHARS] + u"... [truncated {} chars]".format(len(s) - _MAX_RESULT_CHARS)
     return s
 
 
-def _sanitize_history(history, limit=16):
-    """Reduce persisted chat history to plain-text user/assistant messages."""
+# ─── Phantom tool calls ────────────────────────────────────────────────────────
+# A model that writes {"name": "...", "parameters": {...}} as chat text is
+# trying to call a tool. When the name is real the loop executes it
+# (_text_tool_call → known); when it isn't, the blob is a dead end that must
+# never be shown as the answer — the model gets one correction per retry.
+_MAX_PHANTOM_RETRIES = 2
+
+# ─── Announced-but-not-performed turns ────────────────────────────────────────
+# A model that replies "Đang liệt kê các mức trong dự án…" and calls nothing
+# has not answered — it has narrated. The loop used to accept any text-only
+# reply as final, so "list levels" ended on that sentence and no level ever
+# reached the user. Worse than the missing answer: on a data question, prose
+# produced with zero read tools is ungrounded by construction.
+_MAX_ANNOUNCE_NUDGES = 1
+
+_ANNOUNCE_PATTERNS = (
+    # Vietnamese
+    'dang liet ke', 'dang lay', 'dang kiem tra', 'dang tim', 'dang tai',
+    'dang truy xuat', 'dang thuc hien', 'dang tien hanh', 'dang xu ly',
+    'dang chay', 'toi se', 'minh se', 'de toi', 'de minh', 'se tien hanh',
+    'cho chut', 'cho mot chut', 'vui long doi', 'doi mot lat',
+    # English
+    'let me', "i'll ", 'i will ', 'i am going to', "i'm going to",
+    'i am now', "i'm now", 'going to check', 'one moment', 'hold on',
+    'give me a moment', 'let us ', "let's ",
+)
+
+_ANNOUNCE_FIXUP = (
+    u"You described what you were about to do but called no tool, so nothing "
+    u"happened and the user received no data. Do not narrate — act. Call the "
+    u"tool that answers the request NOW, then report its real result. If no "
+    u"available tool can do it, say plainly that you cannot and why."
+)
+
+
+def _announces_work(text):
+    """True when `text` promises an action instead of delivering one.
+
+    Deliberately narrow: a question is a clarification (legitimate), and a
+    long reply is an answer. Only a short, forward-looking sentence counts.
+    """
+    if not text:
+        return False
+    body = u"{}".format(text).strip()
+    if len(body) > 220 or body.endswith(u'?'):
+        return False
+    from Intelligence.knowledge import vi_text
+    folded = vi_text.fold_diacritics(body).lower()
+    for p in _ANNOUNCE_PATTERNS:
+        if p in folded:
+            return True
+    # "Đang liệt kê các mức trong dự án..." — a trailing ellipsis on a short
+    # line is the same promise without any of the phrasings above.
+    return body.endswith(u'...') or body.endswith(u'…')
+
+
+_PHANTOM_FIXUP = (
+    u"`{}` is not a tool, and JSON written as chat text is never executed. "
+    u"An Active skill in your system prompt is a set of INSTRUCTIONS for YOU "
+    u"to carry out — \"playbook\", \"skill\" and \"apply_playbook\" are not "
+    u"tool names. Do the work NOW: use a real tool call from the tools list "
+    u"for anything that reads or edits the model, and plain prose for "
+    u"everything else. Do not output JSON as text again."
+)
+
+
+def _find_json_blob(text):
+    """(obj, start, end) for the outermost {...} in `text`, else None.
+
+    Fenced blocks are skipped on purpose: ```json ...``` is the model SHOWING
+    json because the user asked to see it, not miscalling a tool.
+    """
+    if not text or u"{" not in text or u"```" in text:
+        return None
+    try:
+        import re
+        m = re.search(r'\{[\s\S]*\}', text)
+        if not m:
+            return None
+        return json.loads(m.group()), m.start(), m.end()
+    except Exception:
+        return None
+
+
+def _tool_call_shape(obj):
+    """(name, args) if `obj` is a tool call written as JSON, else None.
+
+    Accepts the Anthropic ({"name","parameters"|"input"}), OpenAI
+    ({"function": {"name","arguments"}}) and legacy T3Lab
+    ({"intent","params"}) spellings — a model that falls out of native
+    tool-calling reproduces whichever one it was trained on.
+    """
+    if not isinstance(obj, dict):
+        return None
+    fn = obj.get("function")
+    if isinstance(fn, dict):
+        obj = fn
+    name = obj.get("name") or obj.get("tool") or obj.get("intent")
+    args = (obj.get("parameters") or obj.get("arguments")
+            or obj.get("params") or obj.get("input") or {})
+    if not name or not isinstance(args, dict):
+        return None
+    try:
+        name = name.strip()
+    except Exception:
+        return None          # name wasn't a string
+    return (name, args) if name else None
+
+
+# Keys a JSON tool call may carry. Anything else in the object means the model
+# is returning DATA that merely happens to have a "name" field (a level, a
+# family type...), which must never be mistaken for a call.
+_CALL_KEYS = frozenset((
+    "name", "tool", "intent", "function", "type", "id",
+    "parameters", "arguments", "params", "input",
+    "message", "thought", "reasoning", "explanation",
+))
+
+
+def _only_call_keys(obj):
+    try:
+        return not (set(obj.keys()) - _CALL_KEYS)
+    except Exception:
+        return False
+
+
+def is_bare_tool_call_text(content):
+    """True when `content` is nothing but a tool call written as JSON text —
+    no prose around it, e.g.
+
+        {"name": "apply_playbook", "parameters": {"playbook_name": "lod-standard"}}
+
+    AgentLoop suppresses these before they reach the chat now, but saved
+    transcripts written before that fix still carry them. Used by the
+    Assistant's history loader to prune them: replayed into the model's
+    context they are a worked example of answering with a fake tool call,
+    which is exactly the behaviour being fixed.
+    """
+    if not content:
+        return False
+    try:
+        stripped = content.strip()
+    except Exception:
+        return False
+    if not (stripped.startswith(u"{") and stripped.endswith(u"}")):
+        return False
+    found = _find_json_blob(stripped)
+    if not found:
+        return False
+    return bool(_tool_call_shape(found[0])) and _only_call_keys(found[0])
+
+
+def _call_key(name, args):
+    """Canonical identity of one tool call, for the duplicate guard.
+
+    Shared by the guard itself and by the read-batching prefetch so the two
+    can never disagree about what counts as "already done".
+    """
+    try:
+        return (name, json.dumps(_json_safe(args), sort_keys=True,
+                                 ensure_ascii=False))
+    except Exception:
+        try:
+            return (name, u"{}".format(_json_safe(args)))
+        except Exception:
+            return (name, u"<unkeyable>")
+
+
+def _sanitize_history(history, limit=None):
+    """Reduce persisted chat history to plain-text user/assistant messages.
+
+    The window size comes from Intelligence.conversation.HISTORY_LIMIT. It was
+    hardcoded to 24 here while script._add_to_history truncated to 16, so this
+    limit never actually bound and the extra continuity it claimed to give
+    could not happen. One constant now, and turns that fall past it are folded
+    into a rolling summary rather than dropped.
+
+    It stays affordable: Claude re-reads the transcript prefix from the prompt
+    cache, and Ollama's num_ctx is sized to fit the actual payload per request.
+    """
+    if limit is None:
+        try:
+            from Intelligence.conversation import HISTORY_LIMIT
+            limit = HISTORY_LIMIT
+        except Exception:
+            limit = 24
     out = []
     for h in (history or [])[-limit:]:
         role    = h.get("role", "")
@@ -77,15 +287,25 @@ class AgentLoop(object):
     """One user request = one AgentLoop.run(). Cancellable between steps."""
 
     def __init__(self, provider, execute_tool, tools, callbacks=None,
-                 max_iterations=10, max_tokens=1500, time_budget_sec=240):
+                 max_iterations=10, max_tokens=1500, time_budget_sec=240,
+                 turn_timer=None, execute_tools_batch=None,
+                 is_write_tool=None):
         self._provider       = provider
         self._execute_tool   = execute_tool
         self._tools          = tools
+        # Optional read-batching seam. Both must be supplied for it to engage;
+        # without them every call goes through execute_tool one at a time,
+        # exactly as before.
+        self._execute_batch  = execute_tools_batch
+        self._is_write_tool  = is_write_tool
         self._cb             = callbacks or {}
         self._max_iterations = max_iterations
         self._max_tokens     = max_tokens
         self._time_budget    = time_budget_sec
         self._cancelled      = False
+        # Optional Intelligence.telemetry.TurnTimer. None = no accounting;
+        # every use below is guarded so the loop runs identically without it.
+        self._timer          = turn_timer
 
     # ── Cancellation ──────────────────────────────────────────────────────────
 
@@ -119,6 +339,126 @@ class AgentLoop(object):
             except Exception:
                 pass
 
+    # ── Telemetry (optional, never raises into the loop) ──────────────────────
+
+    def _note_usage(self, usage):
+        """Accumulate one model call's token usage onto the turn timer."""
+        if self._timer is None or not usage:
+            return
+        try:
+            self._timer.add_usage(usage)
+        except Exception:
+            pass
+
+    def _note_roundtrip(self, n_calls=1):
+        """Record one crossing to Revit's main thread carrying n tool calls."""
+        if self._timer is None:
+            return
+        try:
+            self._timer.tool_roundtrip(n_calls)
+        except Exception:
+            pass
+
+    # ── Read batching ─────────────────────────────────────────────────────────
+
+    def leading_read_run(self, calls, done_calls=None):
+        """Indices of the LEADING run of batchable read-only calls.
+
+        Stops at the first call that is not a plain read — a write, the
+        terminal launcher, the locally-executed memory tool, or a duplicate
+        the loop will refuse anyway. Stopping there is what preserves
+        read-after-write ordering: a read placed after a write must see the
+        model as the write left it, so it can never be hoisted into the batch.
+
+        A run of one is not worth a batch; the caller falls back to the
+        sequential path.
+        """
+        if self._execute_batch is None or self._is_write_tool is None:
+            return []
+        done = done_calls or set()
+        idxs = []
+        for i, tc in enumerate(calls or []):
+            name = tc.get("name", "")
+            if not name or name in (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME):
+                break
+            try:
+                if self._is_write_tool(name):
+                    break
+            except Exception:
+                break
+            if _call_key(name, tc.get("args") or {}) in done:
+                break
+            idxs.append(i)
+        return idxs if len(idxs) > 1 else []
+
+    def _prefetch_reads(self, calls, done_calls):
+        """Execute the leading read run in ONE Revit round-trip.
+
+        Returns {index: result}. Results are handed back to the normal
+        sequential loop below, which still emits on_tool_start/on_tool_done
+        per call and still applies its guards — only the crossing is shared,
+        so the UI and the transcript are indistinguishable from before.
+
+        Any failure falls back silently to per-call execution.
+        """
+        idxs = self.leading_read_run(calls, done_calls)
+        if not idxs:
+            return {}
+        batch = [(calls[i].get("name", ""), calls[i].get("args") or {})
+                 for i in idxs]
+        try:
+            results = self._execute_batch(batch)
+        except Exception:
+            return {}
+        if not isinstance(results, list) or len(results) != len(idxs):
+            return {}
+        self._note_roundtrip(len(idxs))
+        return dict(zip(idxs, results))
+
+    # ── Text tool-call rescue ─────────────────────────────────────────────────
+
+    def _registered_tool_names(self):
+        """Tool names from the provider-native schema list (Anthropic uses
+        {"name": ...}, OpenAI-style wraps it in {"function": {"name": ...}})."""
+        names = set()
+        for t in (self._tools or []):
+            try:
+                n = t.get("name") or (t.get("function") or {}).get("name")
+                if n:
+                    names.add(n)
+            except Exception:
+                pass
+        return names
+
+    def _text_tool_call(self, text):
+        """A tool call the model wrote as chat text instead of a native
+        tool_call block. Local models drift into JSON-in-prose like
+        {"name": "get_material_quantities", "parameters": {...}} after
+        seeing a tool error; hosted ones do it when a /slash skill puts a
+        playbook in the system prompt and they try to "call" the playbook.
+
+        Returns {"name", "args", "prose", "known"} or None. `prose` is the
+        message with the blob removed — the blob itself is never something
+        the user should read, whether or not the tool turns out to be real.
+        `known` says whether the name is a registered tool: True → execute
+        it, False → phantom, correct the model instead.
+        """
+        found = _find_json_blob(text)
+        if not found:
+            return None
+        obj, start, end = found
+        shape = _tool_call_shape(obj)
+        if not shape:
+            return None
+        name, args = shape
+        known = name in self._registered_tool_names()
+        # An unregistered name is weak evidence on its own, so require the
+        # object to carry ONLY tool-call keys before suppressing it.
+        if not known and not _only_call_keys(obj):
+            return None
+        return {"name": name, "args": args, "known": known,
+                "prose": (text[:start] + u" " + text[end:]).strip()}
+
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     def run(self, history, system_prompt, user_content):
@@ -138,6 +478,9 @@ class AgentLoop(object):
         last_text  = u""
         tool_runs  = 0
         iteration  = 0
+        done_calls = set()   # (name, canonical args) that succeeded this run
+        phantom_retries = 0  # JSON calls to tools that don't exist, corrected
+        announce_nudges = 0  # "I'm about to…" replies that called nothing
 
         while iteration < self._max_iterations:
             iteration += 1
@@ -170,14 +513,70 @@ class AgentLoop(object):
                 status = "failed" if iteration == 1 else "done"
                 return self._finish(status, last_text, None, iteration, tool_runs)
 
+            self._note_usage(resp.get("usage"))
+
             text  = (resp.get("text") or u"").strip()
             calls = resp.get("tool_calls") or []
+
+            # Model wrote the tool call as JSON text instead of a native
+            # tool_call block. Either way the blob is not an answer, so it is
+            # stripped from what the user sees; a registered name is then
+            # executed anyway rather than ending the turn on a dead blob.
+            rescued = False
+            phantom  = None
+            if not calls and text:
+                _tc = self._text_tool_call(text)
+                if _tc and _tc["known"]:
+                    calls   = [{"id": "text_rescue", "name": _tc["name"],
+                                "args": _tc["args"]}]
+                    rescued = True
+                    text    = _tc["prose"]
+                elif _tc:
+                    phantom = _tc
+                    text    = _tc["prose"]
+
+            # Phantom: the name isn't a tool at all (`apply_playbook` is the
+            # recurring one — /slash injects a playbook and the model tries
+            # to "call" it). Correct the model and let it try again. Bounded,
+            # because a model that still does this after two corrections will
+            # not stop on the third; falling through then leaves an empty
+            # turn, which script.py already routes to the legacy JSON-intent
+            # path where a visible reply is guaranteed.
+            if phantom is not None and phantom_retries < _MAX_PHANTOM_RETRIES:
+                phantom_retries += 1
+                if text:
+                    last_text = text
+                # An open live bubble already streamed the blob — empty text
+                # drops that bubble, real text replaces its content.
+                self._emit("on_turn_text", text, False)
+                messages.append(resp["assistant_msg"])
+                messages.append({"role": "user",
+                                 "content": _PHANTOM_FIXUP.format(phantom["name"])})
+                continue
+
+            # Narrated instead of acted: no tool call anywhere in this run and
+            # a reply that only promises one. Nudge once, then let it stand —
+            # a model that still narrates after a correction will not stop on
+            # the third try, and its text is at least visible.
+            if (not calls and tool_runs == 0
+                    and announce_nudges < _MAX_ANNOUNCE_NUDGES
+                    and _announces_work(text)):
+                announce_nudges += 1
+                last_text = text
+                self._emit("on_turn_text", text, False)
+                messages.append(resp["assistant_msg"])
+                messages.append({"role": "user", "content": _ANNOUNCE_FIXUP})
+                continue
 
             if text:
                 last_text = text
                 if not turn["streamed"]:
                     self._emit("on_text_delta", text)
                 self._emit("on_turn_text", text, not calls)
+            elif rescued or phantom is not None:
+                # The turn was nothing BUT the blob. Drop the live bubble that
+                # streamed it instead of leaving the raw JSON on screen.
+                self._emit("on_turn_text", u"", False)
 
             messages.append(resp["assistant_msg"])
 
@@ -185,10 +584,18 @@ class AgentLoop(object):
                 return self._finish("done", last_text, None, iteration, tool_runs)
 
             # ── Execute tool calls sequentially (Revit is single-threaded) ──
+            # One exception: the LEADING run of read-only calls is fetched in a
+            # single crossing to Revit's main thread first (each crossing costs
+            # an ExternalEvent raise plus a wait for Revit to go idle, and the
+            # model routinely asks for several reads at once). The loop below
+            # is otherwise untouched — it still emits a card per call and still
+            # applies every guard; it just consumes the prefetched result
+            # instead of paying for its own round-trip.
+            prefetched    = self._prefetch_reads(calls, done_calls)
             results       = []
             launch_intent = None
             doc_changed   = False
-            for tc in calls:
+            for _idx, tc in enumerate(calls):
                 name = tc.get("name", "")
                 args = tc.get("args") or {}
 
@@ -211,12 +618,31 @@ class AgentLoop(object):
                                     "note": "User stopped the request."})
                     break
 
+                # Deterministic duplicate guard: identical (name, args) that
+                # already succeeded in THIS run is never executed again — the
+                # model gets an error result telling it to move on, and no
+                # tool card ever reaches the UI for the repeat.
+                call_key = _call_key(name, args)
+                if call_key in done_calls:
+                    results.append({
+                        "error": u"Duplicate call: `{}` with identical "
+                                 u"arguments already succeeded in this "
+                                 u"request. Do not repeat completed calls — "
+                                 u"continue with the next step or give the "
+                                 u"final answer.".format(name)})
+                    continue
+
                 self._emit("on_tool_start", name, args, iteration)
                 t0 = time.time()
-                try:
-                    res = self._execute_tool(name, args)
-                except Exception as ex:
-                    res = {"error": u"{}".format(ex), "tool": name}
+                if _idx in prefetched:
+                    # Already fetched in the shared read round-trip above.
+                    res = prefetched[_idx]
+                else:
+                    self._note_roundtrip(1)
+                    try:
+                        res = self._execute_tool(name, args)
+                    except Exception as ex:
+                        res = {"error": u"{}".format(ex), "tool": name}
                 if not isinstance(res, dict):
                     res = {"result": res}
                 dt = time.time() - t0
@@ -224,6 +650,8 @@ class AgentLoop(object):
                 tool_runs += 1
                 self._emit("on_tool_done", name, res, ok, dt)
                 results.append(res)
+                if ok:
+                    done_calls.add(call_key)
 
             if launch_intent:
                 return self._finish("done", last_text, launch_intent,
@@ -240,7 +668,20 @@ class AgentLoop(object):
             # dump into the model context.
             try:
                 res_strs = [_result_to_json(r) for r in results]
-                messages.extend(self._provider.agent_tool_results(calls, res_strs))
+                if rescued:
+                    # A rescued call has no native tool_call block in the
+                    # transcript, so provider tool-result messages would
+                    # reference an unknown id — feed the result back as plain
+                    # user text instead (accepted by every provider).
+                    messages.append({
+                        "role": "user",
+                        "content": u"Tool `{}` returned: {}\nContinue the "
+                                   u"task. Use REAL tool calls, never JSON "
+                                   u"as text.".format(calls[0]["name"],
+                                                      res_strs[0])})
+                else:
+                    messages.extend(
+                        self._provider.agent_tool_results(calls, res_strs))
             except Exception:
                 return self._finish("failed", last_text, None, iteration, tool_runs)
 
@@ -248,6 +689,11 @@ class AgentLoop(object):
                             self._max_iterations, tool_runs)
 
     def _finish(self, status, text, launch_intent, iterations, tool_runs):
+        if self._timer is not None:
+            try:
+                self._timer.iterations = iterations
+            except Exception:
+                pass
         result = {
             "status":        status,
             "text":          text,
@@ -266,27 +712,185 @@ class AgentLoop(object):
 _AGENT_PROMPT = u"""You are T3Lab Assistant, an AI agent embedded in Autodesk Revit via the T3Lab pyRevit extension. You can read and modify the live Revit model through the tools provided.
 
 ## Language & formatting
-Always reply in the same language the user writes (Vietnamese or English). Keep replies short and practical — one or two sentences between tool calls, a compact summary at the end.
+{language}Keep replies short and practical — one or two sentences between tool calls, a compact summary at the end.
 Use markdown when it helps: **bold**, `code`, bullet lists, and pipe tables (| a | b |) for numeric summaries — the chat renders them natively. Do NOT use emoji.
 
 ## Units
 All tool coordinates and dimensions are in METERS. Convert user input: 5000mm = 5.0, 3m = 3.0. Element ids are integers.
 
+## Plan, then act
+For a multi-step request, decide the full tool sequence BEFORE the first call and state it in one short sentence. Chain the steps yourself — never ask the user to run intermediate steps you can do with tools. For a simple request, skip the plan and just act.
+
+## Efficiency (each model turn is expensive — minimize turns)
+- BATCH independent read-only calls into ONE turn: when you need e.g. levels + selection + view info, emit all those tool calls together instead of one per turn.
+- Prefer ONE bulk tool over many single calls: `bulk_set_parameter` over repeated `set_parameter`, `ai_element_filter` over per-element inspection, `tag_all_*` over per-element tags.
+- Do not re-query data that is already in this conversation (earlier tool results, the context block in the latest user message) unless the model may have changed since.
+- Never call a tool "just to check" after a success result already told you the outcome; verify with a read tool only after LARGE modifications (20+ elements) or when a result looks suspicious.
+
 ## Working rules
 1. Query before you modify: when element ids or names are unknown, use read tools (get_current_view_elements, ai_element_filter, list_levels, ...) first.
-2. Chain steps yourself — do not ask the user to run intermediate steps you can do with tools.
-3. After finishing, summarize WHAT changed (counts + element ids) in the user's language.
-4. Destructive actions (delete_element, purge_unused, and anything removing model data): unless the user's current message already explicitly requested the deletion, ask for confirmation in text FIRST and stop — do not call the tool in the same turn.
-5. If a tool returns an error, explain it briefly and either retry with fixed arguments (max once) or tell the user what is missing.
-6. `open_t3lab_tool` opens a T3Lab window and ENDS your turn — only ever call it last, and never together with other tools.
+2. After finishing, summarize WHAT changed (counts + element ids) in English.
+3. Destructive actions — `delete_element`, `purge_unused`, `edit_elements` ungroup, `manage_view_template` delete, `manage_links` delete, `manage_document` save_as / sync_with_central, and anything else removing or publishing model data: unless the user's current message already explicitly requested it, ask for confirmation in text FIRST and stop — do not call the tool in the same turn. (Revit cannot undo an ungroup by re-grouping, deleting a link takes its tags and dimensions with it, and syncing pushes your work to the whole team.)
+4. If a tool returns an error, diagnose from the error text and retry ONCE with corrected arguments; if it fails again, report exactly what is missing — never loop on the same failing call.
+5. If the request is ambiguous about WHICH elements to change, ask ONE precise clarifying question instead of guessing — a wrong bulk edit is worse than a question.
+6. `open_t3lab_tool` opens a T3Lab window and ENDS your turn — only ever call it last, and never together with other tools. OPENING A WINDOW IS NOT DOING THE WORK: call it only when the user asked to OPEN/see a tool by name ("mở BatchOut", "open View Manager"). When they asked for a RESULT ("create 3d views for each room", "export the A sheets"), do it with the real tools and report what you produced — handing them a window to fill in themselves is a silent refusal dressed up as success. If no tool can do it, say exactly that.
 7. When the user refers to the current selection ("these elements", "the selected walls", "các element này", "đang chọn"), call `revit_get_selected_elements` FIRST and operate on those element ids — never guess ids.
+8. Trust tool results over assumptions: counts, names and ids come from the model, not from memory of typical projects.
+9. Scope resolution when the request names no explicit target: for CHECKING / auditing / statistics / spell-check requests the default scope is the ENTIRE PROJECT — never silently limit to the current view (limit only when the user says so, or ask ONE question when unsure). For MODIFY actions, use the "Current Revit context" block in the latest user message — the user's selection first, then the active view. Never report "nothing found" from one filtered query: re-check with corrected arguments or wider scope first.
+10. NUMBERS MUST COME FROM TOOLS, NEVER FROM YOU. Tool results may be truncated before you see them, so counting or summing rows/elements yourself gives wrong answers. Use the exact fields the tools compute: `total_count` (ai_element_filter), `row_count` / `column_totals` (get_schedule_data), `element_counts` (analyze_model_statistics). If a statistic you need has no tool-computed field, say so — do not estimate.
+11. Color / highlight requests — "tô màu", "tô đỏ X", "bôi xanh X", "đổi màu X", "highlight X", "color X red": the color word is the OVERRIDE color to APPLY, never a parameter value to filter by (Revit elements have no "Color" or "Fill Color" parameter). For ALL elements of a category ("tô vàng sàn", "color the walls red") call `revit_override_color` with `category` + `color` directly — the server collects every matching element itself, no ids needed and NO count limit. Pass `element_ids` only for a SUBSET: the user's selection (via revit_get_selected_elements) or ids from `ai_element_filter` (category only, no parameter filter; if its `total_count` exceeds the ids returned, re-call with limit=total_count so every match is included). Use `color_elements` only when the user wants elements colored BY a parameter's values (one distinct color per value, e.g. "tô màu tường theo Type") — and its parameter_name must be a REAL parameter, never empty, never a color name.
+12. NEVER fabricate tool activity. Every action happens ONLY through a real tool call in this conversation — if you say you will use a tool, emit that tool call in the same turn, and only report results that came back from an actual tool result. Writing an invented "Result:" for a call you never made is a critical failure.
+13. HISTORY IS NOT A TO-DO LIST: act only on the LATEST user message. Earlier turns are background context — an action already reported successful there is DONE; never re-execute it unless the user explicitly asks again. Each new command fully replaces the previous one: after "tô đỏ tường" (walls red) succeeded, "tô vàng sàn" targets FLOORS + YELLOW only — walls and red are finished business.
+14. WHOLE-CATEGORY actions never need ids: `revit_override_color`, `operate_element`, `edit_elements`, `select_elements`, `set_element_workset`, `bulk_set_parameter` and `tag_elements` all accept `category` and the server collects EVERY matching element itself — one call, no count limit. Ferry ids from `ai_element_filter` only for true subsets (specific parameter values, a picked selection), and remember its id list is paged. Category names are the standard Revit ones (Walls, StructuralFoundations, Ducts, Areas, Rebar, ...) — if one is rejected, the error lists `did_you_mean`; retry with one of those instead of giving up or substituting another category.
+15. NEVER SUBSTITUTE A DIFFERENT ACTION. Match the VERB the user asked for, not the nearest tool you happen to have.
+   - `operate_element` (changes only how the ACTIVE VIEW looks): pin/ghim/khoá → "pin" (unpin/bỏ ghim → "unpin"); hide/ẩn → "hide"; isolate/cô lập → "isolate"; unhide/hiện lại → "unhide"; "bỏ isolate" / "hiện lại hết" → "reset_temporary" (needs no target); ẩn cả category trong view → "hide_category"; halftone/làm mờ → "halftone"; độ trong suốt → "transparency"; select/chọn → "select"; "chọn tương tự" → "select_similar".
+   - `edit_elements` (changes the MODEL): mirror/lật/đối xứng → "mirror"; "đổi type/đổi sang loại X" → "change_type"; group/nhóm lại → "group"; ungroup/rã nhóm → "ungroup".
+   - `manage_view`: đổi tỉ lệ/scale → "set_scale"; mức độ chi tiết → "set_detail_level"; discipline → "set_discipline"; crop/vùng cắt → "set_crop".
+   - `manage_view_template` manages the templates themselves (list/rename/duplicate/delete); applying one to views is `apply_view_template`.
+   - `manage_links` for linked models and CAD links (list/reload/unload/delete/pin); `manage_revision` for revisions (list/create/assign_to_sheets/set_issued); `manage_sheet` for duplicate/renumber/list_sets.
+   - `export_model` for IFC / NWC / DWF / DGN — PDF stays `export_sheets_pdf`, DWG `export_dwg`, PNG `export_image`.
+   - `check_bad_geometry` when an export crashes or geometry looks wrong; `manage_material` to read materials; `create_detail_annotation` for filled regions and detail lines; `manage_document` for save / save as / sync.
+   - Only tô màu / color / highlight means an override color.
+   If NO tool performs the requested action, say plainly that the assistant cannot do it yet and stop — doing a different thing to the model and reporting it as done is a critical failure, worse than doing nothing.
 
-## Current Revit context
-{context}
+## Multiple open models
+Several documents can be open in this Revit session; every tool operates on the ACTIVE one. To work across models: `list_open_documents` → `switch_active_document` (exact title) → read/modify there → switch again as needed, then combine everything into ONE final answer stating which model each number comes from. Element ids are only valid inside their own document — never reuse ids across models. When the user names a model that is not in `list_open_documents`, it may live in a different Revit window (separate process): say so and point them to the assistant in that window — do not guess.
+
+## Live context
+The latest user message carries a "Current Revit context" block (active view, selection, project) and, when relevant, "Reference from project knowledge" excerpts. Read them as the state of the model RIGHT NOW — they are not something the user typed.
 """
 
 
-def build_agent_system_prompt(revit_context=u""):
-    """System prompt for the native tool-calling agent path."""
-    ctx = revit_context.strip() if revit_context else u"(no context snapshot available)"
-    return _AGENT_PROMPT.format(context=ctx)
+# Compact few-shot for LOCAL models on the DEFAULT (no-specialist) path.
+# Cloud models follow the prose rules above reliably; small local models pick
+# the right tool far more often when shown a couple of concrete traces. The
+# per-specialist paths carry their own few-shot; this fills the general path.
+_LOCAL_GENERAL_FEWSHOT = u"""
+## Examples (follow this tool-calling style)
+User: "có bao nhiêu cửa?" -> call ai_element_filter(category="Doors"); read total_count; reply "Model có 84 cửa."
+User: "chọn các element đang chọn và ẩn đi" -> call revit_get_selected_elements FIRST; then operate_element(operation="hide", element_ids=[...]); reply what was hidden.
+User: "tô đỏ tường" -> call revit_override_color(category="Walls", color="red") ONE time (server collects every wall, no ids, no limit); reply "Đã tô đỏ 128 tường."
+User: "pin toàn bộ tường trong view" (= LOCK the walls, NOT a color) -> call operate_element(operation="pin", category="Walls") ONE time; reply "Đã pin 54 tường trong view."
+User: "cô lập cột" then later "bỏ isolate đi" -> first operate_element(operation="isolate", category="Columns"); then operate_element(operation="reset_temporary") with NO category and NO ids — that is the only way back out of isolate.
+User: "tạo section mới" -> call create_view(view_type="section"); never fall back to a 3D view.
+User: "mở batchout" -> call open_t3lab_tool(tool_intent="open_batchout") LAST and stop.
+Rules shown above still apply: query before you modify, numbers come from tool fields (total_count/...), never invent a tool or a result.
+"""
+
+
+# Language directives. The prompt used to hardcode "Always reply in English,
+# regardless of the language the user writes in", which disagreed with the UI
+# the moment the assistant's own strings went back to following the user.
+_LANG_EN = (u"Always reply in English, regardless of the language the user "
+            u"writes in. ")
+_LANG_VI = (u"Always reply in Vietnamese, regardless of the language the user "
+            u"writes in. ")
+_LANG_AUTO = (u"Reply in the SAME language the user wrote in — Vietnamese in, "
+              u"Vietnamese out; English in, English out. ")
+
+
+def build_agent_system_prompt(revit_context=u"", local=False, lang="auto"):
+    """STATIC system prompt for the native tool-calling agent path.
+
+    Static is the point. The live Revit context used to be interpolated into
+    this string, which made the whole system block change on every turn (the
+    active view and selection are re-read by a 2-second timer). Since the
+    system block is one prompt-cache breakpoint — and `messages` sit after it
+    in the cache prefix — a system block that never repeats meant the cache
+    never hit across turns and the entire prompt was re-processed each time.
+    The volatile half now travels with the user turn: see
+    build_context_block() and Intelligence/telemetry.py for the measurement.
+
+    `revit_context` is accepted and ignored, so old callers keep working;
+    passing it no longer has any effect on the returned prompt.
+
+    local=True appends a compact few-shot trace — small local models select
+    tools far more accurately from concrete examples than from prose alone.
+    lang is 'auto' | 'vi' | 'en' and must match what the UI itself renders,
+    so the model's prose and the assistant's own strings agree.
+    """
+    language = {'vi': _LANG_VI, 'en': _LANG_EN}.get(lang, _LANG_AUTO)
+    prompt = _AGENT_PROMPT.format(language=language)
+    if local:
+        prompt += u"\n" + _LOCAL_GENERAL_FEWSHOT
+    return prompt
+
+
+# Fence around the volatile block so the model can tell live state from the
+# user's own words, and so the block can be stripped back off a stored turn.
+CONTEXT_FENCE_OPEN  = u"<<<T3LAB_LIVE_CONTEXT"
+CONTEXT_FENCE_CLOSE = u"T3LAB_LIVE_CONTEXT>>>"
+
+
+def build_context_block(revit_context=u"", knowledge_ref=u"",
+                        analysis_hint=u""):
+    """The VOLATILE half of the prompt, to prepend to the current user turn.
+
+    Everything in here changes from turn to turn — the active view, the
+    selection, knowledge excerpts retrieved for this specific question, and the
+    language analysis of this specific message — which is exactly why it must
+    not sit in the cached system block.
+
+    `analysis_hint` is `Intelligence.language.Utterance.to_prompt_hint()`: a
+    few lines naming the facts a model reads least reliably out of a
+    Vietnamese sentence — whether it was a prohibition, how wide the scope is,
+    which Revit categories were actually named, whether the operation needs
+    confirming. It goes LAST, closest to the user's own words.
+
+    Returns u"" when there is nothing live to report, so an ordinary turn
+    carries no extra tokens at all.
+    """
+    parts = []
+    ctx = (revit_context or u"").strip()
+    if ctx:
+        parts.append(u"## Current Revit context\n" + ctx)
+    ref = (knowledge_ref or u"").strip()
+    if ref:
+        parts.append(ref)
+    hint = (analysis_hint or u"").strip()
+    if hint:
+        parts.append(hint)
+    if not parts:
+        return u""
+    return u"{}\n{}\n{}".format(CONTEXT_FENCE_OPEN,
+                                u"\n\n".join(parts),
+                                CONTEXT_FENCE_CLOSE)
+
+
+def apply_context_block(user_content, context_block):
+    """Prepend `context_block` to a turn's user content.
+
+    Handles both content shapes the providers accept: a plain string, and the
+    Anthropic block list used when an attachment carries images (see
+    rag_processor.build_vision_content_blocks). In the list case the text goes
+    into a leading text block so image blocks keep their own positions.
+    """
+    if not context_block:
+        return user_content
+    if isinstance(user_content, list):
+        return [{"type": "text", "text": context_block}] + list(user_content)
+    return u"{}\n\n{}".format(context_block, user_content or u"")
+
+
+def strip_context_block(text):
+    """Remove any live-context fence from `text`.
+
+    History is stored from the raw user text, so this is belt-and-braces: it
+    keeps a stray fenced block from being replayed as if it were still current
+    if a caller ever persists the decorated content.
+    """
+    if not text or CONTEXT_FENCE_OPEN not in text:
+        return text
+    out = []
+    depth = 0
+    for line in text.split(u"\n"):
+        stripped = line.strip()
+        if stripped == CONTEXT_FENCE_OPEN:
+            depth += 1
+            continue
+        if stripped == CONTEXT_FENCE_CLOSE:
+            depth = max(0, depth - 1)
+            continue
+        if depth == 0:
+            out.append(line)
+    return u"\n".join(out).strip()

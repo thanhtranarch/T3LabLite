@@ -17,6 +17,21 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-05
+
+### Fixed
+- **Ribbon build error after updating to 1.3.0** (`UI build error for
+  'T3LabLite': ... exists:Feedback`). 1.3.0 moved the **Feedback** and **MCP
+  Control** buttons into the new *Assistant Tools* stack, but Revit keeps
+  every ribbon item name for the life of the session -- so rebuilding the
+  panel after the in-place update hit the names the old standalone buttons
+  had already taken, and the whole T3Lab tab failed to load. The stacked
+  buttons now use fresh bundle names (`SendFeedback`, `MCPPanel`); their
+  ribbon labels are unchanged.
+- **Check Update** now says that ribbon layout changes only take effect after
+  a Revit restart, so a reload that leaves the tab looking incomplete is not
+  mistaken for a broken update.
+
 ## [1.3.0] - 2026-08-05
 
 ### Added

@@ -1,5 +1,10 @@
 title: "Assistant Tools"
+# Bundle folder names here must never repeat a name that once sat directly on
+# Support.panel: Revit keeps every ribbon item name for the life of the
+# session, so a stack rebuilt with an old name throws ItemExistsException and
+# the whole tab fails to build. SendFeedback / MCPPanel replace the former
+# standalone Feedback / MCPControl buttons for that reason.
 layout:
-  - Feedback
-  - MCPControl
+  - SendFeedback
+  - MCPPanel
   - LLMsSetting

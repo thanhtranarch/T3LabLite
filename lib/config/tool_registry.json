@@ -207,25 +207,6 @@
       "url": "",
       "xaml": []
     },
-    "Feedback.pushbutton": {
-      "aliases": [
-        "Feedback"
-      ],
-      "button": "Feedback.pushbutton",
-      "doc": "Popup window that lets the user send feedback or suggestions about T3Lab",
-      "intent": "open_feedback",
-      "keywords": [
-        "send feedback",
-        "feedback",
-        "send"
-      ],
-      "kind": "script",
-      "panel": "Support.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\Assistant Tools.stack\\Feedback.pushbutton\\script.py",
-      "title": "Send Feedback",
-      "url": "",
-      "xaml": []
-    },
     "Foundation Volume.pushbutton": {
       "aliases": [],
       "button": "Foundation Volume.pushbutton",
@@ -303,24 +284,6 @@
       "panel": "Support.panel",
       "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\Assistant Tools.stack\\LLMsSetting.pushbutton\\script.py",
       "title": "LLMs Setting",
-      "url": "",
-      "xaml": []
-    },
-    "MCPControl.pushbutton": {
-      "aliases": [],
-      "button": "MCPControl.pushbutton",
-      "doc": "Unified control panel for the T3Lab MCP server.",
-      "intent": "open_mcpcontrol",
-      "keywords": [
-        "mcp control",
-        "mcpcontrol",
-        "control",
-        "mcp"
-      ],
-      "kind": "script",
-      "panel": "Support.panel",
-      "script_path": "C:\\Users\\tran_tienthanh\\OneDrive - Woh Hup (Private) Limited\\Documents\\T3Lab Architect\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\Assistant Tools.stack\\MCPControl.pushbutton\\script.py",
-      "title": "MCP Control",
       "url": "",
       "xaml": []
     },

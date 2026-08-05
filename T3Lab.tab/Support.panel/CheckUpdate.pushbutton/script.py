@@ -49,9 +49,15 @@ logger = script.get_logger()
 # CLASS/FUNCTIONS
 # ==============================================================================
 def _offer_reload(new_version):
+    # Revit never removes a ribbon item once created, so a reload can only
+    # update buttons that kept their bundle name. A release that moves or
+    # renames buttons is fully applied on the next Revit start.
     res = forms.alert(
         "T3Lab has been updated to version {}.\n\n"
-        "Reload pyRevit now to start using the new version?".format(new_version),
+        "Reload pyRevit now to start using the new version?\n"
+        "If the T3Lab ribbon looks incomplete afterwards, restart Revit "
+        "once -- ribbon layout changes only apply on a fresh start.".format(
+            new_version),
         title="Update complete",
         options=["Reload pyRevit now", "Later"])
     if res == "Reload pyRevit now":

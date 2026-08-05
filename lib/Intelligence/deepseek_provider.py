@@ -154,22 +154,26 @@ class DeepSeekProvider(BaseLLMProvider):
         """Model to call: user's choice first, else from the LIVE list (may fetch)."""
         return self._model or self._pick_model(self.get_models())
 
+    def pick_fast_model(self):
+        """Fastest model from the CACHED live list (classification calls)."""
+        return self._pick_model(self._cached_models or [])
+
     # ── Chat ─────────────────────────────────────────────────────────────────
 
     def chat(self, messages, system_prompt, user_content, max_tokens=400, **kwargs):
         self._clear_error()
         api_key = self._get_api_key()
         if not api_key:
-            return None
+            return self._fail_no_key("chat()")
 
         if isinstance(user_content, list):
             text = self.blocks_to_text(user_content)
         else:
             text = user_content or ""
 
-        model = self._resolve_model()
+        model = kwargs.get("model_override") or self._resolve_model()
         if not model:
-            return None   # key not verified / vendor reported no models
+            return self._fail_no_model("chat()")
         msgs  = []
         if system_prompt:
             msgs.append({"role": "system", "content": system_prompt})
@@ -197,6 +201,7 @@ class DeepSeekProvider(BaseLLMProvider):
                 _BASE_URL + "/chat/completions",
                 payload,
                 {"Authorization": "Bearer " + api_key},
+                timeout_ms=int(kwargs.get("timeout_ms") or 60000),
             )
             data    = json.loads(resp_text)
             msg     = data.get("choices", [{}])[0].get("message", {})
@@ -210,9 +215,10 @@ class DeepSeekProvider(BaseLLMProvider):
     def chat_stream(self, messages, system_prompt, user_content,
                     on_delta=None, max_tokens=400, **kwargs):
         """Stream a DeepSeek response token-by-token (OpenAI-compatible SSE)."""
+        self._clear_error()
         api_key = self._get_api_key()
         if not api_key:
-            return None
+            return self._fail_no_key("chat_stream()")
 
         if isinstance(user_content, list):
             text = self.blocks_to_text(user_content)
@@ -221,7 +227,7 @@ class DeepSeekProvider(BaseLLMProvider):
 
         model = self._resolve_model()
         if not model:
-            return None   # key not verified / vendor reported no models
+            return self._fail_no_model("chat_stream()")
         msgs  = []
         if system_prompt:
             msgs.append({"role": "system", "content": system_prompt})
@@ -266,8 +272,21 @@ class DeepSeekProvider(BaseLLMProvider):
             full = _re.sub(r"<think>[\s\S]*?</think>", "", u"".join(chunks)).strip()
             return full if full else None
         except Exception as ex:
-            self._record_error(u"chat_stream() failed: {}".format(ex))
-            return self.chat(messages, system_prompt, user_content, max_tokens, **kwargs)
+            # Transport/streaming error → one blocking retry. chat() starts by
+            # CLEARING the error state, so the streaming reason is captured
+            # first and re-attached when the retry also comes back empty —
+            # otherwise the real cause vanished and the window could only say
+            # "the model didn't respond" with no Details line.
+            stream_err = u"chat_stream() failed: {}".format(ex)
+            self._record_error(stream_err)
+            result = self.chat(messages, system_prompt, user_content,
+                               max_tokens, **kwargs)
+            if result is None:
+                retry_err = self.get_last_error()
+                self._record_error(
+                    u"{} | blocking retry: {}".format(
+                        stream_err, retry_err or u"no response"))
+            return result
 
     # ── Agentic chat (native tool calling, blocking) ──────────────────────────
 
@@ -277,12 +296,10 @@ class DeepSeekProvider(BaseLLMProvider):
         self._clear_error()
         api_key = self._get_api_key()
         if not api_key:
-            return None
+            return self._fail_no_key("chat_agent()")
         model = self._resolve_model()
         if not model:
-            self._record_error(u"no model available (key not verified or "
-                               u"vendor reported no models)")
-            return None
+            return self._fail_no_model("chat_agent()")
         try:
             return openai_chat_agent(
                 _BASE_URL + "/chat/completions",

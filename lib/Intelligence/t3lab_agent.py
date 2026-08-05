@@ -37,15 +37,13 @@ AVAILABLE_INTENTS = {
     "open_batchout":            ("Export",  "Open BatchOut tool",                       u"mở batchout"),
 
     # ── T3Lab Tools ───────────────────────────────────────────────────────────
-    "open_parasync":        ("Tools", "Open ParaSync — sync parameters",           u"mở parasync"),
-    "open_loadfamily":      ("Tools", "Open Load Family tool",                     u"load family"),
-    "open_loadfamily_cloud":("Tools", "Open Load Family Cloud",                    u"load family cloud"),
-    "open_projectname":     ("Tools", "Open Project Name manager",                 u"project name"),
-    "open_workset":         ("Tools", "Open Workset manager",                      u"mở workset"),
-    "open_dimtext":         ("Tools", "Edit dimension text override",               u"dimension text"),
-    "open_upperdimtext":    ("Tools", "Edit upper dimension text",                  u"upper dim text"),
-    "open_resetoverrides":  ("Tools", "Reset all graphic overrides",                u"reset overrides"),
-    "open_grids":           ("Tools", "Open Grid tool",                             u"mở grids"),
+    # Only tools with a dedicated launcher are listed statically. Every other
+    # open_* intent is appended live from the tool_discovery registry by
+    # _registry_intents() — the very drift described in the comment above had
+    # also happened here: ParaSync, Project Name, Workset, Dim Text, Upper Dim
+    # Text, Reset Overrides, Grids and Load Family Cloud were advertised to
+    # every LLM long after their pushbuttons were deleted (2026-07-28).
+    "open_loadfamily":      ("Tools", "Open the Family Loader / Family Manager",   u"load family"),
     "check_spelling":       ("Tools", "Scan ALL Text Notes in the model and proofread their English spelling (use for any spelling/grammar check request)", u"kiểm tra lỗi tiếng anh trong dự án"),
 
     # ── Conversation ─────────────────────────────────────────────────────────
@@ -54,6 +52,35 @@ AVAILABLE_INTENTS = {
     "chat":    ("Chat", "General conversation",                 u"câu hỏi chung"),
     "unknown": ("Chat", "Cannot understand — ask for clarification", u""),
 }
+
+
+def _registry_intents():
+    """Auto-discovered tool intents as {intent: (cat, desc, example)}.
+
+    Read live from the tool_discovery registry so this module can never
+    advertise a T3Lab tool that is not installed — the same guarantee
+    _get_mcp_tools() already gives for the Revit tool names.
+    """
+    out = {}
+    try:
+        from Services.tool_discovery import get_registered_tools
+        for t in get_registered_tools():
+            intent = t.get('intent')
+            if not intent or intent in AVAILABLE_INTENTS:
+                continue
+            title = t.get('title') or intent
+            desc  = t.get('doc') or u"Open the {} tool".format(title)
+            out[intent] = ("Tools", desc, u"mở {}".format(title.lower()))
+    except Exception:
+        pass
+    return out
+
+
+def get_available_intents():
+    """Static intents + everything currently installed, merged."""
+    merged = dict(AVAILABLE_INTENTS)
+    merged.update(_registry_intents())
+    return merged
 
 # ─── Agent descriptors (for settings UI) ─────────────────────────────────────
 
@@ -69,11 +96,10 @@ AGENTS = [
         "id":          "tools",
         "name":        "Tools Agent",
         "icon":        u"⚙",
-        "description": "Opens T3Lab tools: ParaSync, Load Family, Workset, etc.",
-        "intents":     ["open_parasync", "open_loadfamily", "open_loadfamily_cloud",
-                        "open_projectname", "open_workset", "open_dimtext",
-                        "open_upperdimtext", "open_resetoverrides", "open_grids",
-                        "check_spelling"],
+        "description": ("Opens T3Lab tool windows — Family Loader plus every "
+                        "auto-discovered pushbutton; the intent list is filled "
+                        "from the live registry, not hardcoded here."),
+        "intents":     ["open_loadfamily", "check_spelling"],
     },
     {
         "id":          "revit_tools",
@@ -132,7 +158,7 @@ def build_system_prompt(revit_context=u""):
     """
     # Group intents by category
     by_cat = {}
-    for intent, (cat, desc, ex) in AVAILABLE_INTENTS.items():
+    for intent, (cat, desc, ex) in get_available_intents().items():
         by_cat.setdefault(cat, []).append((intent, desc, ex))
 
     lines = []
@@ -156,10 +182,13 @@ def build_system_prompt(revit_context=u""):
         u"\nAVAILABLE APIs (use these as 'intent' values):\n"
         + u"\n".join(lines) +
         u"\n\nOUTPUT FORMAT — JSON only, no other text:\n"
-        u'{"intent": "<intent>", "params": {<optional>}, "message": "<short reply same language>"}\n'
+        u'{"intent": "<intent>", "params": {<optional>}, "message": "<short reply in English>"}\n'
         u"\nPARAMS:\n"
         u"  export_direct / open_batchout_configured: format (pdf|dwg|dwf|dgn|ifc|nwd|img), filter (sheet prefix e.g. G/A/S or '' for all), combine (bool)\n"
         u"\nRULES:\n"
+        u"  - CRITICAL CONTEXT RULE: act ONLY on the user's LATEST message. Earlier conversation turns are completed history — an action already reported as successful there is DONE; NEVER repeat or re-run it unless the latest message explicitly asks again. Each new command fully replaces the previous one: after \"tô đỏ tường\" (walls red) succeeded, \"tô vàng sàn\" means color FLOORS YELLOW only — walls and red are finished, do not touch them.\n"
+        u"  - Color/highlight requests (\"tô đỏ X\", \"bôi vàng Y\", \"highlight Z\", \"color X red\"): the color word is the override color to APPLY, never a parameter value to filter by (elements have no 'Color' parameter). For a WHOLE category (\"tô vàng sàn\" = all floors yellow) call revit_override_color with category + color directly — the server collects ALL matching elements itself, no ids needed, no count limit. Pass element_ids only for a specific subset or the current selection. Use color_elements ONLY for coloring BY a parameter's values, with a REAL parameter_name.\n"
+        u"  - Whole-category actions (\"chọn tất cả X\", \"ẩn hết Y\", \"đổi workset mọi Z\", \"set parameter for all W\"): operate_element / select_elements / set_element_workset / bulk_set_parameter / revit_override_color / tag_elements all accept category directly — the server collects ALL matching elements itself, no ids needed, no count limit.\n"
         u"  - CRITICAL: Never confuse queries about Revit elements (e.g. columns/cột, walls/tường, doors/cửa, rooms/phòng) with sheet exporting (export_direct). If the user asks about elements, use one of the exact tool names listed under \"Local MCP Server Tools\" below (if present), or ask for clarification. Do NOT use export_direct.\n"
         u"  - 'xuất/export' + format → export_direct\n"
         u"  - 'mở batchout' + config → open_batchout_configured\n"
@@ -179,7 +208,7 @@ def build_system_prompt(revit_context=u""):
 
 def get_intent_info(intent):
     """Return (category, description) for an intent or (None, None)."""
-    entry = AVAILABLE_INTENTS.get(intent)
+    entry = get_available_intents().get(intent)
     if entry:
         return entry[0], entry[1]
     for t in _get_mcp_tools():
@@ -192,7 +221,7 @@ def get_apis_text():
     """Return a plain-text list of all available APIs for display in settings."""
     lines = []
     current_cat = None
-    for intent, (cat, desc, ex) in sorted(AVAILABLE_INTENTS.items(), key=lambda x: x[1][0]):
+    for intent, (cat, desc, ex) in sorted(get_available_intents().items(), key=lambda x: x[1][0]):
         if cat != current_cat:
             lines.append(u"\n── {} ──".format(cat.upper()))
             current_cat = cat

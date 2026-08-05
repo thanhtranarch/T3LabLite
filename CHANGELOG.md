@@ -17,21 +17,73 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-05
+
 ### Added
+- **T3Lab Assistant**: the AI assistant is back, rebuilt around real tool
+  calling. It opens from the Support panel, docks as a native Revit pane next
+  to Properties / Project Browser, and also sits in the right-click menu
+  (Revit 2025+). Chat in Vietnamese or English to ask about the model or
+  change it -- the assistant runs Revit tools and opens T3Lab tools for you,
+  streams each step, and by default presents a plan and waits for your
+  confirmation before it changes the model (deletes always ask; the wait can be
+  turned off in LLMs Setting).
+  - **Skills** -- reusable markdown instruction packs that activate on what you
+    ask. 25 ship built-in (ISO 19650 naming, LOD, worksets, QA checklist, BEP,
+    COBie handover, clash coordination, sheet/annotation standards and more).
+    Type `/skill-name` to force one, or install extra skills straight from a
+    GitHub repo -- Claude's `SKILL.md` format is read as-is.
+  - **Knowledge (RAG)** -- index folders of PDF / TXT / MD and get answers with
+    citations. Keyword search (BM25) always works offline; semantic search is
+    optional and runs on a local Ollama embedding model.
+  - **Projects** -- each project keeps its own chat history, custom
+    instructions, default provider/model, knowledge folders, remembered facts
+    ("remember ..." in chat) and daily scheduled prompts.
+  - **Context and attachments** -- the assistant sees the active view and the
+    current selection, and accepts attached files and images.
+  - **PDF comment resolution** -- reads markup annotations from a PDF, traces
+    them to the matching Revit sheet, and proposes a fix per comment that you
+    run item by item.
+  - **Spell check** -- proofreads every Text Note in the model or just the
+    active view.
+  - **Specialist routing** -- requests go to a focused agent (read-only data,
+    model actions, modeling, QA, export, multi-document, knowledge, comments);
+    multi-goal requests are planned as a graph, executed in parallel and
+    re-routed when a step fails.
+- **LLMs Setting** (Support ▸ Assistant Tools): one settings hub for every
+  AI-powered T3Lab tool -- provider (Claude, OpenAI, DeepSeek, Ollama,
+  LM Studio), model, API key or local server URL, live connection status per
+  provider and a one-click test message; plus display name, "ask before model
+  edits", deep-reasoning and maximum-quality toggles, chat detail, and the
+  Projects / Knowledge / Skills tabs.
+- **Assistant Tools** stack on the Support panel groups Feedback, MCP Control
+  and LLMs Setting.
+- **Pause / Stop** while a tool is running: Model Auditor, ManaSheets,
+  ManaViews, SheetGen, FamiGen, IFC-SG, Tile Layout, Auto Join, Room To Floor,
+  Image to Drafting, CAD to Elements (Wall / Floor / Beam) and Bulk Family
+  Export now show a progress bar with Pause and Stop, from the shared
+  `ProgressPauseMixin`.
 - **Auto-update**: the first Revit start of each day checks GitHub for a newer
   release and downloads it in the background. The new version becomes active on
   the next Revit start (or pyRevit reload); a toast says so. Opt out with
   `"auto_update": false` in `%APPDATA%\T3LabAI\mcp_paths.json`.
+- **MCP**: 12 new tools -- `manage_view`, `manage_sheet`,
+  `manage_view_template`, `manage_document`, `manage_links`, `manage_material`,
+  `manage_revision`, `edit_elements`, `create_detail_annotation`,
+  `export_model`, `check_bad_geometry`, `collect_spellcheck_text`.
 
 ### Changed
 - **Check Update**: version lookup, changelog reading and the git/zip update
   strategies moved into `lib/core/updater.py`, shared with the daily automatic
   check. The button behaves as before.
-
-### Removed
-- **MCP**: `show_assistant_pane` tool — the T3Lab Assistant pane no longer
-  appears in the MCP client's tool list (the pane itself was already retired
-  in favour of the MCP-based workflow).
+- **Assistant surface** follows Revit's Light/Dark UI theme (Revit 2024+)
+  instead of a fixed light window.
+- **MCP server / tool layer**: destructive calls are now declared as such so
+  the Assistant always asks first; the active document is resolved even when
+  Revit has no focused tab (start page, freshly opened session) instead of
+  every tool failing; and navigating to an element activates its owner view,
+  so view-specific elements (tags, dimensions, text notes) no longer trigger
+  Revit's "No good view could be found" dialog.
 
 ## [1.2.0] - 2026-07-17
 

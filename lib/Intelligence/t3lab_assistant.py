@@ -52,16 +52,12 @@ AVAILABLE TOOL INTENTS:
 
   open_batchout           – open BatchOut with no pre-configuration. params: {}
 
+  open_loadfamily         – open the Family Loader / Family Manager. params: {}
+
   ── Other tools ───────────────────────────────────────────────────────────────
-  open_parasync       params: {}
-  open_loadfamily     params: {}
-  open_loadfamily_cloud params: {}
-  open_projectname    params: {}
-  open_workset        params: {}
-  open_dimtext        params: {}
-  open_upperdimtext   params: {}
-  open_resetoverrides params: {}
-  open_grids          params: {}
+  Every other tool intent is appended below under "Auto-discovered tools",
+  generated from the live tool registry. NEVER use an open_* intent that is
+  not listed there or above — a tool that is not in the list is not installed.
 
   ── Conversation ──────────────────────────────────────────────────────────────
   help   – answer a question about T3Lab tools.
@@ -86,7 +82,10 @@ EXPORT RULES:
 CONVERSATION RULES:
 - Use conversation history to understand follow-up questions.
   e.g., user asks "batchout là gì?" then "nó xuất được những gì?" → use context.
-- Be concise, friendly, professional. Reply in the same language as the user.
+- Be concise, friendly, professional. Reply in the SAME language as the user
+  (Vietnamese in → Vietnamese out, English in → English out). This prompt
+  contradicted itself before: it demanded English while every example below
+  returned a Vietnamese "message".
 - If unsure between tool and chat → prefer tool if there is a clear keyword.
 - CRITICAL: greetings, thanks, or small talk alone ("morning", "hello", "ok",
   "thanks", "chào"...) are NEVER tool commands. Always answer them with
@@ -100,7 +99,7 @@ RESPONSE FORMAT (JSON only, no markdown, no extra text):
 {
   "intent": "<intent_name>",
   "params": { ... },
-  "message": "<friendly short message in user's language>"
+  "message": "<friendly short message in English>"
 }
 
 EXAMPLES:
@@ -111,7 +110,7 @@ EXAMPLES:
   "xuất pdf toàn bộ G sheet" → {"intent":"export_direct","params":{"format":"pdf","filter":"G","combine":false},"message":"Đang xuất tất cả G sheet sang PDF..."}
   "mở batchout G sheet pdf"  → {"intent":"open_batchout_configured","params":{"format":"pdf","filter":"G"},"message":"Mở BatchOut với G sheet đã chọn..."}
   "mở batchout"              → {"intent":"open_batchout","params":{},"message":"Đang mở BatchOut..."}
-  "parasync"                 → {"intent":"open_parasync","params":{},"message":"Đang mở ParaSync..."}
+  "load family"              → {"intent":"open_loadfamily","params":{},"message":"Đang mở Family Loader..."}
 """
 
 # ─── RAG system prompt prefix ─────────────────────────────────────────────────
@@ -124,8 +123,22 @@ When document content is provided in the conversation:
 3. If the user asks to open a T3Lab tool, follow the normal tool intent rules.
 4. If the request is purely about document analysis, respond as a "chat" intent
    with a detailed, helpful answer as the "message" field.
-5. For image attachments, describe or analyse what you see in the image.
-6. Keep answers concise unless the user asks for detail.
+5. For image attachments, describe or analyse ONLY what you can actually
+   see. If the image content is not available to you (text-only model, no
+   vision), say so plainly and ask for key dimensions or a text PDF —
+   NEVER invent a generic description of the building.
+6. Building image / drawing analysis for modeling requests ("dung model",
+   "build this", "model this building"): produce a STRUCTURED summary the
+   build step can consume:
+   - Levels: count + estimated floor-to-floor height (m)
+   - Structural grid: bay count and spacing if visible (m)
+   - Footprint: overall width x depth (m) and shape
+   - Walls / openings / materials per facade
+   Mark every number as MEASURED (a dimension or scale is visible) or
+   ESTIMATED, show the table, and ask the user to confirm or correct it
+   BEFORE building anything. The build itself follows the image-to-model
+   workflow (levels -> grids -> walls -> floors/roof -> openings).
+7. Keep answers concise unless the user asks for detail.
 
 """
 
@@ -163,6 +176,23 @@ def _build_system_prompt(revit_context=u""):
         base = SYSTEM_PROMPT
     if _EXTRA_TOOLS_SECTION:
         base = base + u'\n' + _EXTRA_TOOLS_SECTION
+    # Persistent memory — remembered preferences/conventions steer this
+    # path too. No tool hint: the JSON-intent path has no remember_fact
+    # tool, mentioning it here would leak into the "message" field.
+    try:
+        from Intelligence import assistant_memory
+        _pid = None
+        try:
+            from config.project_store import ProjectStore
+            _pid = ProjectStore().get_active_project_id()
+        except Exception:
+            _pid = None
+        _mem = assistant_memory.build_memory_block(
+            _pid, include_tool_hint=False)
+        if _mem:
+            base = base + u'\n\n' + _mem
+    except Exception:
+        pass
     return base
 
 
@@ -418,11 +448,25 @@ def parse_command(user_input, history=None, attached_files=None, rag_context=Non
 
 
 def has_api_key():
-    """Return True if the active LLM provider is configured and reachable."""
+    """Return True if the active LLM provider is usable for a real request.
+
+    "Usable" means CONFIGURED, not "answered a probe two seconds ago". This
+    used to be `provider.check_health()`, which for the cloud providers is a
+    live GET /models on every turn: behind a corporate proxy (or on any slow
+    link — the probe has an 8s timeout and no retry) it returns False, the
+    caller skips the whole LLM path, and the assistant answers from its
+    offline canned replies while the model chip still shows the provider. The
+    user sees "connect an AI in Settings" for an AI they already connected.
+
+    A configured-but-actually-dead provider now fails at the real call, where
+    the API's own error message reaches the user (see the llm_call_failed
+    branch in the chat window). Local providers keep the reachability test —
+    they have no key, so it is the only signal they have.
+    """
     try:
         from Intelligence.llm_router import LLMRouter
         provider = LLMRouter().get_active_provider()
-        return provider is not None and provider.check_health()
+        return provider is not None and provider.is_configured()
     except Exception:
         return bool(_get_api_key())   # legacy fallback: check Claude key directly
 
@@ -553,42 +597,18 @@ def keyword_parse(raw):
         return {"intent": "open_batchout", "params": {},
                 "message": u"Đang mở BatchOut..." if viet else "Opening BatchOut..."}
 
-    if any(k in cmd for k in ["parasync", "para sync", "dong bo", "đồng bộ",
-                               "sync param", "parameter sync"]):
-        return {"intent": "open_parasync", "params": {},
-                "message": u"Đang mở ParaSync..." if viet else "Opening ParaSync..."}
-
-    if any(k in cmd for k in ["load family cloud", "tai family cloud"]):
-        return {"intent": "open_loadfamily_cloud", "params": {},
-                "message": u"Đang mở Load Family (Cloud)..." if viet else "Opening Load Family (Cloud)..."}
-
-    if any(k in cmd for k in ["load family", "tai family", "tải family", "nap family"]):
+    if any(k in cmd for k in ["load family", "tai family", "tải family",
+                              "nap family", "family loader", "manafami"]):
         return {"intent": "open_loadfamily", "params": {},
-                "message": u"Đang mở Load Family..." if viet else "Opening Load Family..."}
+                "message": u"Đang mở Family Loader..." if viet else "Opening Family Loader..."}
 
-    if any(k in cmd for k in ["project name", "ten project", "tên project", "dat ten"]):
-        return {"intent": "open_projectname", "params": {},
-                "message": u"Đang mở Project Name..." if viet else "Opening Project Name..."}
-
-    if any(k in cmd for k in ["workset", "quan ly workset"]):
-        return {"intent": "open_workset", "params": {},
-                "message": u"Đang mở Workset..." if viet else "Opening Workset..."}
-
-    if any(k in cmd for k in ["upper dim", "upperdimtext"]):
-        return {"intent": "open_upperdimtext", "params": {},
-                "message": u"Đang mở Upper Dim Text..." if viet else "Opening Upper Dim Text..."}
-
-    if any(k in cmd for k in ["dim text", "dimtext", "sua dimension", "edit dim"]):
-        return {"intent": "open_dimtext", "params": {},
-                "message": u"Đang mở Dim Text..." if viet else "Opening Dim Text..."}
-
-    if any(k in cmd for k in ["reset override", "xoa override", "bo override", "reset graphic"]):
-        return {"intent": "open_resetoverrides", "params": {},
-                "message": u"Đang mở Reset Overrides..." if viet else "Opening Reset Overrides..."}
-
-    if any(k in cmd for k in ["grids", "luoi", "lưới", "truc", "grid tool"]):
-        return {"intent": "open_grids", "params": {},
-                "message": u"Đang mở Grids..." if viet else "Opening Grids..."}
+    # NOTE — 2026-07-28: the hardcoded branches for ParaSync, Load Family
+    # (Cloud), Project Name, Workset, Upper Dim Text, Dim Text, Reset Overrides
+    # and Grids were removed. Each returned an intent whose pushbutton no longer
+    # exists, and because they matched BEFORE resolve_tool() they also shadowed
+    # the real tools that replaced them — "workset" answered "Opening Workset..."
+    # and then failed, instead of resolving to ManaWorkset. Tools other than
+    # BatchOut / Family Loader must go through the ranked resolver below.
 
     # ── Auto-discovered tools — ranked resolver, never first-substring ────────
     # The old loop returned whichever registry entry had ANY generic keyword
@@ -614,18 +634,31 @@ def keyword_parse(raw):
 
 # ─── Tool labels for auto-generated messages ─────────────────────────────────
 
-_TOOL_LABELS = {
-    'open_batchout':          'BatchOut',
-    'open_parasync':          'ParaSync',
-    'open_loadfamily':        'Load Family',
-    'open_loadfamily_cloud':  'Load Family (Cloud)',
-    'open_projectname':       'Project Name',
-    'open_workset':           'Workset Mgmt',
-    'open_dimtext':           'Dim Text',
-    'open_upperdimtext':      'Upper Dim Text',
-    'open_resetoverrides':    'Reset Overrides',
-    'open_grids':             'Grids',
+# Labels for the two tools with a dedicated launcher. Everything else is
+# labelled from the live registry by get_tool_label() — hardcoding the rest is
+# how this map came to advertise eight tools that no longer shipped.
+_SPECIAL_TOOL_LABELS = {
+    'open_batchout':   'BatchOut',
+    'open_loadfamily': 'Family Loader',
 }
+
+
+def get_tool_label(intent):
+    """Display label for a tool intent, from the live registry when possible."""
+    if intent in _SPECIAL_TOOL_LABELS:
+        return _SPECIAL_TOOL_LABELS[intent]
+    try:
+        from Services.tool_discovery import get_registered_tools
+        for t in get_registered_tools():
+            if t.get('intent') == intent:
+                return t.get('title') or intent
+    except Exception:
+        pass
+    return (intent or '').replace('open_', '').replace('_', ' ').strip().title()
+
+
+# Backwards-compatible alias: existing call sites index this like a dict.
+_TOOL_LABELS = _SPECIAL_TOOL_LABELS
 
 
 # ─── Export param extraction ──────────────────────────────────────────────────

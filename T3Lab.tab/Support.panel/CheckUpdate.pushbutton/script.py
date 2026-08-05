@@ -51,9 +51,13 @@ logger = script.get_logger()
 def _offer_reload(new_version):
     res = forms.alert(
         "T3Lab has been updated to version {}.\n\n"
-        "Reload pyRevit now to start using the new version?".format(new_version),
+        "Restart Revit to finish the update.\n\n"
+        "A pyRevit reload is enough for most releases, but it cannot apply "
+        "ribbon changes: Revit will not let a button be moved, renamed or "
+        "removed inside a running session, so a release that reorganises the "
+        "ribbon fails to build until Revit is restarted.".format(new_version),
         title="Update complete",
-        options=["Reload pyRevit now", "Later"])
+        options=["Reload pyRevit now", "I will restart Revit"])
     if res == "Reload pyRevit now":
         try:
             from pyrevit.loader.sessionmgr import reload_pyrevit

@@ -19,8 +19,15 @@ Daily auto-update
 `startup.py` calls `start_daily_update()` on every Revit start. The first
 start of a calendar day checks GitHub on a background thread and updates
 silently; every later start that day is a no-op. The downloaded code becomes
-active on the next Revit start (or pyRevit reload) -- the running session
-keeps the code it already loaded, so the user is told with a toast.
+active on the next Revit start -- the running session keeps the code it already
+loaded, so the user is told with a toast.
+
+A pyRevit reload picks up new *script* code, but not a new *ribbon layout*:
+Revit ribbon items cannot be moved, renamed or removed once a session has
+created them, so a release that reorganises panels (1.3.0 moved Feedback and
+MCPControl into the Assistant Tools stack) fails its UI build on reload with
+"...exists:<button>" from RibbonPanel.verifyNameExclusive. Restarting Revit is
+the only fix, which is why every update message asks for a restart first.
 
 Settings live in %APPDATA%\\T3LabAI\\mcp_paths.json:
     "auto_update"       -- false turns the daily check off (default true)
@@ -523,7 +530,8 @@ def _notify_updated(new_version):
         from pyrevit import forms
         forms.toast(
             "T3Lab Lite {} was downloaded. "
-            "Restart Revit (or pyRevit > Reload) to use it.".format(new_version),
+            "Restart Revit to use it -- a pyRevit reload cannot apply ribbon "
+            "changes.".format(new_version),
             title="T3Lab update ready",
             appid="T3Lab Lite")
     except Exception as ex:

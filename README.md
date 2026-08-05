@@ -23,8 +23,14 @@ T3Lab Lite is installed as a pyRevit extension.
 
 On the first Revit start of each day, T3Lab checks GitHub for a newer release
 and downloads it in the background. Revit keeps running the version it loaded,
-so the update takes effect the next time you start Revit (or click
-pyRevit ▸ Reload) — a notification tells you when that is worth doing.
+so the update takes effect the next time you start Revit — a notification tells
+you when a restart is worth doing.
+
+**Restart Revit rather than reloading pyRevit.** A reload picks up new script
+code, but Revit will not let a ribbon button be moved, renamed or removed once
+a session has created it — so a release that reorganises the ribbon (1.3.0
+moves Feedback and MCP Control into the new Assistant Tools stack) fails to
+build its tab until Revit is restarted.
 
 A clone with local commits or edits is only ever fast-forwarded, never
 overwritten. To turn the daily check off, set `"auto_update": false` in

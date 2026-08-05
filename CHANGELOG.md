@@ -19,6 +19,13 @@ Releasing a new version:
 
 ## [1.3.0] - 2026-08-05
 
+> **Restart Revit to install this one — do not use pyRevit ▸ Reload.**
+> Feedback and MCP Control move into the new Assistant Tools stack, and Revit
+> will not let a ribbon button be moved once a session has created it. Reloading
+> on top of a running 1.2.0 fails the whole T3Lab UI build with
+> `...exists:Feedback` (`RibbonPanel.verifyNameExclusive`); restarting Revit
+> clears it.
+
 ### Added
 - **T3Lab Assistant**: the AI assistant is back, rebuilt around real tool
   calling. It opens from the Support panel, docks as a native Revit pane next

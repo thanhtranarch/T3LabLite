@@ -369,7 +369,16 @@ class ExportProfile(object):
 
     @staticmethod
     def from_dict(data):
-        """Create profile from dictionary."""
+        """Create profile from dictionary.
+
+        Rejects anything that is not a profile mapping up front: the profiles
+        folder also holds bookkeeping JSON (the crash history is a *list*), and
+        calling .items() on that raised
+        "'list' object has no attribute 'items'" in the loader.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(
+                "not a profile object (got {})".format(type(data).__name__))
         profile = ExportProfile()
         for key, value in data.items():
             if hasattr(profile, key):
@@ -584,17 +593,26 @@ class ExportManagerWindow(forms.WPFWindow):
             self.profiles = []
             if os.path.exists(self.profiles_folder):
                 for filename in os.listdir(self.profiles_folder):
-                    if filename == self.LATEST_SETUP_FILENAME:
+                    # Internal bookkeeping files (latest setup, crash marker,
+                    # crash history) share this folder but are not profiles.
+                    if filename.startswith('_'):
                         continue
                     if filename.endswith('.json'):
                         filepath = os.path.join(self.profiles_folder, filename)
                         try:
                             with open(filepath, 'r') as f:
                                 data = json.load(f)
-                                profile = ExportProfile.from_dict(data)
-                                self.profiles.append(profile)
+                            # Shape check, not just the '_' name check above:
+                            # any stray JSON dropped in this folder must be
+                            # skipped silently, never reported as a broken
+                            # profile.
+                            if not isinstance(data, dict) or 'Name' not in data:
+                                logger.debug(
+                                    "Skipping non-profile JSON {}".format(filename))
+                                continue
+                            self.profiles.append(ExportProfile.from_dict(data))
                         except Exception as file_ex:
-                            logger.warning("Could not load profile {}: {}".format(filename, file_ex))
+                            logger.debug("Could not load profile {}: {}".format(filename, file_ex))
 
             # Update profiles listview (only if dialog is open)
             if hasattr(self, 'profiles_listview') and self.profiles_listview:

@@ -31,8 +31,10 @@ __author__ = "Tran Tien Thanh"
 __title__  = "Agent Loop"
 
 import json
+import re
 import time
 
+from core import jsonsafe
 from Intelligence.tool_schema import LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME
 
 
@@ -50,20 +52,12 @@ def _json_safe(obj):
     input json's encoder cannot handle — it decodes byte strings as UTF-8 —
     and under IronPython 2.7 the `u"{}".format(...)` fallback below fails on
     exactly the same bytes, so the guard guarded nothing.
+
+    Delegates to core.jsonsafe so this rule has ONE implementation: a private
+    second copy is how the MCP server path ended up without it, and the miss
+    took down tools/list and every non-ASCII view name.
     """
-    if isinstance(obj, bytes):
-        try:
-            return obj.decode('utf-8')
-        except Exception:
-            return obj.decode('latin-1', 'replace')
-    if isinstance(obj, dict):
-        out = {}
-        for k, v in obj.items():
-            out[_json_safe(k)] = _json_safe(v)
-        return out
-    if isinstance(obj, (list, tuple, set)):
-        return [_json_safe(v) for v in obj]
-    return obj
+    return jsonsafe.coerce(obj)
 
 
 def _result_to_json(result):
@@ -77,6 +71,53 @@ def _result_to_json(result):
     if len(s) > _MAX_RESULT_CHARS:
         s = s[:_MAX_RESULT_CHARS] + u"... [truncated {} chars]".format(len(s) - _MAX_RESULT_CHARS)
     return s
+
+
+# ─── Parameter-error self-correction ───────────────────────────────────────────
+# A small local model routinely calls a real tool with a wrong or missing
+# argument, gets a terse error back, and repeats the same call. Attaching the
+# tool's expected schema TO the error result gives it what it needs to fix the
+# call on the next turn. Bounded per run so a pathological loop can't balloon the
+# context, and each tool is hinted at most once.
+_MAX_PARAM_HINTS = 3
+
+
+def _param_hint(tools, name):
+    """Compact 'expected parameters' line for `name` from the tool list, or u''.
+
+    Handles both shapes in play: Anthropic (`input_schema`) and OpenAI/Ollama
+    (`function.parameters`). Names each property with required/optional and any
+    enum, so a model that guessed the arguments can correct them.
+    """
+    schema = None
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        if t.get("name") == name and isinstance(t.get("input_schema"), dict):
+            schema = t["input_schema"]
+            break
+        fn = t.get("function")
+        if isinstance(fn, dict) and fn.get("name") == name \
+                and isinstance(fn.get("parameters"), dict):
+            schema = fn["parameters"]
+            break
+    if not isinstance(schema, dict):
+        return u""
+    props = schema.get("properties") or {}
+    if not isinstance(props, dict) or not props:
+        return u""
+    required = set(schema.get("required") or [])
+    parts = []
+    for pname in list(props.keys())[:12]:
+        pspec = props[pname] if isinstance(props[pname], dict) else {}
+        bits = [u"{}".format(pspec.get("type") or u"any")]
+        if pspec.get("enum"):
+            vals = u"|".join(u"{}".format(v) for v in list(pspec["enum"])[:8])
+            bits.append(u"enum: " + vals)
+        parts.append(u"{} ({}, {})".format(
+            pname, u"required" if pname in required else u"optional",
+            u", ".join(bits)))
+    return u"Expected parameters for `{}`: {}".format(name, u"; ".join(parts))
 
 
 # ─── Phantom tool calls ────────────────────────────────────────────────────────
@@ -133,6 +174,69 @@ def _announces_work(text):
     # "Đang liệt kê các mức trong dự án..." — a trailing ellipsis on a short
     # line is the same promise without any of the phrasings above.
     return body.endswith(u'...') or body.endswith(u'…')
+
+
+# ── "Taught the user to do it by hand" guard ─────────────────────────────────
+# _announces_work only catches the SHORT forward-looking promise ("Đang xử
+# lý..."); it returns False above 220 characters. The commonest real failure is
+# the opposite shape: a long, confident tutorial telling the user which Revit
+# buttons to click — for "tô đỏ tường" the model produced a numbered walkthrough
+# of a "Bulk Set Parameter" dialog that does not exist. To the user that is a
+# refusal with extra steps: they asked the assistant to DO the work.
+_HOWTO_MARKERS = (
+    # Vietnamese (diacritics folded before matching)
+    'huong dan', 'cac buoc', 'buoc 1', 'tung buoc', 'ban co the su dung',
+    'ban hay', 'nhap chuot', 'nhan chuot', 'chon cong cu', 'thanh cong cu',
+    'hop thoai', 'tren ribbon', 'menu ngu canh', 'lam theo cac buoc',
+    # English
+    'here are the steps', 'follow these steps', 'step 1', 'step-by-step',
+    'you can use the', 'click on the', 'right-click', 'in the ribbon',
+    'dialog box', 'from the menu', 'select the tool',
+)
+
+# The user ASKED for instructions — then a walkthrough is the right answer.
+_ASKS_HOWTO = (
+    'lam the nao', 'lam sao', 'cach ', 'huong dan toi', 'chi toi cach',
+    'how do i', 'how to', 'how can i', 'what are the steps', 'explain how',
+)
+
+_HOWTO_FIXUP = (
+    u"You explained how the USER could do it by hand in Revit's interface. "
+    u"That is a refusal — they asked YOU to do it, and you have tools that "
+    u"perform this directly on the live model. Never describe ribbon buttons, "
+    u"dialogs or click sequences. Call the tool that performs the request NOW "
+    u"and report the real result. If genuinely no tool can do it, say that in "
+    u"one sentence and stop — do not substitute a tutorial."
+)
+
+
+def _asks_for_instructions(text):
+    """True when the USER asked how to do something themselves."""
+    if not text:
+        return False
+    from Intelligence.knowledge import vi_text
+    folded = vi_text.fold_diacritics(u"{}".format(text)).lower()
+    return any(p in folded for p in _ASKS_HOWTO)
+
+
+def _instructs_instead_of_acting(text, user_text=None):
+    """True when the reply is a do-it-yourself walkthrough.
+
+    Length is NOT a disqualifier here — that is exactly what distinguishes this
+    from _announces_work. Two independent signals are required so a passing
+    mention ("click Reload in pyRevit") cannot trip it: a how-to marker AND
+    either a numbered list or a second marker.
+    """
+    if not text or _asks_for_instructions(user_text):
+        return False
+    from Intelligence.knowledge import vi_text
+    body = u"{}".format(text)
+    folded = vi_text.fold_diacritics(body).lower()
+    hits = sum(1 for p in _HOWTO_MARKERS if p in folded)
+    if not hits:
+        return False
+    numbered = len(re.findall(r'(?m)^\s*\d+[\.\)]\s', body)) >= 2
+    return hits >= 2 or numbered
 
 
 _PHANTOM_FIXUP = (
@@ -481,6 +585,7 @@ class AgentLoop(object):
         done_calls = set()   # (name, canonical args) that succeeded this run
         phantom_retries = 0  # JSON calls to tools that don't exist, corrected
         announce_nudges = 0  # "I'm about to…" replies that called nothing
+        hinted = set()       # tools whose schema we already attached to an error
 
         while iteration < self._max_iterations:
             iteration += 1
@@ -568,6 +673,19 @@ class AgentLoop(object):
                 messages.append({"role": "user", "content": _ANNOUNCE_FIXUP})
                 continue
 
+            # Taught the user to click through Revit instead of doing the work.
+            # Same budget as the announce nudge and same reasoning: correct it
+            # once, then let the text stand rather than loop.
+            if (not calls and tool_runs == 0
+                    and announce_nudges < _MAX_ANNOUNCE_NUDGES
+                    and _instructs_instead_of_acting(text, user_content)):
+                announce_nudges += 1
+                last_text = text
+                self._emit("on_turn_text", text, False)
+                messages.append(resp["assistant_msg"])
+                messages.append({"role": "user", "content": _HOWTO_FIXUP})
+                continue
+
             if text:
                 last_text = text
                 if not turn["streamed"]:
@@ -647,6 +765,13 @@ class AgentLoop(object):
                     res = {"result": res}
                 dt = time.time() - t0
                 ok = "error" not in res
+                # Hand a small model the tool's schema alongside the error so it
+                # can fix a wrong/missing argument instead of repeating the call.
+                if not ok and name not in hinted and len(hinted) < _MAX_PARAM_HINTS:
+                    _ph = _param_hint(self._tools, name)
+                    if _ph:
+                        res["expected_parameters"] = _ph
+                        hinted.add(name)
                 tool_runs += 1
                 self._emit("on_tool_done", name, res, ok, dt)
                 results.append(res)
@@ -717,6 +842,11 @@ Use markdown when it helps: **bold**, `code`, bullet lists, and pipe tables (| a
 
 ## Units
 All tool coordinates and dimensions are in METERS. Convert user input: 5000mm = 5.0, 3m = 3.0. Element ids are integers.
+
+## You DO the work — you never teach it
+This is the most important rule. The user is asking you to change their model, not to learn Revit. NEVER answer an action request with instructions, a numbered walkthrough, or the name of a ribbon button, dialog or menu. Do not write "you can use...", "click...", "select the tool...", "here are the steps". You are not a manual; you hold tools that act on the live model, and a tutorial is a refusal dressed up as help. "tô đỏ tường" means CALL revit_override_color, not explain how the user could paint walls themselves. Explain steps ONLY when the user explicitly asked how to do it by hand ("làm thế nào", "how do I"). If no tool can do what was asked, say so in one sentence and stop.
+
+Do not invent safety rules either. Asking "are you sure?" for work that is not on the destructive list in Working rule 3 is the same refusal in a different costume. Graphic overrides (`revit_override_color`, `color_elements`, `operate_element` hide/isolate/halftone), tagging, creating views/sheets/levels/grids and setting parameters are ORDINARY edits: just do them, however many elements they touch. "toàn bộ", "tất cả", "all" describes the SCOPE the user wants — it is not a reason to stop and confirm.
 
 ## Plan, then act
 For a multi-step request, decide the full tool sequence BEFORE the first call and state it in one short sentence. Chain the steps yourself — never ask the user to run intermediate steps you can do with tools. For a simple request, skip the plan and just act.
@@ -813,7 +943,29 @@ def build_agent_system_prompt(revit_context=u"", local=False, lang="auto"):
     prompt = _AGENT_PROMPT.format(language=language)
     if local:
         prompt += u"\n" + _LOCAL_GENERAL_FEWSHOT
+        prompt += teacher_exemplar_block()
     return prompt
+
+
+# ─── Portable teacher exemplars (few-shot distilled from teaching) ───────────────
+
+def teacher_exemplar_block():
+    """The committed teacher-exemplar few-shot block, prefixed with a blank line,
+    or u"" when there are none.
+
+    These come from lib/Intelligence/config/teacher_exemplars.json — a git-tracked
+    file — so a plain local model (qwen3:14b) on ANY machine answers in the taught
+    style without a re-train (the weight-level fine-tune is not portable). Static
+    for the session, so the cached system prefix still hits across turns. Local
+    models only, mirroring _LOCAL_GENERAL_FEWSHOT / SpecialistSpec.few_shot.
+    Never raises.
+    """
+    try:
+        from Intelligence.learning import exemplars as _ex
+        block = _ex.build_exemplar_block(_ex.load_exemplars())
+        return (u"\n" + block) if block else u""
+    except Exception:
+        return u""
 
 
 # Fence around the volatile block so the model can tell live state from the

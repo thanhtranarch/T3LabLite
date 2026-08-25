@@ -15,8 +15,12 @@ __title__   = "MCP Server"
 import os
 import sys
 import threading
+import time
 import json
 import uuid
+import io
+
+from core import jsonsafe
 
 try:
     import queue as _queue_mod            # CPython 3
@@ -145,6 +149,14 @@ try:
                 finally:
                     if is_write:
                         self.server._write_in_progress = False
+                        # Revit keeps regenerating and refreshing views for a
+                        # while after a write commits. Stamp the finish time so
+                        # the read fallback stays off the worker thread during
+                        # that window — see _READ_FALLBACK_WAIT.
+                        try:
+                            self.server._last_write_done = time.time()
+                        except Exception:
+                            pass
                     task.done.set()
 
         def GetName(self):
@@ -210,13 +222,22 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_json(self, data, status_code=200):
-        """Send JSON response"""
-        body = json.dumps(data)
+        """Send JSON response.
+
+        Serialized through jsonsafe, NOT plain json.dumps: IronPython 2.7's
+        ASCII escaper raises on non-ASCII, and 35 tool descriptions in the
+        registry below contain an em dash. That made every tools/list response
+        die mid-handler — the client saw a bare connection reset and bridge.py
+        silently fell back to its stale tools_cache.json, so newly registered
+        tools (the t3lab_* teaching set among them) never reached Claude.
+        """
+        body = jsonsafe.dumps(data)
         self._send_response(status_code, 'application/json', body)
 
     def _send_sse_event(self, event_type, data):
         """Send SSE event"""
-        message = "event: {}\ndata: {}\n\n".format(event_type, json.dumps(data))
+        message = "event: {}\ndata: {}\n\n".format(event_type,
+                                                   jsonsafe.dumps(data))
         self.wfile.write(message.encode('utf-8'))
         self.wfile.flush()
 
@@ -437,10 +458,28 @@ class T3LabAIServer(object):
         self._write_in_progress = False
         self._start_error = None
         self._token = self._get_or_create_token()
-        # Open TransactionGroup for the current assistant request (B4) — owned
-        # and closed on the Revit main thread via the __begin/__end_action_group
-        # pseudo-tools below. One request = one group = one Undo entry.
+        # Legacy slot for the withdrawn B4 request-wide TransactionGroup. It is
+        # never populated any more (see __begin_action_group) — kept only so an
+        # instance anchored from before a pyRevit reload still has the
+        # attribute for _release_stale_action_group to clear.
         self._action_group = None
+        # Monotonic time the last write tool finished on the Revit main thread.
+        # Gates the read fallback: see _READ_FALLBACK_WAIT.
+        self._last_write_done = 0.0
+
+        # ── Teaching capture (Opus distils via MCP) ──────────────────────────
+        # When ON, the EXTERNAL MCP path (_handle_tool_call, i.e. Claude Desktop
+        # via bridge.py) records every tool call into a trajectory the local
+        # Qwen is later fine-tuned on, and — on the Revit main thread — every
+        # model-MODIFYING tool is restricted to a designated sandbox document so
+        # the teacher can never touch the real project. State persisted in
+        # mcp_paths.json so it survives a restart. See set_teaching_mode /
+        # _sandbox guard in _execute_tool_in_context / the recorder below.
+        self._teaching_enabled = False
+        self._sandbox_doc = None          # {'title':..., 'path':...} or None
+        self._teach_session = None        # {'id','goal','steps':[...]} or None
+        self._restore_teaching_state()
+
         self._initialized = True
 
         # Register default Revit tools
@@ -486,6 +525,130 @@ class T3LabAIServer(object):
     def _register_default_tools(self):
         """Register default Revit tools for MCP"""
         self._tools = {
+            # ── Teaching capture boundary tools (Opus distils via MCP) ───────
+            # Call these to frame ONE training trajectory when the user has
+            # turned teaching capture on in MCP Control. They record nothing
+            # about the Revit model itself — only the task framing — and are
+            # no-ops when teaching mode is off.
+            't3lab_begin_teaching': {
+                'name': 't3lab_begin_teaching',
+                'description': ('Start recording a T3Lab teaching trajectory. '
+                                'Call this FIRST, before the Revit tool calls '
+                                'for one task, passing the task goal in your own '
+                                'words. Everything you do until t3lab_end_teaching '
+                                'is captured as one example to fine-tune the local '
+                                'assistant. Only records when the user enabled '
+                                'teaching capture; safe to call regardless.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'goal': {
+                            'type': 'string',
+                            'description': ('The task you are about to perform, '
+                                            'phrased as a user request (e.g. '
+                                            '"tag all walls on level 1").'),
+                        },
+                    },
+                    'required': ['goal'],
+                },
+            },
+            't3lab_end_teaching': {
+                'name': 't3lab_end_teaching',
+                'description': ('Finish the current T3Lab teaching trajectory '
+                                'started with t3lab_begin_teaching. Call this '
+                                'LAST, after the task is done, with a short '
+                                'summary of the outcome. Persists the trajectory '
+                                'as one training example.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'summary': {
+                            'type': 'string',
+                            'description': ('One-sentence summary of what was '
+                                            'accomplished (optional).'),
+                        },
+                    },
+                    'required': [],
+                },
+            },
+            't3lab_set_teaching_mode': {
+                'name': 't3lab_set_teaching_mode',
+                'description': ('Turn T3Lab teaching capture on or off. While ON, '
+                                'the external MCP session is recorded as training '
+                                'data AND model-modifying tools are restricted to '
+                                'the sandbox document (protects the real project). '
+                                'Call with enabled=true before teaching a task.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'enabled': {
+                            'type': 'boolean',
+                            'description': 'True to start capturing, false to stop.',
+                        },
+                    },
+                    'required': ['enabled'],
+                },
+            },
+            't3lab_mark_sandbox': {
+                'name': 't3lab_mark_sandbox',
+                'description': ('Designate a document as the teaching sandbox — '
+                                'the ONLY document model-modifying tools may touch '
+                                'while teaching mode is on. Pass the title or path '
+                                'of a SCRATCH .rvt (get it from list_open_documents). '
+                                'NEVER mark a real project model.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'document': {
+                            'type': 'string',
+                            'description': ('Title or file path of the scratch '
+                                            'document, as shown by list_open_documents.'),
+                        },
+                    },
+                    'required': ['document'],
+                },
+            },
+            't3lab_training_status': {
+                'name': 't3lab_training_status',
+                'description': ('Report the local training corpus (example count '
+                                'by source), the last fine-tune, whether a run is '
+                                'in progress, and the current teaching/sandbox '
+                                'state. Call before t3lab_train_model.'),
+                'inputSchema': {
+                    'type': 'object', 'properties': {}, 'required': [],
+                },
+            },
+            't3lab_train_model': {
+                'name': 't3lab_train_model',
+                'description': ('Launch a background LoRA fine-tune of the local '
+                                'model on the captured training data. Runs OUTSIDE '
+                                'Revit (CPython + GPU), detached, can take hours. '
+                                'Refuses below the minimum example count unless '
+                                'force=true. Check t3lab_training_status first.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'force': {
+                            'type': 'boolean',
+                            'description': ('Train even if the dataset is below '
+                                            'the recommended minimum.'),
+                        },
+                    },
+                    'required': [],
+                },
+            },
+            't3lab_build_exemplars': {
+                'name': 't3lab_build_exemplars',
+                'description': ('Distil the captured teaching data into a small, '
+                                'PORTABLE few-shot file (teacher_exemplars.json) '
+                                'that makes the local model answer in the taught '
+                                'style on ANY machine — no GPU or fine-tune needed. '
+                                'Commit that file to share it. Call after teaching '
+                                'when you want portability without training.'),
+                'inputSchema': {
+                    'type': 'object', 'properties': {}, 'required': [],
+                },
+            },
             'revit_get_active_view': {
                 'name': 'revit_get_active_view',
                 'description': 'Get information about the currently active view in Revit',
@@ -2373,9 +2536,21 @@ class T3LabAIServer(object):
         }
 
     def _handle_tool_call(self, params):
-        """Handle tools/call request"""
+        """Handle tools/call request.
+
+        This is the EXTERNAL MCP entry (bridge.py / Claude Desktop). The in-app
+        assistant calls _execute_tool directly and never reaches here, so the
+        teaching recorder + session-boundary tools live here and only capture
+        the external teacher's sessions.
+        """
         tool_name = params.get('name', '')
         arguments = params.get('arguments', {})
+
+        # Teaching session boundary tools are handled locally (no Revit) so the
+        # teacher can frame each trajectory. No-op unless teaching mode is on.
+        boundary = self._teach_handle_boundary(tool_name, arguments)
+        if boundary is not None:
+            return boundary
 
         if tool_name not in self._tools:
             return {
@@ -2389,13 +2564,20 @@ class T3LabAIServer(object):
         # Execute tool and return result
         try:
             result = self._execute_tool(tool_name, arguments)
+            self._teach_record_step(tool_name, arguments, result)
             return {
                 'content': [{
                     'type': 'text',
-                    'text': json.dumps(result, indent=2)
+                    # jsonsafe, not json.dumps: a single Revit name with an
+                    # accent (a view called "Café Kitchen - Section") made the
+                    # whole tool call fail with "'unknown' codec can't decode
+                    # byte 0xe9" — IronPython's ensure_ascii escaper again.
+                    'text': jsonsafe.dumps(result, indent=2)
                 }]
             }
         except Exception as e:
+            self._teach_record_step(
+                tool_name, arguments, {'error': str(e), 'tool': tool_name})
             return {
                 'content': [{
                     'type': 'text',
@@ -2403,6 +2585,327 @@ class T3LabAIServer(object):
                 }],
                 'isError': True
             }
+
+    # ── Teaching capture (Opus distils via the external MCP path) ────────────
+
+    # Session-boundary pseudo-tools the teacher (Opus in Claude Desktop) calls
+    # to frame one training trajectory. Registered into tools/list, handled
+    # entirely here — they never touch Revit.
+    _TEACH_BEGIN_TOOL = 't3lab_begin_teaching'
+    _TEACH_END_TOOL   = 't3lab_end_teaching'
+
+    # Claude-callable teaching/training control tools — handled locally (no
+    # Revit), so the external teacher can drive the whole "teach then train"
+    # loop from Claude Desktop. Hidden from the in-app catalog (tool_schema).
+    _TEACH_SET_MODE_TOOL = 't3lab_set_teaching_mode'
+    _TEACH_SANDBOX_TOOL  = 't3lab_mark_sandbox'
+    _TEACH_STATUS_TOOL   = 't3lab_training_status'
+    _TEACH_TRAIN_TOOL    = 't3lab_train_model'
+    _TEACH_EXEMPLARS_TOOL = 't3lab_build_exemplars'
+    # Below this many examples, a fine-tune wastes time (the trainer aborts
+    # anyway) unless the caller forces it. Mirrors tools/train validate_dataset.
+    _TRAIN_MIN_EXAMPLES  = 30
+
+    def _teach_data_dir(self):
+        from core import teaching
+        return teaching.session_dir()
+
+    def _restore_teaching_state(self):
+        """Load persisted teaching_enabled + sandbox_doc from mcp_paths.json."""
+        try:
+            from core import paths
+            data = paths.load_settings() or {}
+            self._teaching_enabled = bool(data.get('teaching_enabled', False))
+            sb = data.get('sandbox_doc')
+            self._sandbox_doc = sb if isinstance(sb, dict) else None
+        except Exception:
+            self._teaching_enabled = False
+            self._sandbox_doc = None
+
+    def set_teaching_mode(self, on):
+        """Enable/disable teaching capture + sandbox write-lock. Persisted."""
+        self._teaching_enabled = bool(on)
+        try:
+            from core import paths
+            paths.set_setting('teaching_enabled', self._teaching_enabled)
+        except Exception:
+            pass
+        return self._teaching_enabled
+
+    def set_sandbox_document(self, info):
+        """Mark a document as the teaching sandbox. `info` is {'title','path'}
+        (resolved by the caller on the UI thread) or None to clear. Persisted."""
+        self._sandbox_doc = info if isinstance(info, dict) else None
+        try:
+            from core import paths
+            paths.set_setting('sandbox_doc', self._sandbox_doc)
+        except Exception:
+            pass
+        return self._sandbox_doc
+
+    def get_teaching_status(self):
+        """{'enabled', 'sandbox', 'session_open', 'sessions_recorded'}."""
+        sessions = 0
+        try:
+            sessions = len([f for f in os.listdir(self._teach_data_dir())
+                            if f.endswith('.jsonl')])
+        except Exception:
+            pass
+        sb = None
+        if isinstance(self._sandbox_doc, dict):
+            sb = self._sandbox_doc.get('title') or self._sandbox_doc.get('path')
+        return {'enabled': bool(self._teaching_enabled),
+                'sandbox': sb,
+                'session_open': self._teach_session is not None,
+                'sessions_recorded': sessions}
+
+    def _is_sandbox_doc(self, doc):
+        """True when `doc` is the designated teaching sandbox.
+
+        Runs on the Revit main thread (valid doc) — reads two string props only,
+        then delegates the (pure, tested) match to core.teaching.is_sandbox.
+        """
+        if doc is None:
+            return False
+        try:
+            title = u'{}'.format(getattr(doc, 'Title', u'') or u'')
+            path  = u'{}'.format(getattr(doc, 'PathName', u'') or u'')
+        except Exception:
+            return False
+        from core import teaching
+        return teaching.is_sandbox(title, path, self._sandbox_doc)
+
+    def _teach_sandbox_reject(self, tool_name):
+        """The error returned when a write is blocked by the sandbox guard."""
+        return {
+            'error': ('Teaching mode is ON: model-modifying tools are only '
+                      'allowed on the sandbox document. Mark a scratch .rvt as '
+                      'the sandbox in MCP Control (or name it with "sandbox"/'
+                      '"nhap"), then retry — the real project is protected.'),
+            'tool': tool_name,
+            'teaching_blocked': True,
+        }
+
+    @staticmethod
+    def _text_result(msg):
+        return {'content': [{'type': 'text', 'text': u'{}'.format(msg)}]}
+
+    def _teach_handle_boundary(self, tool_name, arguments):
+        """Handle the Claude-callable teaching/training control tools locally
+        (no Revit). Returns a result dict, or None when `tool_name` is not one
+        of them so the normal execution path runs."""
+        args = arguments or {}
+
+        # ── Session boundaries ──────────────────────────────────────────────
+        if tool_name == self._TEACH_BEGIN_TOOL:
+            goal = u'{}'.format(args.get('goal') or u'').strip()
+            if self._teaching_enabled:
+                self._teach_begin(goal)
+                msg = 'Teaching trajectory started.'
+            else:
+                msg = ('Teaching mode is OFF — call t3lab_set_teaching_mode('
+                       'enabled=true) first, then retry.')
+            return self._text_result(msg)
+        if tool_name == self._TEACH_END_TOOL:
+            summary = u'{}'.format(args.get('summary') or u'').strip()
+            return self._text_result(self._teach_end(summary))
+
+        # ── Teaching-mode toggle ────────────────────────────────────────────
+        if tool_name == self._TEACH_SET_MODE_TOOL:
+            enabled = bool(args.get('enabled', True))
+            self.set_teaching_mode(enabled)
+            return self._text_result(
+                'Teaching capture {}. {}'.format(
+                    'ON' if enabled else 'OFF',
+                    'Model writes are now restricted to the sandbox document.'
+                    if enabled else 'Sandbox write-lock lifted.'))
+
+        # ── Mark sandbox (local: caller supplies the doc identifier) ────────
+        if tool_name == self._TEACH_SANDBOX_TOOL:
+            doc = u'{}'.format(args.get('document') or u'').strip()
+            if not doc:
+                return self._text_result(
+                    'Pass document=<title or path of the scratch .rvt> — get it '
+                    'from list_open_documents. Only ever mark a SCRATCH model.')
+            self.set_sandbox_document({'title': doc, 'path': doc})
+            return self._text_result(
+                'Sandbox set to "{}". Model-modifying tools are allowed only on '
+                'this document while teaching mode is on.'.format(doc))
+
+        # ── Training status ─────────────────────────────────────────────────
+        if tool_name == self._TEACH_STATUS_TOOL:
+            return self._text_result(self._training_status_text())
+
+        # ── Launch training ─────────────────────────────────────────────────
+        if tool_name == self._TEACH_TRAIN_TOOL:
+            force = bool(args.get('force', False))
+            return self._text_result(self._launch_training(force))
+
+        # ── Build portable exemplars (no GPU) ───────────────────────────────
+        if tool_name == self._TEACH_EXEMPLARS_TOOL:
+            return self._text_result(self._build_exemplars())
+
+        return None
+
+    def _build_exemplars(self):
+        """Distil teacher data into the git-tracked portable few-shot file.
+
+        Unlike training, this needs no GPU: it rewrites teacher_exemplars.json so
+        a plain local model answers in the taught style on any machine once the
+        file is committed. Never raises.
+        """
+        try:
+            from Intelligence.learning import exemplars as _ex
+            res = _ex.promote_from_dataset()
+            n = res.get('count', 0)
+            if res.get('status') == 'ok':
+                return ('Rebuilt {} portable exemplars into '
+                        'lib/Intelligence/config/teacher_exemplars.json. Commit '
+                        'that file so every machine\'s local model answers in the '
+                        'taught style — no GPU / re-train needed.'.format(n))
+            return 'Could not build exemplars: {}'.format(res.get('status'))
+        except Exception as ex:
+            return 'Could not build exemplars: {}'.format(ex)
+
+    def _training_status_text(self):
+        """Human-readable dataset + last-train + teaching status. Never raises."""
+        try:
+            from Intelligence.learning import trainer as _t
+            st = _t.dataset_stats()
+            last = _t.last_train() or {}
+            running = _t.is_running()
+        except Exception as ex:
+            return 'Training status unavailable: {}'.format(ex)
+        by_src = ', '.join('{}: {}'.format(k, v)
+                           for k, v in sorted((st.get('by_source') or {}).items()))
+        teach = self.get_teaching_status()
+        last_line = ('last trained {} on {} examples'.format(
+            last.get('trained_at'), last.get('examples'))
+            if last else 'never trained')
+        return ('Training data: {} examples ({}). {}. Teaching {}, sandbox={}, '
+                'sessions recorded={}. Training running: {}.'.format(
+                    st.get('count', 0), by_src or 'empty', last_line,
+                    'ON' if teach.get('enabled') else 'OFF',
+                    teach.get('sandbox') or 'none',
+                    teach.get('sessions_recorded', 0),
+                    'yes' if running else 'no'))
+
+    def _launch_training(self, force):
+        """Decide + launch the detached fine-tune. Never raises."""
+        try:
+            from Intelligence.learning import trainer as _t
+            from core import teaching
+            count = _t.dataset_stats().get('count', 0)
+            if not teaching.should_launch_training(count, force,
+                                                   self._TRAIN_MIN_EXAMPLES):
+                return ('Only {} training examples — need >= {} to train well. '
+                        'Teach more tasks (t3lab_begin_teaching/…/'
+                        't3lab_end_teaching) or call t3lab_train_model(force=true)'
+                        ' to run anyway.'.format(count, self._TRAIN_MIN_EXAMPLES))
+            if _t.is_running():
+                return 'A training run is already in progress.'
+            # Refresh the portable few-shot layer too, so machines without the
+            # fine-tuned model still benefit once teacher_exemplars.json is
+            # committed. Best-effort — never blocks the training launch.
+            exemplar_note = ''
+            try:
+                from Intelligence.learning import exemplars as _ex
+                ex_res = _ex.promote_from_dataset()
+                exemplar_note = (' Also rebuilt {} portable exemplars '
+                                 '(commit teacher_exemplars.json).'
+                                 .format(ex_res.get('count', 0)))
+            except Exception:
+                pass
+            ok, note = _t.launch(force=force)
+            if ok:
+                return ('Started background fine-tune on {} examples. It runs '
+                        'OUTSIDE Revit (CPython + GPU) and can take hours; see '
+                        'tools/train/README.md. The result is served as an '
+                        'Ollama model the assistant can then point at.{}'
+                        .format(count, exemplar_note))
+            return 'Could not launch training: {}'.format(note)
+        except Exception as ex:
+            return 'Could not launch training: {}'.format(ex)
+
+    def _teach_begin(self, goal):
+        """Open a new trajectory buffer (flushing any orphan first)."""
+        if self._teach_session is not None:
+            self._teach_flush()
+        import time as _t
+        self._teach_session = {
+            'id': _t.strftime('%Y%m%d-%H%M%S'),
+            'goal': goal or u'',
+            'steps': [],
+        }
+
+    def _teach_record_step(self, tool_name, arguments, result):
+        """Append one executed tool call to the open trajectory + session file.
+
+        No-op unless teaching mode is on. If the teacher never called
+        begin_teaching, an implicit session is opened so nothing is lost.
+        Never raises.
+        """
+        if not self._teaching_enabled:
+            return
+        if tool_name in (self._TEACH_BEGIN_TOOL, self._TEACH_END_TOOL):
+            return
+        try:
+            from core import teaching
+            if self._teach_session is None:
+                self._teach_begin(u'')
+            step = {'tool': tool_name, 'arguments': arguments,
+                    'result': result,
+                    'is_error': bool(teaching.is_error_result(result))}
+            self._teach_session['steps'].append(step)
+            path = os.path.join(self._teach_data_dir(),
+                                self._teach_session['id'] + '.jsonl')
+            teaching.append_step_line(
+                path, self._teach_session.get('goal', u''), step)
+        except Exception:
+            pass
+
+    def _teach_end(self, summary):
+        """Close the open trajectory: convert to an SFT example, clear buffer."""
+        if self._teach_session is None:
+            return 'No teaching trajectory was open.'
+        session = self._teach_session
+        self._teach_session = None
+        steps = session.get('steps') or []
+        goal = session.get('goal') or u''
+        if not steps:
+            return 'Teaching trajectory had no tool calls — nothing recorded.'
+        try:
+            from Intelligence.learning import dataset as _ds
+            rev = None
+            try:
+                from pyrevit import HOST_APP
+                rev = int(HOST_APP.version)
+            except Exception:
+                rev = None
+            if goal:
+                ok, note = _ds.add_trajectory(
+                    goal, steps, final=(summary or None),
+                    source='mcp_teacher', quality='teacher', revit_version=rev)
+                return ('Recorded teaching trajectory ({} steps): {}'
+                        .format(len(steps), note))
+            # No goal declared — leave the raw session file for the miner to
+            # label later; do not fabricate a target here.
+            return ('Recorded {} steps with no goal — call '
+                    't3lab_begin_teaching(goal=...) first next time.'
+                    .format(len(steps)))
+        except Exception as ex:
+            return 'Could not record trajectory: {}'.format(ex)
+
+    def _teach_flush(self):
+        """Flush an orphan open session (begin without end) to the dataset if it
+        has a goal; the raw file survives regardless for the miner."""
+        try:
+            if self._teach_session and self._teach_session.get('goal') \
+                    and self._teach_session.get('steps'):
+                self._teach_end(u'')
+        except Exception:
+            pass
+        self._teach_session = None
 
     # Tools that open a Transaction / mutate the model. These MUST run on
     # Revit's main thread via the ExternalEvent — starting a transaction from
@@ -2416,14 +2919,13 @@ class T3LabAIServer(object):
         'manage_links', 'manage_revision', 'manage_sheet', 'export_model',
         'create_detail_annotation',
         # Save/SaveAs/SynchronizeWithCentral need the Revit main thread but
-        # must NOT be inside a TransactionGroup — also in script.py's
-        # _group_exempt.
+        # must NOT be inside any open transaction phase.
         'manage_document',
         # Read-only, but this set really means "must run on Revit's main
         # thread": check_bad_geometry evaluates surface derivatives and can
         # tessellate faces, which is exactly the work that takes the process
         # down. Never let it fall back onto the HTTP worker thread. It opens
-        # no transaction, so it is _group_exempt too.
+        # no transaction of its own.
         'check_bad_geometry',
         'color_elements', 'tag_all_walls', 'tag_all_rooms', 'move_elements',
         'copy_elements', 'rotate_element', 'create_view', 'set_active_view',
@@ -2744,6 +3246,34 @@ class T3LabAIServer(object):
     # already used when no ExternalEvent exists at all.
     _READ_FALLBACK_WAIT = 2.0
 
+    # ...but only while the model is NOT being rewritten underneath us. Reading
+    # the API off the main thread is safe only when the main thread is idle;
+    # the moment a write commits, Revit spends seconds regenerating elements
+    # and refreshing view caches, and a collector walking the same document
+    # from a worker thread during that window is the documented modeless
+    # hard-crash. A multi-step assistant request is exactly write-then-read, so
+    # that window is where the fallback fired most and where Revit died.
+    #
+    # Inside this quiet period after a write the read WAITS for its turn on the
+    # main thread instead (it still gets a 120s ceiling, same as a write). A
+    # read-only session never enters it at all, so the anti-hang valve keeps
+    # working where it was actually needed.
+    _WRITE_QUIET_PERIOD = 8.0
+
+    def _read_fallback_allowed(self):
+        """True when a read may safely run on the CALLING thread.
+
+        Blocked while a write is executing on the main thread, and for
+        _WRITE_QUIET_PERIOD seconds after the last one finished.
+        """
+        if getattr(self, '_write_in_progress', False):
+            return False
+        try:
+            since = time.time() - (getattr(self, '_last_write_done', 0.0) or 0.0)
+        except Exception:
+            return False
+        return since > self._WRITE_QUIET_PERIOD
+
     # Undeclared arguments a dispatch traps ITSELF, because it can give a
     # better answer than the generic guard below. get_schedule_data reads an
     # EXISTING schedule; a model that passes `category` wants a takeoff, and
@@ -2790,6 +3320,25 @@ class T3LabAIServer(object):
             'tool': tool_name,
         }
 
+    def _release_stale_action_group(self):
+        """Drop any TransactionGroup handle left over from the withdrawn B4
+        grouping WITHOUT touching it.
+
+        Revit already force-closed the group when the Execute that started it
+        returned, so the managed wrapper points at a terminated native object:
+        calling Assimilate() or RollBack() on it is precisely the fatal
+        exception this code path exists to stop. Only the reference is cleared.
+
+        Reached from the Revit main thread (the inert pseudo-tools) and from
+        the pane at request start, so a group opened by a pre-reload,
+        AppDomain-anchored server can never be operated on later.
+        """
+        try:
+            if getattr(self, '_action_group', None) is not None:
+                self._action_group = None
+        except Exception:
+            pass
+
     def _execute_tool(self, tool_name, arguments):
         """Execute a Revit tool in a thread-safe manner using External Events."""
         rejected = self._reject_unknown_arguments(tool_name, arguments)
@@ -2808,14 +3357,21 @@ class T3LabAIServer(object):
             finished = task.done.wait(120 if is_write else self._READ_FALLBACK_WAIT)
             if not finished and not is_write:
                 # Never read concurrently with a write mutating the model on
-                # the UI thread — in that case keep waiting like a write would.
-                if not self._write_in_progress and task.claim('fallback'):
-                    # Revit is busy — run the read directly on this thread
-                    # instead of hanging until Revit next goes idle. Reads
-                    # never touch the window, so running off the UI thread
-                    # is safe; the target is the active document either way.
-                    return self._execute_tool_in_context(
-                        tool_name, arguments)
+                # the UI thread, nor while Revit is still regenerating after
+                # one — in either case keep waiting like a write would.
+                if self._read_fallback_allowed() and task.claim('fallback'):
+                    # Revit is busy with something else — run the read directly
+                    # on this thread instead of hanging until Revit next goes
+                    # idle. The target is the active document either way.
+                    #
+                    # Wrapped: this is a WORKER thread, and a .NET exception
+                    # escaping it is not a failed tool call, it is a dead
+                    # Revit process.
+                    try:
+                        return self._execute_tool_in_context(
+                            tool_name, arguments)
+                    except Exception as e:
+                        return {'error': str(e), 'tool': tool_name}
                 finished = task.done.wait(120)
             if not finished:
                 # If still unclaimed, mark it consumed so the UI thread skips
@@ -2840,8 +3396,13 @@ class T3LabAIServer(object):
                     'external_event_ready': False,
                 }
             # Read tool with no ExternalEvent at all — run directly on the
-            # HTTP worker thread (reads don't touch the window).
-            return self._execute_tool_in_context(tool_name, arguments)
+            # HTTP worker thread (reads don't touch the window). Same reason
+            # for the guard as the fallback above: an escaping .NET exception
+            # on a worker thread kills the process, not just the call.
+            try:
+                return self._execute_tool_in_context(tool_name, arguments)
+            except Exception as e:
+                return {'error': str(e), 'tool': tool_name}
 
     # ── Shared tool helpers ────────────────────────────────────────────────
 
@@ -3061,32 +3622,76 @@ class T3LabAIServer(object):
         from Autodesk.Revit.DB import ElementId
         return ElementId.InvalidElementId
 
+    # Colour vocabulary shared by revit_override_color and create_view_filter.
+    # Vietnamese names are in it because the office types "tô đỏ tường" and the
+    # model forwards the word it was handed, accents and all.
+    CSS_COLORS = {
+        'red': (255, 0, 0), 'do': (255, 0, 0), u'đỏ': (255, 0, 0),
+        'green': (0, 255, 0), 'xanh la': (0, 255, 0), u'xanh lá': (0, 255, 0),
+        'blue': (0, 0, 255), 'xanh': (0, 0, 255), u'xanh dương': (0, 0, 255),
+        'orange': (255, 165, 0), 'cam': (255, 165, 0),
+        'cyan': (0, 255, 255),
+        'yellow': (255, 255, 0), 'vang': (255, 255, 0), u'vàng': (255, 255, 0),
+        'magenta': (255, 0, 255),
+        'black': (0, 0, 0), 'den': (0, 0, 0), u'đen': (0, 0, 0),
+        'white': (255, 255, 255), 'trang': (255, 255, 255), u'trắng': (255, 255, 255),
+        'gray': (128, 128, 128), 'grey': (128, 128, 128),
+        'xam': (128, 128, 128), u'xám': (128, 128, 128),
+        'pink': (255, 192, 203), 'hong': (255, 192, 203), u'hồng': (255, 192, 203),
+        'purple': (128, 0, 128), 'tim': (128, 0, 128), u'tím': (128, 0, 128),
+        'violet': (238, 130, 238),
+    }
+
     def _parse_color(self, color_str):
-        """Parse a hex (#RRGGBB / #RGB) or CSS-name color into an (r, g, b)
-        tuple, or None if unparseable. Mirrors the inline parser in
-        revit_override_color so filter overrides accept the same vocabulary."""
-        if not color_str:
+        """(r, g, b) for a colour, or None if unparseable.
+
+        Accepts a CSS or Vietnamese name, #rrggbb, #rgb, an [r, g, b] sequence,
+        or the STRING form of one ("[0, 0, 255]", "0,0,255"). The string form
+        matters because the MCP schema declares `color` as a string, so a
+        caller that sends an RGB array has it stringified before it arrives —
+        which used to land here as an unknown value and, in
+        revit_override_color, silently become red.
+        """
+        if color_str is None or color_str == u'':
             return None
-        s = color_str.lower().strip()
-        css = {
-            'red': (255, 0, 0), 'green': (0, 255, 0), 'blue': (0, 0, 255),
-            'orange': (255, 165, 0), 'cyan': (0, 255, 255), 'yellow': (255, 255, 0),
-            'magenta': (255, 0, 255), 'black': (0, 0, 0), 'white': (255, 255, 255),
-            'gray': (128, 128, 128), 'grey': (128, 128, 128), 'pink': (255, 192, 203),
-            'purple': (128, 0, 128), 'violet': (238, 130, 238),
-        }
-        if s in css:
-            return css[s]
-        if s.startswith('#'):
-            h = s[1:]
-            try:
-                if len(h) == 6:
-                    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-                if len(h) == 3:
-                    return (int(h[0] * 2, 16), int(h[1] * 2, 16), int(h[2] * 2, 16))
-            except ValueError:
+
+        if isinstance(color_str, (list, tuple)):
+            parts = list(color_str)
+        else:
+            s = u'{}'.format(color_str).lower().strip()
+            if s in self.CSS_COLORS:
+                return self.CSS_COLORS[s]
+            if s.startswith('#'):
+                h = s[1:]
+                try:
+                    if len(h) == 3:
+                        h = u''.join(c * 2 for c in h)
+                    if len(h) == 6:
+                        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+                except ValueError:
+                    return None
                 return None
-        return None
+            parts = [p for p in s.strip('[]() ').replace(';', ',').split(',')
+                     if p.strip() != u'']
+
+        if len(parts) != 3:
+            return None
+        try:
+            rgb = tuple(int(float(u'{}'.format(p).strip())) for p in parts)
+        except (TypeError, ValueError):
+            return None
+        return rgb if all(0 <= c <= 255 for c in rgb) else None
+
+    def _color_error(self, color_str):
+        """Error dict for a colour that _parse_color rejected."""
+        return {
+            'error': u"Unrecognised colour '{}'.".format(color_str),
+            'supported_colors': sorted(set(
+                k for k in self.CSS_COLORS if all(ord(c) < 128 for c in k))),
+            'hint': ('Use a colour name, #rrggbb, or an [r,g,b] triple with '
+                     'values 0-255. An unknown colour is refused rather than '
+                     'silently painted red.'),
+        }
 
     def _apply_param_value(self, param, value):
         """Coerce a string value onto a Revit parameter honouring its storage
@@ -3156,47 +3761,57 @@ class T3LabAIServer(object):
         except ImportError:
             return {'error': 'Revit API not available', 'tool': tool_name}
 
-        # ── Agent request TransactionGroup (B4) ──────────────────────────────
-        # Pseudo-tools, only reachable through _execute_tool (never listed in
-        # the public registry). We are on the Revit main thread here (routed
-        # via _WRITE_TOOLS + ExternalEvent), which TransactionGroup requires.
-        if tool_name == '__begin_action_group':
-            from Autodesk.Revit.DB import TransactionGroup
-            # Defensive: never stack groups — close a leftover one first.
-            if self._action_group is not None:
-                try:
-                    self._action_group.Assimilate()
-                except Exception:
-                    try:
-                        self._action_group.RollBack()
-                    except Exception:
-                        pass
-                self._action_group = None
+        # ── Teaching sandbox write-guard ─────────────────────────────────────
+        # When teaching mode is ON, a model-MODIFYING tool may only run against
+        # the designated sandbox document — so the teacher (or the assistant)
+        # can never damage the real project while capturing training data. Runs
+        # HERE, on the Revit main thread, where `doc` is resolved (reading a
+        # doc's Title/PathName off the HTTP thread would be unsafe). Read tools
+        # are unaffected; teaching mode OFF is a no-op.
+        if self._teaching_enabled and doc is not None:
             try:
-                title = (arguments or {}).get('title') or 'T3Lab AI actions'
-                tg = TransactionGroup(doc, title)
-                tg.Start()
-                self._action_group = tg
-                return {'success': True, 'group': title}
-            except Exception as e:
-                self._action_group = None
-                return {'error': str(e), 'tool': tool_name}
+                from Intelligence.tool_schema import is_model_modifying
+                modifies = is_model_modifying(tool_name)
+            except Exception:
+                # Fail safe: if we can't tell, treat known writers as writers.
+                modifies = tool_name in self._WRITE_TOOLS
+            from core import teaching
+            if teaching.should_block_write(
+                    True, modifies, self._is_sandbox_doc(doc)):
+                return self._teach_sandbox_reject(tool_name)
 
-        elif tool_name == '__end_action_group':
-            tg = self._action_group
-            self._action_group = None
-            if tg is None:
-                return {'success': True, 'note': 'no open group'}
-            try:
-                # Assimilate merges every transaction inside into ONE undo item.
-                tg.Assimilate()
-                return {'success': True}
-            except Exception as e:
-                try:
-                    tg.RollBack()
-                except Exception:
-                    pass
-                return {'error': str(e), 'tool': tool_name}
+        # ── Agent request TransactionGroup (B4) — WITHDRAWN, DO NOT REINSTATE ──
+        # These pseudo-tools used to open a TransactionGroup here and leave it
+        # open so a whole assistant request would collapse into ONE undo entry.
+        # That is not possible from an ExternalEvent: Revit force-closes every
+        # transaction phase an event handler leaves open when Execute returns.
+        # It says so in the journal, once per write:
+        #
+        #   "An API event handler left some transaction phases open for the
+        #    active document. In effect of that, all uncommitted changes made
+        #    by this event handler will be discarded."
+        #
+        # So the group never survived the very Execute that started it (5/5
+        # writes in the 2026-08-11 crash journal, and NO other journal in that
+        # folder carries the warning at all) — B4 delivered nothing. What it
+        # DID deliver was a stale managed TransactionGroup handle pointing at a
+        # group Revit had already terminated, which `__end_action_group` then
+        # Assimilate()d, and which the next request's `__begin_action_group`
+        # Assimilate()d a second time. Operating a dead native group is the
+        # unhandled managed exception (0xe0434352) that took Revit down right
+        # after the second request of a multi-step task.
+        #
+        # Kept as inert no-ops rather than deleted: an AppDomain-anchored
+        # server instance from before a reload can still be called with these
+        # names. Each tool keeps its own Transaction, so a multi-step request
+        # is now N undo entries instead of the 1 it never actually produced.
+        if tool_name in ('__begin_action_group', '__end_action_group'):
+            self._release_stale_action_group()
+            return {'success': False,
+                    'note': ('Request-wide TransactionGroup is disabled: a '
+                             'group cannot outlive the ExternalEvent that '
+                             'opened it. Each tool commits its own '
+                             'transaction.')}
 
         if tool_name == 'revit_get_active_view':
             view = doc.ActiveView
@@ -3546,45 +4161,22 @@ class T3LabAIServer(object):
                         'tool': tool_name}
             element_ids = _clean_ids
 
-            # Parse color
-            r, g, b = 255, 0, 0 # default red
-            if color_str:
-                color_str = color_str.lower().strip()
-                css_colors = {
-                    'red': (255, 0, 0),
-                    'green': (0, 255, 0),
-                    'blue': (0, 0, 255),
-                    'orange': (255, 165, 0),
-                    'cyan': (0, 255, 255),
-                    'yellow': (255, 255, 0),
-                    'magenta': (255, 0, 255),
-                    'black': (0, 0, 0),
-                    'white': (255, 255, 255),
-                    'gray': (128, 128, 128),
-                    'grey': (128, 128, 128),
-                    'pink': (255, 192, 203),
-                    'purple': (128, 0, 128),
-                    'violet': (238, 130, 238),
-                }
-                if color_str in css_colors:
-                    r, g, b = css_colors[color_str]
-                elif color_str.startswith('#'):
-                    hex_val = color_str[1:]
-                    if len(hex_val) == 6:
-                        try:
-                            r = int(hex_val[0:2], 16)
-                            g = int(hex_val[2:4], 16)
-                            b = int(hex_val[4:6], 16)
-                        except ValueError:
-                            pass
-                    elif len(hex_val) == 3:
-                        try:
-                            r = int(hex_val[0]*2, 16)
-                            g = int(hex_val[1]*2, 16)
-                            b = int(hex_val[2]*2, 16)
-                        except ValueError:
-                            pass
-            
+            # Parse color.
+            #
+            # An UNRECOGNISED colour must not fall through to the default.
+            # It used to: anything that was neither a CSS name nor #rrggbb
+            # silently became red, so a caller passing an RGB triple got
+            # "success" with red paint while the reply said blue. Wrong
+            # geometry colour is invisible in the transcript and only shows up
+            # in the model. RGB triples are now accepted, and anything still
+            # unparseable is an error that names what IS supported.
+            r, g, b = 255, 0, 0  # default when no colour is given at all
+            if color_str is not None and color_str != u'':
+                rgb = self._parse_color(color_str)
+                if rgb is None:
+                    return self._color_error(color_str)
+                r, g, b = rgb
+
             from Autodesk.Revit.DB import Color, OverrideGraphicSettings, ElementId, Transaction
             revit_color = Color(r, g, b)
 
@@ -6260,9 +6852,10 @@ class T3LabAIServer(object):
         # ── manage_document ──────────────────────────────────────────────────
         elif tool_name == 'manage_document':
             # NOTE: this tool must NOT run inside a Transaction or a
-            # TransactionGroup — Save/SaveAs/SynchronizeWithCentral all throw if
-            # one is open. It is therefore listed in the assistant's
-            # _group_exempt set as well as in _WRITE_TOOLS.
+            # TransactionGroup — Save/SaveAs/SynchronizeWithCentral all throw
+            # if one is open. Nothing wraps tool calls in a group any more
+            # (see __begin_action_group), so this holds as long as it stays
+            # that way.
             op = (arguments.get('operation') or '').lower()
             if op not in ('save', 'save_as', 'sync_with_central'):
                 return {'error': 'Unknown operation: {}'.format(op),
@@ -8047,6 +8640,20 @@ class T3LabAIServer(object):
                 # explicit positive limit is still honored.
                 limit = int(arguments.get('limit', 0) or 0)
                 ids   = arguments.get('element_ids')
+
+                # An EMPTY list is "select nothing", never "select everything".
+                # `if ids:` treated [] the same as an omitted argument, so the
+                # branch below collected the whole model — select_elements([])
+                # put 37,929 elements into the selection, and any following
+                # colour/hide call that falls back to the selection would then
+                # have hit every one of them. Omitting the argument entirely
+                # still means "use category / whole model".
+                if isinstance(ids, (list, tuple)) and len(ids) == 0 \
+                        and not arguments.get('category'):
+                    uidoc.Selection.SetElementIds(NetList[ElementId]())
+                    return {'success': True, 'selected_count': 0,
+                            'note': 'Selection cleared (element_ids was empty).'}
+
                 if ids:
                     target = [make_eid(int(i)) for i in ids]
                     if limit > 0:

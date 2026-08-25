@@ -49,7 +49,7 @@ _BUTTON_SUFFIXES = ('.pushbutton', '.smartbutton', '.urlbutton')
 _SKIP_BUTTONS = {
     # Infrastructure — not user-facing tools. (Settings.pushbutton and
     # StartMCP.pushbutton were listed here too; neither exists — the real
-    # buttons are LLMsSetting and MCPPanel, and those SHOULD be openable.)
+    # buttons are LLMsSetting and MCPControl, and those SHOULD be openable.)
     'T3LabAssistant.pushbutton',
     # Have a dedicated launcher in script.py (_SPECIAL_LAUNCHERS): they take
     # arguments or open through a Dialog module rather than a script entry.

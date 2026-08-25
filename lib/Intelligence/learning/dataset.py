@@ -15,10 +15,13 @@ export_sft() is a near-passthrough. The enrichers append here; the external
 fine-tune job (tools/train/) reads it.
 
 Write discipline mirrors assistant_memory: ASCII-serialize then write, so an
-IronPython 2.7 UnicodeEncodeError mid-write can never truncate the file. Append
-is line-oriented (one json.dumps per line) so a crash costs at most the last
-line, never the whole corpus. Dedup is by a content hash of the user+assistant
-turns, cached in memory and rebuilt from the file on first use.
+IronPython 2.7 UnicodeEncodeError mid-write can never truncate the file. The
+serializer is `core.jsonsafe.dumps`, NOT `json.dumps(ensure_ascii=True)` —
+IronPython's ASCII escaper raises on the very non-ASCII input it exists to
+handle, which silently dropped every Vietnamese example. Append is
+line-oriented (one dumps per line) so a crash costs at most the last line,
+never the whole corpus. Dedup is by a content hash of the user+assistant turns,
+cached in memory and rebuilt from the file on first use.
 
 Pure Python + guarded imports — CPython-3 testable.
 
@@ -36,12 +39,19 @@ import os
 import threading
 import time
 
+from core import jsonsafe
+
 # Corpus ceiling. Beyond this the oldest lines are dropped on the next add —
 # a training set, not an archive; stale examples from a renamed tool would only
 # teach the model a route that no longer exists.
 MAX_EXAMPLES   = 5000
 MIN_CHARS      = 3        # reject degenerate user/assistant turns
-_VALID_ROLES   = ('system', 'user', 'assistant')
+# 'tool' joins the set so an agentic trajectory (Opus driving Revit via MCP:
+# user goal -> assistant tool_calls -> tool results -> ... -> final answer) can
+# be stored and trained on, not just flat Q&A. Assistant turns may now carry
+# `tool_calls`; tool turns carry the tool result. Plain text examples are
+# unchanged — they simply never use the new roles/fields.
+_VALID_ROLES   = ('system', 'user', 'assistant', 'tool')
 
 _LOCK = threading.Lock()
 # Dedup index: content-hash -> True. None until first load; rebuilt from disk.
@@ -72,41 +82,104 @@ def dataset_file():
 
 # ─── Validation + hashing ───────────────────────────────────────────────────────
 
-def _clean_messages(messages):
-    """Return a sanitized [{role, content}] list, or None if unusable.
+def _clean_tool_calls(raw):
+    """Canonicalize an assistant turn's tool_calls to [{id,name,arguments}].
 
-    Requires at least a user and an assistant turn with real content — a
-    training example needs both a prompt and a target.
+    Accepts the two shapes in play: the OpenAI wire form
+    ({id,type,function:{name,arguments}}) and the recorder's flat
+    {id,name,arguments} (arguments a dict OR a json string). `arguments` is
+    always stored as a JSON STRING so the on-disk row is a stable, trainer-
+    ready shape. Returns [] when nothing usable is present.
+    """
+    out = []
+    for c in (raw or []):
+        if not isinstance(c, dict):
+            continue
+        fn = c.get('function') if isinstance(c.get('function'), dict) else c
+        name = u'{}'.format(fn.get('name') or u'').strip()
+        if not name:
+            continue
+        args = fn.get('arguments')
+        if isinstance(args, (dict, list)):
+            try:
+                args = json.dumps(args, ensure_ascii=False)
+            except Exception:
+                args = u'{}'
+        else:
+            args = u'{}'.format(args if args is not None else u'{}')
+        out.append({'id': u'{}'.format(c.get('id') or u''),
+                    'name': name, 'arguments': args})
+    return out
+
+
+def _clean_messages(messages):
+    """Return a sanitized message list, or None if unusable.
+
+    Supports both a flat Q&A ({role in system/user/assistant, content:str}) and
+    an agentic trajectory (assistant turns carrying `tool_calls`, plus role
+    'tool' result turns). A usable example still needs a `user` prompt and an
+    `assistant` target — but the target may be a tool-calling turn, not prose.
     """
     if not isinstance(messages, (list, tuple)):
         return None
     out = []
     roles = set()
+    has_assistant_target = False
     for m in messages:
         if not isinstance(m, dict):
             return None
         role = m.get('role')
-        content = m.get('content')
         if role not in _VALID_ROLES:
             return None
-        content = u'{}'.format(content or u'').strip()
-        if role in ('user', 'assistant') and len(content) < MIN_CHARS:
-            return None
-        out.append({'role': role, 'content': content})
+        content = u'{}'.format(m.get('content') or u'').strip()
+
+        if role == 'assistant':
+            tool_calls = _clean_tool_calls(m.get('tool_calls'))
+            # An assistant turn is a valid target if it says something OR calls
+            # a tool. A tool-calling turn legitimately has empty content.
+            if len(content) < MIN_CHARS and not tool_calls:
+                return None
+            turn = {'role': role, 'content': content}
+            if tool_calls:
+                turn['tool_calls'] = tool_calls
+            out.append(turn)
+            has_assistant_target = True
+        elif role == 'tool':
+            # Tool result. Keep the id/name link so the trainer can pair it to
+            # the call. Content may be short (e.g. "{}") — do not reject on size.
+            if not content:
+                content = u'{}'
+            out.append({'role': role, 'content': content,
+                        'tool_call_id': u'{}'.format(m.get('tool_call_id') or u''),
+                        'name': u'{}'.format(m.get('name') or u'')})
+        else:  # system / user
+            if role == 'user' and len(content) < MIN_CHARS:
+                return None
+            out.append({'role': role, 'content': content})
         roles.add(role)
-    if 'user' not in roles or 'assistant' not in roles:
+
+    if 'user' not in roles or not has_assistant_target:
         return None
     return out
 
 
 def _hash(messages):
-    """Content hash over the user+assistant turns (system prompt ignored, so the
-    same Q&A saved under two system prompts still dedups)."""
+    """Content hash over the user/assistant/tool turns (system prompt ignored,
+    so the same trajectory saved under two system prompts still dedups).
+
+    Includes assistant tool_calls (name+arguments) and tool results, so two
+    trajectories that differ only in which tools were called hash differently.
+    """
     parts = []
     for m in messages:
-        if m['role'] in ('user', 'assistant'):
-            parts.append(m['role'])
-            parts.append(m['content'].lower().strip())
+        role = m['role']
+        if role == 'system':
+            continue
+        parts.append(role)
+        parts.append((m.get('content') or u'').lower().strip())
+        for tc in m.get('tool_calls') or []:
+            parts.append(tc.get('name') or u'')
+            parts.append((tc.get('arguments') or u'').lower().strip())
     blob = u' '.join(parts).encode('utf-8')
     return hashlib.sha1(blob).hexdigest()
 
@@ -166,9 +239,7 @@ def add_example(messages, source, quality='ok', revit_version=None, meta=None):
         if h in _seen:
             return True, u'duplicate'
         try:
-            payload = json.dumps(row, ensure_ascii=True)
-            if isinstance(payload, bytes):
-                payload = payload.decode('ascii')
+            payload = jsonsafe.dumps(row)
             with io.open(dataset_file(), 'a', encoding='utf-8') as f:
                 f.write(payload + u'\n')
             _seen[h] = True
@@ -189,6 +260,63 @@ def add_qa(user, assistant, source, system=None, **kw):
     msgs.append({'role': 'user', 'content': user})
     msgs.append({'role': 'assistant', 'content': assistant})
     return add_example(msgs, source, **kw)
+
+
+def add_trajectory(goal, steps, final=None, source='mcp_teacher',
+                   quality='teacher', revit_version=None, system=None, **kw):
+    """Store one agentic tool-use trajectory as an SFT example. (ok, note).
+
+    Reconstructs the teacher's session as a chat-SFT trajectory:
+        [system?] user(goal)
+        -> assistant(tool_call #1) -> tool(result #1)
+        -> assistant(tool_call #2) -> tool(result #2) ...
+        -> assistant(final answer)?
+
+    `steps` is the recorder's list of dicts, each:
+        {'tool': str, 'arguments': dict|str, 'result': dict|str, 'is_error': bool}
+    The external MCP bridge issues one tools/call at a time, so one step == one
+    assistant tool-call turn + its tool-result turn. Pure/deterministic; the
+    caller supplies goal/final (a bare trajectory with no goal is rejected —
+    the session miner fills that in before calling).
+    """
+    goal = u' '.join(u'{}'.format(goal or u'').split())
+    if len(goal) < MIN_CHARS:
+        return False, u'no goal'
+    if not steps and not final:
+        return False, u'empty trajectory'
+
+    msgs = []
+    if system:
+        msgs.append({'role': 'system', 'content': system})
+    msgs.append({'role': 'user', 'content': goal})
+
+    for i, step in enumerate(steps or []):
+        if not isinstance(step, dict):
+            continue
+        name = u'{}'.format(step.get('tool') or u'').strip()
+        if not name:
+            continue
+        call_id = u'call_{}'.format(i)
+        result = step.get('result')
+        if not isinstance(result, (str, bytes)) and not isinstance(result, type(u'')):
+            try:
+                result = json.dumps(result, ensure_ascii=False)
+            except Exception:
+                result = u'{}'.format(result)
+        msgs.append({'role': 'assistant', 'content': u'',
+                     'tool_calls': [{'id': call_id, 'name': name,
+                                     'arguments': step.get('arguments')}]})
+        msgs.append({'role': 'tool', 'content': u'{}'.format(result),
+                     'tool_call_id': call_id, 'name': name})
+
+    # Append a final answer only when it is substantive — a trivial one-word
+    # "final" must not invalidate an otherwise-good tool-call trajectory (the
+    # tool-call turns are valid targets on their own).
+    if final and len(u'{}'.format(final).strip()) >= MIN_CHARS:
+        msgs.append({'role': 'assistant', 'content': u'{}'.format(final)})
+
+    return add_example(msgs, source, quality=quality,
+                       revit_version=revit_version, **kw)
 
 
 def iter_examples():
@@ -246,10 +374,7 @@ def export_sft(out_path):
                 if h in seen:
                     continue
                 seen[h] = True
-                line = json.dumps({'messages': msgs}, ensure_ascii=True)
-                if isinstance(line, bytes):
-                    line = line.decode('ascii')
-                f.write(line + u'\n')
+                f.write(jsonsafe.dumps({'messages': msgs}) + u'\n')
                 n += 1
     except Exception:
         return n

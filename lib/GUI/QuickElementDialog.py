@@ -25,7 +25,6 @@ import os
 import io
 clr.AddReference('System')
 clr.AddReference('System.Core')
-clr.AddReference('System.Xml')
 clr.AddReference('PresentationFramework')
 clr.AddReference('PresentationCore')
 clr.AddReference('WindowsBase')
@@ -34,11 +33,8 @@ clr.AddReference('RevitAPIUI')
 
 import System
 from System import Action
-from System.IO import StringReader
-import System.Xml
 from System.Windows import Window, WindowStartupLocation, Thickness, WindowState
 from System.Windows.Controls import ListBoxItem
-from System.Windows.Markup import XamlReader
 from System.Windows.Threading import DispatcherPriority
 from System.Windows.Input import Keyboard, Key
 from System.Collections.Generic import List
@@ -50,6 +46,25 @@ from Autodesk.Revit.DB import (
 )
 
 from pyrevit import revit, forms
+from GUI.WPF_Base import T3WPFWindow, setup_window_logo
+try:
+    from Snippets._host import resolve_doc, resolve_uidoc
+except ImportError:
+    try:
+        import importlib
+        import Snippets._host
+        importlib.reload(Snippets._host)
+        from Snippets._host import resolve_doc, resolve_uidoc
+    except Exception:
+        from Snippets._host import resolve_doc
+        def resolve_uidoc(candidate=None):
+            if candidate is not None and hasattr(candidate, 'Document') and candidate.Document is not None:
+                return candidate
+            try:
+                from pyrevit import revit
+                return revit.uidoc
+            except Exception:
+                return None
 
 import traceback
 from collections import defaultdict
@@ -318,62 +333,101 @@ class ElementCollector(object):
 # =============================================================================
 # MAIN WINDOW CLASS
 # =============================================================================
-class QuickSelectWindow(Window):
+class QuickSelectWindow(T3WPFWindow):
     """Quick Select Manager Window"""
     
-    def __init__(self):
-        # Load XAML - must load into self, not separate object
-        with io.open(xaml_path, 'r', encoding='utf-8') as f:
-            xaml_content = f.read()
-        xr = XamlReader.Load(System.Xml.XmlReader.Create(StringReader(xaml_content)))
-        
-        # Copy window properties
-        self.Title = xr.Title
-        self.Width = xr.Width
-        self.Height = xr.Height
-        self.MinWidth = xr.MinWidth
-        self.MinHeight = xr.MinHeight
-        self.WindowStartupLocation = xr.WindowStartupLocation
-        self.Background = xr.Background
-        self.Content = xr.Content
+    def __init__(self, set_owner=True):
+        T3WPFWindow.__init__(self, xaml_path, set_owner=set_owner)
         
         # IMPORTANT: Store reference to the loaded content for FindName
-        self._content = xr.Content
+        self._content = self.Content
+        setup_window_logo(self)
         
-        # Get Revit references
-        self.doc = revit.doc
-        self.uidoc = revit.uidoc
-        self.collector = ElementCollector(self.doc, self.uidoc)
+        # Get Revit references safely
+        self.doc, _ = resolve_doc()
+        self.uidoc = resolve_uidoc()
+        self.collector = ElementCollector(self.doc, self.uidoc) if (self.doc and self.uidoc) else None
         
         # Data storage
         self.all_items = []
         self.filtered_items = []
         self.categories_list = []
-        
+
+        # Revit API context bridge. Stays None when this window runs on its own
+        # (it is modal then, so it already holds the API context). ManaSelect
+        # mounts this grid inside a MODELESS window and sets this to its
+        # ExternalEvent dispatcher — without it every button below that touches
+        # uidoc/doc throws "Attempting to access Revit API outside of API
+        # context". See _defer().
+        self._api_dispatch = None
+        self._in_api_call = False
+
         # Get UI controls
         self._get_controls()
         self._setup_events()
         
         # Load data
-        self._load_data()
+        if self.collector:
+            self._load_data()
     
+    def _defer(self, handler, sender, args):
+        """Re-enter `handler` inside the Revit API context.
+
+        Returns True when the call was queued — the caller must return
+        immediately, the real work happens on the second pass.
+
+        Standalone (modal): `_api_dispatch` is None, this returns False at once
+        and the handler body runs exactly as it always has. Nothing changes.
+
+        Mounted in ManaSelect (modeless): the host set `_api_dispatch` to its
+        ExternalEvent dispatcher. First pass queues, second pass has
+        `_in_api_call` set so it falls straight through and runs the body — now
+        inside the API context.
+        """
+        dispatch = getattr(self, '_api_dispatch', None)
+        if dispatch is None or self._in_api_call:
+            return False
+
+        def run():
+            self._in_api_call = True
+            try:
+                handler(sender, args)
+            finally:
+                self._in_api_call = False
+
+        dispatch(run)
+        return True
+
     def _find(self, name):
         """Helper to find control by name"""
+        ctrl = getattr(self, name, None)
+        if ctrl is not None:
+            return ctrl
         try:
             # Try finding in content
-            ctrl = self._content.FindName(name)
-            if ctrl:
-                return ctrl
-        except:
+            if self._content and hasattr(self._content, 'FindName'):
+                ctrl = self._content.FindName(name)
+                if ctrl is not None:
+                    return ctrl
+        except Exception:
             pass
         
+        # Try FindName on window
+        try:
+            ctrl = self.FindName(name)
+            if ctrl is not None:
+                return ctrl
+        except Exception:
+            pass
+
         # Try LogicalTreeHelper
         try:
             from System.Windows import LogicalTreeHelper
-            ctrl = LogicalTreeHelper.FindLogicalNode(self._content, name)
-            if ctrl:
-                return ctrl
-        except:
+            if self._content:
+                ctrl = LogicalTreeHelper.FindLogicalNode(self._content, name)
+                if ctrl is not None:
+                    return ctrl
+        except Exception:
             pass
         
         return None
@@ -460,6 +514,14 @@ class QuickSelectWindow(Window):
     def _load_data(self):
         """Load element data"""
         try:
+            if not self.collector:
+                self.doc, _ = resolve_doc()
+                self.uidoc = resolve_uidoc()
+                if self.doc and self.uidoc:
+                    self.collector = ElementCollector(self.doc, self.uidoc)
+            if not self.collector:
+                return
+
             # Get display mode
             display_mode = "Active View"
             if self.cmbDisplay and self.cmbDisplay.SelectedItem:
@@ -485,7 +547,10 @@ class QuickSelectWindow(Window):
             
         except Exception as e:
             print("Error loading data: {}".format(str(e)))
-            traceback.print_exc()
+            try:                     # ScriptIO has no write() under CPython
+                traceback.print_exc()
+            except Exception:
+                pass
     
     def _build_category_list(self):
         """Build category list for filter"""
@@ -568,7 +633,8 @@ class QuickSelectWindow(Window):
             
             # Use System.Collections.ObjectModel.ObservableCollection for proper binding
             from System.Collections.ObjectModel import ObservableCollection
-            observable = ObservableCollection[object]()
+            from System import Object
+            observable = ObservableCollection[Object]()
             for item in self.filtered_items:
                 observable.Add(item)
             
@@ -604,10 +670,14 @@ class QuickSelectWindow(Window):
     
     def _on_display_changed(self, sender, args):
         """Handle display mode change"""
+        if self._defer(self._on_display_changed, sender, args):
+            return
         self._load_data()
     
     def _on_filter_changed(self, sender, args):
         """Handle filter type change"""
+        if self._defer(self._on_filter_changed, sender, args):
+            return
         self._load_data()
     
     def _on_search_changed(self, sender, args):
@@ -700,6 +770,8 @@ class QuickSelectWindow(Window):
     
     def _on_double_click(self, sender, args):
         """Handle double-click to zoom"""
+        if self._defer(self._on_double_click, sender, args):
+            return
         if self.dataGrid.SelectedItem:
             item = self.dataGrid.SelectedItem
             self._zoom_to_element(item.id)
@@ -727,6 +799,8 @@ class QuickSelectWindow(Window):
     
     def _on_zoom(self, sender, args):
         """Zoom to checked elements"""
+        if self._defer(self._on_zoom, sender, args):
+            return
         checked = [item for item in self.filtered_items if item.is_checked]
         if not checked:
             if self.dataGrid.SelectedItem:
@@ -740,11 +814,19 @@ class QuickSelectWindow(Window):
     
     def _on_select(self, sender, args):
         """Select checked elements in Revit"""
+        if self._defer(self._on_select, sender, args):
+            return
         checked = [item for item in self.filtered_items if item.is_checked]
         if not checked:
             forms.alert("Please check elements first.", title="Quick Select")
             return
         
+        if not self.uidoc:
+            self.uidoc = resolve_uidoc()
+        if not self.uidoc:
+            forms.alert("No active document found in Revit.", title="Quick Select")
+            return
+
         # Select in Revit
         id_list = List[ElementId]()
         for item in checked:
@@ -756,11 +838,19 @@ class QuickSelectWindow(Window):
     
     def _on_isolate(self, sender, args):
         """Isolate checked elements in view"""
+        if self._defer(self._on_isolate, sender, args):
+            return
         checked = [item for item in self.filtered_items if item.is_checked]
         if not checked:
             forms.alert("Please check elements first.", title="Quick Select")
             return
         
+        if not self.doc:
+            self.doc, _ = resolve_doc()
+        if not self.doc:
+            forms.alert("No active document found in Revit.", title="Quick Select")
+            return
+
         # Isolate in view
         id_list = List[ElementId]()
         for item in checked:
@@ -777,6 +867,8 @@ class QuickSelectWindow(Window):
     
     def _on_show(self, sender, args):
         """Show element - find view and zoom"""
+        if self._defer(self._on_show, sender, args):
+            return
         checked = [item for item in self.filtered_items if item.is_checked]
         if not checked:
             if self.dataGrid.SelectedItem:
@@ -785,6 +877,12 @@ class QuickSelectWindow(Window):
                 forms.alert("Please check elements or select a row first.", title="Quick Select")
                 return
         
+        if not self.uidoc:
+            self.uidoc = resolve_uidoc()
+        if not self.uidoc:
+            forms.alert("No active document found in Revit.", title="Quick Select")
+            return
+
         # Show first element
         elem_id = checked[0].id
         try:
@@ -794,11 +892,22 @@ class QuickSelectWindow(Window):
     
     def _on_refresh(self, sender, args):
         """Refresh data"""
+        if self._defer(self._on_refresh, sender, args):
+            return
+        doc, _ = resolve_doc()
+        uidoc = resolve_uidoc()
+        if doc and uidoc:
+            self.doc = doc
+            self.uidoc = uidoc
+            self.collector = ElementCollector(self.doc, self.uidoc)
         self._load_data()
     
     def _on_close(self, sender, args):
         """Close window"""
-        self.Close()
+        try:
+            self.Close()
+        except Exception:
+            pass
 
     def _minimize_window(self, sender, args):
         """Minimize window (chrome button, only reachable when shown standalone)"""
@@ -814,6 +923,13 @@ class QuickSelectWindow(Window):
     def _zoom_to_element(self, element_id):
         """Zoom to element"""
         try:
+            if not self.doc:
+                self.doc, _ = resolve_doc()
+            if not self.uidoc:
+                self.uidoc = resolve_uidoc()
+            if not self.doc or not self.uidoc:
+                return
+
             elem = self.doc.GetElement(element_id)
             if not elem:
                 return
@@ -830,6 +946,14 @@ class QuickSelectWindow(Window):
         except Exception as e:
             print("Zoom error: {}".format(str(e)))
 
+    # ── Select-all o header cot checkbox ────────────────────────────────
+    # toggle_all_rows() nam trong T3WPFWindow: no chay tren grid.Items nen chi
+    # dong dang hien thi (sau filter/sort) bi doi, dung nhu nguoi dung thay.
+
+    def select_all_dataGrid_clicked(self, sender, e):
+        """Header checkbox: chon/bo chon moi dong dang hien thi cua dataGrid."""
+        self.toggle_all_rows(self.dataGrid, "is_checked", sender.IsChecked)
+
 
 # =============================================================================
 # MAIN
@@ -840,7 +964,10 @@ def main():
         window.ShowDialog()
     except Exception as e:
         print("Error: {}".format(str(e)))
-        traceback.print_exc()
+        try:                     # ScriptIO has no write() under CPython
+            traceback.print_exc()
+        except Exception:
+            pass
         forms.alert("Error: {}".format(str(e)), title="Quick Select Error")
 
 def show_dialog():

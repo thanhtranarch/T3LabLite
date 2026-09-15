@@ -22,8 +22,18 @@ from Autodesk.Revit.DB import *
 # ╚╗╔╝╠═╣╠╦╝║╠═╣╠╩╗║  ║╣ ╚═╗
 #  ╚╝ ╩ ╩╩╚═╩╩ ╩╚═╝╩═╝╚═╝╚═╝ VARIABLES
 # ==================================================
-app      = __revit__.Application
-rvt_year = int(app.VersionNumber)
+# `__revit__` members are unavailable when no UIDocument is active, and at
+# module scope that kills the import outright. Resolve defensively; the entry
+# point reports the real problem (see Snippets._host.resolve_doc()).
+try:
+    from Snippets._host import get_revit_version
+    rvt_year = get_revit_version()
+except Exception:
+    try:
+        app = __revit__.Application
+        rvt_year = int(app.VersionNumber)
+    except Exception:
+        rvt_year = 2024
 
 
 # ╔═╗╦ ╦╔╗╔╔═╗╔╦╗╦╔═╗╔╗╔╔═╗

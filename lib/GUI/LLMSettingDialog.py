@@ -26,6 +26,7 @@ from System.Windows import Visibility, WindowState
 from System.Windows.Media import SolidColorBrush, Color
 
 from pyrevit import forms, script
+from GUI.WPF_Base import T3WPFWindow
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'LLMSetting.xaml')
 
@@ -100,7 +101,7 @@ _RED    = _brush(239, 68, 68)
 _GLYPH_CANCEL = u""
 
 
-class LLMSettingWindow(forms.WPFWindow):
+class LLMSettingWindow(T3WPFWindow):
     """Standalone dialog for LLM provider / model / API key / connection setup."""
 
     _BRAND_COLORS = _SHARED_PROVIDER_COLORS
@@ -136,6 +137,7 @@ class LLMSettingWindow(forms.WPFWindow):
 
     def __init__(self):
         self._ui_ready     = False   # guards tab_changed during XAML load
+        self._ai_mode_guard = False  # guards ai_mode_toggled re-entry
         self._action_guard  = False  # guards action_mode_toggled re-entry
         self._think_guard   = False  # guards extended_thinking_toggled re-entry
         self._quality_guard = False  # guards quality_mode_toggled re-entry
@@ -167,7 +169,7 @@ class LLMSettingWindow(forms.WPFWindow):
         self._host_dirty = False
         self._chrome_provider = None   # provider the fields currently show
 
-        forms.WPFWindow.__init__(self, _XAML)
+        T3WPFWindow.__init__(self, _XAML)
         self._models_cache = {}
         self._probing = False
         self._probe_pending = None   # at most one queued switch (last wins)
@@ -916,6 +918,15 @@ class LLMSettingWindow(forms.WPFWindow):
             pass
         try:
             from config.settings import get_settings
+            self._ai_mode_guard = True
+            self.ai_mode_toggle.IsChecked = bool(
+                get_settings().is_ai_mode_enabled())
+        except Exception:
+            pass
+        finally:
+            self._ai_mode_guard = False
+        try:
+            from config.settings import get_settings
             self._action_guard = True
             self.action_mode_toggle.IsChecked = (
                 get_settings().get_action_mode() == 'confirm')
@@ -964,6 +975,16 @@ class LLMSettingWindow(forms.WPFWindow):
             self._flash_hint(self.username_saved_hint)
         except Exception as ex:
             logger.debug("save_username_clicked error: {}".format(ex))
+
+    def ai_mode_toggled(self, sender, e):
+        """Persist the global AI Mode state for tools."""
+        if getattr(self, '_ai_mode_guard', False):
+            return
+        try:
+            from config.settings import get_settings
+            get_settings().set_ai_mode_enabled(bool(self.ai_mode_toggle.IsChecked))
+        except Exception as ex:
+            logger.debug("ai_mode_toggled error: {}".format(ex))
 
     def action_mode_toggled(self, sender, e):
         """Persist 'ask before model edits' (confirm) vs 'auto'."""
@@ -1394,7 +1415,7 @@ class LLMSettingWindow(forms.WPFWindow):
                 row.Background = SolidColorBrush(Color.FromRgb(255, 255, 255))
                 row.BorderBrush = SolidColorBrush(Color.FromRgb(230, 230, 234))
                 row.BorderThickness = Thickness(1)
-                row.CornerRadius = CornerRadius(8)
+                row.CornerRadius = CornerRadius(4)
                 row.Padding = Thickness(10, 6, 8, 6)
                 row.Margin = Thickness(0, 0, 0, 4)
 
@@ -1444,7 +1465,7 @@ class LLMSettingWindow(forms.WPFWindow):
                                  if st.get('exists') else u'')
                               + u"\n\nClick to open this folder")
                 tb.FontSize = 11.5
-                tb.FontFamily = System.Windows.Media.FontFamily("Hanken Grotesk")
+                tb.FontFamily = System.Windows.Media.FontFamily("Segoe UI")
                 tb.Foreground = SolidColorBrush(
                     Color.FromRgb(239, 68, 68) if missing
                     else Color.FromRgb(82, 82, 91))
@@ -1795,10 +1816,13 @@ class LLMSettingWindow(forms.WPFWindow):
 
                 x = TextBlock()
                 x.Text = _GLYPH_CANCEL
-                x.FontFamily = System.Windows.Media.FontFamily(
-                    "Segoe MDL2 Assets")
-                x.FontSize = 10
-                x.Foreground = _MUTED
+                try:
+                    x.Style = self.FindResource("T3.Icon.Muted")
+                except Exception:
+                    x.FontFamily = System.Windows.Media.FontFamily(
+                        "Segoe MDL2 Assets")
+                    x.FontSize = 11
+                    x.Foreground = _MUTED
                 x.Cursor = Cursors.Hand
                 x.Margin = Thickness(10, 2, 2, 0)
                 x.ToolTip = u"Forget this fact"
@@ -1922,11 +1946,14 @@ class LLMSettingWindow(forms.WPFWindow):
                 g.Children.Add(lbl)
 
                 x = TextBlock()
-                x.Text = u""
-                x.FontFamily = System.Windows.Media.FontFamily(
-                    "Segoe MDL2 Assets")
-                x.FontSize = 10
-                x.Foreground = _MUTED
+                x.Text = _GLYPH_CANCEL
+                try:
+                    x.Style = self.FindResource("T3.Icon.Muted")
+                except Exception:
+                    x.FontFamily = System.Windows.Media.FontFamily(
+                        "Segoe MDL2 Assets")
+                    x.FontSize = 11
+                    x.Foreground = _MUTED
                 x.Cursor = Cursors.Hand
                 x.Margin = Thickness(10, 2, 2, 0)
                 x.ToolTip = u"Remove"
@@ -2030,7 +2057,7 @@ class LLMSettingWindow(forms.WPFWindow):
                 row.Background = SolidColorBrush(Color.FromRgb(255, 255, 255))
                 row.BorderBrush = SolidColorBrush(Color.FromRgb(230, 230, 234))
                 row.BorderThickness = Thickness(1)
-                row.CornerRadius = CornerRadius(8)
+                row.CornerRadius = CornerRadius(4)
                 row.Padding = Thickness(10, 6, 8, 6)
                 row.Margin = Thickness(0, 0, 0, 4)
 
@@ -2046,7 +2073,7 @@ class LLMSettingWindow(forms.WPFWindow):
                 tb.Text = os.path.basename(path.rstrip(u'\\/')) or path
                 tb.ToolTip = path
                 tb.FontSize = 11.5
-                tb.FontFamily = System.Windows.Media.FontFamily("Hanken Grotesk")
+                tb.FontFamily = System.Windows.Media.FontFamily("Segoe UI")
                 tb.Foreground = SolidColorBrush(Color.FromRgb(82, 82, 91))
                 tb.VerticalAlignment = System.Windows.VerticalAlignment.Center
                 tb.TextTrimming = System.Windows.TextTrimming.CharacterEllipsis
@@ -2216,7 +2243,7 @@ class LLMSettingWindow(forms.WPFWindow):
                 tb.Text = u"No skills yet."
                 tb.FontSize = 11.5
                 tb.Foreground = SolidColorBrush(Color.FromRgb(161, 161, 170))
-                tb.FontFamily = System.Windows.Media.FontFamily("Hanken Grotesk")
+                tb.FontFamily = System.Windows.Media.FontFamily("Segoe UI")
                 panel.Children.Add(tb)
                 return
 
@@ -2232,7 +2259,7 @@ class LLMSettingWindow(forms.WPFWindow):
                 row.Background = SolidColorBrush(Color.FromRgb(255, 255, 255))
                 row.BorderBrush = SolidColorBrush(Color.FromRgb(230, 230, 234))
                 row.BorderThickness = Thickness(1)
-                row.CornerRadius = CornerRadius(8)
+                row.CornerRadius = CornerRadius(4)
                 row.Padding = Thickness(10, 6, 10, 6)
                 row.Margin = Thickness(0, 0, 0, 4)
                 row.ToolTip = meta.get('description', '')
@@ -2255,7 +2282,7 @@ class LLMSettingWindow(forms.WPFWindow):
                     label += u"   ·  built-in"
                 tb.Text = label
                 tb.FontSize = 11.5
-                tb.FontFamily = System.Windows.Media.FontFamily("Hanken Grotesk")
+                tb.FontFamily = System.Windows.Media.FontFamily("Segoe UI")
                 tb.Foreground = SolidColorBrush(Color.FromRgb(82, 82, 91))
                 tb.VerticalAlignment = System.Windows.VerticalAlignment.Center
                 tb.TextTrimming = System.Windows.TextTrimming.CharacterEllipsis

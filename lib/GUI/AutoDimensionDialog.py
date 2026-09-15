@@ -58,6 +58,7 @@ from Autodesk.Revit.DB import (
 from Autodesk.Revit.DB.Structure import StructuralType
 from Autodesk.Revit.UI import TaskDialog
 from pyrevit import revit, forms, script
+from GUI.WPF_Base import T3WPFWindow
 
 # PATH SETUP
 # ==================================================
@@ -73,8 +74,19 @@ if LIB_DIR not in sys.path:
 # DEFINE VARIABLES
 # ==================================================
 logger = script.get_logger()
-doc    = revit.doc
-uidoc  = revit.uidoc
+
+# `revit.doc` / `revit.uidoc` RAISE AttributeError (not return None) when no
+# UIDocument is active — pyrevit/revit/__init__.py __getattr__. At module scope
+# that killed the whole import before show_dialog() could report anything, so
+# resolve defensively here; show_dialog() does the real check and explains.
+try:
+    doc = revit.doc
+except Exception:
+    doc = None
+try:
+    uidoc = revit.uidoc
+except Exception:
+    uidoc = None
 
 # CONSTANTS
 # ==================================================
@@ -86,6 +98,8 @@ GROUPING_TOL = 500.0 * MM_TO_FEET
 
 
 class WarningSwallower(IFailuresPreprocessor):
+    __namespace__ = "T3Lab.AutoDimension"
+
     def PreprocessFailures(self, failuresAccessor):
         fail_list = failuresAccessor.GetFailureMessages()
         if fail_list.Count == 0:
@@ -642,14 +656,14 @@ def _create_chain_dim(doc_ref, view, ref_pos_list, axis, perp, margin, dim_type,
 # WINDOW CLASS
 # ==================================================
 
-class AutoDimensionWindow(forms.WPFWindow):
+class AutoDimensionWindow(T3WPFWindow):
     """
     WPF window for the Auto Dimension tool.
     Inherits from pyrevit forms.WPFWindow which handles XAML loading.
     """
 
     def __init__(self, uidoc_ref, doc_ref):
-        forms.WPFWindow.__init__(self, XAML_FILE)
+        T3WPFWindow.__init__(self, XAML_FILE)
         self.uidoc = uidoc_ref
         self.doc   = doc_ref
         self._dim_types = []  # list of DimensionType elements
@@ -658,6 +672,149 @@ class AutoDimensionWindow(forms.WPFWindow):
         self._populate_dim_types()
         self._populate_views()
         self._set_status("Ready")
+        self._init_ai_mode()
+
+    # ── AI Mode Support ──────────────────────────────────────────────────
+
+    def _init_ai_mode(self):
+        try:
+            if hasattr(self, 'is_ai_mode_active') and self.is_ai_mode_active():
+                if hasattr(self, 'ai_mode_badge') and self.ai_mode_badge:
+                    self.ai_mode_badge.Visibility = Visibility.Visible
+                if hasattr(self, 'txt_ai_status') and self.txt_ai_status:
+                    info = self.get_ai_status_info()
+                    self.txt_ai_status.Text = "AI Mode: {}".format(info.get('model', 'Ready'))
+        except Exception as ex:
+            logger.warning("AI Mode init failed: {}".format(ex))
+
+    def on_ai_auto_offsets_clicked(self, sender, args):
+        """Calculate optimal L1/L2/L3 offsets using AI or architectural scale rules."""
+        btn = getattr(self, 'btn_ai_auto_offsets', None)
+        orig_content = "✨ AI Auto-Offsets"
+
+        def _restore_btn():
+            if btn:
+                btn.Content = orig_content
+                btn.IsEnabled = True
+
+        try:
+            scale = 100
+            try:
+                if self.uidoc and self.uidoc.ActiveView:
+                    scale = self.uidoc.ActiveView.Scale or 100
+            except Exception:
+                pass
+
+            selected_type_name = "Default"
+            try:
+                if self.cmb_dim_type.SelectedItem:
+                    selected_type_name = str(self.cmb_dim_type.SelectedItem)
+            except Exception:
+                pass
+
+            # Backup current values for undo
+            self._prev_offsets_backup = {
+                'mode': getattr(self.cmb_offset_mode, 'SelectedIndex', 0),
+                'l1': getattr(self.txt_l1, 'Text', ''),
+                'l2': getattr(self.txt_l2, 'Text', ''),
+                'l3': getattr(self.txt_l3, 'Text', ''),
+                'offset': getattr(self.txt_offset, 'Text', '')
+            }
+            undo_btn = getattr(self, 'btn_ai_undo_offsets', None)
+            if undo_btn:
+                undo_btn.Visibility = Visibility.Visible
+
+            def _apply_offsets(l1_val, l2_val, l3_val, single_val, rationale_msg):
+                try:
+                    if hasattr(self, 'cmb_offset_mode'):
+                        self.cmb_offset_mode.SelectedIndex = 1  # 3-Level auto
+                    if hasattr(self, 'txt_l1'):
+                        self.txt_l1.Text = str(int(l1_val))
+                    if hasattr(self, 'txt_l2'):
+                        self.txt_l2.Text = str(int(l2_val))
+                    if hasattr(self, 'txt_l3'):
+                        self.txt_l3.Text = str(int(l3_val))
+                    if hasattr(self, 'txt_offset'):
+                        self.txt_offset.Text = str(int(single_val))
+                    self._set_status("AI Offsets: L1={}mm, L2={}mm, L3={}mm ({})".format(
+                        int(l1_val), int(l2_val), int(l3_val), rationale_msg))
+                except Exception as apply_ex:
+                    logger.warning("Apply offsets error: {}".format(apply_ex))
+                finally:
+                    _restore_btn()
+
+            calc_l1 = max(400, int(round((scale * 6.0) / 50.0) * 50))
+            calc_l2 = max(800, int(round((scale * 12.0) / 50.0) * 50))
+            calc_l3 = max(1200, int(round((scale * 18.0) / 50.0) * 50))
+            calc_single = calc_l2
+
+            if not hasattr(self, 'is_ai_mode_active') or not self.is_ai_mode_active():
+                _apply_offsets(calc_l1, calc_l2, calc_l3, calc_single, "Architectural standard formula")
+                return
+
+            if btn:
+                btn.Content = "⏳ Calculating..."
+                btn.IsEnabled = False
+
+            self._set_status("AI calculating optimal offsets for 1:{} scale...".format(scale))
+
+            prompt = (
+                "Given an architectural plan view with drawing scale 1:{scale} and linear dimension type '{dim_type}', "
+                "calculate the optimal, clutter-free offset distances (in millimeters) from the building perimeter for:\n"
+                "- L1: Openings and detail elements\n"
+                "- L2: Walls and structural columns\n"
+                "- L3: Building overall grid dimensions\n"
+                "- single_offset: single general chain\n"
+                "Standard printed clearance is ~6mm-10mm between text and strings. "
+                "Return JSON ONLY with keys:\n"
+                "{{\"l1_mm\": integer, \"l2_mm\": integer, \"l3_mm\": integer, \"single_offset_mm\": integer, \"rationale\": string}}"
+            ).format(scale=scale, dim_type=selected_type_name)
+
+            def _worker():
+                return self.ai_bridge.ask_json(prompt, fast=True)
+
+            def _callback(res, err):
+                if err or not res or not isinstance(res, dict) or 'l1_mm' not in res:
+                    _apply_offsets(calc_l1, calc_l2, calc_l3, calc_single, "Calculated based on 1:{} scale".format(scale))
+                else:
+                    l1 = res.get('l1_mm', calc_l1)
+                    l2 = res.get('l2_mm', calc_l2)
+                    l3 = res.get('l3_mm', calc_l3)
+                    single = res.get('single_offset_mm', calc_single)
+                    rat = res.get('rationale', "Optimized for 1:{} scale".format(scale))
+                    _apply_offsets(l1, l2, l3, single, rat)
+
+            self.run_ai_async(_worker, _callback)
+
+        except Exception as ex:
+            _restore_btn()
+            logger.error("Error in on_ai_auto_offsets_clicked: {}".format(ex))
+            self._set_status("Error calculating offsets: {}".format(ex))
+
+    def on_ai_undo_offsets_clicked(self, sender, args):
+        """Revert offset inputs to previous values before AI calculation."""
+        try:
+            bak = getattr(self, '_prev_offsets_backup', None)
+            if not bak:
+                return
+            if hasattr(self, 'cmb_offset_mode'):
+                self.cmb_offset_mode.SelectedIndex = bak.get('mode', 0)
+            if hasattr(self, 'txt_l1'):
+                self.txt_l1.Text = bak.get('l1', '')
+            if hasattr(self, 'txt_l2'):
+                self.txt_l2.Text = bak.get('l2', '')
+            if hasattr(self, 'txt_l3'):
+                self.txt_l3.Text = bak.get('l3', '')
+            if hasattr(self, 'txt_offset'):
+                self.txt_offset.Text = bak.get('offset', '')
+
+            self._prev_offsets_backup = None
+            undo_btn = getattr(self, 'btn_ai_undo_offsets', None)
+            if undo_btn:
+                undo_btn.Visibility = Visibility.Collapsed
+            self._set_status("Reverted dimension offsets to previous values.")
+        except Exception as ex:
+            logger.error("Error in on_ai_undo_offsets_clicked: {}".format(ex))
 
 
 
@@ -1999,11 +2156,26 @@ class AutoDimensionWindow(forms.WPFWindow):
 # MAIN SCRIPT
 # ==================================================
 def show_dialog():
-    if not revit.doc:
-        forms.alert("Please open a Revit document first.", exitscript=True)
+    # NOTE: `pyrevit.forms.<anything>` raises PyRevitCPythonNotSupported under the
+    # CPython engine — its __getattr__ refuses every attribute. GUI.T3Dialog is the
+    # T3 replacement and works on both engines.
+    from GUI.T3Dialog import show_warning
+    from Snippets._host import resolve_doc, host_uiapp
 
-    uidoc_inst = __revit__.ActiveUIDocument  # noqa: F821
-    doc_inst   = uidoc_inst.Document
+    doc_inst, doc_error = resolve_doc()
+    if doc_inst is None:
+        show_warning(doc_error or "Please open a Revit document first.",
+                     title="Auto Dimension")
+        return
+
+    uiapp = host_uiapp()
+    uidoc_inst = getattr(uiapp, 'ActiveUIDocument', None) if uiapp else None
+    if uidoc_inst is None:
+        show_warning("No active view to dimension in. Open a plan or section "
+                     "view in your model, then run Auto Dimension again.",
+                     title="Auto Dimension")
+        return
+    doc_inst = uidoc_inst.Document
 
     window = AutoDimensionWindow(uidoc_inst, doc_inst)
     # Modal (ShowDialog) is required: Run starts a Transaction directly in the

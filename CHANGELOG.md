@@ -17,6 +17,17 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-15
+
+### Added
+- **ModelAuditor**: Smart Purge and Advanced Purge modules for comprehensive model health cleanup, scanning unreferenced views, unused families, dangerous operations, and worksets.
+- **ManaGroup & BatchLink**: New tools for managing Revit/CAD link instances and grouping operations.
+- **ManaWorkset, ManaLoca, ManaStyles**: Dedicated management tools for worksets, location coordinates, and object styles.
+- **AI Teaching & Learning**: Trajectory capture and exemplar building for training custom assistant behaviors and workflows.
+- **UI Themes**: Enhanced Revit Light/Dark mode compatibility and ribbon UI theme customization.
+- **Tile Layout & AutoJoin**: Automated element joins and tile layout generation.
+- **Sheet Manager & BatchOut**: Improved view placement, custom parameters service, and batch export workflow.
+
 ## [1.3.1] - 2026-08-05
 
 ### Fixed

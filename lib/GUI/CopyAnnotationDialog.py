@@ -42,9 +42,50 @@ from Autodesk.Revit.DB import (
 
 from pyrevit import forms, script, revit
 
-uidoc = revit.uidoc
-doc = revit.doc
-app = doc.Application
+# `revit.doc` / `revit.uidoc` RAISE AttributeError (not return None) when no
+# UIDocument is active. At module scope that kills the import outright, so the
+# tool dies before it can explain itself. Resolve defensively and let the entry
+try:
+    from Snippets._host import resolve_doc, resolve_uidoc
+except ImportError:
+    try:
+        import importlib
+        import Snippets._host
+        importlib.reload(Snippets._host)
+        from Snippets._host import resolve_doc, resolve_uidoc
+    except Exception:
+        from Snippets._host import resolve_doc
+        def resolve_uidoc(candidate=None):
+            if candidate is not None and hasattr(candidate, 'Document') and candidate.Document is not None:
+                return candidate
+            try:
+                from pyrevit import revit
+                return revit.uidoc
+            except Exception:
+                return None
+
+try:
+    uidoc = resolve_uidoc(getattr(revit, 'uidoc', None))
+except Exception:
+    uidoc = None
+try:
+    doc = resolve_doc(getattr(revit, 'doc', None)).doc
+except Exception:
+    doc = None
+
+
+def _get_app(target_doc=None):
+    d = target_doc or resolve_doc(doc)
+    if isinstance(d, tuple):
+        d = d[0]
+    if d and hasattr(d, 'Application'):
+        return d.Application
+    try:
+        if '__revit__' in globals():
+            return __revit__.Application
+    except Exception:
+        pass
+    return None
 
 # ==============================================================================
 # BRAND COLORS
@@ -134,14 +175,22 @@ class UseDestinationHandler(IDuplicateTypeNamesHandler):
         return DuplicateTypeAction.UseDestinationTypes
 
 class SilentFailurePreprocessor(IFailuresPreprocessor):
+    __namespace__ = "T3Lab.CopyAnnotation"
+
     def PreprocessFailures(self, fa):
         for f in fa.GetFailureMessages():
             fa.DeleteWarning(f)
         return FailureProcessingResult.Continue
 
 def get_all_documents():
+    current_app = _get_app()
+    if not current_app:
+        d = resolve_doc(doc)
+        if isinstance(d, tuple):
+            d = d[0]
+        return [d] if d else []
     docs = []
-    for d in app.Documents:
+    for d in current_app.Documents:
         if not d.IsLinked and not d.IsFamilyDocument:
             docs.append(d)
     return docs
@@ -288,7 +337,7 @@ class CopyAnnotationsWindow(Window):
         hdr = Border()
         hdr.Background = _b(CLR_HEADER)
         hdr.Padding = Thickness(20, 14, 20, 14)
-        hdr.CornerRadius = CornerRadius(0, 0, 5, 5)
+        hdr.CornerRadius = CornerRadius(0, 0, 4, 4)
         hp = StackPanel()
         t1 = TextBlock()
         t1.Text = "Copy Annotations Between Models"
@@ -394,7 +443,7 @@ class CopyAnnotationsWindow(Window):
         cb_border = Border()
         cb_border.BorderBrush = _b(CLR_BORDER)
         cb_border.BorderThickness = Thickness(1)
-        cb_border.CornerRadius = CornerRadius(5)
+        cb_border.CornerRadius = CornerRadius(4)
         cb_border.Background = _b(CLR_WHITE)
         cb_border.Padding = Thickness(10, 8, 10, 8)
 
@@ -501,7 +550,7 @@ class CopyAnnotationsWindow(Window):
         vb = Border()
         vb.BorderBrush = _b(CLR_BORDER)
         vb.BorderThickness = Thickness(1)
-        vb.CornerRadius = CornerRadius(5)
+        vb.CornerRadius = CornerRadius(4)
         vb.Background = _b(CLR_WHITE)
         vb.MinHeight = 100
         vb.MaxHeight = 250

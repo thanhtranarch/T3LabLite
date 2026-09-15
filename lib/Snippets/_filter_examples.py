@@ -17,17 +17,33 @@ import clr, os
 from Autodesk.Revit.DB import *
 
 #>>>>>>>>>> VARIABLES
-doc = __revit__.ActiveUIDocument.Document
-uidoc = __revit__.ActiveUIDocument
-app = __revit__.Application
+# `__revit__` members are unavailable when no UIDocument is active, and at
+# module scope that kills the import outright. Resolve defensively; the entry
+# point reports the real problem (see Snippets._host.resolve_doc()).
+try:
+    doc = __revit__.ActiveUIDocument.Document
+except Exception:
+    doc = None
+try:
+    uidoc = __revit__.ActiveUIDocument
+except Exception:
+    uidoc = None
+try:
+    app = __revit__.Application
+except Exception:
+    app = None
 
 #>>>>>>>>>> STRING FILTER
 def create_string_filter(key_parameter, element_value, caseSensitive = True):
     """Function to create a RevitAPI filter."""
     f_parameter         = ParameterValueProvider(ElementId(key_parameter))  #sheet.SheetNumber
     f_parameter_value   = element_value #e.g. element.Category.Id           #element.GetPara
-    caseSensitive       = True
-    f_rule              = FilterStringRule(f_parameter, FilterStringEquals(), f_parameter_value, caseSensitive)
+    try:
+        # Revit 2022+ (caseSensitive parameter was removed)
+        f_rule = FilterStringRule(f_parameter, FilterStringEquals(), f_parameter_value)
+    except Exception:
+        # Revit 2021 and earlier
+        f_rule = FilterStringRule(f_parameter, FilterStringEquals(), f_parameter_value, caseSensitive)
     return ElementParameterFilter(f_rule)
 
 #>>>>>>>>>> MAIN

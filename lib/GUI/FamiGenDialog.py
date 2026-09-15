@@ -23,6 +23,7 @@ from System.Windows.Controls import DataGridComboBoxColumn, DataGridLength
 from System.Windows.Data import Binding, BindingMode, UpdateSourceTrigger
 
 from pyrevit import forms
+from GUI.WPF_Base import T3WPFWindow, to_items_source
 import pyrevit.script as _pyrevit_script
 
 logger = _pyrevit_script.get_logger()
@@ -400,6 +401,8 @@ _CAT_HINTS = [
 # ==============================================================================
 
 class WarningSwallower(IFailuresPreprocessor):
+    __namespace__ = "T3Lab.FamiGen"
+
     def PreprocessFailures(self, failuresAccessor):
         fail_list = failuresAccessor.GetFailureMessages()
         if fail_list.Count == 0:
@@ -498,7 +501,7 @@ CATEGORY_TEMPLATES = _CATEGORY_TEMPLATES
 # COMBINED DIALOG
 # ==============================================================================
 
-class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
+class FamilyCreatorDialog(T3WPFWindow):
 
     # ProgressPauseMixin element names — FamiGen.xaml uses export-suffixed names
     PP_BAR      = "pb_export"
@@ -507,7 +510,7 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
     PP_STOP_MSG = u"Stopping… finishing current block"
 
     def __init__(self, revit_doc, revit_app, initial_mode='cad'):
-        forms.WPFWindow.__init__(self, _XAML)
+        T3WPFWindow.__init__(self, _XAML)
         self._doc = revit_doc
         self._app = revit_app
         self._block_items      = []
@@ -516,6 +519,7 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
         self._filter_cat       = ""
         self._cancel_requested = False
         self._pause_requested  = False
+        self._prev_json_backup = None
 
         self._init_cad_panel()
         self._init_json_panel()
@@ -524,6 +528,24 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
             self._show_panel('json')
         else:
             self._show_panel('cad')
+
+        self._update_ai_status()
+
+    def _update_ai_status(self):
+        """Update AI Mode status badge in TitleBar."""
+        try:
+            if self.is_ai_mode_active("FamiGen"):
+                info = self.get_ai_status_info()
+                label = info.get("label", "Active")
+                txt = getattr(self, 'txt_ai_status', None) or self.FindName('txt_ai_status')
+                if txt is not None:
+                    txt.Text = "AI Mode: " + label
+            else:
+                txt = getattr(self, 'txt_ai_status', None) or self.FindName('txt_ai_status')
+                if txt is not None:
+                    txt.Text = "AI Mode: Offline"
+        except Exception:
+            pass
 
     # ── Window chrome ────────────────────────────────────────────────────────
 
@@ -570,7 +592,10 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
                 mode_json.IsChecked = (mode == 'json')
         except Exception as ex:
             print("Error in _show_panel: {}".format(ex))
-            traceback.print_exc()
+            try:                     # ScriptIO has no write() under CPython
+                traceback.print_exc()
+            except Exception:
+                pass
 
 
     # ── Status helpers ───────────────────────────────────────────────────────
@@ -646,7 +671,7 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
         col = DataGridComboBoxColumn()
         col.Header = "Category"
         col.Width = DataGridLength(140)
-        col.ItemsSource = cat_names
+        col.ItemsSource = to_items_source(cat_names)
         b = Binding("Category")
         b.Mode = BindingMode.TwoWay
         b.UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
@@ -706,7 +731,7 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
                 if cat and item.Category != cat:
                     continue
                 visible.append(item)
-        self.blocks_grid.ItemsSource = visible
+        self.blocks_grid.ItemsSource = to_items_source(visible)
         total   = len(self._block_items)
         showing = len(visible)
         if total == 0:
@@ -999,11 +1024,17 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
         for item in self._block_items:
             item.IsSelected = True
         self.blocks_grid.Items.Refresh()
+        # Giu checkbox select-all o header khop voi nut nay.
+        self.sync_header_checkbox(
+            self.FindName("chk_all_blocks_grid"), self.blocks_grid, "IsSelected")
 
     def deselect_all_clicked(self, sender, e):
         for item in self._block_items:
             item.IsSelected = False
         self.blocks_grid.Items.Refresh()
+        # Giu checkbox select-all o header khop voi nut nay.
+        self.sync_header_checkbox(
+            self.FindName("chk_all_blocks_grid"), self.blocks_grid, "IsSelected")
 
     def export_clicked(self, sender, e):
         output_folder = self.output_path.Text
@@ -2203,6 +2234,139 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
         except Exception as ex:
             forms.alert("Could not copy prompt: {}".format(ex))
 
+    def ai_generate_clicked(self, sender, e):
+        """Generate family JSON schema directly from user description via AI Mode."""
+        prompt_box = getattr(self, 'ai_prompt_tb', None) or self.FindName('ai_prompt_tb')
+        if not prompt_box:
+            return
+        user_prompt = (prompt_box.Text or "").strip()
+        if not user_prompt:
+            forms.alert("Please enter a description of the family to generate.", title="AI Prompt Required")
+            return
+
+        if not self.is_ai_mode_active("FamiGen"):
+            forms.alert(
+                "AI Mode is currently offline or no API Key is configured.\n\n"
+                "Please configure an API Key in LLMs Setting (Support tab) to enable direct AI Generation, "
+                "or use 'Copy Prompt' to generate JSON externally.",
+                title="AI Mode Offline"
+            )
+            return
+
+        cat = None
+        try:
+            combo = getattr(self, 'json_category_combo', None) or self.FindName('json_category_combo')
+            if combo:
+                cat = combo.SelectedItem
+        except Exception:
+            cat = None
+
+        ppath = self._overlay_path(cat)
+        cat_instructions = ""
+        if ppath and os.path.isfile(ppath):
+            try:
+                with codecs.open(ppath, 'r', 'utf-8') as f:
+                    cat_instructions = f.read()
+            except Exception:
+                pass
+
+        system_prompt = (
+            "You are T3Lab BIM AI, an expert parametric family creator for Autodesk Revit.\n"
+            "Generate a complete, valid JSON schema defining the 3D geometry, forms, parameters and dimensions.\n"
+            "The JSON MUST follow the exact format for Revit Family generation with forms (Extrusion, Blend, Revolution, Sweep).\n"
+            "Strictly output valid JSON only without conversational preamble or markdown outside code fences.\n"
+        )
+        if cat:
+            system_prompt += "\nTarget Family Category: " + str(cat) + "\n"
+        if cat_instructions:
+            system_prompt += "\nCategory Guidelines & Schema Reference:\n" + cat_instructions
+
+        lbl = getattr(self, 'lbl_status', None) or self.FindName('lbl_status')
+        if lbl:
+            lbl.Text = "✨ AI is generating family definition..."
+
+        btn = getattr(self, 'btn_ai_generate', None) or self.FindName('btn_ai_generate')
+        if btn:
+            btn.IsEnabled = False
+            btn.Content = "⏳ Generating..."
+
+        def _bg_task():
+            b = self.ai_bridge
+            if not b:
+                return None
+            return b.ask_json(user_prompt, system_prompt=system_prompt, max_tokens=3000)
+
+        def _on_done(res):
+            b_el = getattr(self, 'btn_ai_generate', None) or self.FindName('btn_ai_generate')
+            if b_el:
+                b_el.IsEnabled = True
+                b_el.Content = "✨ AI Generate"
+
+            l_el = getattr(self, 'lbl_status', None) or self.FindName('lbl_status')
+            j_tb = getattr(self, 'json_tb', None) or self.FindName('json_tb')
+            u_btn = getattr(self, 'btn_ai_undo', None) or self.FindName('btn_ai_undo')
+
+            if res and isinstance(res, (dict, list)):
+                try:
+                    # Basic schema pre-validation: check for geometry/forms or dict keys
+                    geom_count = 0
+                    if isinstance(res, dict):
+                        for k in ('geometry', 'shapes', 'primitives', 'elements', 'forms'):
+                            if k in res and isinstance(res[k], list):
+                                geom_count = len(res[k])
+                                break
+                    elif isinstance(res, list):
+                        geom_count = len(res)
+
+                    pretty_json = json.dumps(res, indent=2, ensure_ascii=False)
+                    if j_tb:
+                        old_text = (j_tb.Text or "").strip()
+                        if old_text and old_text != "Paste your JSON schema here...":
+                            self._prev_json_backup = old_text
+                            if u_btn:
+                                u_btn.Visibility = Visibility.Visible
+                        j_tb.Text = pretty_json
+
+                    if l_el:
+                        count_msg = " ({} part(s))".format(geom_count) if geom_count > 0 else ""
+                        l_el.Text = "✨ AI Generated{}! Review JSON and click 'Create Family'.".format(count_msg)
+                except Exception as ex:
+                    if l_el:
+                        l_el.Text = "Error formatting JSON: " + str(ex)
+            else:
+                if l_el:
+                    l_el.Text = "AI generation returned invalid format. Try again."
+                forms.alert("AI model did not return a valid JSON structure. Please retry or refine your prompt.", title="AI Generation")
+
+        def _on_err(err):
+            b_el = getattr(self, 'btn_ai_generate', None) or self.FindName('btn_ai_generate')
+            if b_el:
+                b_el.IsEnabled = True
+                b_el.Content = "✨ AI Generate"
+            l_el = getattr(self, 'lbl_status', None) or self.FindName('lbl_status')
+            if l_el:
+                l_el.Text = "AI Error: " + str(err)
+            forms.alert("AI Generation Error:\n" + str(err), title="AI Error")
+
+        self.run_ai_async(_bg_task, _on_done, _on_err)
+
+    def ai_undo_clicked(self, sender, e):
+        """Revert to previous JSON content before AI generation."""
+        try:
+            if self._prev_json_backup:
+                j_tb = getattr(self, 'json_tb', None) or self.FindName('json_tb')
+                if j_tb:
+                    j_tb.Text = self._prev_json_backup
+                self._prev_json_backup = None
+                u_btn = getattr(self, 'btn_ai_undo', None) or self.FindName('btn_ai_undo')
+                if u_btn:
+                    u_btn.Visibility = Visibility.Collapsed
+                l_el = getattr(self, 'lbl_status', None) or self.FindName('lbl_status')
+                if l_el:
+                    l_el.Text = "Reverted to previous JSON content."
+        except Exception as ex:
+            logger.warning("Error reverting JSON: {}".format(ex))
+
     def cancel_clicked(self, sender, e):
         self.Close()
 
@@ -2896,6 +3060,14 @@ class FamilyCreatorDialog(forms.WPFWindow, ProgressPauseMixin):
         return built, total, skipped
 
     # ── Batch mode ───────────────────────────────────────────────────────────
+
+    # ── Select-all o header cot checkbox ────────────────────────────────
+    # toggle_all_rows() nam trong T3WPFWindow: no chay tren grid.Items nen chi
+    # dong dang hien thi (sau filter/sort) bi doi, dung nhu nguoi dung thay.
+
+    def select_all_blocks_grid_clicked(self, sender, e):
+        """Header checkbox: chon/bo chon moi dong dang hien thi cua blocks_grid."""
+        self.toggle_all_rows(self.blocks_grid, "IsSelected", sender.IsChecked)
 
 
 # ==============================================================================

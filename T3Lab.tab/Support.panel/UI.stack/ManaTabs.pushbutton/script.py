@@ -1,3 +1,4 @@
+#! python3
 # -*- coding: utf-8 -*-
 """
 Extension Tab Manager
@@ -11,28 +12,65 @@ __version__ = "1.0.0"
 __copyright__ = "Copyright (c) 2025 by Dang Quoc Truong (DQT)"
 tool_name = "Extension Tab Manager"
 
-# System library
-from pyrevit.forms import alert, TemplateListItem
-from pyrevit.api import AdWindows
 import os
+import sys
+# ─── CPython 3 & lib bootstrap ────────────────────────────────────────────────
+for _env in ('APPDATA', 'PROGRAMDATA'):
+    _base = os.environ.get(_env, '')
+    if _base:
+        for _clone in ('pyRevit-Master', 'pyRevit'):
+            _ceng = os.path.join(_base, _clone, 'bin', 'cengines', 'CPY3123')
+            if os.path.isdir(_ceng):
+                for _d in (_ceng, os.path.join(_ceng, 'Lib')):
+                    if hasattr(os, 'add_dll_directory'):
+                        try:
+                            os.add_dll_directory(_d)
+                        except Exception:
+                            pass
+                for _p in (_ceng, os.path.join(_ceng, 'Lib'), os.path.join(_ceng, 'python312.zip')):
+                    if os.path.exists(_p) and _p not in sys.path:
+                        sys.path.insert(0, _p)
+
+_cur = os.path.dirname(os.path.abspath(__file__))
+while _cur and not os.path.exists(os.path.join(_cur, 'lib')):
+    _parent = os.path.dirname(_cur)
+    if _parent == _cur:
+        break
+    _cur = _parent
+_lib_dir = os.path.join(_cur, 'lib')
+if os.path.exists(_lib_dir) and _lib_dir not in sys.path:
+    sys.path.insert(0, _lib_dir)
+
+try:
+    import _cpython_bootstrap
+    _cpython_bootstrap.init_cpython_paths()
+except Exception:
+    pass
+# ──────────────────────────────────────────────────────────────────────────────
+
+# System library
+from pyrevit.forms import alert
+from pyrevit.api import AdWindows
 import codecs
 from System import DateTime
 
-# General info
-uidoc = __revit__.ActiveUIDocument
-app = __revit__.Application
-doc = uidoc.Document
-activeView = doc.ActiveView
-date = DateTime.Now.ToString("yyMMdd")
-revit_version = int(app.VersionNumber)
+from Snippets._host import get_revit_version
 
-userName = app.Username
+try:
+    app = __revit__.Application
+except Exception:
+    app = None
+
+date = DateTime.Now.ToString("yyMMdd")
+revit_version = get_revit_version() or 2024
+userName = getattr(app, "Username", None) or os.environ.get("USERNAME", "User")
 
 def TempMemory(tool_name, bool):
     output = []
 
     # main dir
-    memory_folder = r"C:\MEOS_Temp"
+    _appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
+    memory_folder = os.path.join(_appdata, "T3Lab", "Cache")
     memory_clear_folder = os.path.join(memory_folder, userName)
 
     # temp folder
@@ -65,7 +103,11 @@ def TempMemory(tool_name, bool):
     output.append(memory_data_path)  # output 5
     return output
 
-class MyOption(TemplateListItem):
+class MyOption(object):
+    def __init__(self, item, state=False):
+        self.item = item
+        self.state = state
+
     @property
     def name(self):
         return self.item
@@ -73,9 +115,7 @@ class MyOption(TemplateListItem):
 def CheckBoxForListItem(nameLst, activeLst):
     currentLst = []
     for n in nameLst:
-        item = MyOption(n)
-        if n in activeLst:
-            item = MyOption(n, True)
+        item = MyOption(n, n in activeLst)
         currentLst.append(item)
     return currentLst
 
@@ -114,7 +154,13 @@ def main_task():
 
     currentLst = CheckBoxForListItem(extensionTabNameLst, visibleTabNameLst)
     
-    # Import custom Tab Manager Dialog from lib/GUI
+    # Import custom Tab Manager Dialog from lib/GUI (with dynamic reload for live updates)
+    import importlib
+    try:
+        import GUI.ManaTabsDialog
+        importlib.reload(GUI.ManaTabsDialog)
+    except Exception:
+        pass
     from GUI.ManaTabsDialog import show_tab_manager_dialog
     
     selectedTabNameLst = show_tab_manager_dialog(currentLst)

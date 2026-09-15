@@ -43,13 +43,6 @@ from System.Windows.Input import Key
 from System.Windows.Media import SolidColorBrush, Color
 from System.Windows.Threading import Dispatcher, DispatcherPriority
 
-# IronPython HTTP (urllib2 available in IronPython 2.x)
-try:
-    import urllib2
-    HAS_URLLIB2 = True
-except ImportError:
-    HAS_URLLIB2 = False
-
 # CPython / IronPython 3 HTTP
 try:
     import urllib.request as urllib_request
@@ -58,8 +51,15 @@ try:
 except ImportError:
     HAS_URLLIB3 = False
 
-# pyRevit
+# IronPython HTTP (urllib2 available in IronPython 2.x)
+try:
+    import urllib2
+    HAS_URLLIB2 = True
+except ImportError:
+    HAS_URLLIB2 = False
+
 from pyrevit import revit, DB, forms, script
+from GUI.WPF_Base import T3WPFWindow
 
 # Worldwide (keyless) boundary lookup — OpenStreetMap based
 try:
@@ -68,6 +68,14 @@ try:
 except ImportError:
     geoparcel = None
     HAS_GEOPARCEL = False
+
+# VN-2000 Vietnamese Cadastral Coordinate System
+try:
+    from Snippets import _vn2000 as vn2000
+    HAS_VN2000 = True
+except ImportError:
+    vn2000 = None
+    HAS_VN2000 = False
 
 # ╦  ╦╔═╗╦═╗╦╔═╗╔╗ ╦  ╔═╗╔═╗
 # ╚╗╔╝╠═╣╠╦╝║╠═╣╠╩╗║  ║╣ ╚═╗
@@ -95,6 +103,7 @@ EARTH_RADIUS_FT = 20902231.0
 SOURCE_AUTO     = "Auto (recommended)"
 SOURCE_OSM      = "OpenStreetMap (worldwide, no key)"
 SOURCE_LIGHTBOX = "LightBox (US parcels, API key)"
+SOURCE_VN2000   = "VN-2000 (Vietnam Cadastral)"
 
 # Elevation input units -> feet.  Must match cmb_elev_unit in the XAML.
 ELEV_UNITS = {
@@ -276,15 +285,15 @@ def _url_quote(text, safe=''):
     and CPython / IronPython 3.x (urllib.parse.quote).
     Falls back to a manual encoder if neither is available.
     """
-    if HAS_URLLIB2:
-        try:
-            if isinstance(text, unicode):          # IronPython 2 unicode type
-                text = text.encode('utf-8')
-        except NameError:
-            pass
-        return urllib2.quote(text, safe=safe)
     if HAS_URLLIB3:
         return urllib_parse.quote(text, safe=safe)
+    if HAS_URLLIB2:
+        try:
+            if isinstance(text, str):
+                text = text.encode('utf-8')
+        except Exception:
+            pass
+        return urllib2.quote(text, safe=safe)
     # Last-resort manual percent-encoding
     safe_set = set(safe)
     result = []
@@ -304,6 +313,20 @@ def http_get(url, headers=None):
     """
     headers = headers or {}
 
+    if HAS_URLLIB3:
+        req = urllib_request.Request(url, headers=headers)
+        try:
+            with urllib_request.urlopen(req, timeout=15) as resp:
+                return resp.status, resp.read()
+        except Exception as e:
+            if hasattr(e, 'code'):
+                try:
+                    body = e.read()
+                except Exception:
+                    body = b""
+                return e.code, body
+            raise
+
     if HAS_URLLIB2:
         req = urllib2.Request(url)
         for k, v in headers.items():
@@ -319,20 +342,6 @@ def http_get(url, headers=None):
                 body = b""
             return e.code, body
         except Exception as ex:
-            raise
-
-    if HAS_URLLIB3:
-        req = urllib_request.Request(url, headers=headers)
-        try:
-            with urllib_request.urlopen(req, timeout=15) as resp:
-                return resp.status, resp.read()
-        except Exception as e:
-            if hasattr(e, 'code'):
-                try:
-                    body = e.read()
-                except Exception:
-                    body = b""
-                return e.code, body
             raise
 
     raise RuntimeError("No HTTP library available (urllib2 / urllib.request)")
@@ -781,8 +790,39 @@ def search_primary(address, api_key=None, source=SOURCE_AUTO, language=None):
     if not address:
         raise ValueError(u"Please enter an address.")
 
-    use_lightbox = (source == SOURCE_LIGHTBOX or
-                    (source == SOURCE_AUTO and api_key and
+    # ── VN-2000 Cadastral Coordinate Parsing ──────────────────────────────────
+    if HAS_VN2000:
+        pts = []
+        clean_addr = address.strip('\"\'')
+        if os.path.isfile(clean_addr):
+            try:
+                with open(clean_addr, 'r', encoding='utf-8', errors='ignore') as f:
+                    file_content = f.read()
+                pts = vn2000.parse_coordinate_table(file_content)
+            except Exception as ex:
+                logger.warning("Failed to read file as VN-2000: {}".format(ex))
+        if not pts:
+            pts = vn2000.parse_coordinate_table(address)
+
+        is_vn_source = (source == SOURCE_VN2000 or "VN-2000" in source)
+        if len(pts) >= 3 or is_vn_source:
+            if len(pts) < 3:
+                raise ValueError(
+                    u"VN-2000 format requires at least 3 coordinate points (ID, X, Y).\n"
+                    u"Example: 1 1185420.25 594230.12; 2 1185450.10 594235.40; 3 1185445.00 594280.00"
+                )
+            detected_province = "Hà Nội"
+            for prov in vn2000.PROVINCE_MERIDIANS:
+                if prov.lower() in address.lower():
+                    detected_province = prov
+                    break
+            parcel_name = os.path.basename(clean_addr) if os.path.isfile(clean_addr) else "Thửa đất VN-2000"
+            parcel = vn2000.create_vn2000_parcel(pts, name=parcel_name, province=detected_province)
+            if parcel:
+                return [parcel], None
+
+    use_lightbox = (source == SOURCE_LIGHTBOX or "LightBox" in source or
+                    ((source == SOURCE_AUTO or "Auto" in source) and api_key and
                      looks_like_us_address(address)))
 
     if use_lightbox:
@@ -1212,7 +1252,8 @@ def get_survey_point(doc):
 
 def create_property_lines_in_revit(doc, coordinates, elevation_ft=0.0,
                                    line_category=LINE_CAT_PROPERTY,
-                                   origin_mode="Project Base Point"):
+                                   origin_mode="Project Base Point",
+                                   vn2000_points=None):
     """
     Create the property boundary in the Revit document.
 
@@ -1222,24 +1263,35 @@ def create_property_lines_in_revit(doc, coordinates, elevation_ft=0.0,
         elevation_ft  - Z elevation in feet
         line_category - "Property Line" | "Model Lines" | "Detail Lines"
         origin_mode   - where to place the centroid
+        vn2000_points - optional list of raw VN-2000 points [{'x': Northing, 'y': Easting}, ...]
+                        If present, uses direct sub-millimeter metric planar mapping.
 
-    Returns (count, kind) where *kind* names what was actually created, so the
-    caller can report it honestly - "Property Line" falls back to model lines
-    on the Property Line style wherever Revit exposes no PropertyLine factory,
-    which is every shipping version to date.
+    Returns (count, kind) where *kind* names what was actually created.
     """
     if len(coordinates) < 2:
         raise ValueError("Need at least 2 coordinates to create lines")
 
-    # Compute centroid for coordinate origin
-    centroid_lat, centroid_lon = compute_centroid(coordinates)
-
-    # Convert all coords to Revit XYZ (feet)
     revit_pts = []
-    for c in coordinates:
-        lon, lat = c[0], c[1]
-        x_ft, y_ft = latlon_to_feet(lat, lon, centroid_lat, centroid_lon)
-        revit_pts.append(DB.XYZ(x_ft, y_ft, elevation_ft))
+    if vn2000_points and len(vn2000_points) >= 2:
+        # Direct metric planar coordinates
+        # X in VN-2000 is Northing (meters) -> Revit Y (feet)
+        # Y in VN-2000 is Easting (meters) -> Revit X (feet)
+        c_north = sum(p['x'] for p in vn2000_points) / float(len(vn2000_points))
+        c_east  = sum(p['y'] for p in vn2000_points) / float(len(vn2000_points))
+        M2FT = 3.280839895013123
+        for p in vn2000_points:
+            dx_ft = (p['y'] - c_east) * M2FT   # Easting delta -> Revit X
+            dy_ft = (p['x'] - c_north) * M2FT  # Northing delta -> Revit Y
+            revit_pts.append(DB.XYZ(dx_ft, dy_ft, elevation_ft))
+    else:
+        # Compute centroid for coordinate origin
+        centroid_lat, centroid_lon = compute_centroid(coordinates)
+
+        # Convert all coords to Revit XYZ (feet)
+        for c in coordinates:
+            lon, lat = c[0], c[1]
+            x_ft, y_ft = latlon_to_feet(lat, lon, centroid_lat, centroid_lon)
+            revit_pts.append(DB.XYZ(x_ft, y_ft, elevation_ft))
 
     # Determine insertion offset (project base / survey / world origin)
     if origin_mode == "Survey Point":
@@ -1463,13 +1515,14 @@ class ParcelItem(object):
         self.is_approximate    = bool(data.get("is_approximate", False))
         self.lat               = data.get("lat", 0.0)
         self.lon               = data.get("lon", 0.0)
+        self.vn2000_points     = data.get("vn2000_points", None)
         self.subtitle          = data.get(
             "subtitle",
             u"{}  ·  {}".format(self.boundary_kind,
                                      format_area(self.area_sqft_raw)))
 
 
-class PropertyLineDialog(forms.WPFWindow):
+class PropertyLineDialog(T3WPFWindow):
     """Main WPF dialog for Property Line Tool."""
 
     def __init__(self):
@@ -1477,7 +1530,7 @@ class PropertyLineDialog(forms.WPFWindow):
         # which script calls this class (avoids the IronPython absolute-URI bug
         # that occurs with Application.LoadComponent + file:// URIs)
         xaml_path = os.path.join(os.path.dirname(__file__), "Tools", "PropertyLine.xaml")
-        forms.WPFWindow.__init__(self, xaml_path)
+        T3WPFWindow.__init__(self, xaml_path)
 
         self._selected_parcel = None
         self._parcels = []
@@ -1488,15 +1541,17 @@ class PropertyLineDialog(forms.WPFWindow):
 
 
 
-        # Load saved API key
+        # Load saved API key if UI element exists
         config = load_config()
         saved_key = config.get("lightbox_api_key", "")
-        if saved_key:
-            self.txt_api_key.Text = saved_key
-            self._update_api_status(True, "API key loaded from config")
-        else:
-            self._update_api_status(
-                True, "No API key — worldwide OpenStreetMap search still works")
+        txt_key = getattr(self, "txt_api_key", None)
+        if txt_key is not None:
+            if saved_key:
+                txt_key.Text = saved_key
+                self._update_api_status(True, "API key loaded from config")
+            else:
+                self._update_api_status(
+                    True, "No API key — worldwide OpenStreetMap search still works")
 
         # Restore the last used data source
         saved_source = config.get("data_source", SOURCE_AUTO)
@@ -1520,16 +1575,24 @@ class PropertyLineDialog(forms.WPFWindow):
             self.DragMove()
 
     def btn_tab_search_Click(self, sender, e):
-        self.btn_tab_search.IsChecked = True
-        self.btn_tab_api.IsChecked = False
-        self.grid_search_tab.Visibility = Visibility.Visible
-        self.grid_api_tab.Visibility = Visibility.Collapsed
+        if getattr(self, "btn_tab_search", None) is not None:
+            self.btn_tab_search.IsChecked = True
+        if getattr(self, "btn_tab_api", None) is not None:
+            self.btn_tab_api.IsChecked = False
+        if getattr(self, "grid_search_tab", None) is not None:
+            self.grid_search_tab.Visibility = Visibility.Visible
+        if getattr(self, "grid_api_tab", None) is not None:
+            self.grid_api_tab.Visibility = Visibility.Collapsed
 
     def btn_tab_api_Click(self, sender, e):
-        self.btn_tab_search.IsChecked = False
-        self.btn_tab_api.IsChecked = True
-        self.grid_search_tab.Visibility = Visibility.Collapsed
-        self.grid_api_tab.Visibility = Visibility.Visible
+        if getattr(self, "btn_tab_search", None) is not None:
+            self.btn_tab_search.IsChecked = False
+        if getattr(self, "btn_tab_api", None) is not None:
+            self.btn_tab_api.IsChecked = True
+        if getattr(self, "grid_search_tab", None) is not None:
+            self.grid_search_tab.Visibility = Visibility.Collapsed
+        if getattr(self, "grid_api_tab", None) is not None:
+            self.grid_api_tab.Visibility = Visibility.Visible
 
     def btn_minimize_Click(self, sender, e):
         import System.Windows
@@ -1539,7 +1602,10 @@ class PropertyLineDialog(forms.WPFWindow):
         self.Close()
 
     def btn_save_key_Click(self, sender, e):
-        api_key = self.txt_api_key.Text.strip()
+        txt_key = getattr(self, "txt_api_key", None)
+        if txt_key is None:
+            return
+        api_key = txt_key.Text.strip()
         if not api_key:
             self._update_api_status(False, "API key cannot be empty")
             return
@@ -1582,11 +1648,11 @@ class PropertyLineDialog(forms.WPFWindow):
             pass
 
         source = self._selected_source()
-        api_key = self.txt_api_key.Text.strip()
+        txt_key = getattr(self, "txt_api_key", None)
+        api_key = txt_key.Text.strip() if txt_key is not None else load_config().get("lightbox_api_key", "")
         if source == SOURCE_LIGHTBOX and not api_key:
             self._set_status(
-                u"LightBox needs an API key — add one in the API tab, or "
-                u"switch the source to OpenStreetMap.", error=True)
+                u"LightBox needs an API key — switch the source to OpenStreetMap.", error=True)
             return
 
         save_config({"data_source": source})
@@ -2059,9 +2125,10 @@ class PropertyLineDialog(forms.WPFWindow):
         self._set_status("Creating property lines in Revit...", busy=True)
         self.btn_create.IsEnabled = False
 
+        vn_pts = getattr(self._selected_parcel, "vn2000_points", None)
         try:
             count, kind = create_property_lines_in_revit(
-                doc, coords, elevation_ft, line_cat, origin_mode
+                doc, coords, elevation_ft, line_cat, origin_mode, vn2000_points=vn_pts
             )
             logger.info("Boundary created: {} segments as {}".format(count, kind))
 
@@ -2111,11 +2178,14 @@ class PropertyLineDialog(forms.WPFWindow):
         return bool(chk.IsChecked)
 
     def _update_api_status(self, ok, msg):
-        self.txt_api_status.Text = msg
+        txt_status = getattr(self, "txt_api_status", None)
+        if txt_status is None:
+            return
+        txt_status.Text = msg
         if ok:
-            self.txt_api_status.Foreground = SolidColorBrush(Color.FromRgb(78, 201, 176))  # teal
+            txt_status.Foreground = SolidColorBrush(Color.FromRgb(78, 201, 176))  # teal
         else:
-            self.txt_api_status.Foreground = SolidColorBrush(Color.FromRgb(255, 107, 107))  # red
+            txt_status.Foreground = SolidColorBrush(Color.FromRgb(255, 107, 107))  # red
 
     def _set_status(self, msg, error=False, success=False, busy=False):
         self.txt_status.Text = msg

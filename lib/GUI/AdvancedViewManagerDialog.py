@@ -25,8 +25,10 @@ from System.Windows.Controls import (Grid, RowDefinition, ColumnDefinition, Bord
 from System.Windows.Media import SolidColorBrush, Color, Brushes
 from System.Windows.Forms import SaveFileDialog, OpenFileDialog, DialogResult
 from System.Collections.ObjectModel import ObservableCollection
+from System import Object
 
 from pyrevit import forms, revit, DB
+from GUI.WPF_Base import T3WPFWindow, to_items_source
 from Autodesk.Revit.DB import (
     FilteredElementCollector, View, ViewType, ElementId,
     BuiltInParameter, ViewDetailLevel, StorageType, Transaction
@@ -71,14 +73,14 @@ class PreviewItem(object):
 # BATCH RENAME DIALOG
 # =====================================================
 
-class BatchRenameDialog(forms.WPFWindow):
+class BatchRenameDialog(T3WPFWindow):
     """Dialog for batch renaming views"""
     
     def __init__(self, views, doc):
-        forms.WPFWindow.__init__(self, BATCH_XAML_FILE)
+        T3WPFWindow.__init__(self, BATCH_XAML_FILE)
         self.views = views
         self.doc = doc
-        self.preview_items = ObservableCollection[object]()
+        self.preview_items = ObservableCollection[Object]()
         
         # Bind events
         self.find_box.TextChanged += self._on_option_changed
@@ -183,15 +185,15 @@ class BatchRenameDialog(forms.WPFWindow):
 # MAIN WINDOW - SHEET MANAGER STYLE
 # =====================================================
 
-class AdvancedViewManagerWindow(forms.WPFWindow):
+class AdvancedViewManagerWindow(T3WPFWindow):
     """Advanced view manager with Sheet Manager style UI"""
     
     def __init__(self, doc, uidoc):
-        forms.WPFWindow.__init__(self, XAML_FILE)
+        T3WPFWindow.__init__(self, XAML_FILE)
         self.doc = doc
         self.uidoc = uidoc
         self.all_views = []
-        self.filtered_views = ObservableCollection[object]()
+        self.filtered_views = ObservableCollection[Object]()
         self.custom_columns = {}
         
         # Bind events
@@ -216,8 +218,8 @@ class AdvancedViewManagerWindow(forms.WPFWindow):
         
         # Bind items for standard combo columns
         self.template_items = self._get_all_templates()
-        self.col_template.ItemsSource = self.template_items
-        self.col_detail.ItemsSource = ["Coarse", "Medium", "Fine"]
+        self.col_template.ItemsSource = to_items_source(self.template_items)
+        self.col_detail.ItemsSource = to_items_source(["Coarse", "Medium", "Fine"])
         
         # Then load data (will update summary cards)
         self._load_all_views()

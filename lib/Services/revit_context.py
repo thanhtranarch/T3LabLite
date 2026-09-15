@@ -50,9 +50,9 @@ __title__  = "Revit API Context Runner"
 import threading
 
 try:
+    import queue as _queue_mod          # CPython 3
+except ImportError:
     import Queue as _queue_mod          # IronPython 2.7
-except ImportError:                      # pragma: no cover - CPython 3 tests
-    import queue as _queue_mod
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -135,6 +135,7 @@ try:
     from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
 
     class _ApiContextHandler(IExternalEventHandler):
+        __namespace__ = "T3Lab.Services"
         """Drains the task queue inside Revit's API context."""
 
         def Execute(self, app):
@@ -190,7 +191,7 @@ def has_api_context():
     return _EVENT is not None
 
 
-def run_in_api_context(func, on_done=None):
+def run_in_api_context(func, on_done=None, require_api_context=False):
     """Run `func` inside Revit's API context.
 
     Args:
@@ -198,9 +199,12 @@ def run_in_api_context(func, on_done=None):
                  (ok, error_text) by _normalise.
         on_done: optional callable(ok, error_text), invoked on Revit's main
                  thread once `func` has run.
+        require_api_context: refuse inline execution when an ExternalEvent
+                 cannot be queued. Use for modeless document operations.
 
     Returns 'queued' when the call was handed to the ExternalEvent, or
-    'inline' when it ran immediately (no event available).
+    'inline' when it ran immediately (no event available), or 'rejected' when
+    a strict request could not be queued. Strict rejection still calls on_done.
 
     Deliberately ASYNCHRONOUS. The caller is normally the WPF dispatcher —
     i.e. Revit's main thread — and Revit only fires external events from that
@@ -215,6 +219,13 @@ def run_in_api_context(func, on_done=None):
         ensure_api_context()
 
     if _EVENT is None:
+        if require_api_context:
+            if on_done:
+                try:
+                    on_done(False, "Revit API event is unavailable. Reload pyRevit and reopen the Assistant before retrying.")
+                except Exception:
+                    pass
+            return 'rejected'
         # No event: outside Revit (tests), or ensure_api_context() failed /
         # was never called. Running inline is the best available context; if
         # the tool needs a real one it fails with its own honest error rather
@@ -230,7 +241,11 @@ def run_in_api_context(func, on_done=None):
     token = object()
     _TASKS.put((token, func, on_done))
     try:
-        _EVENT.Raise()
+        request = _EVENT.Raise()
+        # Pending means this shared handler was already queued; it drains all
+        # tasks on Execute. Denied/TimedOut cannot promise that execution.
+        if require_api_context and str(request) not in ('Accepted', 'Pending'):
+            raise RuntimeError("Revit API event request was not accepted: {}".format(request))
     except Exception as ex:
         # Raise() failed — the task would sit in the queue forever. Take it
         # back out and run it here so the user still gets an outcome. With
@@ -239,6 +254,13 @@ def run_in_api_context(func, on_done=None):
         # happens to be at the front — a plain get_nowait() could silently
         # steal and discard someone else's still-good, still-queued task.
         _remove_task(token)
+        if require_api_context:
+            if on_done:
+                try:
+                    on_done(False, _err_text(ex))
+                except Exception:
+                    pass
+            return 'rejected'
         ok, err = _call(func)
         if not ok and not err:
             err = _err_text(ex)

@@ -8,8 +8,8 @@ import json
 import codecs
 import datetime
 import traceback
-import __builtin__
 import clr
+import builtins as __builtin__
 
 # Add required assemblies
 clr.AddReference("System")
@@ -42,7 +42,9 @@ from Autodesk.Revit.DB import (
     Transaction, ElementId, StorageType
 )
 from pyrevit import script, forms
+from GUI.WPF_Base import T3WPFWindow
 from GUI.ProgressPauseMixin import ProgressPauseMixin
+from Snippets._compat import make_eid, eid_value
 
 # Dynamically find the XAML layout
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'IFCSG.xaml')
@@ -300,6 +302,9 @@ def show_column_mapping_dialog(excel_info, filepath):
 
     win.FindName("btnOK").Click += on_ok
     win.FindName("btnCancel").Click += on_cancel
+    top_cancel = win.FindName("btnCancelTop")
+    if top_cancel:
+        top_cancel.Click += on_cancel
     win.ShowDialog()
     return result
 
@@ -998,7 +1003,7 @@ class ExcelReporter:
 # Unified IFC-SG Suite Window
 # ==============================================================================
 
-class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
+class IFCSGSuiteWindow(T3WPFWindow):
 
     # ProgressPauseMixin — IFCSG.xaml progress panel element names
     PP_PANEL      = "ifc_progress_panel"
@@ -1011,7 +1016,7 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
     PP_STOP_MSG   = u"Stopping… finishing current check"
 
     def __init__(self, script_dir, revit):
-        forms.WPFWindow.__init__(self, _XAML)
+        T3WPFWindow.__init__(self, _XAML)
         self._script_dir = script_dir
         self._revit = revit
         self.doc = doc
@@ -1048,6 +1053,7 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
         self.cmbSubtype = self.FindName("cmbSubtype")
         self.btnApply = self.FindName("btnApply")
         self.btnApplyAll = self.FindName("btnApplyAll")
+        self.btn_ai_auto_match = self.FindName("btn_ai_auto_match")
         self.dgTypes = self.FindName("dgTypes")
         self.chkApplyType = self.FindName("chkApplyType")
         self.chkApplyEntity = self.FindName("chkApplyEntity")
@@ -1060,9 +1066,12 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
         self.lstComponents.SelectionChanged += self._on_comp_selected
         self.btnLoadExcel.Click += self._on_load_excel
         self.btnAutoAssign.Click += self._on_auto_assign
+        if self.btn_ai_auto_match is not None:
+            self.btn_ai_auto_match.Click += self._on_ai_auto_match
         self.btnApply.Click += self._on_apply_selected
         self.btnApplyAll.Click += self._on_apply_all
         self.txtFilter.TextChanged += self._on_filter_changed
+        self._update_ai_status()
 
         # State variables for Tab 1
         self.mapping = {}
@@ -1319,7 +1328,7 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
 
         badge = WPFBorder()
         badge.Background = bc.ConvertFromString("#E2E8F0")
-        badge.CornerRadius = System.Windows.CornerRadius(8)
+        badge.CornerRadius = System.Windows.CornerRadius(4)
         badge.Padding = WPFThickness(6, 1, 6, 1)
         badge.Margin = WPFThickness(4, 0, 0, 0)
         DockPanel.SetDock(badge, System.Windows.Controls.Dock.Right)
@@ -1410,6 +1419,119 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
             sel_str = sel_str[5:]
         is_ud = sel_str.startswith("*")
         return sel_str, is_ud
+
+    def _update_ai_status(self):
+        try:
+            txt = getattr(self, 'txt_ai_status', None) or self.FindName('txt_ai_status')
+            if txt is not None:
+                if self.is_ai_mode_active("IFCSG"):
+                    info = self.get_ai_status_info()
+                    txt.Text = "AI Mode: " + info.get("label", "Active")
+                else:
+                    txt.Text = "AI Mode: Offline"
+        except Exception:
+            pass
+
+    def _on_ai_auto_match(self, sender=None, args=None):
+        """Predict best matching IFC-SG Subtype for selected types using AI Mode."""
+        if not self.is_ai_mode_active("IFCSG"):
+            forms.alert(
+                "AI Mode is currently offline or no API Key is configured.\n\n"
+                "Please configure an API Key in LLMs Setting to enable AI Subtype Predictions.",
+                title="AI Mode Offline"
+            )
+            return
+
+        if not self.cmbSubtype or not self.cmbSubtype.Items or self.cmbSubtype.Items.Count == 0:
+            forms.alert("No subtypes available for the selected component.", title="No Subtypes")
+            return
+
+        candidates = [str(item) for item in self.cmbSubtype.Items if str(item).strip()]
+        if not candidates:
+            return
+
+        sel_items = []
+        if self.dgTypes and self.dgTypes.SelectedItems and self.dgTypes.SelectedItems.Count > 0:
+            sel_items = list(self.dgTypes.SelectedItems)
+        elif self.current_rows:
+            sel_items = self.current_rows[:1]
+
+        if not sel_items:
+            forms.alert("Please select at least one type in the grid to predict subtype.", title="Selection Required")
+            return
+
+        target_row = sel_items[0]
+        type_name = getattr(target_row, "TypeName", "") or getattr(target_row, "Type", "") or str(target_row)
+        comp_name = getattr(self, "current_comp", "") or "BIM Component"
+
+        btn = getattr(self, 'btn_ai_auto_match', None)
+        orig_content = "✨ AI Predict"
+
+        def _restore_btn():
+            if btn:
+                btn.Content = orig_content
+                btn.IsEnabled = True
+
+        if btn:
+            btn.Content = "⏳ Predicting..."
+            btn.IsEnabled = False
+
+        # Backup current selection for undo/safety
+        self._prev_subtype_idx = self.cmbSubtype.SelectedIndex
+
+        # Smart candidate pre-filter if candidate list is very long
+        filtered_candidates = candidates
+        if len(candidates) > 35:
+            tokens = set(re.findall(r'\w+', (type_name + " " + comp_name).lower()))
+            scored = []
+            for c in candidates:
+                c_tokens = set(re.findall(r'\w+', c.lower()))
+                common = len(tokens.intersection(c_tokens))
+                scored.append((common, c))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            filtered_candidates = [c for _, c in scored[:30]]
+
+        def _bg():
+            b = self.ai_bridge
+            if not b:
+                return None
+            return b.classify(
+                input_text="Revit Type: {} | Component: {}".format(type_name, comp_name),
+                candidate_categories=filtered_candidates,
+                context="Singapore BCA CORENET X IFC-SG classification"
+            )
+
+        def _on_done(res):
+            try:
+                if res and isinstance(res, dict) and "selected_category" in res:
+                    pred = res["selected_category"]
+                    conf = res.get("confidence", 0.9)
+                    ratio = res.get("rationale", "")
+
+                    matched_idx = -1
+                    for i in range(self.cmbSubtype.Items.Count):
+                        if str(self.cmbSubtype.Items[i]).strip().lower() == pred.strip().lower():
+                            matched_idx = i
+                            break
+
+                    if matched_idx >= 0:
+                        self.cmbSubtype.SelectedIndex = matched_idx
+                        forms.alert(
+                            "Predicted Subtype: {}\nConfidence: {:.0%}\n\nRationale:\n{}".format(pred, float(conf), ratio),
+                            title="✨ AI Subtype Prediction"
+                        )
+                    else:
+                        forms.alert("AI predicted: {}, but not in current subtype list.".format(pred), title="Prediction Note")
+                else:
+                    forms.alert("Could not determine a matching subtype. Please select manually.", title="Prediction Inconclusive")
+            finally:
+                _restore_btn()
+
+        def _on_err(err):
+            _restore_btn()
+            forms.alert("AI Error:\n" + str(err), title="AI Error")
+
+        self.run_ai_async(_bg, _on_done, _on_err)
 
     def _on_apply_selected(self, sender, args):
         sel_indices = set()
@@ -1938,7 +2060,9 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
             ids = System.Collections.Generic.List[ElementId]()
             for eid in element_ids:
                 try:
-                    ids.Add(ElementId(int(eid)))
+                    eid_obj = make_eid(int(eid))
+                    if eid_obj and eid_value(eid_obj) != -1:
+                        ids.Add(eid_obj)
                 except:
                     pass
             if ids.Count > 0:
@@ -1995,7 +2119,7 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
                 disc_border.Margin = Thickness(0, 8, 0, 2)
                 disc_border.Padding = Thickness(8, 4, 8, 4)
                 disc_border.Background = bc.ConvertFromString("#0F172A")
-                disc_border.CornerRadius = System.Windows.CornerRadius(3)
+                disc_border.CornerRadius = System.Windows.CornerRadius(4)
                 
                 disc_txt = TextBlock()
                 disc_txt.Text = r.discipline
@@ -2020,7 +2144,7 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
                 cat_border = Border()
                 cat_border.Margin = Thickness(0, 4, 0, 2)
                 cat_border.Padding = Thickness(4, 3, 4, 3)
-                cat_border.CornerRadius = System.Windows.CornerRadius(3)
+                cat_border.CornerRadius = System.Windows.CornerRadius(4)
                 cat_border.Background = bc.ConvertFromString("#F9F6EE")
                 cat_border.BorderBrush = bc.ConvertFromString("#E8E0D0")
                 cat_border.BorderThickness = Thickness(1)
@@ -2070,19 +2194,19 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
                     
                     bar_border = Border()
                     bar_border.Height = 10
-                    bar_border.CornerRadius = System.Windows.CornerRadius(5)
+                    bar_border.CornerRadius = System.Windows.CornerRadius(2)
                     bar_border.Background = bc.ConvertFromString("#E0E0E0")
                     
                     bar_grid = Grid()
                     bar_bg = Border()
                     bar_bg.Height = 10
-                    bar_bg.CornerRadius = System.Windows.CornerRadius(5)
+                    bar_bg.CornerRadius = System.Windows.CornerRadius(2)
                     bar_bg.Background = bc.ConvertFromString("#E0E0E0")
                     bar_grid.Children.Add(bar_bg)
                     
                     bar_fill = Border()
                     bar_fill.Height = 10
-                    bar_fill.CornerRadius = System.Windows.CornerRadius(5)
+                    bar_fill.CornerRadius = System.Windows.CornerRadius(2)
                     bar_fill.HorizontalAlignment = System.Windows.HorizontalAlignment.Left
                     bar_fill.Width = max(1, pct * 1.8)
                     
@@ -2160,7 +2284,7 @@ class IFCSGSuiteWindow(forms.WPFWindow, ProgressPauseMixin):
             row_border = Border()
             row_border.Margin = Thickness(16, 1, 0, 1)
             row_border.Padding = Thickness(8, 3, 8, 3)
-            row_border.CornerRadius = System.Windows.CornerRadius(2)
+            row_border.CornerRadius = System.Windows.CornerRadius(4)
             row_border.Background = bc.ConvertFromString(status_bg.get(r.status, "#FAFAFA"))
             
             row_grid = Grid()
@@ -2273,7 +2397,13 @@ def show_ifcsg_suite(script_dir, revit):
     global doc, uidoc, output
     uidoc = revit.ActiveUIDocument
     doc = uidoc.Document
-    output = script.get_output()
+    # CPython has no ScriptOutput.GetDefault; safe_output()
+    # returns a no-op window instead of killing the tool.
+    try:
+        from _cpython_bootstrap import safe_output
+        output = safe_output()
+    except Exception:
+        output = script.get_output()
 
     try:
         win = IFCSGSuiteWindow(script_dir, revit)

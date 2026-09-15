@@ -1,3 +1,4 @@
+#! python3
 # -*- coding: utf-8 -*-
 """
 DQT - Ribbon Name Manager
@@ -15,6 +16,7 @@ __version__   = "1.0.0"
 __copyright__ = "Copyright (c) 2026 by Dang Quoc Truong (DQT)"
 __doc__       = """DQT - Ribbon Name Manager
 
+
 Improved ribbon-name tool. Opens a themed window listing every ribbon tab with
 its current name and your short name. Double-click a short-name cell to edit it.
 Then:
@@ -28,12 +30,54 @@ Works on Revit 2024 / 2025 / 2026 / 2027.
 """
 
 import os
+import sys
+
+# ─── CPython 3 & lib bootstrap ────────────────────────────────────────────────
+for _env in ('APPDATA', 'PROGRAMDATA'):
+    _base = os.environ.get(_env, '')
+    if _base:
+        for _clone in ('pyRevit-Master', 'pyRevit'):
+            _ceng = os.path.join(_base, _clone, 'bin', 'cengines', 'CPY3123')
+            if os.path.isdir(_ceng):
+                for _d in (_ceng, os.path.join(_ceng, 'Lib')):
+                    if hasattr(os, 'add_dll_directory'):
+                        try:
+                            os.add_dll_directory(_d)
+                        except Exception:
+                            pass
+                for _p in (_ceng, os.path.join(_ceng, 'Lib'), os.path.join(_ceng, 'python312.zip')):
+                    if os.path.exists(_p) and _p not in sys.path:
+                        sys.path.insert(0, _p)
+
+_cur = os.path.dirname(os.path.abspath(__file__))
+while _cur and not os.path.exists(os.path.join(_cur, 'lib')):
+    _parent = os.path.dirname(_cur)
+    if _parent == _cur:
+        break
+    _cur = _parent
+_lib_dir = os.path.join(_cur, 'lib')
+if os.path.exists(_lib_dir) and _lib_dir not in sys.path:
+    sys.path.insert(0, _lib_dir)
+
+try:
+    import _cpython_bootstrap
+    _cpython_bootstrap.init_cpython_paths()
+except Exception:
+    pass
+# ──────────────────────────────────────────────────────────────────────────────
+import os
 import json
 from pyrevit import forms
 from pyrevit.api import AdWindows
 
 # ------------------------------------------------------------------ GENERAL
-app = __revit__.Application
+# `__revit__` members are unavailable when no UIDocument is active, and at
+# module scope that kills the import outright. Resolve defensively; the entry
+# point reports the real problem (see Snippets._host.resolve_doc()).
+try:
+    app = __revit__.Application
+except Exception:
+    app = None
 
 PATH_SCRIPT  = os.path.dirname(__file__)
 MAP_PATH     = os.path.join(PATH_SCRIPT, "dqt_ribbon_map.json")
@@ -66,42 +110,61 @@ DEFAULT_MAP = {
 def _read_json(path, default):
     if os.path.exists(path):
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8-sig") as f:
                 return json.load(f)
         except Exception:
             return default
     return default
 
 def _write_json(path, data):
+    import tempfile
+    temporary_path = None
     try:
-        with open(path, "w") as f:
+        # Replace only a complete JSON file; a failed write preserves settings.
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False,
+                                         dir=os.path.dirname(os.path.abspath(path)),
+                                         prefix=".ribbon-", suffix=".tmp") as f:
+            temporary_path = f.name
             json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary_path, path)
         return True
     except Exception:
         return False
+    finally:
+        if temporary_path and os.path.exists(temporary_path):
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
 
 def load_map():
     data = _read_json(MAP_PATH, None)
-    if data is None:
+    if not isinstance(data, dict):
         return dict(DEFAULT_MAP)
     merged = dict(DEFAULT_MAP)
-    merged.update(data)
+    merged.update({full: short for full, short in data.items()
+                   if isinstance(full, str) and full and isinstance(short, str)})
     return merged
 
 def save_map(m):
     return _write_json(MAP_PATH, m)
 
 def load_originals():
-    return _read_json(ORIG_PATH, {})
+    data = _read_json(ORIG_PATH, {})
+    return data if isinstance(data, dict) else {}
 
 def save_originals(m):
     return _write_json(ORIG_PATH, m)
 
 def load_state():
-    return _read_json(STATE_PATH, {"mode": "full"}).get("mode", "full")
+    data = _read_json(STATE_PATH, {"mode": "full"})
+    mode = data.get("mode") if isinstance(data, dict) else None
+    return mode if mode in ("full", "short", "mixed") else "full"
 
 def save_state(mode):
-    _write_json(STATE_PATH, {"mode": mode})
+    return _write_json(STATE_PATH, {"mode": mode})
 
 def get_ribbon_tabs():
     tabs = []
@@ -121,22 +184,8 @@ def main():
     short_map = load_map()
     originals = load_originals()
 
-    # Capture originals logic
-    short_to_full = {short: full for full, short in short_map.items()}
-    changed = False
-    for tab in live_tabs:
-        title = tab.Title
-        if title in short_to_full:
-            full = short_to_full[title]
-            if full not in originals:
-                originals[full] = full
-                changed = True
-        else:
-            if title not in originals:
-                originals[title] = title
-                changed = True
-    if changed:
-        save_originals(originals)
+    # The dialog captures stable tab IDs before editing names. Reverse-mapping
+    # titles here loses identity when more than one tab shares a short name.
 
     from GUI.RibbonNamesDialog import show_ribbon_names_dialog
 

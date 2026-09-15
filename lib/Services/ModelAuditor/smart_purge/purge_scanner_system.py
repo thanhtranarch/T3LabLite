@@ -15,6 +15,9 @@ FIXED in this version:
 
 __author__ = "Dang Quoc Truong (DQT)"
 
+import os
+import sys
+
 from Autodesk.Revit.DB import (
     FilteredElementCollector,
     ImportInstance,
@@ -32,7 +35,7 @@ from Autodesk.Revit import DB
 
 # Import compatibility helper
 try:
-    from revit_utils import _eid_int
+    from .revit_utils import _eid_int
 except:
     # Fallback if revit_utils not available
     def _eid_int(element_id):
@@ -54,7 +57,7 @@ except:
         return -1
 
 try:
-    from purge_scanner import BasePurgeScanner
+    from .purge_scanner import BasePurgeScanner
 except:
     # Fallback for testing
     class BasePurgeScanner:
@@ -116,7 +119,10 @@ class ImportSymbolsScanner(BasePurgeScanner):
         except Exception as e:
             print("Error scanning import symbols: {}".format(str(e)))
             import traceback
-            traceback.print_exc()
+            try:                     # ScriptIO has no write() under CPython
+                traceback.print_exc()
+            except Exception:
+                pass
         
         return all_items
     

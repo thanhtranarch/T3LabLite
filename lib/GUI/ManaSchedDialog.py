@@ -19,6 +19,7 @@ __title__  = "Schedule Manager Dialog"
 # ============================================================
 import os
 import zipfile
+import json
 
 try:
     from xml.etree import ElementTree as ET
@@ -39,6 +40,7 @@ from System.Windows.Controls import (
 )
 
 from pyrevit import revit, DB, forms
+from GUI.WPF_Base import T3WPFWindow
 
 # ============================================================
 # XAML PATH
@@ -49,12 +51,11 @@ _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'ManaSched.xaml')
 # ============================================================
 # REVIT VERSION HELPER
 # ============================================================
+from Snippets._compat import make_eid, eid_value
+
 def _eid_int(element_id):
-    """ElementId integer value - compatible across Revit 2024/2025/2026."""
-    try:
-        return element_id.Value
-    except AttributeError:
-        return element_id.IntegerValue
+    """ElementId integer value - compatible across Revit 2020-2027+."""
+    return eid_value(element_id)
 
 
 # ============================================================
@@ -716,7 +717,7 @@ def _apply_changes(changes, doc):
                 skipped += 1
                 continue
             try:
-                elem = doc.GetElement(DB.ElementId(eid))
+                elem = doc.GetElement(make_eid(eid))
             except Exception:
                 elem = None
             if not elem:
@@ -850,11 +851,14 @@ def _render_preview(container, all_data):
             brd.Background      = _b('#F4F4F6') if is_header else _b('#FFFFFF')
             brd.Padding         = System.Windows.Thickness(6, 3, 6, 3)
             tb = TextBlock()
-            tb.Text       = str(text) if text is not None else ""
+            cell_str      = str(text) if text is not None else ""
+            tb.Text       = cell_str
             tb.FontSize   = 11
             tb.FontWeight = (System.Windows.FontWeights.SemiBold
                              if is_header else System.Windows.FontWeights.Normal)
             tb.Foreground = _b('#18181B')
+            tb.TextTrimming = System.Windows.TextTrimming.CharacterEllipsis
+            tb.ToolTip      = cell_str
             brd.Child = tb
             WPFGrid.SetRow(brd, row)
             WPFGrid.SetColumn(brd, col)
@@ -904,7 +908,7 @@ class ScheduleItem(object):
 # MAIN WINDOW CLASS
 # ============================================================
 
-class ManaSchedWindow(forms.WPFWindow):
+class ManaSchedWindow(T3WPFWindow):
     """
     WPF host for ManaSched.xaml.
 
@@ -914,7 +918,7 @@ class ManaSchedWindow(forms.WPFWindow):
     """
 
     def __init__(self, script_dir, revit_obj):
-        forms.WPFWindow.__init__(self, _XAML)
+        T3WPFWindow.__init__(self, _XAML)
         self._script_dir = script_dir
         self._revit      = revit_obj
         self._doc        = revit_obj.ActiveUIDocument.Document
@@ -967,6 +971,113 @@ class ManaSchedWindow(forms.WPFWindow):
 
         # Default to Excel Link tab
         self.tab_main.SelectedItem = self.tab_excel_link
+        self._init_ai_mode()
+
+    # ── AI Mode Support ──────────────────────────────────────────────────
+
+    def _init_ai_mode(self):
+        try:
+            if hasattr(self, 'is_ai_mode_active') and self.is_ai_mode_active():
+                if hasattr(self, 'ai_mode_badge') and self.ai_mode_badge:
+                    self.ai_mode_badge.Visibility = Visibility.Visible
+                if hasattr(self, 'txt_ai_status') and self.txt_ai_status:
+                    info = self.get_ai_status_info()
+                    self.txt_ai_status.Text = "AI Mode: {}".format(info.get('model', 'Ready'))
+        except Exception:
+            pass
+
+    def ai_audit_schedule_clicked(self, sender, e):
+        """AI QA: Audit schedule rows for anomalies, missing values, or inconsistent naming conventions."""
+        btn = getattr(self, 'btn_ai_audit_schedule', None)
+        orig_content = "✨ AI Audit Data"
+
+        def _restore_btn():
+            if btn:
+                btn.Content = orig_content
+                btn.IsEnabled = True
+
+        try:
+            selected_items = [item for item in self._schedule_items if item.is_checked]
+            if not selected_items and self.xl_dg_schedules.SelectedItem:
+                selected_items = [self.xl_dg_schedules.SelectedItem]
+
+            if not selected_items:
+                forms.alert("Please select at least one schedule to audit.", title="AI Schedule Audit")
+                return
+
+            sched_item = selected_items[0]
+            matched_sch = None
+            for name, sch in self._all_schedules:
+                if name == sched_item.name:
+                    matched_sch = sch
+                    break
+
+            if not matched_sch:
+                forms.alert("Could not load schedule data.", title="AI Audit")
+                return
+
+            data = _extract_schedule_data(matched_sch, self._doc)
+            if not data or not data.get('rows'):
+                forms.alert("Schedule '{}' is empty or has no rows.".format(sched_item.name), title="AI Audit")
+                return
+
+            headers = data.get('headers', [])
+            rows = data.get('rows', [])[:30]
+
+            def _apply_classic():
+                blank_count = 0
+                for row in rows:
+                    for val in row:
+                        if not val or not str(val).strip():
+                            blank_count += 1
+                forms.alert(
+                    "Rule-based Audit for '{}':\n- Analyzed {} rows, {} columns\n- Found {} empty cell(s).".format(
+                        sched_item.name, len(rows), len(headers), blank_count),
+                    title="Schedule Data Audit"
+                )
+                _restore_btn()
+
+            if not hasattr(self, 'is_ai_mode_active') or not self.is_ai_mode_active():
+                _apply_classic()
+                return
+
+            if btn:
+                btn.Content = "⏳ Auditing..."
+                btn.IsEnabled = False
+
+            self._set_status("AI auditing schedule '{}' ({} rows)...".format(sched_item.name, len(rows)))
+
+            prompt = (
+                "You are an expert BIM Data Manager.\n"
+                "Audit the following schedule data from Revit for anomalies, outliers, missing values, "
+                "or inconsistent naming/formatting:\n\n"
+                "Schedule: {}\n"
+                "Headers: {}\n"
+                "Sample Rows (first {}):\n{}\n\n"
+                "Return a concise 3-part diagnostic in Vietnamese:\n"
+                "1. ĐÁNH GIÁ CHẤT LƯỢNG DỮ LIỆU (Completeness & Quality Rating)\n"
+                "2. CÁC BẤT THƯỜNG / Ô TRỐNG ĐÁNG CHÚ Ý (Notable Anomalies & Blank Fields)\n"
+                "3. KHUYẾN NGHỊ CHUẨN HÓA (Recommended Data Normalization)"
+            ).format(sched_item.name, ", ".join(headers), len(rows), json.dumps(rows[:20]))
+
+            def _worker():
+                return self.ai_bridge.ask(prompt, max_tokens=1000)
+
+            def _callback(res, err):
+                try:
+                    if err or not res:
+                        _apply_classic()
+                        return
+                    forms.alert(res, title="✨ AI Schedule Data Audit: " + sched_item.name)
+                    self._set_status("AI Audit completed for '{}'.".format(sched_item.name))
+                finally:
+                    _restore_btn()
+
+            self.run_ai_async(_worker, _callback)
+
+        except Exception as ex:
+            _restore_btn()
+            self._set_status("AI Audit error: {}".format(ex))
 
     # ------------------------------------------------------------------
     # WINDOW CHROME
@@ -1590,6 +1701,18 @@ class ManaSchedWindow(forms.WPFWindow):
     # XAML Click= alias for Duplicator run button
     def btn_dup_run_clicked(self, sender, e):
         self._on_dup_run(sender, e)
+
+    # ── Select-all o header cot checkbox ────────────────────────────────
+    # toggle_all_rows() nam trong T3WPFWindow: no chay tren grid.Items nen chi
+    # dong dang hien thi (sau filter/sort) bi doi, dung nhu nguoi dung thay.
+
+    def select_all_xl_dg_schedules_clicked(self, sender, e):
+        """Header checkbox: chon/bo chon moi dong dang hien thi cua xl_dg_schedules."""
+        self.toggle_all_rows(self.xl_dg_schedules, "is_checked", sender.IsChecked)
+
+    def select_all_dup_dg_schedules_clicked(self, sender, e):
+        """Header checkbox: chon/bo chon moi dong dang hien thi cua dup_dg_schedules."""
+        self.toggle_all_rows(self.dup_dg_schedules, "is_checked", sender.IsChecked)
 
 
 # ============================================================

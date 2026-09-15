@@ -3,7 +3,7 @@
 
 import os
 import codecs
-import __builtin__
+import builtins as __builtin__
 
 import clr
 clr.AddReference('System')
@@ -13,7 +13,7 @@ clr.AddReference('WindowsBase')
 
 import System
 from System.Windows import (Window, Thickness, GridLength, GridUnitType,
-                            HorizontalAlignment, VerticalAlignment, FontWeights,
+                            HorizontalAlignment, VerticalAlignment, FontWeights, Visibility,
                             MessageBox, MessageBoxButton, MessageBoxImage, MessageBoxResult)
 from System.Windows.Controls import (StackPanel, TextBlock, TextBox, Button,
                                       ComboBox, ComboBoxItem, DataGrid, Orientation,
@@ -29,10 +29,12 @@ from System.Windows.Media import BrushConverter, SolidColorBrush
 from System.Windows.Data import Binding as WPFBinding
 from System.Windows.Controls import DataGridLength
 from System.Collections.ObjectModel import ObservableCollection
+from System import Object
 from System.ComponentModel import INotifyPropertyChanged, PropertyChangedEventArgs
 from System.Reflection import BindingFlags
 
 from pyrevit import revit, DB, forms, script
+from GUI.WPF_Base import T3WPFWindow, to_items_source
 
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'ManaPara.xaml')
@@ -49,13 +51,11 @@ def _hex_brush(hex_color):
 # ============================================================================
 # VERSION HELPERS
 # ============================================================================
+from Snippets._compat import make_eid, eid_value
 
 def _eid_int(element_id):
-    """ElementId integer value — compatible across Revit 2024/2025/2026."""
-    try:
-        return element_id.Value
-    except AttributeError:
-        return element_id.IntegerValue
+    """ElementId integer value — compatible across Revit 2020-2027+."""
+    return eid_value(element_id)
 
 
 def _get_revit_version():
@@ -416,7 +416,13 @@ def _update_parameter_binding(param_name, new_binding_type):
 # PARAMETER DATA MODEL
 # ============================================================================
 
-class ParameterItem(INotifyPropertyChanged):
+try:
+    _Reactive = getattr(forms, 'Reactive', object)
+except Exception:
+    _Reactive = object
+
+
+class ParameterItem(_Reactive):
     """WPF-bindable parameter data model."""
 
     def __init__(self, name, param_type, data_type, group, group_id,
@@ -1604,7 +1610,7 @@ class ExcelColumnMapper(object):
 # LOADER GRID DATA ROW
 # ============================================================================
 
-class LoaderGridRow(INotifyPropertyChanged):
+class LoaderGridRow(_Reactive):
     """WPF-bindable row for dg_loader_params."""
 
     def __init__(self, req):
@@ -1665,9 +1671,9 @@ class LoaderGridRow(INotifyPropertyChanged):
 # MAIN WINDOW
 # ============================================================================
 
-class ManaParaWindow(forms.WPFWindow):
+class ManaParaWindow(T3WPFWindow):
     def __init__(self, script_dir, revit_obj):
-        forms.WPFWindow.__init__(self, _XAML)
+        T3WPFWindow.__init__(self, _XAML)
         self._script_dir = script_dir
         self._revit = revit_obj
         self._doc = revit.doc
@@ -1709,6 +1715,9 @@ class ManaParaWindow(forms.WPFWindow):
 
         # Load parameter data
         self._load_param_data()
+
+        # AI Mode initialization
+        self._init_ai_mode()
 
         # Force initial tab content to render: btn_nav_browse.IsChecked was already
         # True when the XAML was parsed, so its Checked event fired before the
@@ -1853,7 +1862,7 @@ class ManaParaWindow(forms.WPFWindow):
                     continue
                 filtered.append(item)
 
-            self.dg_parameters.ItemsSource = ObservableCollection[object](filtered)
+            self.dg_parameters.ItemsSource = to_items_source(filtered)
             self._set_status("Showing {} of {} parameters.".format(
                 len(filtered), len(self._all_param_items)))
         except Exception as ex:
@@ -1974,6 +1983,8 @@ class ManaParaWindow(forms.WPFWindow):
         self.txt_transfer_tgt_search.TextChanged += self._on_transfer_tgt_search
         self.btn_transfer_preview.Click += self._on_transfer_preview
         self.btn_transfer_run.Click += self._on_transfer_run
+        if hasattr(self, "btn_transfer_ai_match"):
+            self.btn_transfer_ai_match.Click += self._on_transfer_ai_match
 
         # Set up DataGrid columns for preview
         self._setup_transfer_preview_columns()
@@ -2176,6 +2187,138 @@ class ManaParaWindow(forms.WPFWindow):
         self._selected_target = None
         self._check_enable_run()
 
+    def _init_ai_mode(self):
+        """Initialize AI Mode status pill and tool capabilities if AI is active."""
+        try:
+            if hasattr(self, "ai_mode_badge"):
+                if self.is_ai_mode_active():
+                    self.ai_mode_badge.Visibility = Visibility.Visible
+                    info = self.get_ai_status_info()
+                    provider = info.get("provider", "Ready")
+                    model = info.get("model", "")
+                    label = "AI: {}".format(provider)
+                    if model:
+                        label = "AI: {} ({})".format(provider, model)
+                    if hasattr(self, "txt_ai_status"):
+                        self.txt_ai_status.Text = label
+                    if hasattr(self, "btn_transfer_ai_match"):
+                        self.btn_transfer_ai_match.Visibility = Visibility.Visible
+                else:
+                    self.ai_mode_badge.Visibility = Visibility.Collapsed
+                    if hasattr(self, "btn_transfer_ai_match"):
+                        self.btn_transfer_ai_match.ToolTip = "Enable AI Mode in LLMs Setting for semantic parameter matching"
+        except Exception:
+            pass
+
+    def _on_transfer_ai_match(self, sender, e):
+        """Use AI to semantically match the selected source parameter to candidate target parameters."""
+        if not self._selected_source:
+            MessageBox.Show(
+                "Please select a Source Parameter first to match.",
+                "AI Parameter Match",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information
+            )
+            return
+
+        if not self._transfer_target_items:
+            MessageBox.Show(
+                "No target parameters available in the current category.",
+                "AI Parameter Match",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning
+            )
+            return
+
+        if not self.is_ai_mode_active():
+            MessageBox.Show(
+                "AI Mode is currently disabled or no LLM provider is configured.\n"
+                "Please enable AI Mode in LLMs Setting.",
+                "AI Mode Inactive",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information
+            )
+            return
+
+        src_name = self._selected_source
+        tgt_candidates = [item[0] for item in self._transfer_target_items if item[0] != src_name]
+        if not tgt_candidates:
+            return
+
+        # Visual feedback
+        btn = getattr(self, 'btn_transfer_ai_match', None)
+        orig_content = btn.Content if btn else "✨ AI Match"
+
+        def _restore_btn():
+            if btn:
+                btn.Content = orig_content
+                btn.IsEnabled = True
+
+        if btn:
+            btn.Content = "⏳ Matching..."
+            btn.IsEnabled = False
+
+        self.txt_transfer_tgt_info.Text = "AI matching target parameter for '{}'...".format(src_name)
+        if hasattr(self, "txt_param_status_bar"):
+            self.txt_param_status_bar.Text = "AI reasoning: matching '{}' to candidates...".format(src_name)
+
+        system_prompt = (
+            "You are an expert BIM Manager and Autodesk Revit data specialist. "
+            "Given a source Revit parameter name and a list of target parameter candidates, "
+            "identify the single best semantic target match. "
+            "Return JSON: {\"target_param\": \"<name>\", \"confidence\": 0.0-1.0, \"reasoning\": \"<brief 1-sentence reason>\"}."
+        )
+        prompt = (
+            "Source parameter: \"{}\"\n"
+            "Target candidates:\n{}\n\n"
+            "Select the best target candidate that matches the semantic intent of the source parameter."
+        ).format(src_name, "\n".join("- " + c for c in tgt_candidates[:60]))
+
+        def _worker():
+            return self.ai_bridge.ask_json(prompt, system_prompt=system_prompt)
+
+        def _on_success(result):
+            try:
+                if not result or not isinstance(result, dict) or "target_param" not in result:
+                    self.txt_transfer_tgt_info.Text = "AI could not find a confident match."
+                    return
+
+                best_param = result.get("target_param")
+                confidence = result.get("confidence", 0.0)
+                reasoning = result.get("reasoning", "")
+
+                # Find matching item in target list
+                found = False
+                for name, border, txt in self._transfer_target_items:
+                    if name.lower() == str(best_param).lower():
+                        # Trigger selection handler
+                        self._on_target_param_selected(name, border, txt, [name, border, txt, True], 'target')
+                        found = True
+                        break
+
+                if found:
+                    try:
+                        conf_pct = float(confidence) * 100
+                    except:
+                        conf_pct = 90.0
+                    self.txt_transfer_tgt_info.Text = "Target: {} (AI: {:.0f}% - {})".format(
+                        best_param, conf_pct, reasoning
+                    )
+                    if hasattr(self, "txt_param_status_bar"):
+                        self.txt_param_status_bar.Text = "AI matched '{}' -> '{}' ({:.0f}%)".format(
+                            src_name, best_param, conf_pct
+                        )
+                else:
+                    self.txt_transfer_tgt_info.Text = "AI suggested '{}', but it is not in the active list.".format(best_param)
+            finally:
+                _restore_btn()
+
+        def _on_error(err):
+            _restore_btn()
+            self.txt_transfer_tgt_info.Text = "AI match error: {}".format(err)
+
+        self.run_ai_async(_worker, on_success=_on_success, on_error=_on_error)
+
     def _on_transfer_preview(self, s, e):
         if not self._selected_source or not self._selected_target:
             MessageBox.Show("Please select both Source and Target parameters.",
@@ -2212,7 +2355,7 @@ class ManaParaWindow(forms.WPFWindow):
             except Exception:
                 continue
 
-        self.dg_transfer_preview.ItemsSource = rows
+        self.dg_transfer_preview.ItemsSource = to_items_source(rows)
         try:
             self.txt_transfer_preview_status.Text = "{} element(s) previewed".format(len(rows))
         except:
@@ -2329,7 +2472,7 @@ class ManaParaWindow(forms.WPFWindow):
                     return False
             elif tgt_st == DB.StorageType.ElementId:
                 try:
-                    eid = DB.ElementId(int(float(src_str)))
+                    eid = make_eid(int(float(src_str)))
                     tgt_param.Set(eid)
                     return True
                 except Exception:
@@ -2465,9 +2608,8 @@ class ManaParaWindow(forms.WPFWindow):
     def _refresh_loader_grid(self):
         """Populate dg_loader_params with current requirements."""
         try:
-            rows = ObservableCollection[object](
+            self.dg_loader_params.ItemsSource = to_items_source(
                 [LoaderGridRow(r) for r in self._loader_requirements])
-            self.dg_loader_params.ItemsSource = rows
         except Exception as ex:
             self.txt_loader_status.Text = "Grid error: {}".format(str(ex))
 
@@ -2544,6 +2686,14 @@ class ManaParaWindow(forms.WPFWindow):
         finally:
             self.btn_loader_add.IsEnabled = True
             self.prg_loader.Visibility = self._vis('Collapsed')
+
+    # ── Select-all o header cot checkbox ────────────────────────────────
+    # toggle_all_rows() nam trong T3WPFWindow: no chay tren grid.Items nen chi
+    # dong dang hien thi (sau filter/sort) bi doi, dung nhu nguoi dung thay.
+
+    def select_all_dg_loader_params_clicked(self, sender, e):
+        """Header checkbox: chon/bo chon moi dong dang hien thi cua dg_loader_params."""
+        self.toggle_all_rows(self.dg_loader_params, "is_selected", sender.IsChecked)
 
 
 # ============================================================================

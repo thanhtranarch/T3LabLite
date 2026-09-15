@@ -24,9 +24,16 @@ from Autodesk.Revit.DB import (RevisionNumberType,
                                ElementId)
 from Snippets._context_manager import try_except
 
-doc = __revit__.ActiveUIDocument.Document
-app = __revit__.Application
-rvt_year = int(app.VersionNumber)
+# `__revit__` members are unavailable when no UIDocument is active, and at
+# module scope that kills the import outright. Resolve defensively; the entry
+# point reports the real problem (see Snippets._host.resolve_doc()).
+try:
+    from Snippets._host import resolve_doc, get_revit_version
+    doc, _doc_err = resolve_doc()
+    rvt_year = get_revit_version()
+except Exception:
+    doc = None
+    rvt_year = 2024
 
 
 def create_revision(description, date, revision_type=None):
@@ -47,7 +54,10 @@ def create_revision(description, date, revision_type=None):
         revision_type = getattr(RevisionNumberType, 'None', None)
 
     with try_except(debug=True):
-        new_rev              = Revision.Create(doc)
+        target_doc = doc or (resolve_doc()[0] if 'resolve_doc' in globals() else None)
+        if not target_doc:
+            return None
+        new_rev              = Revision.Create(target_doc)
         new_rev.Description  = description
         new_rev.RevisionDate = date
 

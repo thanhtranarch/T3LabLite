@@ -8,13 +8,18 @@ Copyright © 2025 Dang Quoc Truong (DQT)
 
 __author__ = "Dang Quoc Truong (DQT)"
 
+import os
+import sys
+
 try:
-    from base_scanner import BaseAdvancedScanner
+    from .base_scanner import BaseAdvancedScanner
 except ImportError:
     import sys
     import os
     sys.path.insert(0, os.path.dirname(__file__))
-    from base_scanner import BaseAdvancedScanner
+    from .base_scanner import BaseAdvancedScanner
+
+from .base_scanner import eid_value
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, 
@@ -105,12 +110,12 @@ class ModelDeepScanner(BaseAdvancedScanner):
                     scope_box_param = view.get_Parameter(
                         Autodesk.Revit.DB.BuiltInParameter.VIEWER_VOLUME_OF_INTEREST_CROP
                     )
-                    if scope_box_param and scope_box_param.AsElementId().IntegerValue > 0:
-                        used_scope_boxes.add(scope_box_param.AsElementId().IntegerValue)
+                    if scope_box_param and eid_value(scope_box_param.AsElementId()) > 0:
+                        used_scope_boxes.add(eid_value(scope_box_param.AsElementId()))
             
             # Find unused scope boxes
             for scope_box in scope_boxes:
-                if scope_box.Id.IntegerValue not in used_scope_boxes:
+                if eid_value(scope_box.Id) not in used_scope_boxes:
                     if self.can_delete(scope_box):
                         items.append(self.create_item_dict(scope_box, category.name))
                         

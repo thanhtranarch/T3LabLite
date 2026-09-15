@@ -18,24 +18,69 @@ Callbacks contract (missing keys degrade gracefully):
 """
 
 import os
-import clr
-clr.AddReference("System.Drawing")
+import sys
+
+try:
+    import clr
+    for _ref in ('System', 'WindowsBase', 'PresentationCore', 'PresentationFramework', 'System.Drawing'):
+        try:
+            clr.AddReference(_ref)
+        except Exception:
+            pass
+except Exception:
+    clr = None
 
 from pyrevit import forms
+from GUI.WPF_Base import T3WPFWindow
 
-from System import TimeSpan
-from System.Windows import (WindowState, Thickness, CornerRadius,
-                            Visibility, Clipboard, VerticalAlignment)
-from System.Windows.Input import Cursors, Key
-from System.Windows.Media import (BrushConverter, Color, SolidColorBrush,
-                                  LinearGradientBrush, GradientStop,
-                                  GradientStopCollection)
-from System.Windows.Controls import (Canvas, Button, TextBlock, StackPanel,
-                                     Border, Orientation)
-from System.Windows.Shapes import Ellipse
-from System.Windows.Threading import DispatcherTimer
-from System.Drawing import Bitmap, Graphics
-from System.Drawing import Point as DrawPoint, Size as DrawSize
+try:
+    from System import TimeSpan
+except Exception:
+    TimeSpan = None
+
+try:
+    from System.Windows import (WindowState, Thickness, CornerRadius,
+                                Visibility, Clipboard, VerticalAlignment,
+                                HorizontalAlignment, FontWeights, TextTrimming)
+except Exception:
+    WindowState = Thickness = CornerRadius = Visibility = Clipboard = VerticalAlignment = None
+    HorizontalAlignment = FontWeights = TextTrimming = None
+
+try:
+    from System.Windows.Input import Cursors, Key
+except Exception:
+    Cursors = Key = None
+
+try:
+    from System.Windows.Media import (BrushConverter, Color, SolidColorBrush,
+                                      LinearGradientBrush, GradientStop,
+                                      GradientStopCollection)
+except Exception:
+    BrushConverter = Color = SolidColorBrush = LinearGradientBrush = GradientStop = GradientStopCollection = None
+
+try:
+    from System.Windows.Controls import (Canvas, Button, TextBlock, StackPanel,
+                                         Border, Orientation)
+except Exception:
+    Canvas = Button = TextBlock = StackPanel = Border = Orientation = None
+
+try:
+    from System.Windows.Shapes import Ellipse
+except Exception:
+    Ellipse = None
+
+try:
+    from System.Windows.Threading import DispatcherTimer
+except Exception:
+    DispatcherTimer = None
+
+try:
+    from System.Drawing import Bitmap, Graphics
+    from System.Drawing import Point as DrawPoint, Size as DrawSize
+    HAS_DRAWING = True
+except Exception:
+    Bitmap = Graphics = DrawPoint = DrawSize = None
+    HAS_DRAWING = False
 
 # Absolute path to XAML
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'BGTheme.xaml')
@@ -46,7 +91,23 @@ MAX_RECENTS = 10
 # ------------------------------------------------------------------ helpers
 
 def brush(hex_string):
-    return BrushConverter().ConvertFromString(hex_string)
+    """Safely convert a hex string to a WPF Brush."""
+    if not hex_string:
+        return None
+    try:
+        if BrushConverter is not None:
+            return BrushConverter().ConvertFromString(hex_string)
+        from System.Windows.Media import BrushConverter as BC
+        return BC().ConvertFromString(hex_string)
+    except Exception:
+        pass
+    try:
+        rgb = from_hex(hex_string)
+        if rgb is not None:
+            return solid(rgb)
+    except Exception:
+        pass
+    return None
 
 
 def clamp255(v):
@@ -141,11 +202,11 @@ GRADIENT_PRESETS = [
 ]
 
 
-class BackgroundThemeWindow(forms.WPFWindow):
+class BackgroundThemeWindow(T3WPFWindow):
     """3-tab theme studio: model background / 3D gradient / Revit UI theme."""
 
     def __init__(self, config, presets, callbacks):
-        forms.WPFWindow.__init__(self, _XAML)
+        T3WPFWindow.__init__(self, _XAML)
 
         self.presets = presets
         self.callbacks = callbacks or {}
@@ -233,15 +294,21 @@ class BackgroundThemeWindow(forms.WPFWindow):
     # ------------------------------------------------------------ chrome
 
     def minimize_button_clicked(self, sender, e):
-        self.WindowState = WindowState.Minimized
+        if WindowState is not None:
+            self.WindowState = WindowState.Minimized
 
     def maximize_button_clicked(self, sender, e):
-        if self.WindowState == WindowState.Maximized:
-            self.WindowState = WindowState.Normal
-            self.btn_maximize.ToolTip = "Maximize"
-        else:
-            self.WindowState = WindowState.Maximized
-            self.btn_maximize.ToolTip = "Restore"
+        if WindowState is not None:
+            if self.WindowState == WindowState.Maximized:
+                self.WindowState = WindowState.Normal
+                btn = getattr(self, 'btn_maximize', None) or self.FindName('btn_maximize')
+                if btn:
+                    btn.ToolTip = "Maximize"
+            else:
+                self.WindowState = WindowState.Maximized
+                btn = getattr(self, 'btn_maximize', None) or self.FindName('btn_maximize')
+                if btn:
+                    btn.ToolTip = "Restore"
 
     def close_button_clicked(self, sender, e):
         self.Close()
@@ -474,6 +541,8 @@ class BackgroundThemeWindow(forms.WPFWindow):
             self._status("Screen pick cancelled")
 
     def _sample_screen(self, args):
+        if not HAS_DRAWING or Bitmap is None or Graphics is None:
+            return None
         try:
             pos = args.GetPosition(self)
             sp = self.PointToScreen(pos)
@@ -503,29 +572,66 @@ class BackgroundThemeWindow(forms.WPFWindow):
         self._stop_eyedrop("Picked %s from screen" % to_hex(self._r, self._g, self._b))
         args.Handled = True
 
+    # ------------------------------------------------------------ style helper
+
+    def _apply_button_style(self, btn, style_key):
+        if not btn or not style_key:
+            return
+        try:
+            st = self.TryFindResource(style_key)
+            if st is not None:
+                btn.Style = st
+                return
+        except Exception:
+            pass
+        try:
+            if hasattr(self.Resources, "Contains") and self.Resources.Contains(style_key):
+                btn.Style = self.Resources[style_key]
+        except Exception:
+            pass
+
     # ------------------------------------------------------------ presets
 
     def _make_chip(self, name, rgb, click_handler, tag):
         btn = Button()
-        btn.Style = self.Resources["TertiaryButton"]
-        btn.Margin = Thickness(3)
-        sp = StackPanel()
-        sp.Orientation = Orientation.Horizontal
-        dot = Ellipse()
-        dot.Width = 10
-        dot.Height = 10
-        dot.Fill = solid(rgb)
-        dot.Stroke = brush("#D4D4DA")
-        dot.StrokeThickness = 1
-        dot.Margin = Thickness(0, 0, 6, 0)
-        dot.VerticalAlignment = VerticalAlignment.Center
+        self._apply_button_style(btn, "T3.Button.Base")
+        btn.Background = solid(rgb)
+
+        lum = luminance(rgb[0], rgb[1], rgb[2])
+        if lum > 180:
+            btn.BorderBrush = brush("#C8C8D0")
+        elif lum < 50:
+            btn.BorderBrush = brush("#3A3A42")
+        else:
+            btn.BorderBrush = solid((max(0, rgb[0] - 25), max(0, rgb[1] - 25), max(0, rgb[2] - 25)))
+        btn.BorderThickness = Thickness(1)
+
+        btn.Height = 26
+        btn.Padding = Thickness(6, 0, 6, 0)
+        btn.Margin = Thickness(0, 0, 4, 4)
+        if Cursors is not None:
+            btn.Cursor = Cursors.Hand
+
         txt = TextBlock()
         txt.Text = name
-        txt.VerticalAlignment = VerticalAlignment.Center
-        sp.Children.Add(dot)
-        sp.Children.Add(txt)
-        btn.Content = sp
+        txt.FontSize = 11.5
+        if FontWeights is not None:
+            txt.FontWeight = FontWeights.SemiBold
+        if VerticalAlignment is not None:
+            txt.VerticalAlignment = VerticalAlignment.Center
+        if HorizontalAlignment is not None:
+            txt.HorizontalAlignment = HorizontalAlignment.Center
+        if TextTrimming is not None:
+            txt.TextTrimming = TextTrimming.CharacterEllipsis
+
+        if lum < 140:
+            txt.Foreground = brush("#FFFFFF")
+        else:
+            txt.Foreground = brush("#18181B")
+
+        btn.Content = txt
         btn.Tag = tag
+        btn.ToolTip = "%s (%s)" % (name, to_hex(*rgb))
         btn.Click += click_handler
         return btn
 
@@ -612,7 +718,7 @@ class BackgroundThemeWindow(forms.WPFWindow):
             sw = Border()
             sw.Width = 24
             sw.Height = 24
-            sw.CornerRadius = CornerRadius(7)
+            sw.CornerRadius = CornerRadius(4)
             sw.Margin = Thickness(0, 0, 6, 6)
             sw.Background = solid(rgb)
             sw.BorderBrush = brush("#D4D4DA")
@@ -684,23 +790,26 @@ class BackgroundThemeWindow(forms.WPFWindow):
         for idx, item in enumerate(GRADIENT_PRESETS):
             name = item[0]
             btn = Button()
-            btn.Style = self.Resources["TertiaryButton"]
-            btn.Margin = Thickness(0, 0, 6, 6)
+            self._apply_button_style(btn, "T3.Button.Secondary")
+            btn.Height = 24
+            btn.Padding = Thickness(8, 0, 8, 0)
+            btn.Margin = Thickness(0, 0, 4, 4)
             sp = StackPanel()
             sp.Orientation = Orientation.Horizontal
             for rgb in item[1:]:
                 dot = Ellipse()
-                dot.Width = 9
-                dot.Height = 9
+                dot.Width = 8
+                dot.Height = 8
                 dot.Fill = solid(rgb)
-                dot.Stroke = brush("#D4D4DA")
+                dot.Stroke = brush("#DCDCE0")
                 dot.StrokeThickness = 1
-                dot.Margin = Thickness(0, 0, 3, 0)
+                dot.Margin = Thickness(0, 0, 4, 0)
                 dot.VerticalAlignment = VerticalAlignment.Center
                 sp.Children.Add(dot)
             txt = TextBlock()
             txt.Text = name
-            txt.Margin = Thickness(3, 0, 0, 0)
+            txt.FontSize = 11.5
+            txt.Margin = Thickness(4, 0, 0, 0)
             txt.VerticalAlignment = VerticalAlignment.Center
             sp.Children.Add(txt)
             btn.Content = sp
@@ -781,8 +890,8 @@ class BackgroundThemeWindow(forms.WPFWindow):
             btn.Content = name
             btn.Width = 110
             btn.Margin = Thickness(0, 0, 8, 0)
-            style_key = "PrimaryButton" if name == current else "SecondaryButton"
-            btn.Style = self.Resources[style_key]
+            style_key = "T3.Button.Primary" if name == current else "T3.Button.Secondary"
+            self._apply_button_style(btn, style_key)
             btn.Tag = name
             btn.Click += self._on_theme_click
             self.ThemeBtnPanel.Children.Add(btn)
@@ -796,9 +905,9 @@ class BackgroundThemeWindow(forms.WPFWindow):
                 btn.Content = name
                 btn.Width = 110
                 btn.Margin = Thickness(0, 0, 8, 0)
-                style_key = ("PrimaryButton" if name == canvas_current
-                             else "SecondaryButton")
-                btn.Style = self.Resources[style_key]
+                style_key = ("T3.Button.Primary" if name == canvas_current
+                             else "T3.Button.Secondary")
+                self._apply_button_style(btn, style_key)
                 btn.Tag = name
                 btn.Click += self._on_canvas_theme_click
                 self.CanvasBtnPanel.Children.Add(btn)

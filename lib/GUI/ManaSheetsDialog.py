@@ -21,12 +21,14 @@ from System.Windows.Controls import (RowDefinition, ColumnDefinition, Border,
                                       DataGridTextColumn, ScrollViewer)
 from System.Windows.Media import SolidColorBrush
 from System.Collections.ObjectModel import ObservableCollection
+from System import Object
 from System.ComponentModel import INotifyPropertyChanged, PropertyChangedEventArgs
 
 # CRITICAL: Import WPF Grid BEFORE Revit wildcard import
 from System.Windows.Controls import Grid as WPFGrid
 
 from pyrevit import revit, DB, forms
+from GUI.WPF_Base import T3WPFWindow
 from Autodesk.Revit.DB import FilteredElementCollector, ViewSheet, Transaction
 
 from Snippets._compat import eid_value
@@ -40,27 +42,56 @@ if SERVICES_DIR not in sys.path:
 
 # Import Sheet Manager services
 try:
-    from sheet_core.revit_service import RevitService
-    from sheet_core.data_models import ChangeTracker, SheetModel
-    from excel_service import ExcelService
-    from viewsheet_sets_service import ViewSheetSetsService
-    from place_views_service import PlaceViewsService
-    from custom_parameters_service import CustomParametersService
+    from Services.SheetManager.sheet_core.revit_service import RevitService
+    from Services.SheetManager.sheet_core.data_models import ChangeTracker, SheetModel
+    from Services.SheetManager.excel_service import ExcelService
+    from Services.SheetManager.viewsheet_sets_service import ViewSheetSetsService
+    from Services.SheetManager.place_views_service import PlaceViewsService
+    from Services.SheetManager.custom_parameters_service import CustomParametersService
 except Exception as e:
     # Print error in case imports fail
     print("Error importing services: {}".format(e))
 
-doc = revit.doc
+try:
+    from GUI import RevitTheme as _theme
+except Exception:
+    try:
+        import RevitTheme as _theme
+    except Exception:
+        _theme = None
+
+# `revit.doc` / `revit.uidoc` RAISE AttributeError (not return None) when no
+# UIDocument is active. At module scope that kills the import outright, so the
+# tool dies before it can explain itself. Resolve defensively and let the entry
+# point report the real problem.
+try:
+    doc = revit.doc
+except Exception:
+    doc = None
 XAML_FILE = os.path.join(GUI_DIR, 'Tools', 'ManaSheets.xaml')
 
 from GUI.ProgressPauseMixin import ProgressPauseMixin
+from GUI.DataGridColumnFilter import ColumnFilterController
+from GUI import GridPendingEdits as _pend
+
+# Row fields the grid lets the user edit. Each needs a matching `dirty_<field>`
+# flag on the row and a CellStyle DataTrigger in ManaSheets.xaml bound to it,
+# otherwise the amber "waiting for Apply" highlight never shows.
+SHEET_EDIT_FIELDS = ("sheet_number", "sheet_name", "designed_by",
+                     "checked_by", "approved_by", "drawn_by")
 
 
 # =====================================================
 # RENUMBER WRAPPER MODEL
 # =====================================================
 
-class RenumberItem(INotifyPropertyChanged):
+try:
+    _Reactive = getattr(forms, 'Reactive', object)
+except Exception:
+    _Reactive = object
+
+
+class RenumberItem(_Reactive):
     """Wrapper class for Sheet Renumber preview grid"""
     def __init__(self, sheet_model):
         self._property_changed_handlers = []
@@ -89,22 +120,31 @@ class RenumberItem(INotifyPropertyChanged):
             self.OnPropertyChanged("IsSelected")
 
     def add_PropertyChanged(self, handler):
-        self._property_changed_handlers.append(handler)
+        if handler not in self._property_changed_handlers:
+            self._property_changed_handlers.append(handler)
 
     def remove_PropertyChanged(self, handler):
-        self._property_changed_handlers.remove(handler)
+        if handler in self._property_changed_handlers:
+            self._property_changed_handlers.remove(handler)
 
     def OnPropertyChanged(self, property_name):
-        args = PropertyChangedEventArgs(property_name)
-        for handler in self._property_changed_handlers:
-            handler(self, args)
+        try:
+            if PropertyChangedEventArgs is not None:
+                args = PropertyChangedEventArgs(property_name)
+                for handler in list(self._property_changed_handlers):
+                    try:
+                        handler(self, args)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 
 # =====================================================
 # MAIN WINDOW CONTROLLER
 # =====================================================
 
-class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
+class SheetManagerWindow(T3WPFWindow):
 
     # ProgressPauseMixin — ManaSheets.xaml status-bar progress panel
     PP_PANEL      = "ms_progress_panel"
@@ -117,8 +157,11 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
     PP_STOP_MSG   = u"Stopping… finishing current sheet"
 
     def __init__(self):
-        forms.WPFWindow.__init__(self, XAML_FILE)
+        T3WPFWindow.__init__(self, XAML_FILE)
         self.doc = revit.doc
+
+        self._adopt_host_font()
+        self._apply_theme()
         
         # Initialize Core Services
         self.revit_service = RevitService(self.doc)
@@ -146,8 +189,8 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
 
         # Data collection
         self.all_sheets = []
-        self.filtered_sheets = ObservableCollection[object]()
-        self.renumber_items = ObservableCollection[object]()
+        self.filtered_sheets = ObservableCollection[Object]()
+        self.renumber_items = ObservableCollection[Object]()
         
         # Chrome controls
         self.btn_minimize.Click += self._minimize
@@ -190,6 +233,21 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
         self.renum_close_btn.Click += self._on_close
         self.renum_grid.ItemsSource = self.renumber_items
 
+        # Column filters (nút phễu trên header — GUI/DataGridColumnFilter.py).
+        # Chỉ gắn cho bảng SHEETS: bảng Renumber là preview của chính danh sách
+        # đã lọc ở tab SHEETS, lọc thêm ở đó sẽ làm lệch dải số sinh ra.
+        self.sheets_col_filter = ColumnFilterController(
+            self, self.sheets_grid,
+            columns=[("NUMBER", "sheet_number"),
+                     ("SHEET NAME", "sheet_name"),
+                     ("DESIGNED BY", "designed_by"),
+                     ("CHECKED BY", "checked_by"),
+                     ("APPROVED BY", "approved_by"),
+                     ("DRAWN BY", "drawn_by")],
+            source=lambda: self.all_sheets,
+            on_changed=self._apply_sheets_filters,
+            status_setter=self._set_status)
+
         # Load initial data
         self._load_sheets_data()
         self._apply_sheets_filters()
@@ -199,6 +257,33 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
         # True when the XAML was parsed, so its Checked event fired before this
         # handler was wired above and tab_control.SelectedIndex was never set.
         self.tab_control.SelectedIndex = 0
+
+    def _set_status(self, text):
+        """Ghi một câu trạng thái ra footer."""
+        try:
+            self.txt_status_bar.Text = text
+        except Exception:
+            pass
+
+    def _adopt_host_font(self):
+        if _theme is None:
+            return
+        family, size = _theme.host_font()
+        if family:
+            try:
+                self.FontFamily = family
+                if size and size > 0:
+                    self.FontSize = size
+            except Exception:
+                pass
+
+    def _apply_theme(self, theme=None):
+        if _theme is None:
+            return
+        try:
+            _theme.apply(self, theme)
+        except Exception:
+            pass
 
     # ── Chrome Event Handlers ────────────────────────────────────
     def _minimize(self, sender, e):
@@ -231,6 +316,8 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
     # ── SHEETS Tab Logics ─────────────────────────────────────────
     def _load_sheets_data(self):
         self.all_sheets = self.revit_service.get_all_sheets()
+        for item in self.all_sheets:
+            _pend.init_pending(item, SHEET_EDIT_FIELDS)
         self.change_tracker.clear_all()
         self._update_sheets_summary()
 
@@ -254,10 +341,14 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
             elif filter_index == 2: # Non-Placeholder Only
                 if item.element.IsPlaceholder:
                     continue
-                    
+            # Bộ lọc theo cột (nút phễu trên header)
+            if not self.sheets_col_filter.passes(item):
+                continue
+
             self.filtered_sheets.Add(item)
-            
+
         self._update_sheets_summary()
+        self.sheets_col_filter.refresh_glyphs()
 
     def _update_sheets_summary(self):
         self.sheets_total_text.Text = str(len(self.all_sheets))
@@ -270,7 +361,14 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
                 categories.add(s.designed_by)
         self.sheets_categories_text.Text = str(len(categories)) if categories else "1"
         
-        self.sheets_changes_text.Text = str(len(self.change_tracker.modified_items))
+        # Count the amber cells, not the tracked rows: two edits on one sheet is
+        # two pending changes to the person looking at the grid.
+        pending_cells = _pend.pending_count(self.all_sheets)
+        self.sheets_changes_text.Text = str(pending_cells)
+        try:
+            self.sheets_apply_btn.IsEnabled = pending_cells > 0
+        except Exception:
+            pass
 
     def _on_sheets_search_changed(self, sender, args):
         self._apply_sheets_filters()
@@ -299,66 +397,87 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
         self._update_sheets_summary()
 
     def _on_sheets_cell_edit(self, sender, args):
+        """Stage the edit and paint the cell amber. Apply Changes writes it.
+
+        Dispatch is on the column's BINDING PATH. This used to compare
+        `column.Header` against "Sheet Number" while the XAML said "NUMBER", so
+        no branch ever matched: nothing was tracked, the amber never appeared,
+        and Apply kept reporting "No pending changes to apply" however much the
+        user had typed.
+        """
         from System.Windows.Controls import DataGridEditAction
         if args.EditAction == DataGridEditAction.Cancel:
             return
-            
+
         try:
             item = args.Row.Item
-            column = args.Column
-            
-            # Edit sheet number
-            if column.Header == "Sheet Number":
-                new_val = args.EditingElement.Text
-                if item.sheet_number != new_val:
-                    item.sheet_number = new_val
-                    item.check_if_modified()
-                    self.change_tracker.track_modification(item)
-                    
-            # Edit sheet name
-            elif column.Header == "Sheet Name":
-                new_val = args.EditingElement.Text
-                if item.sheet_name != new_val:
-                    item.sheet_name = new_val
-                    item.check_if_modified()
-                    self.change_tracker.track_modification(item)
-                    
-            # Edit designed_by
-            elif column.Header == "Designed By":
-                new_val = args.EditingElement.Text
-                item.designed_by = new_val
-                item.is_modified = True
+            field = _pend.column_key(args.Column)
+            if not field or field not in SHEET_EDIT_FIELDS:
+                return
+
+            typed = _pend.editor_text(args.EditingElement)
+            current = getattr(item, field, None)
+
+            if _pend.same_text(typed, current):
+                _pend.unstage(item, field)      # typed it back to how it was
+            elif field in ("sheet_number", "sheet_name") and not (typed or "").strip():
+                # Revit refuses both outright, so the cell is bounced here
+                # rather than at Apply time when it is buried among the rest.
+                _pend.revert_editor(args.EditingElement, current)
+                self._set_status(
+                    "A sheet number and a sheet name cannot be empty — "
+                    "the cell was left unchanged.")
+                return
+            else:
+                _pend.stage(item, field, typed)
+                # The binding writes `typed` into the row right after this
+                # returns, so the row already carries the new value; the tracker
+                # just needs to know the row is dirty for Apply to pick it up.
                 self.change_tracker.track_modification(item)
-                
-            # Edit checked_by
-            elif column.Header == "Checked By":
-                new_val = args.EditingElement.Text
-                item.checked_by = new_val
-                item.is_modified = True
-                self.change_tracker.track_modification(item)
-                
-            # Edit approved_by
-            elif column.Header == "Approved By":
-                new_val = args.EditingElement.Text
-                item.approved_by = new_val
-                item.is_modified = True
-                self.change_tracker.track_modification(item)
-                
-            # Edit drawn_by
-            elif column.Header == "Drawn By":
-                new_val = args.EditingElement.Text
-                item.drawn_by = new_val
-                item.is_modified = True
-                self.change_tracker.track_modification(item)
-                
+
+            if not _pend.has_pending(item):
+                self._untrack(item)
+
+            self._refresh_sheets_grid_later()
             self._update_sheets_summary()
         except Exception as e:
-            MessageBox.Show("Error editing sheet parameter: {}".format(str(e)), "Error")
+            self._set_status("Could not read that edit: {}".format(str(e)))
+
+    def _untrack(self, item):
+        """Drop a row from the tracker once its last amber cell is gone."""
+        try:
+            item.check_if_modified()
+        except Exception:
+            pass
+        try:
+            self.change_tracker.modified_items.remove(item)
+        except Exception:
+            pass
+
+    def _refresh_sheets_grid_later(self):
+        """Redraw once the edit has finished committing.
+
+        SheetModel carries no INotifyPropertyChanged, so the amber DataTrigger
+        only re-reads `dirty_<field>` on a refresh — and calling Refresh() while
+        the cell is still committing throws "not allowed during an EditItem
+        transaction". Hence the trip through the dispatcher.
+        """
+        try:
+            from System.Windows.Threading import DispatcherPriority
+            from System import Action
+            self.Dispatcher.BeginInvoke(
+                DispatcherPriority.Background,
+                Action(lambda: self.sheets_grid.Items.Refresh()))
+        except Exception:
+            try:
+                self.sheets_grid.Items.Refresh()
+            except Exception:
+                pass
 
     def _on_sheets_sets(self, sender, args):
         if self.sheet_sets_service:
             try:
-                from viewsheet_sets_dialog import ViewSheetSetsDialog
+                from Services.SheetManager.viewsheet_sets_dialog import ViewSheetSetsDialog
                 dialog = ViewSheetSetsDialog(self.doc, self.sheet_sets_service)
                 dialog.ShowDialog()
                 self._load_sheets_data()
@@ -369,7 +488,7 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
     def _on_sheets_place_views(self, sender, args):
         if self.place_views_service:
             try:
-                from place_views_dialog import PlaceViewsDialog
+                from Services.SheetManager.place_views_dialog import PlaceViewsDialog
                 dialog = PlaceViewsDialog(self.doc, self.place_views_service)
                 dialog.ShowDialog()
                 self._load_sheets_data()
@@ -380,7 +499,7 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
     def _on_sheets_custom_params(self, sender, args):
         if self.params_service:
             try:
-                from custom_parameters_dialog import CustomParametersDialog
+                from Services.SheetManager.custom_parameters_dialog import CustomParametersDialog
                 dialog = CustomParametersDialog(self.doc, self.params_service)
                 dialog.ShowDialog()
                 self._load_sheets_data()
@@ -502,13 +621,23 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
         self._apply_sheets_filters()
 
     def _on_sheets_apply(self, sender, args):
-        if not self.change_tracker.has_changes():
-            MessageBox.Show("No pending changes to apply.", "Info", MessageBoxButton.OK, MessageBoxImage.Information)
+        # Drive off the staged cells, not the tracker alone: the tracker is a
+        # row-level flag, while what the user sees waiting on screen is the
+        # amber cells. Keeping the two in step is what makes the counter honest.
+        staged = _pend.pending_rows(self.all_sheets)
+        for item in staged:
+            self.change_tracker.track_modification(item)
+        if not staged:
+            MessageBox.Show("No pending changes to apply.", "Info",
+                            MessageBoxButton.OK, MessageBoxImage.Information)
             return
-            
-        modified = len(self.change_tracker.modified_items)
-        msg = "Apply changes?\n\nModified Sheets: {}".format(modified)
-        
+
+        modified = len(staged)
+        cells = _pend.pending_count(self.all_sheets)
+        msg = "Apply {} edited cell{} on {} sheet{}?".format(
+            cells, "" if cells == 1 else "s",
+            modified, "" if modified == 1 else "s")
+
         result = MessageBox.Show(msg, "Confirm Changes", MessageBoxButton.YesNo, MessageBoxImage.Question)
         if result == MessageBoxResult.Yes:
             t = Transaction(self.doc, "Apply Sheet Manager Changes")
@@ -537,6 +666,7 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
                         # Update Number & Name
                         if self.revit_service.update_sheet(item):
                             item.commit_changes()
+                            _pend.clear_pending(item)
                             success += 1
                         else:
                             failed += 1
@@ -588,6 +718,11 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
             new_num = "{}{}{}".format(prefix, start_num + index * step_num, suffix)
             item.preview_number = new_num
 
+        try:
+            self.renum_grid.Items.Refresh()
+        except Exception:
+            pass
+
     def _on_renum_run(self, sender, args):
         selected_preview = [item for item in self.renumber_items if item.IsSelected]
         if not selected_preview:
@@ -638,6 +773,18 @@ class SheetManagerWindow(forms.WPFWindow, ProgressPauseMixin):
             finally:
                 self.end_progress()
 
+    # ── Select-all o header cot checkbox ────────────────────────────────
+    # toggle_all_rows() nam trong T3WPFWindow: no chay tren grid.Items nen chi
+    # dong dang hien thi (sau filter/sort) bi doi, dung nhu nguoi dung thay.
+
+    def select_all_sheets_grid_clicked(self, sender, e):
+        """Header checkbox: chon/bo chon moi dong dang hien thi cua sheets_grid."""
+        self.toggle_all_rows(self.sheets_grid, "is_selected", sender.IsChecked)
+
+    def select_all_renum_grid_clicked(self, sender, e):
+        """Header checkbox: chon/bo chon moi dong dang hien thi cua renum_grid."""
+        self.toggle_all_rows(self.renum_grid, "IsSelected", sender.IsChecked)
+
 
 # =====================================================
 # LAUNCHER FUNCTION
@@ -651,7 +798,10 @@ def show_sheet_manager():
     except Exception as e:
         print("\nFATAL ERROR: {}".format(str(e)))
         import traceback
-        traceback.print_exc()
+        try:                     # ScriptIO has no write() under CPython
+            traceback.print_exc()
+        except Exception:
+            pass
         MessageBox.Show(
             "Error starting Sheet Manager:\n\n{}".format(str(e)),
             "Error", MessageBoxButton.OK, MessageBoxImage.Error

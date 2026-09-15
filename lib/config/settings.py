@@ -142,8 +142,8 @@ class T3LabAISettings(object):
             'window_state': {
                 'left':         None,
                 'top':          None,
-                'width':        720,
-                'height':       580,
+                'width':        560,
+                'height':       720,
                 'sidebar_open': False,
             },
             'active_project': None,
@@ -159,44 +159,62 @@ class T3LabAISettings(object):
                 'graph_mode':     True,
                 'show_tool_calls': True,
                 'show_thinking':   True,
-                # Idle-time self-study of local, zero-API-cost enrichers
-                # (telemetry mining, model snapshot, API facts). On by default;
-                # heavily throttled (see Intelligence/learning/loop.py).
                 'self_study':      True,
-                # Read-only multi-goal plans may surface parallel task cards.
-                # Guarded to writer-free plans in script.py — never runs two
-                # model-writes at once.
                 'parallel_tasks':  True,
-                # Opt-in DISTILLATION: let Opus 5 (Claude) act as the teacher
-                # that writes gold answers into the self-study SFT corpus for a
-                # local Qwen fine-tune. OFF by default because it spends Claude
-                # API tokens, breaking the otherwise local-only study contract.
                 'opus_teacher':    False,
-                # Opt-in: auto-launch the detached local fine-tune once the
-                # corpus has grown enough (see Intelligence/learning/trainer.py).
                 'self_train_auto': False,
             },
             'skills': {
                 'disabled': [],
             },
+            'ai_mode': {
+                'enabled': True,
+                'fast_provider': 'auto',
+                'reasoning_provider': 'auto',
+                'tool_toggles': {},
+            },
         }
 
     def get_window_state(self):
-        """Return the last-saved window state dict."""
+        """Return the last-saved window state dict with safe boundary clamping."""
         defaults = {'left': None, 'top': None,
-                    'width': 720, 'height': 580, 'sidebar_open': False}
+                    'width': 560, 'height': 720, 'sidebar_open': False}
         saved = self._settings.get('window_state', {})
         defaults.update(saved)
+        try:
+            w = defaults.get('width')
+            if w is not None:
+                w_f = float(w)
+                if w_f < 380 or w_f > 1600:
+                    defaults['width'] = 560
+            h = defaults.get('height')
+            if h is not None:
+                h_f = float(h)
+                if h_f < 400 or h_f > 1400:
+                    defaults['height'] = 720
+        except Exception:
+            defaults['width'] = 560
+            defaults['height'] = 720
         return defaults
 
     def save_window_state(self, left, top, width, height, sidebar_open=False):
-        """Persist window geometry and sidebar visibility."""
+        """Persist window geometry and sidebar visibility with boundary clamping."""
         def _m(s):
+            w = 560
+            h = 720
+            try:
+                if width is not None:
+                    w = max(380, min(int(float(width)), 1600))
+                if height is not None:
+                    h = max(400, min(int(float(height)), 1400))
+            except Exception:
+                w, h = 560, 720
+
             s['window_state'] = {
                 'left':         left,
                 'top':          top,
-                'width':        width,
-                'height':       height,
+                'width':        w,
+                'height':       h,
                 'sidebar_open': sidebar_open,
             }
         return self._update(_m)
@@ -460,6 +478,49 @@ class T3LabAISettings(object):
         def _m(s):
             s['active_project'] = project_id
         return self._update(_m)
+
+    # ------------------------------------------------------------------
+    # AI Mode (Tool Copilot & Augmented Features)
+    # ------------------------------------------------------------------
+
+    def is_ai_mode_enabled(self):
+        """Return True if global AI Mode is enabled."""
+        return bool(self._settings.get('ai_mode', {}).get('enabled', True))
+
+    def set_ai_mode_enabled(self, enabled):
+        """Enable or disable global AI Mode."""
+        def _m(s):
+            s.setdefault('ai_mode', {})['enabled'] = bool(enabled)
+        return self._update(_m)
+
+    def is_tool_ai_enabled(self, tool_name=None):
+        """Return True if AI mode is enabled for a specific tool.
+        If tool not explicitly configured, defaults to the global AI Mode state.
+        """
+        if not self.is_ai_mode_enabled():
+            return False
+        if not tool_name:
+            return True
+        toggles = self._settings.get('ai_mode', {}).get('tool_toggles', {})
+        return bool(toggles.get(tool_name, True))
+
+    def set_tool_ai_enabled(self, tool_name, enabled):
+        """Set AI mode state for a specific tool."""
+        def _m(s):
+            s.setdefault('ai_mode', {}).setdefault('tool_toggles', {})[tool_name] = bool(enabled)
+        return self._update(_m)
+
+    def get_ai_mode_config(self):
+        """Return the entire ai_mode configuration dictionary."""
+        defaults = {
+            'enabled': True,
+            'fast_provider': 'auto',
+            'reasoning_provider': 'auto',
+            'tool_toggles': {},
+        }
+        saved = self._settings.get('ai_mode', {})
+        defaults.update(saved)
+        return defaults
 
     def log_model_usage(self, action, provider, model):
         """Log model usage/setup to a log file for audit and fast setup verification."""

@@ -33,12 +33,26 @@ class CustomParametersService(object):
             # Get all parameters
             parameters = []
             for param in sample_sheet.Parameters:
+                group_name = ""
+                try:
+                    if hasattr(param.Definition, "GetGroupTypeId"):
+                        forge_id = param.Definition.GetGroupTypeId()
+                        if forge_id:
+                            group_name = str(forge_id.TypeId)
+                except Exception:
+                    pass
+                if not group_name:
+                    try:
+                        group_name = str(param.Definition.ParameterGroup)
+                    except Exception:
+                        group_name = "Other"
+
                 param_info = {
                     'name': param.Definition.Name,
                     'type': str(param.StorageType),
                     'is_read_only': param.IsReadOnly,
                     'is_shared': param.IsShared,
-                    'group': str(param.Definition.ParameterGroup)
+                    'group': group_name
                 }
                 parameters.append(param_info)
             
@@ -98,7 +112,10 @@ class CustomParametersService(object):
         except Exception as e:
             print("Error setting parameter '{}': {}".format(param_name, str(e)))
             import traceback
-            traceback.print_exc()
+            try:                     # ScriptIO has no write() under CPython
+                traceback.print_exc()
+            except Exception:
+                pass
             return False
     
     def bulk_update_parameter(self, sheets, param_name, value):

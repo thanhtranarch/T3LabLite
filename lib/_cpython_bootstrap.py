@@ -387,6 +387,55 @@ def init_cpython_paths():
         except Exception:
             pass
 
+    # Record ribbon tool execution telemetry
+    try:
+        _track_caller_script()
+    except Exception:
+        pass
+
+
+def _track_caller_script():
+    """Detect if caller is a T3Lab ribbon tool and log usage telemetry."""
+    try:
+        frame = sys._getframe(1)
+    except Exception:
+        return
+
+    caller_file = ''
+    while frame:
+        f_name = getattr(frame.f_code, 'co_filename', '') or ''
+        if f_name.endswith('script.py') and 'T3Lab.tab' in f_name:
+            caller_file = f_name
+            break
+        frame = frame.f_back
+
+    if not caller_file:
+        return
+
+    try:
+        norm = caller_file.replace('/', '\\')
+        parts = norm.split('\\')
+        tool_name = None
+        panel_name = None
+        for part in parts:
+            if part.endswith('.panel'):
+                panel_name = part[:-6]
+            if part.endswith(('.pushbutton', '.smartbutton', '.linkbutton')):
+                tool_name = part.rsplit('.', 1)[0]
+
+        if not tool_name:
+            tool_name = os.path.basename(os.path.dirname(caller_file))
+
+        from Services.telemetry_service import TelemetryService
+        TelemetryService.record_tool_usage(
+            tool_name=tool_name,
+            tool_type='ribbon',
+            panel=panel_name,
+            purpose=u"Người dùng chạy công cụ {} trên Revit Ribbon".format(tool_name)
+        )
+    except Exception:
+        pass
+
 
 class _NullStream(object):
     """Stand-in for a stdout/stderr that has no write() (pyRevit ScriptIO)."""

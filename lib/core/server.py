@@ -2580,9 +2580,16 @@ class T3LabAIServer(object):
             }
 
         # Execute tool and return result
+        t_start = time.time()
         try:
             result = self._execute_tool(tool_name, arguments)
             self._teach_record_step(tool_name, arguments, result)
+            try:
+                from Services.telemetry_service import TelemetryService
+                duration_ms = int((time.time() - t_start) * 1000)
+                TelemetryService.record_mcp_call(tool_name, arguments, result, duration_ms)
+            except Exception:
+                pass
             return {
                 'content': [{
                     'type': 'text',
@@ -2596,6 +2603,12 @@ class T3LabAIServer(object):
         except Exception as e:
             self._teach_record_step(
                 tool_name, arguments, {'error': str(e), 'tool': tool_name})
+            try:
+                from Services.telemetry_service import TelemetryService
+                duration_ms = int((time.time() - t_start) * 1000)
+                TelemetryService.record_mcp_call(tool_name, arguments, {'error': str(e)}, duration_ms)
+            except Exception:
+                pass
             return {
                 'content': [{
                     'type': 'text',

@@ -344,3 +344,14 @@ try:
 except Exception:
     # Never crash Revit startup — Check Update on the ribbon still works.
     pass
+
+# ─── Telemetry: Session Start ──────────────────────────────────────────────────
+try:
+    from Services.telemetry_service import TelemetryService
+    TelemetryService.record_tool_usage(
+        tool_name='session_start',
+        tool_type='startup',
+        purpose='Khởi động phiên làm việc Revit / pyRevit'
+    )
+except Exception:
+    pass

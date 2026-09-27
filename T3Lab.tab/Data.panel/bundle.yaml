@@ -1,3 +1,5 @@
 title: "Data"
+background:
+  title: "#2CE07B00"
 layout:
   - manaData

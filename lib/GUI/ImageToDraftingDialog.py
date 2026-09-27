@@ -31,21 +31,8 @@ __version__ = "4.0.0"
 import os
 import sys
 # ─── CPython 3 & lib bootstrap ────────────────────────────────────────────────
-for _env in ('APPDATA', 'PROGRAMDATA'):
-    _base = os.environ.get(_env, '')
-    if _base:
-        for _clone in ('pyRevit-Master', 'pyRevit'):
-            _ceng = os.path.join(_base, _clone, 'bin', 'cengines', 'CPY3123')
-            if os.path.isdir(_ceng):
-                for _d in (_ceng, os.path.join(_ceng, 'Lib')):
-                    if hasattr(os, 'add_dll_directory'):
-                        try:
-                            os.add_dll_directory(_d)
-                        except Exception:
-                            pass
-                for _p in (_ceng, os.path.join(_ceng, 'Lib'), os.path.join(_ceng, 'python312.zip')):
-                    if os.path.exists(_p) and _p not in sys.path:
-                        sys.path.insert(0, _p)
+# CPython engine paths are injected by lib/_cpython_bootstrap.py below;
+# it discovers the engine whatever the pyRevit clone is called.
 
 _cur = os.path.dirname(os.path.abspath(__file__))
 while _cur and not os.path.exists(os.path.join(_cur, 'lib')):
@@ -87,6 +74,7 @@ import Microsoft.Win32
 
 from pyrevit import revit, DB, forms, script
 from GUI.WPF_Base import T3WPFWindow
+from core.extension_paths import tab_dir
 # Put the extension's lib/ on sys.path so GUI.ProgressPauseMixin imports
 # (mirror main()'s "walk up to T3Lab.extension" logic).
 _ext_dir = os.path.dirname(__file__)
@@ -196,92 +184,6 @@ def pdf_to_bmp(pdf_path, page_num, dpi=150, gs_path=None):
 # ══════════════════════════════════════════════════════════════════════════════
 # IMAGE PREPROCESSING
 # ══════════════════════════════════════════════════════════════════════════════
-
-def preprocess_image(input_bmp, threshold=210, line_thickness_px=2):
-    """
-    Threshold to binary, then apply "safe interior erosion":
-      A pixel is removed only when ALL four 4-connected neighbours are
-      foreground — i.e. it is strictly interior to a thick blob.
-      Edge pixels and thin lines are never touched.
-
-    erode_passes = max(0, line_thickness_px // 3)
-      thickness 1-2 → 0 passes (threshold only)
-      thickness 3-5 → 1 pass
-      thickness 6-8 → 2 passes
-
-    Returns (processed_bmp_path, w, h).
-    Falls back to input_bmp if System.Drawing is unavailable.
-    """
-    erode_passes = max(0, line_thickness_px // 3)
-
-    try:
-        clr.AddReference('System.Drawing')
-        import System
-        from System.Drawing import Bitmap, Rectangle
-        from System.Drawing.Imaging import PixelFormat, ImageLockMode
-        from System.Runtime.InteropServices import Marshal
-
-        src   = Bitmap(input_bmp)
-        w, h  = src.Width, src.Height
-        fmt   = PixelFormat.Format32bppArgb
-        src32 = src.Clone(Rectangle(0, 0, w, h), fmt)
-        src.Dispose()
-
-        bd     = src32.LockBits(Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, fmt)
-        stride = bd.Stride
-        raw    = System.Array.CreateInstance(System.Byte, stride * h)
-        Marshal.Copy(bd.Scan0, raw, 0, len(raw))
-        src32.UnlockBits(bd)
-        src32.Dispose()
-
-        # ── threshold ─────────────────────────────────────────────────────────
-        grid = bytearray(w * h)
-        for y in range(h):
-            base = y * stride
-            for x in range(w):
-                r = raw[base + x * 4 + 2]
-                g = raw[base + x * 4 + 1]
-                b = raw[base + x * 4 + 0]
-                if (r * 299 + g * 587 + b * 114) // 1000 < threshold:
-                    grid[y * w + x] = 1
-
-        # ── safe interior erosion ─────────────────────────────────────────────
-        for _ in range(erode_passes):
-            new_g = bytearray(grid)
-            for y in range(1, h - 1):
-                row = y * w
-                for x in range(1, w - 1):
-                    i = row + x
-                    if (grid[i] and
-                            grid[i - w] and grid[i + w] and
-                            grid[i - 1] and grid[i + 1]):
-                        new_g[i] = 0
-            grid = new_g
-
-        # ── write output BMP ──────────────────────────────────────────────────
-        out_bmp = Bitmap(w, h)
-        bd      = out_bmp.LockBits(Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, fmt)
-        strd_o  = bd.Stride
-        buf_o   = System.Array.CreateInstance(System.Byte, strd_o * h)
-        for y in range(h):
-            base = y * strd_o
-            for x in range(w):
-                v = 0 if grid[y * w + x] else 255
-                buf_o[base + x * 4 + 0] = v
-                buf_o[base + x * 4 + 1] = v
-                buf_o[base + x * 4 + 2] = v
-                buf_o[base + x * 4 + 3] = 255
-        Marshal.Copy(buf_o, 0, bd.Scan0, len(buf_o))
-        out_bmp.UnlockBits(bd)
-
-        out_path = input_bmp.replace('.bmp', '_pre.bmp')
-        out_bmp.Save(out_path)
-        out_bmp.Dispose()
-        return out_path, w, h
-
-    except Exception as exc:
-        print("Preprocessing skipped: {}".format(exc))
-        return input_bmp, 0, 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1256,7 +1158,7 @@ class ImageToDraftingWindow(T3WPFWindow):
         self.gs_path      = None   # cached Ghostscript path
         self.temp_files   = []
         ext_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        pb_potrace = os.path.join(ext_dir, 'T3Lab.tab', 'Modeling & Datum.panel', 'Create.stack', 'Create Elements.pulldown', 'ImageToDrafting.pushbutton', 'potrace.exe')
+        pb_potrace = os.path.join(tab_dir(ext_dir), 'Modeling & Datum.panel', 'Create.stack', 'Create Elements.pulldown', 'ImageToDrafting.pushbutton', 'potrace.exe')
         self.potrace_path = pb_potrace if os.path.isfile(pb_potrace) else os.path.join(os.path.dirname(__file__), 'potrace.exe')
 
     # ── window chrome ──────────────────────────────────────────────────────────

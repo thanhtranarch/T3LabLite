@@ -157,6 +157,23 @@ try:
 except Exception:
     IRONPY = 'IronPython' in sys.version
 
+# An exception escaping a WPF handler or binding while a tool window is open
+# surfaces as Revit's "Command Failure for External Command" (modal) or kills
+# Revit (modeless). Every window built on this base is guarded; see ErrorGuard.
+try:
+    from GUI.ErrorGuard import (guard_handler as _guard_handler,
+                                handle_dispatcher_exception as _handle_dispatcher_exception)
+except Exception:
+    try:
+        from ErrorGuard import (guard_handler as _guard_handler,
+                                handle_dispatcher_exception as _handle_dispatcher_exception)
+    except Exception:
+        def _guard_handler(fn, owner=None, name=None):
+            return fn
+
+        def _handle_dispatcher_exception(owner, exc):
+            return False
+
 # Set of standard WPF event attribute names extracted from XAML
 _EVENT_NAMES = {
     'Click', 'Checked', 'Unchecked', 'SelectionChanged', 'TextChanged',
@@ -214,6 +231,23 @@ def set_items_source(control, items):
         control.ItemsSource = to_items_source(items)
 
 
+_EVENT_ALTERNATION = '|'.join(sorted(_EVENT_NAMES, key=len, reverse=True))
+_TAG_RE = re.compile(r'<[A-Za-z0-9_.:]+(?:\s+[^>]*?)?/?>')
+_NAME_RE = re.compile(r'(?:x:)?Name\s*=\s*"([^"]+)"')
+_ROOT_TAG_RE = re.compile(r'^(<[A-Za-z0-9_.:]+)')
+# One alternation instead of looping _EVENT_NAMES (40 names) with a fresh
+# re.search per name per tag — on a 100k-char tool XAML (~1000 tags) that loop
+# meant up to 40000 regex searches just to sanitize before every window open.
+_EVENT_FIND_RE = re.compile(r'\b(' + _EVENT_ALTERNATION + r')\s*=\s*"([^"]*)"')
+_EVENT_STRIP_RE = re.compile(r'\s*\b(?:' + _EVENT_ALTERNATION + r')\s*=\s*"[^"]*"')
+
+# Sanitize result cache, keyed by (path, mtime, size): reopening the same tool
+# in one Revit session (or across the QA "open every tool once" loop) skips
+# re-running the regex pass on identical, unchanged XAML text.
+_SANITIZE_CACHE = {}
+_SANITIZE_CACHE_MAX = 32
+
+
 def _sanitize_xaml(xaml_content):
     """
     Sanitize XAML for CPython XamlReader:
@@ -224,21 +258,17 @@ def _sanitize_xaml(xaml_content):
     named_elements = set()
     counter = [0]
 
-    for m in re.finditer(r'(?:x:)?Name\s*=\s*"([^"]+)"', xaml_content):
+    for m in _NAME_RE.finditer(xaml_content):
         named_elements.add(m.group(1))
 
     def process_tag(match):
         tag = match.group(0)
-        has_event = False
-        for evt in _EVENT_NAMES:
-            if re.search(r'\b' + evt + r'\s*=\s*"[^"]*"', tag):
-                has_event = True
-                break
-        if not has_event:
+        evt_matches = _EVENT_FIND_RE.findall(tag)
+        if not evt_matches:
             return tag
 
         is_root_window = tag.startswith('<Window')
-        name_match = re.search(r'(?:x:)?Name\s*=\s*"([^"]+)"', tag)
+        name_match = _NAME_RE.search(tag)
         if name_match:
             elem_name = name_match.group(1)
         elif is_root_window:
@@ -247,20 +277,90 @@ def _sanitize_xaml(xaml_content):
             counter[0] += 1
             elem_name = "__t3_dyn_" + str(counter[0])
             named_elements.add(elem_name)
-            tag = re.sub(r'^(<[A-Za-z0-9_.:]+)', r'\1 x:Name="' + elem_name + '"', tag)
+            tag = _ROOT_TAG_RE.sub(r'\1 x:Name="' + elem_name + '"', tag)
 
-        for evt in _EVENT_NAMES:
-            evt_match = re.search(r'\b(' + evt + r')\s*=\s*"([^"]+)"', tag)
-            if evt_match:
-                event_name = evt_match.group(1)
-                handler_name = evt_match.group(2)
-                event_bindings.append((elem_name, event_name, handler_name))
-                tag = re.sub(r'\s*\b' + evt + r'\s*=\s*"[^"]*"', '', tag)
+        for event_name, handler_name in evt_matches:
+            event_bindings.append((elem_name, event_name, handler_name))
+        tag = _EVENT_STRIP_RE.sub('', tag)
 
         return tag
 
-    clean_xaml = re.sub(r'<[A-Za-z0-9_.:]+(?:\s+[^>]*?)?/?>', process_tag, xaml_content)
+    clean_xaml = _TAG_RE.sub(process_tag, xaml_content)
     return clean_xaml, event_bindings, named_elements
+
+
+def _sanitize_xaml_cached(xaml_content, cache_key=None):
+    """`_sanitize_xaml`, skipped on a cache hit for the same (path, mtime, size).
+
+    `cache_key` is `(path, mtime, size)` from the caller, or None for inline
+    XAML strings (never cached — there is no stable identity to key on).
+    """
+    if cache_key is None:
+        return _sanitize_xaml(xaml_content)
+    hit = _SANITIZE_CACHE.get(cache_key)
+    if hit is not None:
+        clean_xaml, event_bindings, named_elements = hit
+        return clean_xaml, list(event_bindings), set(named_elements)
+    result = _sanitize_xaml(xaml_content)
+    if len(_SANITIZE_CACHE) >= _SANITIZE_CACHE_MAX:
+        _SANITIZE_CACHE.pop(next(iter(_SANITIZE_CACHE)))
+    _SANITIZE_CACHE[cache_key] = result
+    return result
+
+
+# ── Checkbox bridge ──────────────────────────────────────────────────────────
+# pythonnet hands WPF every Python attribute as a PyObject. WPF converts that
+# to string — which is why every text column renders — but never to bool?, so
+# `IsChecked="{Binding is_selected}"` on a Python row always reads unchecked:
+# the tick a click draws vanishes on Items.Refresh(), select-all ticks nothing,
+# a scrolled-back row comes back empty. The row template reads the flag through
+# a hidden string instead ("True"/"False" parse to bool):
+#
+#   <Grid>
+#     <TextBlock x:Name="row_sel_text" Text="{Binding is_selected}" Visibility="Collapsed"/>
+#     <CheckBox IsChecked="{Binding Text, ElementName=row_sel_text, Mode=OneWay}" .../>
+#   </Grid>
+#
+# OneWay cannot write the click back to the row, so every T3WPFWindow does it:
+# see T3WPFWindow._on_bridged_toggle. dev/audit_t3.py (rule 24) rejects the
+# direct binding.
+
+def bridged_row_property(checkbox, binding_operations, is_checked_dp, text_dp):
+    """(row attribute, bridge TextBlock) of a bridged CheckBox, or (None, None).
+
+    CheckBox.IsChecked must be bound to `Text` of a named element whose own
+    Text binding is a plain property path on the row (the DataContext).
+    """
+    none = (None, None)
+    b = binding_operations.GetBinding(checkbox, is_checked_dp)
+    if b is None or not b.ElementName or b.Path is None or b.Path.Path != 'Text':
+        return none
+    bridge = checkbox.FindName(b.ElementName)
+    if bridge is None:
+        return none
+    tb = binding_operations.GetBinding(bridge, text_dp)
+    if tb is None or tb.Path is None or tb.ElementName or \
+            tb.RelativeSource is not None or tb.Source is not None:
+        return none
+    path = tb.Path.Path or ''
+    if not path or '.' in path or '[' in path:
+        return none
+    return path, bridge
+
+
+def write_bridged_toggle(checkbox, prop):
+    """Push a user toggle to the Python row. True when the row changed."""
+    row = getattr(checkbox, 'DataContext', None)
+    if row is None or not prop:
+        return False
+    value = bool(checkbox.IsChecked)
+    try:
+        if getattr(row, prop) == value:
+            return False            # a model -> view refresh, not a click
+        setattr(row, prop, value)
+        return True
+    except Exception:
+        return False                # DataRowView, DisconnectedItem, read-only
 
 
 def setup_window_logo(win_or_elem):
@@ -359,6 +459,7 @@ class T3WPFWindow(Window):
     def load_xaml(self, xaml_source, literal_string=False, handle_esc=True, set_owner=True):
         """Loads XAML and wires named elements + event handlers."""
         # Read XAML content
+        self._sanitize_cache_key = None
         if literal_string:
             xaml_content = xaml_source
         else:
@@ -374,6 +475,11 @@ class T3WPFWindow(Window):
 
             with io.open(xaml_path, 'r', encoding='utf-8-sig') as f:
                 xaml_content = f.read()
+            try:
+                st = os.stat(xaml_path)
+                self._sanitize_cache_key = (xaml_path, st.st_mtime, st.st_size)
+            except Exception:
+                pass
 
         if IRONPY:
             # IronPython engine: use wpf.LoadComponent if available
@@ -393,12 +499,48 @@ class T3WPFWindow(Window):
             self.setup_owner()
         if handle_esc:
             self.setup_default_handlers()
+        self._install_dispatcher_guard()
+
+    def _install_dispatcher_guard(self):
+        """Catch exceptions WPF raises outside our handlers while this window
+        is open — a binding onto a read-only property, a handler attached in
+        code, a Dispatcher callback — before they reach Revit.
+
+        Detached again on Closed: the Dispatcher is Revit's UI thread, shared
+        with every other window, and only exceptions from Python code or WPF
+        data binding are ever marked handled (see ErrorGuard).
+        """
+        if getattr(self, '_t3_dispatcher_guard_on', False):
+            return
+        try:
+            self.Dispatcher.UnhandledException += self._on_dispatcher_unhandled
+            self._t3_dispatcher_guard_on = True
+            self.Closed += self._remove_dispatcher_guard
+        except BaseException:
+            pass
+
+    def _remove_dispatcher_guard(self, sender=None, e=None):
+        if not getattr(self, '_t3_dispatcher_guard_on', False):
+            return
+        try:
+            self.Dispatcher.UnhandledException -= self._on_dispatcher_unhandled
+        except BaseException:
+            pass
+        self._t3_dispatcher_guard_on = False
+
+    def _on_dispatcher_unhandled(self, sender, e):
+        try:
+            if not e.Handled and _handle_dispatcher_exception(self, e.Exception):
+                e.Handled = True
+        except BaseException:
+            pass
 
     def _load_via_xaml_reader(self, xaml_content):
         """Hydrates Window via System.Windows.Markup.XamlReader with multi-strategy fallbacks."""
         if xaml_content is not None:
             xaml_content = xaml_content.lstrip('\ufeff \t\r\n')
-        clean_xaml, event_bindings, named_elements = _sanitize_xaml(xaml_content)
+        clean_xaml, event_bindings, named_elements = _sanitize_xaml_cached(
+            xaml_content, getattr(self, '_sanitize_cache_key', None))
 
         loaded_win = None
         errors = []
@@ -605,6 +747,7 @@ class T3WPFWindow(Window):
             pass
 
         # Bind event handlers dynamically
+        unresolved = []
         for elem_name, event_name, handler_name in event_bindings:
             try:
                 if elem_name == '__root__':
@@ -614,14 +757,23 @@ class T3WPFWindow(Window):
                     if ctrl is None:
                         ctrl = loaded_win.FindName(elem_name) or self.FindName(elem_name)
                 if ctrl is None:
+                    unresolved.append((elem_name, event_name, handler_name))
                     continue
                 handler = getattr(self, handler_name, None)
                 if handler is not None and callable(handler):
                     evt = getattr(ctrl, event_name, None)
                     if evt is not None:
-                        evt += handler
+                        evt += _guard_handler(handler, self, handler_name)
             except BaseException:
                 pass
+
+        # Checkbox bridge ghi lại model TRƯỚC mọi Click handler (Checked chạy
+        # trong OnToggle, Click chạy sau) — y như TwoWay binding ngày trước.
+        self._install_checkbox_bridge()
+
+        # Nút nằm trong DataTemplate không có trong namescope của window nên
+        # vòng trên không nối được — xử lý riêng bằng routed event.
+        self._wire_templated_clicks(unresolved)
 
         # Wire title bar drag if an element named 'title_bar' or similar exists
         for tb_name in ('title_bar', 'titlebar', 'border_titlebar', 'TitleBar'):
@@ -637,6 +789,131 @@ class T3WPFWindow(Window):
 
         # Auto-wire window chrome controls (minimize, maximize, close)
         self._wire_window_controls()
+
+    def _install_checkbox_bridge(self):
+        """Write bridged row checkboxes back to their Python row.
+
+        ToggleButton.Checked / Unchecked bubble up from every row template;
+        they fire inside OnToggle, before Click, so each tool's Click handler
+        already sees the updated row — the order TwoWay binding used to give.
+        Toggles caused by the binding itself (model -> view) find the row
+        already equal and write nothing.
+        """
+        try:
+            from System.Windows import RoutedEventHandler
+            from System.Windows.Controls.Primitives import ToggleButton
+        except BaseException:
+            return
+        try:
+            # Keep the delegate: if it is collected the checkboxes go dead.
+            self._t3_bridge_handler = RoutedEventHandler(self._on_bridged_toggle)
+            self.AddHandler(ToggleButton.CheckedEvent, self._t3_bridge_handler, True)
+            self.AddHandler(ToggleButton.UncheckedEvent, self._t3_bridge_handler, True)
+        except BaseException:
+            pass
+
+    def _on_bridged_toggle(self, sender, e):
+        try:
+            from System.Windows.Data import BindingOperations
+            from System.Windows.Controls import TextBlock
+            from System.Windows.Controls.Primitives import ToggleButton
+            checkbox = e.OriginalSource
+            prop, bridge = bridged_row_property(checkbox, BindingOperations,
+                                                ToggleButton.IsCheckedProperty,
+                                                TextBlock.TextProperty)
+            if not prop:
+                return
+            write_bridged_toggle(checkbox, prop)
+            # Re-read the row into the bridge. Without it the TextBlock keeps
+            # the pre-click "False" while the box shows the click; a recycled
+            # container then lands on another "False" row, Text does not
+            # change, the binding never fires, and that row shows a stale tick.
+            expr = BindingOperations.GetBindingExpression(bridge, TextBlock.TextProperty)
+            if expr is not None:
+                expr.UpdateTarget()
+        except BaseException:
+            pass
+
+    def _wire_templated_clicks(self, unresolved):
+        """Nối `Click=` cho nút sinh ra từ DataTemplate / ControlTemplate.
+
+        Element do template sinh ra KHÔNG nằm trong namescope của window, nên
+        `FindName` ở vòng nối handler phía trên trả về None và cái
+        `Click="..."` khai trong template im lặng không bao giờ được nối:
+        bấm nút không có phản ứng gì và cũng không có lỗi nào được ném ra.
+
+        `_sanitize_xaml` đã gắn cho mọi tag mang event một `x:Name` sinh tự
+        động, và cái tên đó đi theo từng bản sao của template. Ở đây window
+        nghe `ButtonBase.ClickEvent` nổi lên, rồi đi ngược từ `OriginalSource`
+        lên cây để tìm element mang đúng tên đó và gọi handler với chính nút
+        vừa bấm làm `sender` — nhờ vậy handler vẫn đọc được `sender.DataContext`
+        như khi nối trực tiếp.
+
+        Cơ chế này TẮT mặc định và mỗi window tự bật bằng
+        `WIRE_TEMPLATED_CLICKS = True`. Lý do: vài tool (ManaGroup,
+        SelectFromDict) đã tự bù bằng `AddHandler(CheckBox.ClickEvent, …)` trên
+        cả bảng; bật đại trà sẽ khiến handler của chúng chạy hai lần. Tool nào
+        muốn dùng thì bật rồi bỏ phần AddHandler thủ công. Đang bật: ModelAuditor,
+        BatchLink, BatchOut, ManaFami, ManaLoca, ManaSheets. Nghe cả
+        `ButtonBase.ClickEvent` lẫn `Hyperlink.ClickEvent`; event khác Click
+        (Checked, PreviewMouse…) trong template KHÔNG được nối —
+        `dev/audit_wiring.py` (W2) bắt trường hợp đó.
+        """
+        if not getattr(self, 'WIRE_TEMPLATED_CLICKS', False):
+            return
+        clicks = {}
+        for elem_name, event_name, handler_name in (unresolved or []):
+            if event_name == 'Click':
+                clicks[elem_name] = handler_name
+        if not clicks:
+            return
+        try:
+            from System.Windows import RoutedEventHandler, LogicalTreeHelper
+            from System.Windows.Controls.Primitives import ButtonBase
+            from System.Windows.Media import VisualTreeHelper, Visual
+        except BaseException:
+            return
+        try:
+            from System.Windows.Documents import Hyperlink
+        except BaseException:
+            Hyperlink = None
+
+        def _parent(node):
+            # Hyperlink / Run là ContentElement, không phải Visual:
+            # VisualTreeHelper.GetParent ném lỗi, phải đi theo logical tree.
+            try:
+                if isinstance(node, Visual):
+                    return VisualTreeHelper.GetParent(node)
+            except BaseException:
+                pass
+            try:
+                return LogicalTreeHelper.GetParent(node)
+            except BaseException:
+                return None
+
+        def _dispatch(sender, args):
+            try:
+                node = getattr(args, 'OriginalSource', None)
+                while node is not None:
+                    handler_name = clicks.get(getattr(node, 'Name', None) or '')
+                    if handler_name:
+                        handler = getattr(self, handler_name, None)
+                        if handler is not None and callable(handler):
+                            _guard_handler(handler, self, handler_name)(node, args)
+                        return
+                    node = _parent(node)
+            except BaseException:
+                pass
+
+        try:
+            # Giữ tham chiếu tới delegate, nếu không GC thu mất và nút chết lại.
+            self._templated_click_handler = RoutedEventHandler(_dispatch)
+            self.AddHandler(ButtonBase.ClickEvent, self._templated_click_handler, True)
+            # Hyperlink.ClickEvent là routed event RIÊNG, không phải ButtonBase.ClickEvent.
+            if Hyperlink is not None:
+                self.AddHandler(Hyperlink.ClickEvent, self._templated_click_handler, True)
+        except BaseException:
+            pass
 
     def _wire_window_controls(self):
         """Auto-wires and standardizes window chrome buttons (minimize, maximize, close)."""
@@ -1170,6 +1447,61 @@ class T3WPFWindow(Window):
         if not b:
             return {"available": False, "provider": "None", "model": "", "label": "AI Offline"}
         return b.get_active_provider_info()
+
+    # ── AI Mode chuẩn T3 (xem T3LAB_UI_STANDARD.md § AI Mode) ──────────────
+    # Tool giữ AI khai AI_TOOL = "<Tên>" — khoá tra tool_toggles trong settings.
+    # XAML: badge `ai_mode_badge` + `txt_ai_status` trên title bar; nút AI dùng
+    # icon EA80 + nhãn "AI <Động từ>". Không đổi Content của nút khi đang chạy.
+    AI_TOOL = None
+
+    def init_ai_badge(self):
+        """Badge AI trên title bar: chữ 'AI ready' / 'AI off' + tooltip provider.
+
+        Trạng thái nói bằng CHỮ, không chỉ bằng màu. Trả về True khi AI sẵn sàng.
+        """
+        badge = getattr(self, 'ai_mode_badge', None)
+        label = getattr(self, 'txt_ai_status', None)
+        active = self.is_ai_mode_active(self.AI_TOOL)
+        if badge is None or label is None:
+            return active
+        try:
+            from System.Windows import Visibility as _Vis
+            if active:
+                info = self.get_ai_status_info() or {}
+                label.Text = "AI ready"
+                badge.ToolTip = "AI Mode: {}".format(info.get('label') or 'ready')
+            else:
+                label.Text = "AI off"
+                badge.ToolTip = ("AI Mode is off. Turn it on and add an API key "
+                                 "in Support > LLMs Setting.")
+            badge.Visibility = _Vis.Visible
+        except Exception:
+            pass
+        return active
+
+    def ai_require(self):
+        """True khi AI dùng được; nếu không, báo MỘT câu thống nhất và trả False."""
+        if self.is_ai_mode_active(self.AI_TOOL):
+            return True
+        try:
+            from GUI.T3Dialog import show_info
+            show_info("AI Mode is off, or no AI provider is available.",
+                      title="AI Mode",
+                      details="Turn on AI Mode and add an API key in "
+                              "Support > LLMs Setting, then try again.",
+                      owner=self)
+        except Exception:
+            pass
+        return False
+
+    def ai_busy(self, button, busy):
+        """Khoá / mở nút AI trong lúc chờ model — không đụng Content (icon + nhãn)."""
+        if button is None:
+            return
+        try:
+            button.IsEnabled = not busy
+        except Exception:
+            pass
 
     def run_ai_async(self, worker_func, on_done=None, on_error=None, **kwargs):
         """Run an AI query on a background thread and invoke callbacks on the UI thread.

@@ -17,6 +17,26 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-09-27
+
+### Added
+- **Check Update**: Restored the interactive Check Update tool on the Support panel and background daily update check in `startup.py`. Supports git fast-forward (`git pull --ff-only`) and direct zip fallback, changelog "What's new" preview, and pyRevit reload prompt.
+- **CropSync**: New tool in Views & Sheets panel to synchronize crop regions, annotation crops, and crop view settings across selected views.
+- **DatumSync**: New tool in Modeling & Datum panel to synchronize grid lines, levels, and datums across views.
+
+### Changed
+- **CPython 3 Migration**: Migrated scripts across all tools to CPython 3 runtime (`#! python3`) with robust engine path bootstrapping via `_cpython_bootstrap.py`.
+- **Panel Renaming**: Renamed `Data & IFC-SG` panel to `Data`.
+- **Ribbon Layout Refinement**: Streamlined button layouts across `Data.panel`, `Standards & Settings.panel`, `Modeling & Datum.panel`, `Annotation & Select.panel`, and `Support.panel`.
+
+### Removed
+- Removed deprecated/standalone tools from ribbon:
+  - **IFC-SG Suite, BCF Reader, Foundation Volume** (from Data panel).
+  - **ManaLoca, ManaStyles, ManaWorkset** (from Standards & Settings panel; functionality consolidated into Model Auditor).
+  - **ManaFami, FamiGen** (from Modeling & Datum panel).
+  - **ManaAnno** (from Annotation & Select panel).
+  - Standalone **T3LabAssistant** ribbon pushbutton (now accessible natively via Dockable Pane and right-click context menu in Revit 2025+).
+
 ## [1.4.0] - 2026-09-15
 
 ### Added

@@ -23,16 +23,25 @@ __version__ = "1.1.0"
 import os
 import re
 import sys
+
+# ManaAnnoDialog.py lives in lib/GUI; keep lib first so all absolute imports are
+# stable regardless of the pyRevit clone name or current working directory.
+lib_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if lib_dir not in sys.path:
+    sys.path.insert(0, lib_dir)
+
 import clr
 clr.AddReference('PresentationCore')
 clr.AddReference('PresentationFramework')
 clr.AddReference('System')
 clr.AddReference('System.Data')
 
-from System.Windows import Visibility, WindowState
-from System.Windows.Media.Imaging import BitmapImage
-from System import Uri, UriKind
+from System import TimeSpan
+from System.Collections.Generic import List
 from System.Data import DataTable
+from System.Windows import Visibility, WindowState
+from System.Windows.Threading import DispatcherTimer
+import Autodesk.Revit.DB as DB
 from Autodesk.Revit.DB import (
     FilteredElementCollector,
     Dimension, DimensionType,
@@ -40,49 +49,40 @@ from Autodesk.Revit.DB import (
     Transaction, ElementId,
     BuiltInParameter,
 )
-from pyrevit import revit, forms, script
+from pyrevit import revit, script
+from GUI import T3Dialog
 from GUI.WPF_Base import T3WPFWindow
 
-# Path setup
-extension_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
-lib_dir = os.path.join(extension_dir, 'lib')
-if lib_dir not in sys.path:
-    sys.path.append(lib_dir)
 if os.path.dirname(__file__) not in sys.path:
-    sys.path.append(os.path.dirname(__file__))
+    sys.path.insert(0, os.path.dirname(__file__))
 
 try:
     from GUI import DimTextDialog
     from GUI import CopyAnnotationDialog
+    from GUI import TagCheckerDialog
 except Exception:
     import DimTextDialog
     import CopyAnnotationDialog
+    import TagCheckerDialog
 import Utils.UpperAll as UpperAll
 import Utils.RenumberAlongSpline as RenumberAlongSpline
 
 # DEFINE VARIABLES
 # ==================================================
 logger = script.get_logger()
-# CPython has no ScriptOutput.GetDefault; safe_output()
-# returns a no-op window instead of killing the tool.
-try:
-    from _cpython_bootstrap import safe_output
-    output = safe_output()
-except Exception:
-    output = script.get_output()
 # `revit.doc` / `revit.uidoc` RAISE AttributeError (not return None) when no
 # UIDocument is active. At module scope that kills the import outright, so the
 # tool dies before it can explain itself. Resolve defensively and let the entry
 try:
-    from Snippets._host import resolve_doc, resolve_uidoc, get_revit_version
+    from Snippets._host import resolve_doc, resolve_uidoc
 except ImportError:
     try:
         import importlib
         import Snippets._host
         importlib.reload(Snippets._host)
-        from Snippets._host import resolve_doc, resolve_uidoc, get_revit_version
+        from Snippets._host import resolve_doc, resolve_uidoc
     except Exception:
-        from Snippets._host import resolve_doc, get_revit_version
+        from Snippets._host import resolve_doc
         def resolve_uidoc(candidate=None):
             if candidate is not None and hasattr(candidate, 'Document') and candidate.Document is not None:
                 return candidate
@@ -100,10 +100,6 @@ try:
     uidoc = resolve_uidoc(getattr(revit, 'uidoc', None))
 except Exception:
     uidoc = None
-try:
-    REVIT_VERSION = get_revit_version(doc)
-except Exception:
-    REVIT_VERSION = 2024
 
 # ============================================================
 # NAMING STRUCTURE CONFIGURATION — ISO 19650 COMPLIANT
@@ -168,10 +164,64 @@ def _rgb(color_int):
 def _sanitize(v):
     if not v:
         return "N/A"
-    return re.sub(r'[\\/:?"<>|=]', '', v).strip() or "N/A"
+    value = re.sub(r'[\\/:{}\[\]|;<>?`~=\r\n\t"]', '', str(v)).strip()
+    return value[:240] or "N/A"
 
 def _mm(param):
     return "{:.2f}mm".format(round(param.AsDouble() * 304.8, 2))
+
+
+def _param_text(param, default=""):
+    if param is None:
+        return default
+    try:
+        return param.AsString() or default
+    except Exception:
+        return default
+
+
+def _type_name(element, default=""):
+    try:
+        value = element.Name
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    try:
+        return _param_text(
+            element.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME), default
+        )
+    except Exception:
+        return default
+
+
+def _is_grouped(element):
+    try:
+        return element.GroupId != ElementId.InvalidElementId
+    except Exception:
+        return False
+
+
+def _run_transaction(label, action):
+    """Run one atomic Revit write and never leave a started transaction open."""
+    transaction = Transaction(doc, "T3Lab: " + label)
+    try:
+        if transaction.Start() != DB.TransactionStatus.Started:
+            raise RuntimeError("Revit did not start the transaction.")
+        options = transaction.GetFailureHandlingOptions()
+        options.SetForcedModalHandling(True)
+        transaction.SetFailureHandlingOptions(options)
+        result = action()
+        if transaction.Commit() != DB.TransactionStatus.Committed:
+            raise RuntimeError("Revit did not commit the transaction.")
+        return result
+    except Exception:
+        if transaction.GetStatus() == DB.TransactionStatus.Started:
+            transaction.RollBack()
+        raise
+    finally:
+        if transaction.GetStatus() != DB.TransactionStatus.Pending:
+            transaction.Dispose()
 
 # ============================================================
 # DIMENSION RENAME HELPERS
@@ -185,23 +235,23 @@ def _dim_name(dt, origin):
     p = gp(BuiltInParameter.TEXT_SIZE)
     size  = _mm(p) if p else "N/A"
     p = gp(BuiltInParameter.TEXT_FONT)
-    font  = p.AsString() if p else "N/A"
+    font  = _sanitize(_param_text(p, "N/A"))
     p = gp(BuiltInParameter.TEXT_WIDTH_SCALE)
     factor = "{:.2f}".format(p.AsDouble()).rstrip('0').rstrip('.') if p else "N/A"
     p = gp(BuiltInParameter.DIM_TEXT_BACKGROUND)
-    bg    = p.AsValueString() if p else "N/A"
+    bg    = _sanitize(p.AsValueString()) if p else "N/A"
     p = gp(BuiltInParameter.LINE_COLOR)
     color = _DIM_COLORS.get(_rgb(p.AsInteger()), "RGB") if p else "N/A"
     p = gp(BuiltInParameter.DIM_PREFIX)
-    pref  = _sanitize(p.AsString()) if p else "N/A"
+    pref  = _sanitize(_param_text(p)) if p else "N/A"
     p = gp(BuiltInParameter.DIM_STYLE_CENTERLINE_SYMBOL)
     ctr   = "Center" if (p and p.AsElementId() != ElementId.InvalidElementId) else "N/A"
     p = gp(BuiltInParameter.SPOT_ELEV_IND_ELEVATION)
-    elev  = _sanitize(p.AsString()) if p else "N/A"
+    elev  = _sanitize(_param_text(p)) if p else "N/A"
     p = gp(BuiltInParameter.SPOT_ELEV_IND_TOP)
-    top   = _sanitize(p.AsString()) if p else "N/A"
+    top   = _sanitize(_param_text(p)) if p else "N/A"
     p = gp(BuiltInParameter.SPOT_ELEV_IND_BOTTOM)
-    bot   = _sanitize(p.AsString()) if p else "N/A"
+    bot   = _sanitize(_param_text(p)) if p else "N/A"
 
     # Extract custom rounding if available
     rounding_str = ""
@@ -252,7 +302,7 @@ def _txt_name(tt, origin):
     p = gp(BuiltInParameter.TEXT_SIZE)
     size   = _mm(p) if p else "N/A"
     p = gp(BuiltInParameter.TEXT_FONT)
-    font   = p.AsString().replace(" ", "") if p else "N/A"
+    font   = _sanitize(_param_text(p, "N/A").replace(" ", ""))
     p = gp(BuiltInParameter.TEXT_BACKGROUND)
     bg     = ("Opaque" if p.AsInteger() == 0 else "Transparent") if p else "N/A"
     p = gp(BuiltInParameter.TEXT_WIDTH_SCALE)
@@ -306,6 +356,8 @@ _XAML_PATH = os.path.join(_GUI_DIR, 'Tools', 'ManaAnno.xaml')
 # WINDOW CLASS
 # ============================================================
 class AnnotationManagerWindow(T3WPFWindow):
+    AI_TOOL = "ManaAnno"
+
 
     def __init__(self):
         try:
@@ -332,6 +384,15 @@ class AnnotationManagerWindow(T3WPFWindow):
             self._txt_map = {}   # id-str → Revit element
             self.dg_txt.CellEditEnding += self.txt_cell_edit_ending
 
+            # Debounce live search.  Rebuilding thousands of DataRows on every
+            # keypress was the source of the Journal BIG_GAP on large models.
+            self._dim_search_timer = DispatcherTimer()
+            self._dim_search_timer.Interval = TimeSpan.FromMilliseconds(250)
+            self._dim_search_timer.Tick += self._run_queued_dim_search
+            self._txt_search_timer = DispatcherTimer()
+            self._txt_search_timer.Interval = TimeSpan.FromMilliseconds(250)
+            self._txt_search_timer.Tick += self._run_queued_txt_search
+
             # Sidebar list event bindings
             self.lb_dim_types.SelectionChanged += self.dim_sidebar_select_changed
             self.lb_txt_types.SelectionChanged += self.txt_sidebar_select_changed
@@ -342,10 +403,22 @@ class AnnotationManagerWindow(T3WPFWindow):
             self.dim_kw.TextChanged += self.dim_kw_changed
             self.txt_kw.TextChanged += self.txt_kw_changed
 
-            # Auto-load all elements on startup
+            # Four collectors total at startup (instances/types for each tool).
+            # All search and sidebar operations below work from these snapshots.
+            self._refresh_dim_cache()
+            self._refresh_txt_cache()
             self._load_all_dims()
             self._load_all_txts()
             self._load_sidebar_lists()
+
+            # Bind after initial population so selection sync does not run for
+            # thousands of transient rows while the DataTables are built.
+            self.dg_dim.SelectionChanged += self._dim_grid_selection_changed
+            self.dg_txt.SelectionChanged += self._txt_grid_selection_changed
+
+            include_groups = getattr(self, 'chk_include_groups', None)
+            if include_groups is not None:
+                include_groups.Click += self.settings_filter_changed
 
             # DimText state
             self._dimtext_rules = []
@@ -354,6 +427,9 @@ class AnnotationManagerWindow(T3WPFWindow):
             self.btn_util_copy_anno.Click += self._on_launch_copier
             self.btn_util_renumber_spline.Click += self._on_launch_renumber
             self.btn_util_upper_all.Click += self._on_launch_upper_all
+            tag_button = getattr(self, 'btn_util_tag_checker', None)
+            if tag_button is not None:
+                tag_button.Click += self._on_launch_tag_checker
 
             # Force initial tab content to render: nav_dim.IsChecked was already
             # True when the XAML was parsed, so no explicit SelectedIndex was ever
@@ -364,193 +440,302 @@ class AnnotationManagerWindow(T3WPFWindow):
             logger.error("Error initializing window: {}".format(ex))
             raise
 
-    # ── AI Mode Support ──────────────────────────────────────────────────
-
     def _init_ai_mode(self):
-        try:
-            if hasattr(self, 'is_ai_mode_active') and self.is_ai_mode_active():
-                if hasattr(self, 'ai_mode_badge') and self.ai_mode_badge:
-                    self.ai_mode_badge.Visibility = Visibility.Visible
-                if hasattr(self, 'txt_ai_status') and self.txt_ai_status:
-                    info = self.get_ai_status_info()
-                    self.txt_ai_status.Text = "AI Mode: {}".format(info.get('model', 'Ready'))
-        except Exception as ex:
-            logger.warning("AI Mode init failed: {}".format(ex))
+        self.init_ai_badge()
 
     def on_txt_ai_qa_clicked(self, sender, args):
-        """AI Quality Check: Detect typos, formatting issues, casing in Text Notes."""
-        try:
-            notes_to_check = []
+        """AI Spellcheck: typo / casing / viết tắt trong Text Note — chỉ STAGE, Apply mới ghi.
+
+        Không có fallback bằng luật: bản cũ thay 'dam'→'DẦM', 'san'→'SÀN'… bất kể
+        ngữ cảnh nên phá cả chữ tiếng Anh. AI tắt thì báo, không tự sửa gì.
+        """
+        if not self.ai_require():
+            return
+        if self._txt_submode != "notes":
+            self._status("AI Spellcheck is available in Find Notes mode only.")
+            return
+        notes = [{"id": str(r["_id"]), "text": str(r["Name"])}
+                 for r in self._txt_dt.Rows if r["Selected"]]
+        if not notes:
+            notes = [{"id": str(r["_id"]), "text": str(r["Name"])}
+                     for r in list(self._txt_dt.Rows)[:30]]
+        if not notes:
+            self._status("No text notes to check.")
+            return
+
+        requested_text = {item["id"]: item["text"] for item in notes}
+
+        import json
+        prompt = (
+            "You are a BIM quality-assurance specialist for architectural, structural and MEP "
+            "drawing annotations (Vietnamese and English).\n"
+            "Review these text notes for spelling errors, irregular casing, abbreviations and "
+            "inconsistencies. Keep each note's language; only fix real mistakes.\n"
+            "Return JSON ONLY: {\"corrections\": [{\"id\": \"...\", \"original\": \"...\", "
+            "\"suggested\": \"...\", \"issue\": \"...\"}], \"summary\": \"<one English sentence>\"}\n"
+            "Notes:\n" + json.dumps(notes, ensure_ascii=False)
+        )
+        btn = getattr(self, 'btn_txt_ai_qa', None)
+        self.ai_busy(btn, True)
+        self._status("AI checking {} text note(s)...".format(len(notes)))
+
+        def _worker():
+            return self.ai_bridge.ask_json(prompt, fast=True)
+
+        def _callback(res, err):
+            self.ai_busy(btn, False)
+            if err or not isinstance(res, dict) or 'corrections' not in res:
+                self._status("AI returned no usable result - nothing was changed. Try again.")
+                return
+            fixes = {}
+            for correction in res.get('corrections', []):
+                if not isinstance(correction, dict):
+                    continue
+                elem_id = str(correction.get('id', ''))
+                suggestion = correction.get('suggested')
+                original = correction.get('original')
+                if (elem_id in requested_text
+                        and isinstance(suggestion, str)
+                        and suggestion.strip()
+                        and (original is None or str(original) == requested_text[elem_id])):
+                    fixes[elem_id] = suggestion
+            updated = 0
             for row in self._txt_dt.Rows:
-                if row["Selected"]:
-                    notes_to_check.append({"id": str(row["_id"]), "text": str(row["Name"])})
-            if not notes_to_check:
-                for row in self._txt_dt.Rows:
-                    notes_to_check.append({"id": str(row["_id"]), "text": str(row["Name"])})
-                    if len(notes_to_check) >= 30:
-                        break
+                rid = str(row["_id"])
+                current_text = str(row["Name"])
+                if (rid in fixes
+                        and current_text == requested_text.get(rid)
+                        and fixes[rid] != current_text):
+                    row["Name"] = fixes[rid]
+                    row["Status"] = "AI Fix"
+                    row["Selected"] = True
+                    updated += 1
+            if updated:
+                self.btn_txt_apply.Visibility = Visibility.Visible
+                self._status("AI staged {} fix(es) (Status 'AI Fix') - review, then Apply Changes.".format(updated))
+            else:
+                self._status("AI found nothing to fix in {} note(s).".format(len(notes)))
 
-            if not notes_to_check:
-                self._status("No text notes found to check.")
-                return
+        self.run_ai_async(_worker, _callback)
 
-            self._status("AI inspecting {} text note(s) for typos & BIM standards...".format(len(notes_to_check)))
-            if hasattr(self, 'btn_txt_ai_qa'):
-                self.btn_txt_ai_qa.IsEnabled = False
-                self.btn_txt_ai_qa.Content = "⏳ Checking..."
-
-            def _restore_txt_btn():
-                if hasattr(self, 'btn_txt_ai_qa'):
-                    self.btn_txt_ai_qa.IsEnabled = True
-                    self.btn_txt_ai_qa.Content = "✨ AI Spellcheck & Fix"
-
-            def _apply_classic():
-                _restore_txt_btn()
-                changed = 0
-                for row in self._txt_dt.Rows:
-                    orig = str(row["Name"])
-                    cleaned = " ".join(orig.split())
-                    terms = {"wc": "WC", "nvs": "NVS", "dam": "DẦM", "cot": "CỘT", "san": "SÀN", "tang": "TẦNG"}
-                    for t_low, t_up in terms.items():
-                        cleaned = re.sub(r'\b' + re.escape(t_low) + r'\b', t_up, cleaned, flags=re.IGNORECASE)
-                    if cleaned != orig:
-                        row["Name"] = cleaned
-                        row["Status"] = "Rule Fix"
-                        row["Selected"] = True
-                        changed += 1
-                if changed:
-                    self.btn_txt_apply.Visibility = Visibility.Visible
-                    self._status("Rule-based QA: Standardized {} note(s) (marked 'Rule Fix'). Click Apply to save.".format(changed))
-                else:
-                    self._status("Rule-based QA: All checked notes conform to basic formatting.")
-
-            if not hasattr(self, 'is_ai_mode_active') or not self.is_ai_mode_active():
-                _apply_classic()
-                return
-
-            import json
-            prompt = (
-                "You are an expert BIM Quality Assurance specialist for architectural, structural, and MEP drawing annotations (Vietnamese & English).\n"
-                "Review these drawing text notes for spelling errors, irregular casing, abbreviations, and inconsistencies.\n"
-                "Return JSON ONLY with this structure:\n"
-                "{\n"
-                "  \"corrections\": [\n"
-                "    {\"id\": \"...\", \"original\": \"...\", \"suggested\": \"...\", \"issue\": \"...\"}\n"
-                "  ],\n"
-                "  \"summary\": \"...\"\n"
-                "}\n"
-                "Notes to inspect:\n" + json.dumps(notes_to_check)
-            )
-
-            def _worker():
-                return self.ai_bridge.ask_json(prompt, fast=True)
-
-            def _callback(res, err):
-                _restore_txt_btn()
-                if err or not res or not isinstance(res, dict) or 'corrections' not in res:
-                    _apply_classic()
-                    return
-
-                corrections = res.get('corrections', [])
-                summary = res.get('summary', 'Inspection complete')
-                if not corrections:
-                    self._status("AI QA: All notes look standard. No corrections needed.")
-                    return
-
-                corr_map = {c['id']: c['suggested'] for c in corrections if 'id' in c and 'suggested' in c}
-                updated = 0
-                for row in self._txt_dt.Rows:
-                    rid = str(row["_id"])
-                    if rid in corr_map:
-                        row["Name"] = corr_map[rid]
-                        row["Status"] = "AI Fix"
-                        row["Selected"] = True
-                        updated += 1
-
-                if updated > 0:
-                    self.btn_txt_apply.Visibility = Visibility.Visible
-                    self._status("AI QA: {}. {} note(s) updated (marked as 'AI Fix'). Click Apply Changes to commit.".format(
-                        summary, updated))
-                else:
-                    self._status("AI QA: {}".format(summary))
-
-            self.run_ai_async(_worker, _callback)
-
-        except Exception as ex:
-            if hasattr(self, 'btn_txt_ai_qa'):
-                self.btn_txt_ai_qa.IsEnabled = True
-                self.btn_txt_ai_qa.Content = "✨ AI Spellcheck & Fix"
-            logger.error("Error in on_txt_ai_qa_clicked: {}".format(ex))
-            self._status("Error in AI QA: {}".format(ex))
-
-    def on_dimtext_ai_suggest_clicked(self, sender, args):
-        """Suggest standard engineering dimension text overrides (Prefix, Suffix, Above, Below)."""
-        try:
-            self._status("AI suggesting standard dimension override annotations...")
-            if hasattr(self, 'btn_dimtext_ai_suggest'):
-                self.btn_dimtext_ai_suggest.IsEnabled = False
-                self.btn_dimtext_ai_suggest.Content = "⏳ Suggesting..."
-
-            def _restore_dim_btn():
-                if hasattr(self, 'btn_dimtext_ai_suggest'):
-                    self.btn_dimtext_ai_suggest.IsEnabled = True
-                    self.btn_dimtext_ai_suggest.Content = "✨ AI Suggest Overrides"
-
-            def _apply_suggestions(pfx, sfx, abv, blw, rationale):
-                _restore_dim_btn()
-                if hasattr(self, 'txt_prefix') and pfx and not self.txt_prefix.Text:
-                    self.txt_prefix.Text = pfx
-                if hasattr(self, 'txt_suffix') and sfx:
-                    self.txt_suffix.Text = sfx
-                if hasattr(self, 'txt_above') and abv:
-                    self.txt_above.Text = abv
-                if hasattr(self, 'txt_below') and blw:
-                    self.txt_below.Text = blw
-                self._status("AI Suggest: Applied overrides ({})".format(rationale))
-
-            if not hasattr(self, 'is_ai_mode_active') or not self.is_ai_mode_active():
-                _apply_suggestions("", " (TYP.)", "VERIFY ON SITE", "F.F.L.", "Standard BIM drawing convention")
-                return
-
-            prompt = (
-                "Suggest standard architectural/engineering BIM dimension override text for typical floor plan annotations.\n"
-                "Return JSON ONLY with keys:\n"
-                "{\n"
-                "  \"prefix\": string,\n"
-                "  \"suffix\": string (e.g. ' (TYP.)' or ' (E.Q.)'),\n"
-                "  \"above\": string (e.g. 'VERIFY' or 'CLEAR'),\n"
-                "  \"below\": string (e.g. 'F.F.L.' or 'C.H.'),\n"
-                "  \"rationale\": string\n"
-                "}"
-            )
-
-            def _worker():
-                return self.ai_bridge.ask_json(prompt, fast=True)
-
-            def _callback(res, err):
-                if err or not res or not isinstance(res, dict):
-                    _apply_suggestions("", " (TYP.)", "VERIFY ON SITE", "F.F.L.", "Standard drawing practice")
-                else:
-                    pfx = res.get('prefix', '')
-                    sfx = res.get('suffix', ' (TYP.)')
-                    abv = res.get('above', 'VERIFY')
-                    blw = res.get('below', 'F.F.L.')
-                    rat = res.get('rationale', 'AEC drawing standard')
-                    _apply_suggestions(pfx, sfx, abv, blw, rat)
-
-            self.run_ai_async(_worker, _callback)
-
-        except Exception as ex:
-            if hasattr(self, 'btn_dimtext_ai_suggest'):
-                self.btn_dimtext_ai_suggest.IsEnabled = True
-                self.btn_dimtext_ai_suggest.Content = "✨ AI Suggest Overrides"
-            logger.error("Error in on_dimtext_ai_suggest_clicked: {}".format(ex))
-            self._status("Error in AI Suggest: {}".format(ex))
 
     # ── helpers ─────────────────────────────────────────────────────────
 
     def _status(self, msg):
         self.status.Text = msg
+
+    def _setting_enabled(self, control_name, default):
+        control = getattr(self, control_name, None)
+        if control is None or control.IsChecked is None:
+            return default
+        return bool(control.IsChecked)
+
+    def _include_grouped(self):
+        return self._setting_enabled('chk_include_groups', False)
+
+    def _auto_select_enabled(self):
+        return self._setting_enabled('chk_auto_select', True)
+
+    def _confirm_delete_enabled(self):
+        return self._setting_enabled('chk_confirm_delete', True)
+
+    @staticmethod
+    def _view_name(owner_view_id, cache):
+        key = str(owner_view_id)
+        if key not in cache:
+            view = doc.GetElement(owner_view_id)
+            cache[key] = view.Name if view is not None else ""
+        return cache[key]
+
+    def _refresh_dim_cache(self):
+        self._dim_types = list(
+            FilteredElementCollector(doc).OfClass(DimensionType)
+            .WhereElementIsElementType()
+        )
+        self._dim_type_by_id = {str(item.Id): item for item in self._dim_types}
+        self._dim_type_names = {
+            key: _type_name(item, "<unnamed style>")
+            for key, item in self._dim_type_by_id.items()
+        }
+        self._dim_records = []
+        self._dim_record_by_id = {}
+        self._dim_counts_all = {}
+        self._dim_counts_ungrouped = {}
+        view_names = {}
+        for element in FilteredElementCollector(doc).OfClass(Dimension).WhereElementIsNotElementType():
+            elem_id = str(element.Id)
+            type_id = str(element.GetTypeId())
+            grouped = _is_grouped(element)
+            self._dim_counts_all[type_id] = self._dim_counts_all.get(type_id, 0) + 1
+            if not grouped:
+                self._dim_counts_ungrouped[type_id] = self._dim_counts_ungrouped.get(type_id, 0) + 1
+            record = {
+                "element": element,
+                "id": elem_id,
+                "type_id": type_id,
+                "type_name": self._dim_type_names.get(type_id, "<unnamed style>"),
+                "view_id": str(element.OwnerViewId),
+                "view_name": self._view_name(element.OwnerViewId, view_names),
+                "grouped": grouped,
+            }
+            self._dim_records.append(record)
+            self._dim_record_by_id[elem_id] = record
+
+    def _refresh_txt_cache(self):
+        self._txt_types = list(
+            FilteredElementCollector(doc).OfClass(TextNoteType)
+            .WhereElementIsElementType()
+        )
+        self._txt_type_by_id = {str(item.Id): item for item in self._txt_types}
+        self._txt_type_names = {
+            key: _type_name(item, "<unnamed>")
+            for key, item in self._txt_type_by_id.items()
+        }
+        self._txt_records = []
+        self._txt_record_by_id = {}
+        self._txt_counts_all = {}
+        self._txt_counts_ungrouped = {}
+        view_names = {}
+        for element in FilteredElementCollector(doc).OfClass(TextNote).WhereElementIsNotElementType():
+            elem_id = str(element.Id)
+            type_id = str(element.GetTypeId())
+            grouped = _is_grouped(element)
+            self._txt_counts_all[type_id] = self._txt_counts_all.get(type_id, 0) + 1
+            if not grouped:
+                self._txt_counts_ungrouped[type_id] = self._txt_counts_ungrouped.get(type_id, 0) + 1
+            record = {
+                "element": element,
+                "id": elem_id,
+                "type_id": type_id,
+                "type_name": self._txt_type_names.get(type_id, "<unnamed>"),
+                "text": element.Text or "",
+                "view_id": str(element.OwnerViewId),
+                "view_name": self._view_name(element.OwnerViewId, view_names),
+                "grouped": grouped,
+            }
+            self._txt_records.append(record)
+            self._txt_record_by_id[elem_id] = record
+
+    def _record_is_visible(self, record):
+        return self._include_grouped() or not record["grouped"]
+
+    def _dim_counts(self):
+        return self._dim_counts_all if self._include_grouped() else self._dim_counts_ungrouped
+
+    def _txt_counts(self):
+        return self._txt_counts_all if self._include_grouped() else self._txt_counts_ungrouped
+
+    def _replace_table(self, table, grid, populate):
+        """Bulk replace rows without a WPF notification/layout pass per row."""
+        was_updating = getattr(self, '_updating_grids', False)
+        self._updating_grids = True
+        grid.ItemsSource = None
+        table.BeginLoadData()
+        try:
+            table.Clear()
+            populate()
+        finally:
+            table.EndLoadData()
+            grid.ItemsSource = table.DefaultView
+            self._updating_grids = was_updating
+        if grid is getattr(self, 'dg_dim', None):
+            self._set_empty_state('dg_dim_empty', len(table.Rows) == 0)
+        elif grid is getattr(self, 'dg_txt', None):
+            self._set_empty_state('dg_txt_empty', len(table.Rows) == 0)
+
+    def _set_empty_state(self, control_name, is_empty):
+        control = getattr(self, control_name, None)
+        if control is not None:
+            control.Visibility = Visibility.Visible if is_empty else Visibility.Collapsed
+
+    @staticmethod
+    def _selected_rows(table, grid):
+        selected = {}
+        for row in table.Rows:
+            if bool(row["Selected"]):
+                selected[str(row["_id"])] = row
+        if not selected:
+            for row in grid.SelectedItems:
+                selected[str(row["_id"])] = row
+        return list(selected.values())
+
+    @staticmethod
+    def _set_header_checkbox(control, value):
+        if control is not None:
+            control.IsChecked = value
+
+    def _confirm_delete(self, count, label):
+        if not self._confirm_delete_enabled():
+            return True
+        return T3Dialog.confirm(
+            "Delete {} selected {}?".format(count, label),
+            title="Confirm Delete",
+            ok_text="Delete",
+            cancel_text="Cancel",
+            danger=True,
+            details="This model change can be restored with one Undo.",
+            owner=self,
+        )
+
+    def _run_queued_dim_search(self, sender, args):
+        self._dim_search_timer.Stop()
+        self.dim_search(None, None)
+
+    def _run_queued_txt_search(self, sender, args):
+        self._txt_search_timer.Stop()
+        self.txt_search(None, None)
+
+    def settings_filter_changed(self, sender, args):
+        self._dim_search_timer.Stop()
+        self._txt_search_timer.Stop()
+        self.dim_search(None, None)
+        self.txt_search(None, None)
+
+    def _set_revit_selection(self, element_ids):
+        if uidoc is None or not element_ids:
+            return
+        ids = List[ElementId]()
+        for element_id in element_ids:
+            ids.Add(element_id)
+        uidoc.Selection.SetElementIds(ids)
+
+    def _dim_grid_selection_changed(self, sender, args):
+        if getattr(self, '_updating_grids', False) or not self._auto_select_enabled():
+            return
+        row = self.dg_dim.SelectedItem
+        if row is None or uidoc is None:
+            return
+        active_view_id = str(uidoc.ActiveView.Id)
+        cat_code = str(row["_cat"])
+        elem_id = str(row["_id"])
+        if cat_code == "DimInst":
+            record = self._dim_record_by_id.get(elem_id)
+            matches = [record] if record and record["view_id"] == active_view_id else []
+        else:
+            matches = [record for record in self._dim_records
+                       if record["type_id"] == elem_id
+                       and record["view_id"] == active_view_id
+                       and self._record_is_visible(record)]
+        self._set_revit_selection([record["element"].Id for record in matches])
+
+    def _txt_grid_selection_changed(self, sender, args):
+        if getattr(self, '_updating_grids', False) or not self._auto_select_enabled():
+            return
+        row = self.dg_txt.SelectedItem
+        if row is None or uidoc is None:
+            return
+        active_view_id = str(uidoc.ActiveView.Id)
+        cat_code = str(row["_cat"])
+        elem_id = str(row["_id"])
+        if cat_code == "TxtInst":
+            record = self._txt_record_by_id.get(elem_id)
+            matches = [record] if record and record["view_id"] == active_view_id else []
+        else:
+            matches = [record for record in self._txt_records
+                       if record["type_id"] == elem_id
+                       and record["view_id"] == active_view_id
+                       and self._record_is_visible(record)]
+        self._set_revit_selection([record["element"].Id for record in matches])
 
     def _dt_add(self, dt, elem_id, cat_code, name, details,
                 size="", font="", bg="", color="", selected=False, count="1", status="Active"):
@@ -578,9 +763,9 @@ class AnnotationManagerWindow(T3WPFWindow):
         p = gp(BuiltInParameter.TEXT_SIZE)
         size = _mm(p) if p else ""
         p = gp(BuiltInParameter.TEXT_FONT)
-        font = p.AsString() if p else ""
+        font = _param_text(p)
         p = gp(BuiltInParameter.DIM_TEXT_BACKGROUND)
-        bg = p.AsValueString() if p else ""
+        bg = (p.AsValueString() or "") if p else ""
         p = gp(BuiltInParameter.LINE_COLOR)
         color = _DIM_COLORS.get(_rgb(p.AsInteger()), "RGB") if p else ""
         return size, font, bg, color
@@ -594,7 +779,7 @@ class AnnotationManagerWindow(T3WPFWindow):
         p = gp(BuiltInParameter.TEXT_SIZE)
         size = _mm(p) if p else ""
         p = gp(BuiltInParameter.TEXT_FONT)
-        font = p.AsString() if p else ""
+        font = _param_text(p)
         p = gp(BuiltInParameter.TEXT_BACKGROUND)
         bg = ("Opaque" if p.AsInteger() == 0 else "Transparent") if p else ""
         p = gp(BuiltInParameter.LINE_COLOR)
@@ -602,51 +787,36 @@ class AnnotationManagerWindow(T3WPFWindow):
         return size, font, bg, color
 
     def _load_all_dims(self):
-        self._dim_dt.Clear()
         self._dim_map = {}
+        counts = self._dim_counts()
 
-        # Pre-calculate counts of instances per type
-        all_dims = FilteredElementCollector(doc).OfClass(Dimension)\
-                   .WhereElementIsNotElementType().ToElements()
-        dim_counts = {}
-        for d in all_dims:
-            tid = str(d.DimensionType.Id)
-            dim_counts[tid] = dim_counts.get(tid, 0) + 1
-
-        if self._dim_submode == "instances":
-            dims = FilteredElementCollector(doc).OfClass(Dimension)\
-                   .WhereElementIsNotElementType().ToElements()
-            for d in dims:
-                view = doc.GetElement(d.OwnerViewId)
-                if view:
-                    try:
-                        _p = d.DimensionType.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                        d_name = (_p.AsString() if _p else "") or "<unnamed style>"
-                    except Exception:
-                        d_name = "<unnamed style>"
-                    self._dt_add(self._dim_dt, str(d.Id), "DimInst",
-                                 d_name, view.Name,
+        def populate():
+            if self._dim_submode == "instances":
+                for record in self._dim_records:
+                    if not self._record_is_visible(record) or not record["view_name"]:
+                        continue
+                    self._dt_add(self._dim_dt, record["id"], "DimInst",
+                                 record["type_name"], record["view_name"],
                                  selected=False, count="1", status="Active")
-                    self._dim_map[str(d.Id)] = d
-        else:
-            types = FilteredElementCollector(doc).OfClass(DimensionType)\
-                    .WhereElementIsElementType().ToElements()
-            for dt in types:
-                try:
-                    name = dt.Name or ""
-                except Exception:
-                    name = ""
-                try:
-                    size, font, bg, color = self._get_dim_params(dt)
-                except Exception:
-                    size, font, bg, color = "", "", "", ""
-                count = dim_counts.get(str(dt.Id), 0)
-                status = "Active" if count > 0 else "Unused"
-                self._dt_add(self._dim_dt, str(dt.Id), "DimType",
-                             name or "<unnamed>", "Dimension Type",
-                             size, font, bg, color,
-                             selected=False, count=str(count), status=status)
-                self._dim_map[str(dt.Id)] = dt
+                    self._dim_map[record["id"]] = record["element"]
+            else:
+                for item in self._dim_types:
+                    elem_id = str(item.Id)
+                    try:
+                        size, font, bg, color = self._get_dim_params(item)
+                    except Exception:
+                        size, font, bg, color = "", "", "", ""
+                    count = counts.get(elem_id, 0)
+                    all_count = self._dim_counts_all.get(elem_id, 0)
+                    status = "Active" if count else ("Grouped only" if all_count else "Unused")
+                    self._dt_add(self._dim_dt, elem_id, "DimType",
+                                 self._dim_type_names.get(elem_id, "<unnamed>"),
+                                 "Dimension Type", size, font, bg, color,
+                                 selected=False, count=str(count), status=status)
+                    self._dim_map[elem_id] = item
+
+        self._replace_table(self._dim_dt, self.dg_dim, populate)
+        self._set_header_checkbox(getattr(self, 'chk_all_dg_dim', None), False)
 
         n = len(self._dim_map)
         self.dim_count.Text = "{} found".format(n)
@@ -654,69 +824,45 @@ class AnnotationManagerWindow(T3WPFWindow):
         self._status("Loaded {} {}.".format(n, kind))
 
     def _load_all_txts(self):
-        self._txt_dt.Clear()
         self._txt_map = {}
+        counts = self._txt_counts()
 
-        # Pre-calculate counts of instances per type
-        all_notes = FilteredElementCollector(doc).OfClass(TextNote)\
-                    .WhereElementIsNotElementType().ToElements()
-        note_counts = {}
-        for tn in all_notes:
-            tid = str(tn.TextNoteType.Id)
-            note_counts[tid] = note_counts.get(tid, 0) + 1
-
-        if self._txt_submode == "notes":
-            notes = FilteredElementCollector(doc).OfClass(TextNote)\
-                    .WhereElementIsNotElementType().ToElements()
-            for tn in notes:
-                view = doc.GetElement(tn.OwnerViewId)
-                if view:
-                    preview = (tn.Text or "")[:60].replace("\n", " ").replace("\r", "")
-                    self._dt_add(self._txt_dt, str(tn.Id), "TxtInst",
-                                 preview, view.Name,
+        def populate():
+            if self._txt_submode == "notes":
+                for record in self._txt_records:
+                    if not self._record_is_visible(record) or not record["view_name"]:
+                        continue
+                    # Keep the complete string.  The previous 60-character
+                    # preview was later written back by edit/AI Apply, silently
+                    # truncating real annotations.
+                    self._dt_add(self._txt_dt, record["id"], "TxtInst",
+                                 record["text"], record["view_name"],
                                  selected=False, count="1", status="Active")
-                    self._txt_map[str(tn.Id)] = tn
-        else:
-            types = FilteredElementCollector(doc).OfClass(TextNoteType)\
-                    .WhereElementIsElementType().ToElements()
-            for tt in types:
-                try:
-                    p = tt.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                    name = p.AsString() if p else (tt.Name or "")
-                except Exception:
-                    name = ""
-                try:
-                    size, font, bg, color = self._get_txt_params(tt)
-                except Exception:
-                    size, font, bg, color = "", "", "", ""
-                count = note_counts.get(str(tt.Id), 0)
-                status = "Active" if count > 0 else "Unused"
-                self._dt_add(self._txt_dt, str(tt.Id), "TxtType",
-                             name or "<unnamed>", "Text Note Type",
-                             size, font, bg, color,
-                             selected=False, count=str(count), status=status)
-                self._txt_map[str(tt.Id)] = tt
+                    self._txt_map[record["id"]] = record["element"]
+            else:
+                for item in self._txt_types:
+                    elem_id = str(item.Id)
+                    try:
+                        size, font, bg, color = self._get_txt_params(item)
+                    except Exception:
+                        size, font, bg, color = "", "", "", ""
+                    count = counts.get(elem_id, 0)
+                    all_count = self._txt_counts_all.get(elem_id, 0)
+                    status = "Active" if count else ("Grouped only" if all_count else "Unused")
+                    self._dt_add(self._txt_dt, elem_id, "TxtType",
+                                 self._txt_type_names.get(elem_id, "<unnamed>"),
+                                 "Text Note Type", size, font, bg, color,
+                                 selected=False, count=str(count), status=status)
+                    self._txt_map[elem_id] = item
+
+        self._replace_table(self._txt_dt, self.dg_txt, populate)
+        self._set_header_checkbox(getattr(self, 'chk_all_dg_txt', None), False)
 
         n = len(self._txt_map)
         self.txt_count.Text = "{} found".format(n)
         kind = "note(s)" if self._txt_submode == "notes" else "type(s)"
         self._status("Loaded {} {}.".format(n, kind))
 
-    def dim_refresh(self, sender, args):
-        self._load_all_dims()
-        self._load_sidebar_lists()
-
-    def txt_refresh(self, sender, args):
-        self._load_all_txts()
-        self._load_sidebar_lists()
-
-    def _remove_rows(self, dt, elem_map, ok_ids):
-        ok_set = set(ok_ids)
-        to_del = list(r for r in dt.Rows if str(r["_id"]) in ok_set)
-        for r in to_del:
-            dt.Rows.Remove(r)
-        for eid in ok_ids:
-            elem_map.pop(eid, None)
 
     # ── Window controls ──────────────────────────────────────────────────
 
@@ -732,6 +878,8 @@ class AnnotationManagerWindow(T3WPFWindow):
             self.btn_maximize.ToolTip = "Restore"
 
     def close_button_clicked(self, sender, args):
+        self._dim_search_timer.Stop()
+        self._txt_search_timer.Stop()
         self.Close()
 
     # ── Dimension sub-mode ───────────────────────────────────────────────
@@ -739,13 +887,14 @@ class AnnotationManagerWindow(T3WPFWindow):
     def _toggle_param_cols(self, dg, show):
         vis = Visibility.Visible if show else Visibility.Collapsed
         for col in dg.Columns:
-            h = str(col.Header) if col.Header else ""
-            if h in ("Size", "Font", "Background", "Color"):
+            h = str(col.Header).strip().lower() if col.Header else ""
+            if h in ("size", "font", "background", "color"):
                 col.Visibility = vis
 
     def dim_submode(self, sender, args):
         if not hasattr(self, '_dim_dt'):
             return
+        self._dim_search_timer.Stop()
         self._dim_submode = "instances" if self.rb_dim_inst.IsChecked else "types"
         is_type = self._dim_submode == "types"
         self.btn_dim_jump.IsEnabled = not is_type
@@ -766,54 +915,40 @@ class AnnotationManagerWindow(T3WPFWindow):
             self._load_all_dims()
             return
 
-        self._dim_dt.Clear()
         self._dim_map = {}
+        counts = self._dim_counts()
 
-        # Pre-calculate counts of instances per type
-        all_dims = FilteredElementCollector(doc).OfClass(Dimension)\
-                   .WhereElementIsNotElementType().ToElements()
-        dim_counts = {}
-        for d in all_dims:
-            tid = str(d.DimensionType.Id)
-            dim_counts[tid] = dim_counts.get(tid, 0) + 1
-
-        if self._dim_submode == "instances":
-            dims = FilteredElementCollector(doc).OfClass(Dimension)\
-                   .WhereElementIsNotElementType().ToElements()
-            for d in dims:
-                try:
-                    _p = d.DimensionType.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                    d_name = (_p.AsString() if _p else "") or "<unnamed style>"
-                except Exception:
-                    d_name = "<unnamed style>"
-                if kw in d_name.lower():
-                    view = doc.GetElement(d.OwnerViewId)
-                    if view:
-                        self._dt_add(self._dim_dt, str(d.Id), "DimInst",
-                                     d_name, view.Name,
-                                     selected=False, count="1", status="Active")
-                        self._dim_map[str(d.Id)] = d
-        else:  # types
-            types = FilteredElementCollector(doc).OfClass(DimensionType)\
-                    .WhereElementIsElementType().ToElements()
-            for dt in types:
-                try:
-                    name = dt.Name or ""
-                except Exception:
+        def populate():
+            if self._dim_submode == "instances":
+                for record in self._dim_records:
+                    if (not self._record_is_visible(record)
+                            or not record["view_name"]
+                            or kw not in record["type_name"].lower()):
+                        continue
+                    self._dt_add(self._dim_dt, record["id"], "DimInst",
+                                 record["type_name"], record["view_name"],
+                                 selected=False, count="1", status="Active")
+                    self._dim_map[record["id"]] = record["element"]
+            else:
+                for item in self._dim_types:
+                    elem_id = str(item.Id)
+                    name = self._dim_type_names.get(elem_id, "<unnamed>")
+                    if kw not in name.lower():
+                        continue
                     try:
-                        _p = dt.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                        name = _p.AsString() if _p else ""
+                        size, font, bg, color = self._get_dim_params(item)
                     except Exception:
-                        name = ""
-                if kw in name.lower():
-                    size, font, bg, color = self._get_dim_params(dt)
-                    count = dim_counts.get(str(dt.Id), 0)
-                    status = "Active" if count > 0 else "Unused"
-                    self._dt_add(self._dim_dt, str(dt.Id), "DimType",
-                                 name or "<unnamed>", "Dimension Type",
-                                 size, font, bg, color,
+                        size, font, bg, color = "", "", "", ""
+                    count = counts.get(elem_id, 0)
+                    all_count = self._dim_counts_all.get(elem_id, 0)
+                    status = "Active" if count else ("Grouped only" if all_count else "Unused")
+                    self._dt_add(self._dim_dt, elem_id, "DimType", name,
+                                 "Dimension Type", size, font, bg, color,
                                  selected=False, count=str(count), status=status)
-                    self._dim_map[str(dt.Id)] = dt
+                    self._dim_map[elem_id] = item
+
+        self._replace_table(self._dim_dt, self.dg_dim, populate)
+        self._set_header_checkbox(getattr(self, 'chk_all_dg_dim', None), False)
 
         n = len(self._dim_map)
         self.dim_count.Text = "{} found".format(n)
@@ -849,16 +984,15 @@ class AnnotationManagerWindow(T3WPFWindow):
         if not elem:
             return
 
-        t = Transaction(doc, "Rename Dimension Type")
-        t.Start()
         try:
-            elem.Name = new_name
-            t.Commit()
+            _run_transaction("Rename Dimension Type", lambda: setattr(elem, "Name", new_name))
             self._status(u"Renamed: '{}' \u2192 '{}'.".format(old_name[:40], new_name[:40]))
         except Exception as e:
-            t.RollBack()
             args.Cancel = True
             self._status("Rename failed: {}".format(e))
+            return
+        self._refresh_dim_cache()
+        self._load_sidebar_lists()
 
     def dim_jump(self, sender, args):
         selected_rows = []
@@ -877,60 +1011,79 @@ class AnnotationManagerWindow(T3WPFWindow):
         if not d:
             return
         view = doc.GetElement(d.OwnerViewId)
-        if view:
-            uidoc.ActiveView = view
-            uidoc.ShowElements(d.Id)
-            self._status("Jumped to view '{}' — dimension '{}'.".format(
-                view.Name, str(row["Name"])[:40]))
+        if view and uidoc is not None:
+            try:
+                uidoc.ActiveView = view
+                uidoc.ShowElements(d.Id)
+                self._status("Jumped to view '{}' — dimension '{}'.".format(
+                    view.Name, str(row["Name"])[:40]))
+            except Exception as ex:
+                self._status("Could not open the dimension view: {}".format(ex))
 
     def dim_delete(self, sender, args):
-        selected_rows = []
-        for row in self._dim_dt.Rows:
-            if row["Selected"]:
-                selected_rows.append(row)
-        if not selected_rows:
-            selected_rows = list(self.dg_dim.SelectedItems)
-
+        selected_rows = self._selected_rows(self._dim_dt, self.dg_dim)
         if not selected_rows:
             self._status("Nothing selected. Check boxes or select rows to delete.")
             return
 
-        t = Transaction(doc, "Delete Selected Dimensions")
-        t.Start()
-        ok_ids = []
-        errors = 0
+        candidates = []
+        skipped_in_use = 0
         for row in selected_rows:
             elem_id = str(row["_id"])
-            elem    = self._dim_map.get(elem_id)
-            if elem:
+            if str(row["_cat"]) == "DimType" and self._dim_counts_all.get(elem_id, 0):
+                skipped_in_use += 1
+                continue
+            elem = self._dim_map.get(elem_id)
+            if elem is not None:
+                candidates.append(elem)
+        if not candidates:
+            self._status("No elements were deleted. {} selected type(s) are still in use.".format(
+                skipped_in_use))
+            return
+        label = "dimension element(s)" if self._dim_submode == "instances" else "unused DimensionType(s)"
+        if not self._confirm_delete(len(candidates), label):
+            self._status("Delete cancelled.")
+            return
+
+        result = {"deleted": 0, "errors": 0}
+
+        def delete_elements():
+            for elem in candidates:
                 try:
                     doc.Delete(elem.Id)
-                    ok_ids.append(elem_id)
+                    result["deleted"] += 1
                 except Exception:
-                    errors += 1
-        t.Commit()
-        self._remove_rows(self._dim_dt, self._dim_map, ok_ids)
-        self.dim_count.Text = "{} found".format(len(self._dim_map))
-        msg = "Deleted {} elements.".format(len(ok_ids))
-        if errors:
-            msg += "  ({} failed.)".format(errors)
+                    result["errors"] += 1
+
+        try:
+            _run_transaction("Delete Selected Dimensions", delete_elements)
+        except Exception as ex:
+            self._status("Delete failed; no dimensions were changed: {}".format(ex))
+            return
+
+        self._refresh_dim_cache()
+        self.dim_search(None, None)
+        msg = "Deleted {} element(s).".format(result["deleted"])
+        if result["errors"]:
+            msg += "  ({} failed.)".format(result["errors"])
+        if skipped_in_use:
+            msg += "  ({} in-use type(s) skipped.)".format(skipped_in_use)
         self._status(msg)
         self._load_sidebar_lists()
 
     def dim_select_all(self, sender, args):
         for row in self._dim_dt.Rows:
             row["Selected"] = True
+        self._set_header_checkbox(getattr(self, 'chk_all_dg_dim', None), True)
 
     def dim_clear_sel(self, sender, args):
         for row in self._dim_dt.Rows:
             row["Selected"] = False
+        self._set_header_checkbox(getattr(self, 'chk_all_dg_dim', None), False)
 
     def dim_apply(self, sender, args):
         """Apply edited Name back to DimensionType elements."""
-        t = Transaction(doc, "Apply Dimension Type Changes")
-        t.Start()
-        count = 0
-        errors = 0
+        changes = []
         for row in self._dim_dt.Rows:
             elem_id = str(row["_id"])
             elem = self._dim_map.get(elem_id)
@@ -939,98 +1092,89 @@ class AnnotationManagerWindow(T3WPFWindow):
             new_name = str(row["Name"]).strip()
             if not new_name:
                 continue
-            try:
-                _p = elem.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                cur_name = _p.AsString() if _p else ""
-                if cur_name != new_name:
+            if _type_name(elem) != new_name:
+                changes.append((elem, new_name))
+        if not changes:
+            self._status("No DimensionType names needed changes.")
+            return
+        result = {"count": 0, "errors": 0}
+
+        def apply_changes():
+            for elem, new_name in changes:
+                try:
                     elem.Name = new_name
-                    count += 1
-            except Exception:
-                errors += 1
-        t.Commit()
-        msg = "Applied {} rename(s).".format(count)
-        if errors:
-            msg += "  ({} failed.)".format(errors)
+                    result["count"] += 1
+                except Exception:
+                    result["errors"] += 1
+
+        try:
+            _run_transaction("Apply Dimension Type Changes", apply_changes)
+        except Exception as ex:
+            self._status("Apply failed; no DimensionTypes were renamed: {}".format(ex))
+            return
+        msg = "Applied {} rename(s).".format(result["count"])
+        if result["errors"]:
+            msg += "  ({} failed.)".format(result["errors"])
         self._status(msg)
+        self._refresh_dim_cache()
         self._load_all_dims()
         self._load_sidebar_lists()
 
     def dim_rename_all(self, sender, args):
-        from pyrevit import forms as pf
-        if not pf.alert("Auto-rename ALL DimensionTypes in this document?\nThis cannot be undone.",
-                        title="Confirm Rename", yes=True, no=True):
+        if not T3Dialog.confirm(
+                "Auto-rename all DimensionTypes in this document?",
+                title="Confirm Rename", ok_text="Rename All", danger=True,
+                details="All successful renames are recorded as one Undo step.", owner=self):
             return
-        t = Transaction(doc, "Rename Dimension Types")
-        t.Start()
-        count = 0
-        try:
-            for dt in FilteredElementCollector(doc).OfClass(DimensionType)\
-                      .WhereElementIsElementType().ToElements():
-                new_name = None
+        used_names = {name.lower() for name in self._dim_type_names.values()}
+        plans = []
+        for item in self._dim_types:
+            origin = self._dim_type_names.get(str(item.Id), "")
+            if not origin:
+                continue
+            used_names.discard(origin.lower())
+            base_name = _dim_name(item, origin)
+            new_name = base_name
+            suffix = 2
+            while new_name.lower() in used_names:
+                new_name = "{}_{}".format(base_name, suffix)
+                suffix += 1
+            used_names.add(new_name.lower())
+            if origin != new_name:
+                plans.append((item, origin, new_name))
+        if not plans:
+            self._status("All DimensionTypes already match the naming standard.")
+            return
+        result = {"count": 0, "errors": 0}
+
+        def rename_all():
+            for item, origin, new_name in plans:
                 try:
-                    p = dt.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                    if p is None:
-                        continue
-                    origin = p.AsString()
-                    if not origin:
-                        continue
-                    new_name = _dim_name(dt, origin)
-                    if origin != new_name:
-                        dt.Name = new_name
-                        count += 1
+                    item.Name = new_name
+                    result["count"] += 1
                 except Exception as ex:
-                    try:
-                        _p = dt.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                        _cur = _p.AsString() if _p else str(dt.Id)
-                    except Exception:
-                        _cur = str(dt.Id)
-                    print("DEBUG: Failed to rename DimensionType '{}' to '{}': {}".format(
-                        _cur, new_name, ex
-                    ))
-        finally:
-            t.Commit()
-        self._status("Renamed {} DimensionType(s).".format(count))
+                    result["errors"] += 1
+                    logger.warning("DimensionType '{}' could not be renamed to '{}': {}".format(
+                        origin, new_name, ex))
+
+        try:
+            _run_transaction("Rename Dimension Types", rename_all)
+        except Exception as ex:
+            self._status("Rename failed; no DimensionTypes were changed: {}".format(ex))
+            return
+        self._status("Renamed {} DimensionType(s); {} failed.".format(
+            result["count"], result["errors"]))
+        self._refresh_dim_cache()
         self._load_all_dims()
         self._load_sidebar_lists()
 
-    def dim_delete_unused(self, sender, args):
-        from pyrevit import forms as pf
-        all_dims = FilteredElementCollector(doc).OfClass(Dimension)\
-                   .WhereElementIsNotElementType().ToElements()
-        used_ids = set()
-        for d in all_dims:
-            try:
-                used_ids.add(str(d.DimensionType.Id))
-            except Exception:
-                pass
-        all_types = FilteredElementCollector(doc).OfClass(DimensionType)\
-                    .WhereElementIsElementType().ToElements()
-        unused = [dt for dt in all_types if str(dt.Id) not in used_ids]
-        if not unused:
-            self._status("No unused Dimension Types found.")
-            return
-        if not pf.alert("Purge {} unused Dimension Type(s)?\nThis cannot be undone.".format(len(unused)),
-                        title="Confirm Purge", yes=True, no=True):
-            return
-        t = Transaction(doc, "Purge Unused Dimension Types")
-        t.Start()
-        ok = 0
-        for dt in unused:
-            try:
-                doc.Delete(dt.Id)
-                ok += 1
-            except Exception:
-                pass
-        t.Commit()
-        self._status("Purged {} unused Dimension Type(s).".format(ok))
-        self._load_all_dims()
-        self._load_sidebar_lists()
 
     # ── TextNote sub-mode ────────────────────────────────────────────────
 
     def txt_submode(self, sender, args):
         if not hasattr(self, '_txt_dt'):
             return
+        self._txt_search_timer.Stop()
         if self.rb_notes.IsChecked:
             self._txt_submode = "notes"
             if hasattr(self, 'txt_lbl'):
@@ -1057,47 +1201,40 @@ class AnnotationManagerWindow(T3WPFWindow):
             self._load_all_txts()
             return
 
-        self._txt_dt.Clear()
         self._txt_map = {}
+        counts = self._txt_counts()
 
-        # Pre-calculate counts of instances per type
-        all_notes = FilteredElementCollector(doc).OfClass(TextNote)\
-                    .WhereElementIsNotElementType().ToElements()
-        note_counts = {}
-        for tn in all_notes:
-            tid = str(tn.TextNoteType.Id)
-            note_counts[tid] = note_counts.get(tid, 0) + 1
-
-        if self._txt_submode == "notes":
-            notes = FilteredElementCollector(doc).OfClass(TextNote)\
-                    .WhereElementIsNotElementType().ToElements()
-            for tn in notes:
-                if kw in (tn.Text or "").lower():
-                    view = doc.GetElement(tn.OwnerViewId)
-                    if view:
-                        preview = (tn.Text or "")[:60].replace("\n", " ").replace("\r", "")
-                        self._dt_add(self._txt_dt, str(tn.Id), "TxtInst",
-                                     preview, view.Name,
-                                     selected=False, count="1", status="Active")
-                        self._txt_map[str(tn.Id)] = tn
-        else:  # types
-            types = FilteredElementCollector(doc).OfClass(TextNoteType)\
-                    .WhereElementIsElementType().ToElements()
-            for tt in types:
-                try:
-                    _p = tt.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                    name = _p.AsString() if _p else (tt.Name or "")
-                except Exception:
-                    name = ""
-                if kw in name.lower():
-                    size, font, bg, color = self._get_txt_params(tt)
-                    count = note_counts.get(str(tt.Id), 0)
-                    status = "Active" if count > 0 else "Unused"
-                    self._dt_add(self._txt_dt, str(tt.Id), "TxtType",
-                                 name or "<unnamed>", "Text Note Type",
-                                 size, font, bg, color,
+        def populate():
+            if self._txt_submode == "notes":
+                for record in self._txt_records:
+                    if (not self._record_is_visible(record)
+                            or not record["view_name"]
+                            or kw not in record["text"].lower()):
+                        continue
+                    self._dt_add(self._txt_dt, record["id"], "TxtInst",
+                                 record["text"], record["view_name"],
+                                 selected=False, count="1", status="Active")
+                    self._txt_map[record["id"]] = record["element"]
+            else:
+                for item in self._txt_types:
+                    elem_id = str(item.Id)
+                    name = self._txt_type_names.get(elem_id, "<unnamed>")
+                    if kw not in name.lower():
+                        continue
+                    try:
+                        size, font, bg, color = self._get_txt_params(item)
+                    except Exception:
+                        size, font, bg, color = "", "", "", ""
+                    count = counts.get(elem_id, 0)
+                    all_count = self._txt_counts_all.get(elem_id, 0)
+                    status = "Active" if count else ("Grouped only" if all_count else "Unused")
+                    self._dt_add(self._txt_dt, elem_id, "TxtType", name,
+                                 "Text Note Type", size, font, bg, color,
                                  selected=False, count=str(count), status=status)
-                    self._txt_map[str(tt.Id)] = tt
+                    self._txt_map[elem_id] = item
+
+        self._replace_table(self._txt_dt, self.dg_txt, populate)
+        self._set_header_checkbox(getattr(self, 'chk_all_dg_txt', None), False)
 
         n = len(self._txt_map)
         self.txt_count.Text = "{} found".format(n)
@@ -1106,21 +1243,21 @@ class AnnotationManagerWindow(T3WPFWindow):
 
     def txt_cell_edit_ending(self, sender, args):
         col_header = str(args.Column.Header)
-        if col_header not in ("NAME"):
+        if col_header != "TEXT / NAME":
             return
         if str(args.EditAction) != "Commit":
             return
 
         tb       = args.EditingElement
-        new_name = tb.Text.strip()
-        if not new_name:
-            args.Cancel = True
-            return
-
         row      = args.Row.Item
         elem_id  = str(row["_id"])
         cat_code = str(row["_cat"])
         old_name = str(row["Name"])
+        raw_name = tb.Text or ""
+        new_name = raw_name.strip() if cat_code == "TxtType" else raw_name
+        if not new_name.strip():
+            args.Cancel = True
+            return
 
         if new_name == old_name:
             return
@@ -1129,19 +1266,19 @@ class AnnotationManagerWindow(T3WPFWindow):
         if not elem:
             return
 
-        t = Transaction(doc, "Rename Text Note")
-        t.Start()
         try:
-            if cat_code == "TxtType":
-                elem.Name = new_name
-            else:  # TxtInst — edit the text content
-                elem.Text = new_name
-            t.Commit()
+            attr_name = "Name" if cat_code == "TxtType" else "Text"
+            _run_transaction(
+                "Rename Text Note Type" if cat_code == "TxtType" else "Edit Text Note",
+                lambda: setattr(elem, attr_name, new_name),
+            )
             self._status(u"Renamed: '{}' \u2192 '{}'.".format(old_name[:40], new_name[:40]))
         except Exception as e:
-            t.RollBack()
             args.Cancel = True
             self._status("Rename failed: {}".format(e))
+            return
+        self._refresh_txt_cache()
+        self._load_sidebar_lists()
 
     def txt_jump(self, sender, args):
         if self._txt_submode != "notes":
@@ -1163,163 +1300,172 @@ class AnnotationManagerWindow(T3WPFWindow):
         if not tn:
             return
         view = doc.GetElement(tn.OwnerViewId)
-        if view:
-            uidoc.ActiveView = view
-            uidoc.ShowElements(tn.Id)
-            self._status("Jumped to view '{}' — note: '{}'.".format(
-                view.Name, str(row["Name"])[:40]))
+        if view and uidoc is not None:
+            try:
+                uidoc.ActiveView = view
+                uidoc.ShowElements(tn.Id)
+                note_text = str(row["Name"]).replace("\r", " ").replace("\n", " ")
+                self._status("Jumped to view '{}' — note: '{}'.".format(
+                    view.Name, note_text[:40]))
+            except Exception as ex:
+                self._status("Could not open the Text Note view: {}".format(ex))
 
     def txt_delete(self, sender, args):
-        selected_rows = []
-        for row in self._txt_dt.Rows:
-            if row["Selected"]:
-                selected_rows.append(row)
-        if not selected_rows:
-            selected_rows = list(self.dg_txt.SelectedItems)
-
+        selected_rows = self._selected_rows(self._txt_dt, self.dg_txt)
         if not selected_rows:
             self._status("Nothing selected. Check boxes or select rows to delete.")
             return
         label = "note instance(s)" if self._txt_submode == "notes" else "TextNoteType(s)"
-        t = Transaction(doc, "Delete Selected Text {}".format(label))
-        t.Start()
-        ok_ids = []
-        errors = 0
+        candidates = []
+        skipped_in_use = 0
         for row in selected_rows:
             elem_id = str(row["_id"])
-            elem    = self._txt_map.get(elem_id)
-            if elem:
+            if str(row["_cat"]) == "TxtType" and self._txt_counts_all.get(elem_id, 0):
+                skipped_in_use += 1
+                continue
+            elem = self._txt_map.get(elem_id)
+            if elem is not None:
+                candidates.append(elem)
+        if not candidates:
+            self._status("No elements were deleted. {} selected type(s) are still in use.".format(
+                skipped_in_use))
+            return
+        if not self._confirm_delete(len(candidates), label):
+            self._status("Delete cancelled.")
+            return
+        result = {"deleted": 0, "errors": 0}
+
+        def delete_elements():
+            for elem in candidates:
                 try:
                     doc.Delete(elem.Id)
-                    ok_ids.append(elem_id)
+                    result["deleted"] += 1
                 except Exception:
-                    errors += 1
-        t.Commit()
-        self._remove_rows(self._txt_dt, self._txt_map, ok_ids)
-        self.txt_count.Text = "{} found".format(len(self._txt_map))
-        msg = "Deleted {} {}.".format(len(ok_ids), label)
-        if errors:
-            msg += "  ({} could not be deleted — may be in use.)".format(errors)
+                    result["errors"] += 1
+
+        try:
+            _run_transaction("Delete Selected Text Notes", delete_elements)
+        except Exception as ex:
+            self._status("Delete failed; no Text Notes were changed: {}".format(ex))
+            return
+        self._refresh_txt_cache()
+        self.txt_search(None, None)
+        msg = "Deleted {} {}.".format(result["deleted"], label)
+        if result["errors"]:
+            msg += "  ({} could not be deleted.)".format(result["errors"])
+        if skipped_in_use:
+            msg += "  ({} in-use type(s) skipped.)".format(skipped_in_use)
         self._status(msg)
         self._load_sidebar_lists()
 
     def txt_select_all(self, sender, args):
         for row in self._txt_dt.Rows:
             row["Selected"] = True
+        self._set_header_checkbox(getattr(self, 'chk_all_dg_txt', None), True)
 
     def txt_clear_sel(self, sender, args):
         for row in self._txt_dt.Rows:
             row["Selected"] = False
+        self._set_header_checkbox(getattr(self, 'chk_all_dg_txt', None), False)
 
     def txt_apply(self, sender, args):
         """Apply edited Name/Text back to TextNoteType or TextNote instances."""
-        t = Transaction(doc, "Apply Text Note Changes")
-        t.Start()
-        count = 0
-        errors = 0
+        changes = []
         for row in self._txt_dt.Rows:
             elem_id = str(row["_id"])
             elem = self._txt_map.get(elem_id)
             if not elem:
                 continue
-            new_name = str(row["Name"]).strip()
-            if not new_name:
-                continue
             cat_code = str(row["_cat"])
-            try:
-                if cat_code == "TxtType":
-                    _p = elem.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                    cur_name = _p.AsString() if _p else ""
-                    if cur_name != new_name:
+            raw_name = str(row["Name"])
+            new_name = raw_name.strip() if cat_code == "TxtType" else raw_name
+            if not new_name.strip():
+                continue
+            current = _type_name(elem) if cat_code == "TxtType" else (elem.Text or "")
+            if current != new_name:
+                changes.append((elem, cat_code, new_name))
+        if not changes:
+            self._status("No Text Note changes needed to be applied.")
+            return
+        result = {"count": 0, "errors": 0}
+
+        def apply_changes():
+            for elem, cat_code, new_name in changes:
+                try:
+                    if cat_code == "TxtType":
                         elem.Name = new_name
-                        count += 1
-                else:
-                    if elem.Text != new_name:
+                    else:
                         elem.Text = new_name
-                        count += 1
-            except Exception:
-                errors += 1
-        t.Commit()
-        msg = "Applied {} text change(s).".format(count)
-        if errors:
-            msg += "  ({} failed.)".format(errors)
+                    result["count"] += 1
+                except Exception:
+                    result["errors"] += 1
+
+        try:
+            _run_transaction("Apply Text Note Changes", apply_changes)
+        except Exception as ex:
+            self._status("Apply failed; no Text Notes were changed: {}".format(ex))
+            return
+        msg = "Applied {} text change(s).".format(result["count"])
+        if result["errors"]:
+            msg += "  ({} failed.)".format(result["errors"])
         self._status(msg)
-        self.btn_txt_apply.Visibility = Visibility.Collapsed
+        self._refresh_txt_cache()
         self._load_all_txts()
         self._load_sidebar_lists()
+        self.btn_txt_apply.Visibility = (
+            Visibility.Visible if self._txt_submode == "types" else Visibility.Collapsed
+        )
 
     def txt_rename_all(self, sender, args):
-        from pyrevit import forms as pf
-        if not pf.alert("Auto-rename ALL TextNoteTypes in this document?\nThis cannot be undone.",
-                        title="Confirm Rename", yes=True, no=True):
+        if not T3Dialog.confirm(
+                "Auto-rename all TextNoteTypes in this document?",
+                title="Confirm Rename", ok_text="Rename All", danger=True,
+                details="All successful renames are recorded as one Undo step.", owner=self):
             return
-        t = Transaction(doc, "Rename TextNote Types")
-        t.Start()
-        count = 0
-        try:
-            for tt in FilteredElementCollector(doc).OfClass(TextNoteType)\
-                      .WhereElementIsElementType().ToElements():
+        used_names = {name.lower() for name in self._txt_type_names.values()}
+        plans = []
+        for item in self._txt_types:
+            origin = self._txt_type_names.get(str(item.Id), "")
+            if not origin:
+                continue
+            used_names.discard(origin.lower())
+            base_name = _txt_name(item, origin)
+            new_name = base_name
+            suffix = 2
+            while new_name.lower() in used_names:
+                new_name = "{}_{}".format(base_name, suffix)
+                suffix += 1
+            used_names.add(new_name.lower())
+            if origin != new_name:
+                plans.append((item, origin, new_name))
+        if not plans:
+            self._status("All TextNoteTypes already match the naming standard.")
+            return
+        result = {"count": 0, "errors": 0}
+
+        def rename_all():
+            for item, origin, new_name in plans:
                 try:
-                    _p = tt.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-                    if _p is None:
-                        continue
-                    origin = _p.AsString()
-                    if not origin:
-                        continue
-                    tt.Name = _txt_name(tt, origin)
-                    count += 1
-                except Exception:
-                    pass
-        finally:
-            t.Commit()
-        self._status("Renamed {} TextNoteType(s).".format(count))
+                    item.Name = new_name
+                    result["count"] += 1
+                except Exception as ex:
+                    result["errors"] += 1
+                    logger.warning("TextNoteType '{}' could not be renamed to '{}': {}".format(
+                        origin, new_name, ex))
+
+        try:
+            _run_transaction("Rename Text Note Types", rename_all)
+        except Exception as ex:
+            self._status("Rename failed; no TextNoteTypes were changed: {}".format(ex))
+            return
+        self._status("Renamed {} TextNoteType(s); {} failed.".format(
+            result["count"], result["errors"]))
+        self._refresh_txt_cache()
         self._load_all_txts()
         self._load_sidebar_lists()
 
-    def txt_delete_unused(self, sender, args):
-        from pyrevit import forms as pf
-        all_notes = FilteredElementCollector(doc).OfClass(TextNote)\
-                    .WhereElementIsNotElementType().ToElements()
-        used_ids = set()
-        for tn in all_notes:
-            try:
-                used_ids.add(str(tn.TextNoteType.Id))
-            except Exception:
-                pass
-        all_types = FilteredElementCollector(doc).OfClass(TextNoteType)\
-                    .WhereElementIsElementType().ToElements()
-        unused = [tt for tt in all_types if str(tt.Id) not in used_ids]
-        if not unused:
-            self._status("No unused Text Note Types found.")
-            return
-        if not pf.alert("Purge {} unused Text Note Type(s)?\nThis cannot be undone.".format(len(unused)),
-                        title="Confirm Purge", yes=True, no=True):
-            return
-        t = Transaction(doc, "Purge Unused Text Note Types")
-        t.Start()
-        ok = 0
-        for tt in unused:
-            try:
-                doc.Delete(tt.Id)
-                ok += 1
-            except Exception:
-                pass
-        t.Commit()
-        self._status("Purged {} unused Text Note Type(s).".format(ok))
-        self._load_all_txts()
-        self._load_sidebar_lists()
 
     # ── Header Checkbox Toggle Event Handlers ─────────────────────────────────
-
-    def dim_header_select_all_clicked(self, sender, args):
-        is_checked = sender.IsChecked
-        for row in self._dim_dt.Rows:
-            row["Selected"] = is_checked
-
-    def txt_header_select_all_clicked(self, sender, args):
-        is_checked = sender.IsChecked
-        for row in self._txt_dt.Rows:
-            row["Selected"] = is_checked
 
     # ── Top Horizontal Navigation Tab Event Handlers ─────────────────────────
 
@@ -1355,26 +1501,37 @@ class AnnotationManagerWindow(T3WPFWindow):
         if hasattr(self, 'main_tabs'):
             self.main_tabs.SelectedIndex = 4
 
-    def _on_launch_copier(self, sender, e):
+    def _launch_utility(self, callback, label, refresh_annotations=True):
         self.Hide()
+        succeeded = False
         try:
-            CopyAnnotationDialog.show_dialog()
+            callback()
+            succeeded = True
+        except SystemExit:
+            self._status("{} was cancelled or is unavailable in the active view.".format(label))
+        except Exception as ex:
+            logger.exception("{} failed".format(label))
+            self._status("{} failed: {}".format(label, ex))
         finally:
             self.Show()
+        if succeeded and refresh_annotations:
+            self._refresh_dim_cache()
+            self._refresh_txt_cache()
+            self.dim_search(None, None)
+            self.txt_search(None, None)
+            self._load_sidebar_lists()
+
+    def _on_launch_copier(self, sender, e):
+        self._launch_utility(CopyAnnotationDialog.show_dialog, "Annotation Copier")
 
     def _on_launch_renumber(self, sender, e):
-        self.Hide()
-        try:
-            RenumberAlongSpline.run()
-        finally:
-            self.Show()
+        self._launch_utility(RenumberAlongSpline.run, "Renumber Along Spline")
 
     def _on_launch_upper_all(self, sender, e):
-        self.Hide()
-        try:
-            UpperAll.run()
-        finally:
-            self.Show()
+        self._launch_utility(UpperAll.run, "Uppercase Converter")
+
+    def _on_launch_tag_checker(self, sender, e):
+        self._launch_utility(TagCheckerDialog.show_dialog, "Tag Checker", False)
 
     # ── DimText tab handlers ─────────────────────────────────────────────────
 
@@ -1394,9 +1551,20 @@ class AnnotationManagerWindow(T3WPFWindow):
         self.sp_filter_config.Visibility = vis
 
     def dimtext_add_rule(self, sender, args):
-        rd = self._dimtext_create_rule_row()
+        rd = DimTextDialog.create_rule_row(self, self._dimtext_remove_rule)
         self._dimtext_rules.append(rd)
         self.sp_rules.Children.Add(rd["panel"])
+
+    def _dimtext_remove_rule(self, rd):
+        self.sp_rules.Children.Remove(rd["panel"])
+        if rd in self._dimtext_rules:
+            self._dimtext_rules.remove(rd)
+
+    def _dimtext_build_filter_fn(self):
+        if not self.chk_filter_enable.IsChecked or not self._dimtext_rules:
+            return None
+        return DimTextDialog.build_filter_fn(self._dimtext_rules,
+                                             self.combo_combine.SelectedIndex == 0)
 
     def dimtext_apply(self, sender, args):
         prefix   = self.txt_prefix.Text.strip()
@@ -1415,181 +1583,29 @@ class AnnotationManagerWindow(T3WPFWindow):
             scope = "selection"
 
         if not dims:
-            self._status("DimText: no dimensions found in {}.".format(scope))
+            self._status("DimText: no dimensions found in {}. Select dimensions or "
+                         "choose 'All dimensions in active view'.".format(scope))
             return
 
-        from Autodesk.Revit.DB import Transaction
-        with Transaction(doc, "Dim Text Override") as t:
-            t.Start()
-            for dim in dims:
-                DimTextDialog._set_dim_text(dim, prefix, suffix, above, below, override, filter_fn)
-                if leader_off:
-                    DimTextDialog._turn_off_leader(dim)
-            t.Commit()
+        try:
+            DimTextDialog.apply_dim_text(dims, prefix, suffix, above, below, override,
+                                         leader_off, filter_fn)
+        except Exception as ex:
+            self._status("DimText: failed ({}). Nothing was modified.".format(ex))
+            return
 
         note = " (filter active)" if filter_fn else ""
-        self._status("DimText: applied to {} dim(s) in {}{}.".format(len(dims), scope, note))
-
-    def _dimtext_build_filter_fn(self):
-        if not self.chk_filter_enable.IsChecked or not self._dimtext_rules:
-            return None
-        parsed = []
-        for rd in self._dimtext_rules:
-            op = rd["combo"].SelectedItem.Content if rd["combo"].SelectedItem else None
-            if op is None:
-                continue
-            v1 = v2 = 0.0
-            if op not in DimTextDialog._NO_VALUE_OPS:
-                try:
-                    v1 = float(rd["txt1"].Text.strip() or "0")
-                except ValueError:
-                    v1 = 0.0
-            if op in DimTextDialog._TWO_VALUE_OPS:
-                try:
-                    v2 = float(rd["txt2"].Text.strip() or "0")
-                except ValueError:
-                    v2 = 0.0
-            parsed.append((op, v1, v2))
-        if not parsed:
-            return None
-        use_and = (self.combo_combine.SelectedIndex == 0)
-        def filter_fn(length_mm):
-            if length_mm is None:
-                return False
-            results = []
-            for op, v1, v2 in parsed:
-                if   op == "equals":                      results.append(abs(length_mm - v1) < 0.5)
-                elif op == "does not equal":              results.append(abs(length_mm - v1) >= 0.5)
-                elif op == "is greater than":             results.append(length_mm >  v1)
-                elif op == "is greater than or equal to": results.append(length_mm >= v1)
-                elif op == "is less than":                results.append(length_mm <  v1)
-                elif op == "is less than or equal to":    results.append(length_mm <= v1)
-                elif op == "between":                     results.append(min(v1, v2) <= length_mm <= max(v1, v2))
-                elif op == "has a value":                 results.append(True)
-                elif op == "has no value":                results.append(False)
-            if not results:
-                return True
-            return all(results) if use_and else any(results)
-        return filter_fn
-
-    def _dimtext_create_rule_row(self):
-        from System.Windows import Thickness, Visibility, VerticalAlignment
-        from System.Windows.Controls import (
-            StackPanel, ComboBox, ComboBoxItem, TextBox, Button, TextBlock
-        )
-        from System.Windows.Controls import Orientation as WPFOrientation
-        from System.Windows.Media import SolidColorBrush, Color
-        from System.Windows.Media import FontFamily as WPFFontFamily
-
-        rd = {}
-        row = StackPanel()
-        row.Orientation = WPFOrientation.Horizontal
-        row.Margin = Thickness(0, 0, 0, 6)
-        rd["panel"] = row
-
-        combo = ComboBox()
-        combo.Width = 185; combo.Height = 28
-        combo.FontFamily = WPFFontFamily("Inter"); combo.FontSize = 12
-        combo.Margin = Thickness(0, 0, 6, 0)
-        for op in DimTextDialog._OPERATORS:
-            item = ComboBoxItem(); item.Content = op; combo.Items.Add(item)
-        combo.SelectedIndex = 0
-        combo.SelectionChanged += self._dimtext_make_op_handler(rd)
-        rd["combo"] = combo; row.Children.Add(combo)
-
-        txt1 = TextBox()
-        txt1.Width = 72; txt1.Height = 28; txt1.FontSize = 12
-        txt1.Padding = Thickness(6, 4, 6, 4); txt1.Margin = Thickness(0, 0, 4, 0)
-        txt1.BorderBrush = SolidColorBrush(Color.FromRgb(0xCB, 0xD5, 0xE1))
-        txt1.BorderThickness = Thickness(1)
-        rd["txt1"] = txt1; row.Children.Add(txt1)
-
-        lbl_mm = TextBlock()
-        lbl_mm.Text = "mm"; lbl_mm.FontSize = 11
-        lbl_mm.Foreground = SolidColorBrush(Color.FromRgb(0x64, 0x74, 0x8B))
-        lbl_mm.Margin = Thickness(0, 0, 8, 0); lbl_mm.VerticalAlignment = VerticalAlignment.Center
-        rd["lbl_mm"] = lbl_mm; row.Children.Add(lbl_mm)
-
-        lbl_and = TextBlock()
-        lbl_and.Text = "and"; lbl_and.FontSize = 11
-        lbl_and.Foreground = SolidColorBrush(Color.FromRgb(0x0F, 0x17, 0x2A))
-        lbl_and.Margin = Thickness(0, 0, 6, 0); lbl_and.VerticalAlignment = VerticalAlignment.Center
-        lbl_and.Visibility = Visibility.Collapsed
-        rd["lbl_and"] = lbl_and; row.Children.Add(lbl_and)
-
-        txt2 = TextBox()
-        txt2.Width = 72; txt2.Height = 28; txt2.FontSize = 12
-        txt2.Padding = Thickness(6, 4, 6, 4); txt2.Margin = Thickness(0, 0, 4, 0)
-        txt2.BorderBrush = SolidColorBrush(Color.FromRgb(0xCB, 0xD5, 0xE1))
-        txt2.BorderThickness = Thickness(1); txt2.Visibility = Visibility.Collapsed
-        rd["txt2"] = txt2; row.Children.Add(txt2)
-
-        lbl_mm2 = TextBlock()
-        lbl_mm2.Text = "mm"; lbl_mm2.FontSize = 11
-        lbl_mm2.Foreground = SolidColorBrush(Color.FromRgb(0x64, 0x74, 0x8B))
-        lbl_mm2.Margin = Thickness(0, 0, 8, 0); lbl_mm2.VerticalAlignment = VerticalAlignment.Center
-        lbl_mm2.Visibility = Visibility.Collapsed
-        rd["lbl_mm2"] = lbl_mm2; row.Children.Add(lbl_mm2)
-
-        btn = Button()
-        btn.Content = u"−"; btn.Width = 26; btn.Height = 26; btn.FontSize = 14
-        btn.Background = SolidColorBrush(Color.FromArgb(0, 0, 0, 0))
-        btn.BorderThickness = Thickness(1)
-        btn.BorderBrush = SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44))
-        btn.Foreground = SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44))
-        btn.Click += self._dimtext_make_remove_handler(rd)
-        row.Children.Add(btn)
-
-        return rd
-
-    def _dimtext_make_op_handler(self, rd):
-        from System.Windows import Visibility
-        def handler(sender, args):
-            op = sender.SelectedItem.Content if sender.SelectedItem else ""
-            no_val  = op in DimTextDialog._NO_VALUE_OPS
-            two_val = op in DimTextDialog._TWO_VALUE_OPS
-            v1_vis = Visibility.Collapsed if no_val else Visibility.Visible
-            rd["txt1"].Visibility   = v1_vis
-            rd["lbl_mm"].Visibility = v1_vis
-            v2_vis = Visibility.Visible if two_val else Visibility.Collapsed
-            rd["lbl_and"].Visibility = v2_vis
-            rd["txt2"].Visibility    = v2_vis
-            rd["lbl_mm2"].Visibility = v2_vis
-        return handler
-
-    def _dimtext_make_remove_handler(self, rd):
-        def handler(sender, args):
-            self.sp_rules.Children.Remove(rd["panel"])
-            if rd in self._dimtext_rules:
-                self._dimtext_rules.remove(rd)
-        return handler
+        self._status("DimText: processed {} dim(s) in {}{}.".format(len(dims), scope, note))
 
     # ── Sidebar Browsing & Live Filtering List Event Handlers ────────────────
 
     def _load_sidebar_lists(self):
-        dim_types = FilteredElementCollector(doc).OfClass(DimensionType)\
-                    .WhereElementIsElementType().ToElements()
-        dim_names = []
-        for dt in dim_types:
-            try:
-                n = dt.Name
-                if n:
-                    dim_names.append(n)
-            except Exception:
-                pass
-        self._all_dim_type_names = sorted(list(set(dim_names)))
-
-        txt_types = FilteredElementCollector(doc).OfClass(TextNoteType)\
-                    .WhereElementIsElementType().ToElements()
-        txt_names = []
-        for tt in txt_types:
-            try:
-                n = tt.Name
-                if n:
-                    txt_names.append(n)
-            except Exception:
-                pass
-        self._all_txt_type_names = sorted(list(set(txt_names)))
+        self._all_dim_type_names = sorted(set(
+            name for name in self._dim_type_names.values() if name
+        ), key=lambda value: value.lower())
+        self._all_txt_type_names = sorted(set(
+            name for name in self._txt_type_names.values() if name
+        ), key=lambda value: value.lower())
 
         self.filter_sidebar_dim_list()
         self.filter_sidebar_txt_list()
@@ -1600,6 +1616,7 @@ class AnnotationManagerWindow(T3WPFWindow):
         for name in self._all_dim_type_names:
             if not kw or kw in name.lower():
                 self.lb_dim_types.Items.Add(name)
+        self._set_empty_state('lb_dim_types_empty', self.lb_dim_types.Items.Count == 0)
 
     def filter_sidebar_txt_list(self):
         kw = self.txt_sidebar_search.Text.strip().lower()
@@ -1607,20 +1624,19 @@ class AnnotationManagerWindow(T3WPFWindow):
         for name in self._all_txt_type_names:
             if not kw or kw in name.lower():
                 self.lb_txt_types.Items.Add(name)
+        self._set_empty_state('lb_txt_types_empty', self.lb_txt_types.Items.Count == 0)
 
     def dim_sidebar_select_changed(self, sender, args):
         selected_item = self.lb_dim_types.SelectedItem
         if selected_item:
             self.dim_kw.Text = selected_item
             self.dim_kw_placeholder.Visibility = Visibility.Collapsed
-            self.dim_search(sender, args)
 
     def txt_sidebar_select_changed(self, sender, args):
         selected_item = self.lb_txt_types.SelectedItem
         if selected_item:
             self.txt_kw.Text = selected_item
             self.txt_kw_placeholder.Visibility = Visibility.Collapsed
-            self.txt_search(sender, args)
 
     def dim_sidebar_search_changed(self, sender, args):
         self.dim_sidebar_placeholder.Visibility = Visibility.Collapsed if self.dim_sidebar_search.Text else Visibility.Visible
@@ -1634,11 +1650,13 @@ class AnnotationManagerWindow(T3WPFWindow):
 
     def dim_kw_changed(self, sender, args):
         self.dim_kw_placeholder.Visibility = Visibility.Collapsed if self.dim_kw.Text else Visibility.Visible
-        self.dim_search(sender, args)
+        self._dim_search_timer.Stop()
+        self._dim_search_timer.Start()
 
     def txt_kw_changed(self, sender, args):
         self.txt_kw_placeholder.Visibility = Visibility.Collapsed if self.txt_kw.Text else Visibility.Visible
-        self.txt_search(sender, args)
+        self._txt_search_timer.Stop()
+        self._txt_search_timer.Start()
 
     # ── Select-all o header cot checkbox ────────────────────────────────
     # toggle_all_rows() nam trong T3WPFWindow: no chay tren grid.Items nen chi
@@ -1656,8 +1674,13 @@ class AnnotationManagerWindow(T3WPFWindow):
 # MAIN SCRIPT
 # ==================================================
 def show_dialog():
-    if not revit.doc:
-        forms.alert("Please open a Revit document first.", exitscript=True)
+    if doc is None or uidoc is None:
+        T3Dialog.show_error(
+            "No active Revit document is available.",
+            title="ManaAnno",
+            details="Open a project and a graphical view, then run ManaAnno again.",
+        )
+        return
     logger.info("Annotation Manager started")
     win = AnnotationManagerWindow()
     win.ShowDialog()

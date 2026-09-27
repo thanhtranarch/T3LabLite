@@ -8,6 +8,7 @@ import json
 from pyrevit import forms, revit, script
 from GUI.WPF_Base import T3WPFWindow, to_items_source
 from Snippets._compat import eid_value
+from core.extension_paths import tab_dir
 
 import clr
 clr.AddReference('System')
@@ -45,7 +46,7 @@ XAML_FILE = os.path.join(os.path.dirname(__file__), 'Tools', 'ManaLoca.xaml')
 LIB_DIR = os.path.dirname(os.path.dirname(__file__))
 EXT_DIR = os.path.dirname(LIB_DIR)
 SETTINGS_FILE = os.path.join(
-    EXT_DIR, 'T3Lab.tab', 'Standards & Settings.panel', 'ManaLoca.pushbutton', 'session.json'
+    tab_dir(EXT_DIR), 'Standards & Settings.panel', 'ManaLoca.pushbutton', 'session.json'
 )
 if not os.path.exists(os.path.dirname(SETTINGS_FILE)):
     SETTINGS_FILE = os.path.join(os.path.dirname(__file__), 'ManaLoca_session.json')
@@ -546,6 +547,10 @@ class LocationManagerHandler(IExternalEventHandler):
 # ==================================================
 
 class LocationManagerWindow(T3WPFWindow):
+    # Click= trong DataTemplate không nằm trong namescope của window, nếu
+    # không bật cờ này handler của checkbox/nút từng dòng không bao giờ chạy.
+    WIRE_TEMPLATED_CLICKS = True
+
     def __init__(self, xaml_file_path=None):
         xaml_path = xaml_file_path or XAML_FILE
         self.all_elements    = []

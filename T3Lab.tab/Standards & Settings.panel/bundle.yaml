@@ -1,8 +1,5 @@
 title: "Standards & Settings"
 layout:
   - ModelAuditor
-  - ManaLoca
-  - ManaStyles
-  - ManaWorkset
   - ManaGroup
   - BatchLink

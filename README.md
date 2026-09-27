@@ -1,7 +1,7 @@
 # T3Lab Lite
 
-**T3Lab Lite** is a pyRevit extension built for Revit users who want to work faster.
-It covers batch export, sheet & view management, family tools, IFC-SG compliance, CAD-to-BIM conversion, model auditing, a built-in AI assistant that runs Revit tools from plain Vietnamese or English, and MCP integration that lets Claude AI work with Revit directly.
+**T3Lab Lite** is a pyRevit extension running on **CPython 3** built for Revit users who want to work faster.
+It covers batch export, sheet & view management, datum & crop synchronization, CAD-to-BIM conversion, model auditing, a built-in AI assistant that runs Revit tools from plain Vietnamese or English, and MCP integration that lets Claude AI work with Revit directly.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's new in each release.
 
@@ -36,9 +36,9 @@ happened.
 
 ### Tools
 
-The ribbon is organised into six panels: **Support**, **Standards & Settings**, **Data & IFC-SG**, **Modeling & Datum**, **Annotation & Select**, and **Views & Sheets**.
+The ribbon is organised into six panels: **Support**, **Standards & Settings**, **Data**, **Modeling & Datum**, **Annotation & Select**, and **Views & Sheets**. All tools run on the high-performance **CPython 3** engine.
 
-Tools that process many elements — Model Auditor, ManaSheets, ManaViews, SheetGen, FamiGen, IFC-SG, Tile Layout, Auto Join, Room To Floor, Image to Drafting, CAD to Elements and BatchOut — show a progress bar with **Pause** and **Stop** while they run, so a long batch can be paused or cancelled without killing Revit.
+Tools that process many elements — Model Auditor, ManaSheets, ManaViews, SheetGen, Tile Layout, Auto Join, Room To Floor, Image to Drafting, CAD to Elements and BatchOut — show a progress bar with **Pause** and **Stop** while they run, so a long batch can be paused or cancelled without killing Revit.
 
 ---
 
@@ -68,7 +68,11 @@ Import PDF pages into selected Revit views sequentially. Supports 150 / 300 / 60
 - **BG Theme** — set the model-view background colour. Presets, RGB sliders, HEX input, and live preview. SHIFT+Click cycles Black → Gray → White.
 
 #### Check Update
-Compare the installed version with the latest release on GitHub and update via git or direct download — see [Staying up to date](#staying-up-to-date).
+Compare the installed version (`version.txt`) with the latest release on GitHub and update via git or direct download — see [Staying up to date](#staying-up-to-date).
+- **Version Detection** — queries GitHub repository releases and mirrors (jsDelivr) to prevent rate limits.
+- **What's New Preview** — automatically extracts release notes from `CHANGELOG.md` between local and remote versions.
+- **Safe Updating** — pulls updates via `git pull --ff-only` when running from a git clone (protecting local edits) or downloads and extracts the release archive.
+- **Live Reload** — prompts to reload pyRevit immediately to start using updated tools.
 
 #### Cloud Links
 Quick links to Autodesk Forma, Autodesk Health dashboard, and Bluebeam Status.
@@ -80,26 +84,20 @@ Quick links to Autodesk Forma, Autodesk Health dashboard, and Bluebeam Status.
 #### Model Auditor
 Consolidated model health checks in one window.
 - **Model Check** — verify model standards and quality rules.
+- **Smart Purge** — safe, category-based model cleanup removing unreferenced views, unused families, and unplaced elements.
 - **Warnings** — review and address the Revit warning list.
 - **In-Place Models** — list and manage in-place family instances.
 - **Material List** — audit all materials used in the model.
 
-#### ManaLoca
-List and adjust element locations in the current view or by level.
-Edit XYZ coordinates in a data grid and commit changes back to the model. Modeless — stays open while you work.
+#### ManaGroup
+Manage Revit Model Groups and Detail Groups: list group types and placed instances, count references, and audit unused group definitions.
 
-#### ManaStyles
-Unified visual style manager.
-- **Fill Patterns / Line Styles / Line Patterns** — create, rename, and manage graphic styles.
-- **Color Splasher** — apply graphic override colours to elements by category rule.
-- **Coordinate Editor** — view and adjust element XYZ coordinates in a grid.
-
-#### ManaWorkset
-Enable worksharing, create or delete worksets, assign elements to worksets by rule (category, level, or type), and generate workset-based view filters.
+#### BatchLink
+Manage Revit and CAD link paths in bulk: verify link statuses, repath missing links, reload links across documents, and audit external dependencies.
 
 ---
 
-### Data & IFC-SG
+### Data
 
 #### ManaSched
 Export schedule data to Excel with formatting preserved, import updated values back into schedule rows, and duplicate schedules.
@@ -111,21 +109,12 @@ Parameter Manager — transfer parameter values between elements by rule, assign
 Find elements contained in Rooms, Areas, Spaces, Zones, Masses, or Scope Boxes.
 Assign parameter values to contained elements from their container, or aggregate element data back into the container.
 
-#### IFC-SG Suite
-Unified suite for IFC-SG submission in Singapore.
-- **Subtype Assigner** — load mapping rules from Excel, assign IFC Export Class and Predefined Type parameters.
-- **Compliance Checker** — verify required parameters exist and are filled based on CORENET X rules.
-
-#### BCF Reader
-Import BCF 2.1 files from IFC Delta Viewer and navigate issues in Revit.
-Click an issue to jump the active view to the flagged element. Modeless — stays open while you work.
-
-#### Foundation Volume
-Write the Revit computed volume into a selected shared parameter on Structural Foundation elements, in one transaction.
-
 ---
 
 ### Modeling & Datum
+
+#### DatumSync
+Synchronize grid lines, levels, and reference planes across views. Align 2D/3D extents, datum bubbles, and visibility between a source view and target views to maintain clean documentation.
 
 #### Property Line
 Create property lines from Lightbox parcel survey data. Supports metes-and-bounds descriptions and coordinate-based input.
@@ -141,15 +130,6 @@ Create property lines from Lightbox parcel survey data. Supports metes-and-bound
 - **Image to Drafting** — create a Drafting View and import an image from disk or clipboard.
 - **Text to Element** — transfer Text Note content to element parameters via bounding-box overlap in the active view.
 
-#### ManaFami
-Family Manager — browse loaded families by category, search and filter, load new families from disk or the cloud catalogue, and delete unused family types.
-
-#### FamiGen
-Create Revit families from external data.
-- **From CAD** — scan imported DWG blocks and export each unique block as an `.rfa` family.
-- **From JSON** — generate fully parametric families from a structured JSON schema.
-- **Batch** — create standard families from built-in presets without any source file.
-
 #### Element Adjust
 - **Auto Join** — automatically join intersecting elements by category rules (Shift+Click for quick join).
 - **Split Elements** — split Walls, Columns, or Floors at selected levels, preserving parameters.
@@ -159,10 +139,6 @@ Create Revit families from external data.
 ---
 
 ### Annotation & Select
-
-#### ManaAnno
-Unified tool to find, remove, and rename Dimensions and Text Notes.
-Find dimensions or notes by keyword and jump to the view, delete instances or types, and auto-rename all types by their properties.
 
 #### ManaDWG
 Manage CAD imports and CAD links — list, rename, and delete DWG imports and links from a single interface.
@@ -185,6 +161,9 @@ Manage sheets in one unified interface — browse with live search, sync sheet d
 
 #### SheetGen
 Create floor-plan views from a room list. Select rooms, choose a View Family Type and naming template, and generate all views in one transaction.
+
+#### CropSync
+Synchronize crop regions, annotation crops, and crop view settings across selected views to ensure consistent sheet alignment and view boundaries.
 
 #### BatchOut
 Export sheets to PDF, DWG, NWD, and IFC formats in batch.

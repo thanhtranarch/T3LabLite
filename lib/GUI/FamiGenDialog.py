@@ -35,11 +35,12 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 _EXTENSION_DIR = os.path.dirname(_LIB_DIR)
+from core.extension_paths import tab_dir  # noqa: E402  (after the sys.path insert)
 # Per-category prompts: prompts/<slug>.md is a fully self-contained system prompt
 # for that family category (schema, forms, curve segments, failure modes, checklist
 # and category-specific guidance) — picked by the user before "Copy Prompt".
 _PROMPTS_DIR = os.path.join(
-    _EXTENSION_DIR, 'T3Lab.tab', 'Modeling & Datum.panel',
+    tab_dir(_EXTENSION_DIR), 'Modeling & Datum.panel',
     'FamiGen.pushbutton', 'prompts')
 
 from Autodesk.Revit.DB import (
@@ -502,6 +503,8 @@ CATEGORY_TEMPLATES = _CATEGORY_TEMPLATES
 # ==============================================================================
 
 class FamilyCreatorDialog(T3WPFWindow):
+    AI_TOOL = "FamiGen"
+
 
     # ProgressPauseMixin element names — FamiGen.xaml uses export-suffixed names
     PP_BAR      = "pb_export"
@@ -532,20 +535,7 @@ class FamilyCreatorDialog(T3WPFWindow):
         self._update_ai_status()
 
     def _update_ai_status(self):
-        """Update AI Mode status badge in TitleBar."""
-        try:
-            if self.is_ai_mode_active("FamiGen"):
-                info = self.get_ai_status_info()
-                label = info.get("label", "Active")
-                txt = getattr(self, 'txt_ai_status', None) or self.FindName('txt_ai_status')
-                if txt is not None:
-                    txt.Text = "AI Mode: " + label
-            else:
-                txt = getattr(self, 'txt_ai_status', None) or self.FindName('txt_ai_status')
-                if txt is not None:
-                    txt.Text = "AI Mode: Offline"
-        except Exception:
-            pass
+        self.init_ai_badge()
 
     # ── Window chrome ────────────────────────────────────────────────────────
 
@@ -2244,13 +2234,7 @@ class FamilyCreatorDialog(T3WPFWindow):
             forms.alert("Please enter a description of the family to generate.", title="AI Prompt Required")
             return
 
-        if not self.is_ai_mode_active("FamiGen"):
-            forms.alert(
-                "AI Mode is currently offline or no API Key is configured.\n\n"
-                "Please configure an API Key in LLMs Setting (Support tab) to enable direct AI Generation, "
-                "or use 'Copy Prompt' to generate JSON externally.",
-                title="AI Mode Offline"
-            )
+        if not self.ai_require():
             return
 
         cat = None
@@ -2283,12 +2267,10 @@ class FamilyCreatorDialog(T3WPFWindow):
 
         lbl = getattr(self, 'lbl_status', None) or self.FindName('lbl_status')
         if lbl:
-            lbl.Text = "✨ AI is generating family definition..."
+            lbl.Text = "AI is generating the family definition..."
 
         btn = getattr(self, 'btn_ai_generate', None) or self.FindName('btn_ai_generate')
-        if btn:
-            btn.IsEnabled = False
-            btn.Content = "⏳ Generating..."
+        self.ai_busy(btn, True)
 
         def _bg_task():
             b = self.ai_bridge
@@ -2298,9 +2280,7 @@ class FamilyCreatorDialog(T3WPFWindow):
 
         def _on_done(res):
             b_el = getattr(self, 'btn_ai_generate', None) or self.FindName('btn_ai_generate')
-            if b_el:
-                b_el.IsEnabled = True
-                b_el.Content = "✨ AI Generate"
+            self.ai_busy(b_el, False)
 
             l_el = getattr(self, 'lbl_status', None) or self.FindName('lbl_status')
             j_tb = getattr(self, 'json_tb', None) or self.FindName('json_tb')
@@ -2329,7 +2309,7 @@ class FamilyCreatorDialog(T3WPFWindow):
 
                     if l_el:
                         count_msg = " ({} part(s))".format(geom_count) if geom_count > 0 else ""
-                        l_el.Text = "✨ AI Generated{}! Review JSON and click 'Create Family'.".format(count_msg)
+                        l_el.Text = "AI generated the JSON{} - review it, then click 'Create Family'.".format(count_msg)
                 except Exception as ex:
                     if l_el:
                         l_el.Text = "Error formatting JSON: " + str(ex)
@@ -2340,9 +2320,7 @@ class FamilyCreatorDialog(T3WPFWindow):
 
         def _on_err(err):
             b_el = getattr(self, 'btn_ai_generate', None) or self.FindName('btn_ai_generate')
-            if b_el:
-                b_el.IsEnabled = True
-                b_el.Content = "✨ AI Generate"
+            self.ai_busy(b_el, False)
             l_el = getattr(self, 'lbl_status', None) or self.FindName('lbl_status')
             if l_el:
                 l_el.Text = "AI Error: " + str(err)
@@ -3076,10 +3054,4 @@ class FamilyCreatorDialog(T3WPFWindow):
 
 def show_family_creator(revit_doc, revit_app, initial_mode='cad'):
     FamilyCreatorDialog(revit_doc, revit_app, initial_mode).ShowDialog()
-
-def show_family_creator_cad(revit_doc, revit_app):
-    show_family_creator(revit_doc, revit_app, 'cad')
-
-def show_family_creator_json(revit_doc, revit_app):
-    show_family_creator(revit_doc, revit_app, 'json')
 

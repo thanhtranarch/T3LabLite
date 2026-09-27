@@ -3,8 +3,8 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Send Feedback"
-        Width="600" Height="680"
-        MinWidth="480" MinHeight="500"
+        Width="460" Height="680"
+        MinWidth="400" MinHeight="480"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="False"
@@ -192,6 +192,11 @@
           <Style x:Key="T3.Cell.Number" TargetType="TextBlock" BasedOn="{StaticResource T3.Cell.Mono}">
             <Setter Property="HorizontalAlignment" Value="Right"/>
           </Style>
+          <!-- Cột hẹp (đếm, trạng thái, nút): canh giữa thì ô và header không còn
+               lệch nhau một khoảng trắng 8px ở mép trái. -->
+          <Style x:Key="T3.Cell.Center" TargetType="TextBlock" BasedOn="{StaticResource T3.Cell.Mono}">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+          </Style>
 
           <!-- ══════════════════ 5 · SEPARATOR / RULE ══════════════════ -->
           <Style x:Key="T3.Rule" TargetType="Separator">
@@ -222,7 +227,8 @@
                  E946 Info        E7BA Warning    E783 Error      E713 Settings
                  E70D ChevronDown E70E ChevronUp  E76B ChevronLeft E76C ChevronRight
                  E74E Save        E8E5 OpenFile   E774 Globe      E7A7 Undo
-                 E8A3 Zoom        E7B3 Isolate    E7C9 Pick
+                 E8A3 Zoom        E7B3 Isolate    E7C9 Pick       E7C3 Document
+                 E896 Download    EA80 Insight
 
                Thêm glyph mới thì kiểm hai thứ (xem mục Icon của T3LAB_UI_STANDARD.md):
                  1. Không TRÔNG GIỐNG glyph đã có — E71E cũng là kính lúp y hệt E721
@@ -619,6 +625,14 @@
             </Setter>
           </Style>
 
+          <!-- Dòng danh sách hai hàng chữ (tiêu đề + mô tả). T3.ListBoxItem ghim cứng
+               chiều cao 26px, nên list nào có item template nhiều hơn một dòng phải
+               khai ItemContainerStyle này, không thì hàng thứ hai bị cắt mất. -->
+          <Style x:Key="T3.ListBoxItem.Multiline" TargetType="ListBoxItem" BasedOn="{StaticResource T3.ListBoxItem}">
+            <Setter Property="Height"    Value="Auto"/>
+            <Setter Property="MinHeight" Value="{StaticResource T3.H.Row}"/>
+          </Style>
+
           <Style x:Key="T3.ListBox" TargetType="ListBox">
             <Setter Property="Background"  Value="{StaticResource T3.Surface}"/>
             <Setter Property="BorderBrush" Value="{StaticResource T3.Border}"/>
@@ -665,6 +679,10 @@
             <Setter Property="Padding" Value="8,0"/>
             <Setter Property="HorizontalContentAlignment" Value="Left"/>
             <Setter Property="VerticalContentAlignment"   Value="Center"/>
+          </Style>
+          <!-- Header của cột canh giữa — đi kèm T3.Cell.Center. -->
+          <Style x:Key="T3.DataGridColumnHeader.Center" TargetType="DataGridColumnHeader" BasedOn="{StaticResource T3.DataGridColumnHeader}">
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
           </Style>
 
           <Style x:Key="T3.DataGridRow" TargetType="DataGridRow">
@@ -782,6 +800,33 @@
                  BasedOn="{StaticResource T3.DataGridColumnHeader}">
             <Setter Property="Cursor"  Value="Hand"/>
             <Setter Property="ToolTip" Value="Click the column name to filter"/>
+          </Style>
+
+          <!-- ══════════════════ CỘT CHECKBOX (chọn dòng)
+               Header và ô dòng phải cùng MỘT hình học thì ô select-all mới nằm đúng
+               trên hàng ô tick: không padding, hộp căn giữa theo bề rộng cột.
+               T3.DataGridColumnHeader có Padding 8 + nội dung căn trái, T3.DataGridCell
+               có Padding 8, và T3.CheckBox có Padding 8 bên trái dành cho nhãn — ghép
+               lại thì header lệch vài px so với dòng (ManaViews 2026-09-26).
+                 <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
+                                         HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                         CellStyle="{StaticResource T3.DataGridCell.Check}">
+               và cả checkbox header lẫn checkbox dòng dùng Style="{StaticResource T3.CheckBox.Cell}".
+               ══════════════════ -->
+          <Style x:Key="T3.DataGridColumnHeader.Check" TargetType="DataGridColumnHeader"
+                 BasedOn="{StaticResource T3.DataGridColumnHeader}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+          </Style>
+          <Style x:Key="T3.DataGridCell.Check" TargetType="DataGridCell"
+                 BasedOn="{StaticResource T3.DataGridCell}">
+            <Setter Property="Padding" Value="0"/>
+          </Style>
+          <!-- Checkbox không nhãn: bỏ Padding dành cho nhãn để hộp nằm đúng tâm. -->
+          <Style x:Key="T3.CheckBox.Cell" TargetType="CheckBox" BasedOn="{StaticResource T3.CheckBox}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
           </Style>
 
           <!-- Dòng giá trị trong popup lọc (Python dựng, dùng khóa này cho checkbox). -->
@@ -1670,59 +1715,73 @@
             </Border>
 
             <!-- ══════════════════ ROW 1: FORM BODY CONTENT ══════════════════ -->
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Background="{StaticResource T3.Surface}">
-                <StackPanel Margin="16">
-                    <!-- Tip / Info Callout -->
-                    <Border Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
-                            BorderThickness="1" CornerRadius="4" Padding="12,8" Margin="0,0,0,16">
-                        <TextBlock Style="{StaticResource T3.Body.Secondary}" TextWrapping="Wrap">
-                            <Run Text="Note: " FontWeight="SemiBold" Foreground="{StaticResource T3.Ink}"/>
-                            <Run Text="Your feedback will be prepared in your default email client addressed to trantienthanh909@gmail.com."/>
-                        </TextBlock>
-                    </Border>
+            <Grid Grid.Row="1" Background="{StaticResource T3.Surface}" Margin="16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/> <!-- 0: Tip Callout -->
+                    <RowDefinition Height="Auto"/> <!-- 1: Feedback Type -->
+                    <RowDefinition Height="Auto"/> <!-- 2: Name + Email -->
+                    <RowDefinition Height="Auto"/> <!-- 3: Subject -->
+                    <RowDefinition Height="Auto"/> <!-- 4: Message Label -->
+                    <RowDefinition Height="*"/>    <!-- 5: Message TextBox (stretches to fill remaining space) -->
+                </Grid.RowDefinitions>
 
-                    <!-- Feedback Type -->
+                <!-- Tip / Info Callout -->
+                <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
+                        BorderThickness="1" CornerRadius="4" Padding="12,8" Margin="0,0,0,12">
+                    <TextBlock Style="{StaticResource T3.Body.Secondary}" TextWrapping="Wrap">
+                        <Run Text="Note: " FontWeight="SemiBold" Foreground="{StaticResource T3.Ink}"/>
+                        <Run Text="Your feedback will be prepared in your default email client addressed to trantienthanh909@gmail.com."/>
+                    </TextBlock>
+                </Border>
+
+                <!-- Feedback Type -->
+                <StackPanel Grid.Row="1" Margin="0,0,0,12">
                     <TextBlock Text="FEEDBACK TYPE" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
                     <ComboBox x:Name="feedback_type" Style="{StaticResource T3.ComboBox}"
-                              ItemContainerStyle="{StaticResource T3.ComboBoxItem}" Margin="0,0,0,16">
+                              ItemContainerStyle="{StaticResource T3.ComboBoxItem}">
                         <ComboBoxItem Content="Suggestion" IsSelected="True"/>
                         <ComboBoxItem Content="Bug report"/>
                         <ComboBoxItem Content="Question"/>
                         <ComboBoxItem Content="Other"/>
                     </ComboBox>
-
-                    <!-- Name + Email Row -->
-                    <Grid Margin="0,0,0,16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="YOUR NAME (OPTIONAL)" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                            <TextBox x:Name="user_name" Style="{StaticResource T3.TextBox}"/>
-                        </StackPanel>
-
-                        <StackPanel Grid.Column="2">
-                            <TextBlock Text="YOUR EMAIL (OPTIONAL)" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                            <TextBox x:Name="user_email" Style="{StaticResource T3.TextBox}"/>
-                        </StackPanel>
-                    </Grid>
-
-                    <!-- Subject -->
-                    <TextBlock Text="SUBJECT" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                    <TextBox x:Name="subject_text" Style="{StaticResource T3.TextBox}" Margin="0,0,0,16"/>
-
-                    <!-- Message -->
-                    <TextBlock Text="MESSAGE" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                    <TextBox x:Name="message_text" Style="{StaticResource T3.TextBox}"
-                             AcceptsReturn="True" TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto"
-                             MinHeight="150" Height="180" VerticalContentAlignment="Top"
-                             Padding="8"/>
                 </StackPanel>
-            </ScrollViewer>
+
+                <!-- Name + Email Row -->
+                <Grid Grid.Row="2" Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="YOUR NAME (OPTIONAL)" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                        <TextBox x:Name="user_name" Style="{StaticResource T3.TextBox}"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="YOUR EMAIL (OPTIONAL)" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                        <TextBox x:Name="user_email" Style="{StaticResource T3.TextBox}"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Subject -->
+                <StackPanel Grid.Row="3" Margin="0,0,0,12">
+                    <TextBlock Text="SUBJECT" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                    <TextBox x:Name="subject_text" Style="{StaticResource T3.TextBox}"/>
+                </StackPanel>
+
+                <!-- Message Label -->
+                <TextBlock Grid.Row="4" Text="MESSAGE" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+
+                <!-- Message Box (auto-expands to fill all remaining height) -->
+                <TextBox Grid.Row="5" x:Name="message_text" Style="{StaticResource T3.TextBox}"
+                         Height="Auto" VerticalAlignment="Stretch"
+                         VerticalContentAlignment="Stretch"
+                         VerticalScrollBarVisibility="Auto"
+                         AcceptsReturn="True" TextWrapping="Wrap"
+                         Padding="8"/>
+            </Grid>
 
             <!-- ══════════════════ ROW 2: UNIFIED FOOTER BAR ══════════════════ -->
             <Border Grid.Row="2" Style="{StaticResource T3.FooterBar}">

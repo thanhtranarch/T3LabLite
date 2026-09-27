@@ -192,6 +192,11 @@
           <Style x:Key="T3.Cell.Number" TargetType="TextBlock" BasedOn="{StaticResource T3.Cell.Mono}">
             <Setter Property="HorizontalAlignment" Value="Right"/>
           </Style>
+          <!-- Cột hẹp (đếm, trạng thái, nút): canh giữa thì ô và header không còn
+               lệch nhau một khoảng trắng 8px ở mép trái. -->
+          <Style x:Key="T3.Cell.Center" TargetType="TextBlock" BasedOn="{StaticResource T3.Cell.Mono}">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+          </Style>
 
           <!-- ══════════════════ 5 · SEPARATOR / RULE ══════════════════ -->
           <Style x:Key="T3.Rule" TargetType="Separator">
@@ -222,7 +227,8 @@
                  E946 Info        E7BA Warning    E783 Error      E713 Settings
                  E70D ChevronDown E70E ChevronUp  E76B ChevronLeft E76C ChevronRight
                  E74E Save        E8E5 OpenFile   E774 Globe      E7A7 Undo
-                 E8A3 Zoom        E7B3 Isolate    E7C9 Pick
+                 E8A3 Zoom        E7B3 Isolate    E7C9 Pick       E7C3 Document
+                 E896 Download    EA80 Insight
 
                Thêm glyph mới thì kiểm hai thứ (xem mục Icon của T3LAB_UI_STANDARD.md):
                  1. Không TRÔNG GIỐNG glyph đã có — E71E cũng là kính lúp y hệt E721
@@ -619,6 +625,14 @@
             </Setter>
           </Style>
 
+          <!-- Dòng danh sách hai hàng chữ (tiêu đề + mô tả). T3.ListBoxItem ghim cứng
+               chiều cao 26px, nên list nào có item template nhiều hơn một dòng phải
+               khai ItemContainerStyle này, không thì hàng thứ hai bị cắt mất. -->
+          <Style x:Key="T3.ListBoxItem.Multiline" TargetType="ListBoxItem" BasedOn="{StaticResource T3.ListBoxItem}">
+            <Setter Property="Height"    Value="Auto"/>
+            <Setter Property="MinHeight" Value="{StaticResource T3.H.Row}"/>
+          </Style>
+
           <Style x:Key="T3.ListBox" TargetType="ListBox">
             <Setter Property="Background"  Value="{StaticResource T3.Surface}"/>
             <Setter Property="BorderBrush" Value="{StaticResource T3.Border}"/>
@@ -665,6 +679,10 @@
             <Setter Property="Padding" Value="8,0"/>
             <Setter Property="HorizontalContentAlignment" Value="Left"/>
             <Setter Property="VerticalContentAlignment"   Value="Center"/>
+          </Style>
+          <!-- Header của cột canh giữa — đi kèm T3.Cell.Center. -->
+          <Style x:Key="T3.DataGridColumnHeader.Center" TargetType="DataGridColumnHeader" BasedOn="{StaticResource T3.DataGridColumnHeader}">
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
           </Style>
 
           <Style x:Key="T3.DataGridRow" TargetType="DataGridRow">
@@ -782,6 +800,33 @@
                  BasedOn="{StaticResource T3.DataGridColumnHeader}">
             <Setter Property="Cursor"  Value="Hand"/>
             <Setter Property="ToolTip" Value="Click the column name to filter"/>
+          </Style>
+
+          <!-- ══════════════════ CỘT CHECKBOX (chọn dòng)
+               Header và ô dòng phải cùng MỘT hình học thì ô select-all mới nằm đúng
+               trên hàng ô tick: không padding, hộp căn giữa theo bề rộng cột.
+               T3.DataGridColumnHeader có Padding 8 + nội dung căn trái, T3.DataGridCell
+               có Padding 8, và T3.CheckBox có Padding 8 bên trái dành cho nhãn — ghép
+               lại thì header lệch vài px so với dòng (ManaViews 2026-09-26).
+                 <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
+                                         HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                         CellStyle="{StaticResource T3.DataGridCell.Check}">
+               và cả checkbox header lẫn checkbox dòng dùng Style="{StaticResource T3.CheckBox.Cell}".
+               ══════════════════ -->
+          <Style x:Key="T3.DataGridColumnHeader.Check" TargetType="DataGridColumnHeader"
+                 BasedOn="{StaticResource T3.DataGridColumnHeader}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+          </Style>
+          <Style x:Key="T3.DataGridCell.Check" TargetType="DataGridCell"
+                 BasedOn="{StaticResource T3.DataGridCell}">
+            <Setter Property="Padding" Value="0"/>
+          </Style>
+          <!-- Checkbox không nhãn: bỏ Padding dành cho nhãn để hộp nằm đúng tâm. -->
+          <Style x:Key="T3.CheckBox.Cell" TargetType="CheckBox" BasedOn="{StaticResource T3.CheckBox}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
           </Style>
 
           <!-- Dòng giá trị trong popup lọc (Python dựng, dùng khóa này cho checkbox). -->
@@ -1649,17 +1694,20 @@
                                 <TextBlock Text="IFC-SG Suite" Style="{StaticResource T3.Title}"/>
                                 <TextBlock Text="Manage IFC-SG parameter mapping and Singapore compliance" Style="{StaticResource T3.Subtitle}"/>
                             </StackPanel>
+                            <!-- AI MODE BADGE — chuẩn T3 (T3LAB_UI_STANDARD.md § AI Mode). Code: init_ai_badge() -->
+                            <Border x:Name="ai_mode_badge" Style="{StaticResource T3.Pill}" Height="24" Margin="16,0,0,0"
+                                    Visibility="Collapsed">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="&#xEA80;" Style="{StaticResource T3.Icon.Lead}"/>
+                                    <TextBlock x:Name="txt_ai_status" Text="AI off" Style="{StaticResource T3.Caption}"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
 
                         <!-- AI Mode Status Pill & Window Controls -->
                         <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal"
                                     shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                            <Border x:Name="ai_mode_badge" Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}" BorderThickness="1" CornerRadius="4" Padding="8,4" Margin="0,0,16,0">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                    <TextBlock Text="&#xE946;" Style="{StaticResource T3.Icon.Muted}" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                    <TextBlock x:Name="txt_ai_status" Text="AI Mode: Ready" Style="{StaticResource T3.Caption}" Foreground="{StaticResource T3.TextMuted}" VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Border>
 
                             <Button x:Name="btn_minimize" Style="{StaticResource T3.WinCtrl}" ToolTip="Minimize">
                                 <TextBlock Text="&#xE921;" Style="{StaticResource T3.Icon}"/>
@@ -1854,9 +1902,14 @@
                                                       ItemContainerStyle="{StaticResource T3.ComboBoxItem}"
                                                       Margin="0,0,12,0"/>
                                             <StackPanel Grid.Column="2" Orientation="Horizontal">
-                                                <Button x:Name="btn_ai_auto_match" Content="✨ AI Predict"
+                                                <Button x:Name="btn_ai_auto_match"
                                                         Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0" Padding="12,0"
-                                                        ToolTip="Use AI to automatically predict and match the best IFC-SG subtype for the selected types"/>
+                                                        ToolTip="Predict the IFC-SG subtype of the selected types from their names">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xEA80;" Style="{StaticResource T3.Icon.Lead}"/>
+                                                        <TextBlock Text="AI Predict" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </Button>
                                                 <Button x:Name="btnApply" Content="Apply Selected"
                                                         Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"/>
                                                 <Button x:Name="btnApplyAll" Content="Apply to All"

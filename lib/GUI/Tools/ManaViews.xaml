@@ -6,7 +6,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         mc:Ignorable="d"
         Title="ManaViews"
-        Width="1200" Height="720" MinWidth="1080" MinHeight="640"
+        Width="1280" Height="720" MinWidth="1200" MinHeight="640"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" AllowsTransparency="False"
         Background="{DynamicResource T3.Surface}"
@@ -193,6 +193,11 @@
           <Style x:Key="T3.Cell.Number" TargetType="TextBlock" BasedOn="{StaticResource T3.Cell.Mono}">
             <Setter Property="HorizontalAlignment" Value="Right"/>
           </Style>
+          <!-- Cột hẹp (đếm, trạng thái, nút): canh giữa thì ô và header không còn
+               lệch nhau một khoảng trắng 8px ở mép trái. -->
+          <Style x:Key="T3.Cell.Center" TargetType="TextBlock" BasedOn="{StaticResource T3.Cell.Mono}">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+          </Style>
 
           <!-- ══════════════════ 5 · SEPARATOR / RULE ══════════════════ -->
           <Style x:Key="T3.Rule" TargetType="Separator">
@@ -223,7 +228,8 @@
                  E946 Info        E7BA Warning    E783 Error      E713 Settings
                  E70D ChevronDown E70E ChevronUp  E76B ChevronLeft E76C ChevronRight
                  E74E Save        E8E5 OpenFile   E774 Globe      E7A7 Undo
-                 E8A3 Zoom        E7B3 Isolate    E7C9 Pick
+                 E8A3 Zoom        E7B3 Isolate    E7C9 Pick       E7C3 Document
+                 E896 Download    EA80 Insight
 
                Thêm glyph mới thì kiểm hai thứ (xem mục Icon của T3LAB_UI_STANDARD.md):
                  1. Không TRÔNG GIỐNG glyph đã có — E71E cũng là kính lúp y hệt E721
@@ -620,6 +626,14 @@
             </Setter>
           </Style>
 
+          <!-- Dòng danh sách hai hàng chữ (tiêu đề + mô tả). T3.ListBoxItem ghim cứng
+               chiều cao 26px, nên list nào có item template nhiều hơn một dòng phải
+               khai ItemContainerStyle này, không thì hàng thứ hai bị cắt mất. -->
+          <Style x:Key="T3.ListBoxItem.Multiline" TargetType="ListBoxItem" BasedOn="{StaticResource T3.ListBoxItem}">
+            <Setter Property="Height"    Value="Auto"/>
+            <Setter Property="MinHeight" Value="{StaticResource T3.H.Row}"/>
+          </Style>
+
           <Style x:Key="T3.ListBox" TargetType="ListBox">
             <Setter Property="Background"  Value="{StaticResource T3.Surface}"/>
             <Setter Property="BorderBrush" Value="{StaticResource T3.Border}"/>
@@ -666,6 +680,10 @@
             <Setter Property="Padding" Value="8,0"/>
             <Setter Property="HorizontalContentAlignment" Value="Left"/>
             <Setter Property="VerticalContentAlignment"   Value="Center"/>
+          </Style>
+          <!-- Header của cột canh giữa — đi kèm T3.Cell.Center. -->
+          <Style x:Key="T3.DataGridColumnHeader.Center" TargetType="DataGridColumnHeader" BasedOn="{StaticResource T3.DataGridColumnHeader}">
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
           </Style>
 
           <Style x:Key="T3.DataGridRow" TargetType="DataGridRow">
@@ -783,6 +801,33 @@
                  BasedOn="{StaticResource T3.DataGridColumnHeader}">
             <Setter Property="Cursor"  Value="Hand"/>
             <Setter Property="ToolTip" Value="Click the column name to filter"/>
+          </Style>
+
+          <!-- ══════════════════ CỘT CHECKBOX (chọn dòng)
+               Header và ô dòng phải cùng MỘT hình học thì ô select-all mới nằm đúng
+               trên hàng ô tick: không padding, hộp căn giữa theo bề rộng cột.
+               T3.DataGridColumnHeader có Padding 8 + nội dung căn trái, T3.DataGridCell
+               có Padding 8, và T3.CheckBox có Padding 8 bên trái dành cho nhãn — ghép
+               lại thì header lệch vài px so với dòng (ManaViews 2026-09-26).
+                 <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
+                                         HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                         CellStyle="{StaticResource T3.DataGridCell.Check}">
+               và cả checkbox header lẫn checkbox dòng dùng Style="{StaticResource T3.CheckBox.Cell}".
+               ══════════════════ -->
+          <Style x:Key="T3.DataGridColumnHeader.Check" TargetType="DataGridColumnHeader"
+                 BasedOn="{StaticResource T3.DataGridColumnHeader}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+          </Style>
+          <Style x:Key="T3.DataGridCell.Check" TargetType="DataGridCell"
+                 BasedOn="{StaticResource T3.DataGridCell}">
+            <Setter Property="Padding" Value="0"/>
+          </Style>
+          <!-- Checkbox không nhãn: bỏ Padding dành cho nhãn để hộp nằm đúng tâm. -->
+          <Style x:Key="T3.CheckBox.Cell" TargetType="CheckBox" BasedOn="{StaticResource T3.CheckBox}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
           </Style>
 
           <!-- Dòng giá trị trong popup lọc (Python dựng, dùng khóa này cho checkbox). -->
@@ -1734,7 +1779,7 @@
                                         Padding="0">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="240"/>
+                                            <ColumnDefinition Width="208"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
 
@@ -1783,7 +1828,7 @@
                             <!-- 2. Filters & DataGrid: Docked flush in Row 1 -->
                             <Grid Grid.Row="1">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="240"/>
+                                    <ColumnDefinition Width="208"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
 
@@ -1796,7 +1841,7 @@
                                         <StackPanel>
                                             <TextBlock Text="SEARCH" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
                                             <TextBox x:Name="views_search_box" Style="{StaticResource T3.Search}"
-                                                     Tag="Search views..." Margin="0,0,0,16"/>
+                                                     Tag="Search views..." ToolTip="Search views, then use the column headers to refine filters. Edit cells and click Apply Changes to save amber pending edits." Margin="0,0,0,16"/>
 
                                             <TextBlock Text="FILTER BY TYPE" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
                                             <ComboBox x:Name="views_type_combo" Style="{StaticResource T3.ComboBox}"
@@ -1851,29 +1896,26 @@
                                               HorizontalScrollBarVisibility="Disabled"
                                               EnableRowVirtualization="True">
                                         <DataGrid.Columns>
-                                            <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False">
+                                            <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
+                                                                    HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                                                    CellStyle="{StaticResource T3.DataGridCell.Check}">
                                                 <DataGridTemplateColumn.Header>
-                                                    <CheckBox x:Name="chk_all_views_grid" Style="{StaticResource T3.CheckBox}"
+                                                    <CheckBox x:Name="chk_all_views_grid" Style="{StaticResource T3.CheckBox.Cell}"
                                                               Click="select_all_views_grid_clicked"
-                                                              HorizontalAlignment="Center" VerticalAlignment="Center"
                                                               ToolTip="Select all rows"/>
                                                 </DataGridTemplateColumn.Header>
-                                                <DataGridTemplateColumn.CellStyle>
-                                                    <Style TargetType="DataGridCell" BasedOn="{StaticResource T3.DataGridCell}">
-                                                        <Setter Property="Padding" Value="0"/>
-                                                    </Style>
-                                                </DataGridTemplateColumn.CellStyle>
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
-                                                        <CheckBox IsChecked="{Binding is_selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                                  Style="{StaticResource T3.CheckBox}"
-                                                                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                                  Padding="0" Margin="0"/>
+                                                        <Grid>
+                                                            <TextBlock x:Name="row_is_selected_text" Text="{Binding is_selected}" Visibility="Collapsed"/>
+                                                            <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text, Mode=OneWay}"
+                                                                      Style="{StaticResource T3.CheckBox.Cell}"/>
+                                                        </Grid>
                                                     </DataTemplate>
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>
                                             <DataGridTextColumn Header="VIEW NAME" HeaderStyle="{StaticResource T3.DataGridColumnHeader.Filter}"
-Binding="{Binding name}" Width="*"
+Binding="{Binding name}" Width="*" MinWidth="140"
                                                                 ElementStyle="{StaticResource T3.Cell.Mono}">
                                                 <DataGridTextColumn.CellStyle>
                                                     <Style TargetType="DataGridCell" BasedOn="{StaticResource T3.DataGridCell}">
@@ -1888,13 +1930,13 @@ Binding="{Binding name}" Width="*"
                                                 </DataGridTextColumn.CellStyle>
                                             </DataGridTextColumn>
                                             <DataGridTextColumn Header="TYPE" HeaderStyle="{StaticResource T3.DataGridColumnHeader.Filter}"
-Binding="{Binding view_type}" Width="110" IsReadOnly="True"
+Binding="{Binding view_type}" Width="100" IsReadOnly="True"
                                                                 ElementStyle="{StaticResource T3.Cell.Muted}"/>
                                             <DataGridTextColumn Header="LEVEL" HeaderStyle="{StaticResource T3.DataGridColumnHeader.Filter}"
-Binding="{Binding level_name}" Width="100" IsReadOnly="True"
+Binding="{Binding level_name}" Width="90" IsReadOnly="True"
                                                                 ElementStyle="{StaticResource T3.Cell.Muted}"/>
                                             <DataGridComboBoxColumn x:Name="col_template" Header="VIEW TEMPLATE" HeaderStyle="{StaticResource T3.DataGridColumnHeader.Filter}"
-Width="160"
+Width="144"
                                                                     SelectedItemBinding="{Binding view_template}">
                                                 <DataGridComboBoxColumn.CellStyle>
                                                     <Style TargetType="DataGridCell" BasedOn="{StaticResource T3.DataGridCell}">
@@ -1939,7 +1981,7 @@ Width="100"
                                                 </DataGridComboBoxColumn.CellStyle>
                                             </DataGridComboBoxColumn>
                                             <DataGridTextColumn Header="TITLE ON SHEET" HeaderStyle="{StaticResource T3.DataGridColumnHeader.Filter}"
-Binding="{Binding title_on_sheet}" Width="140" IsReadOnly="False">
+Binding="{Binding title_on_sheet}" Width="128" IsReadOnly="False">
                                                 <DataGridTextColumn.CellStyle>
                                                     <Style TargetType="DataGridCell" BasedOn="{StaticResource T3.DataGridCell}">
                                                         <Style.Triggers>
@@ -1959,8 +2001,20 @@ Binding="{Binding sheet_number}" Width="90" IsReadOnly="True"
                                     </DataGrid>
 
                                     <!-- Empty State -->
-                                    <TextBlock x:Name="views_grid_empty" Style="{StaticResource T3.Empty}"
-                                               Text="No matching views found" Visibility="Collapsed"/>
+                                    <Grid IsHitTestVisible="False" Panel.ZIndex="1">
+                                        <Grid.Style>
+                                            <Style TargetType="Grid">
+                                                <Setter Property="Margin" Value="{StaticResource T3.Pad.Panel}"/>
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ElementName=views_grid, Path=HasItems}" Value="False">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Grid.Style>
+                                        <TextBlock x:Name="views_grid_empty" Text="No views match the current filters.&#x0a;Clear the search and reset filters, or refresh after creating views." Style="{StaticResource T3.Empty}"/>
+                                    </Grid>
                                 </Grid>
                             </Grid>
 
@@ -2009,7 +2063,7 @@ Binding="{Binding sheet_number}" Width="90" IsReadOnly="True"
                                     Padding="0">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="240"/>
+                                        <ColumnDefinition Width="208"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
 
@@ -2060,7 +2114,7 @@ Binding="{Binding sheet_number}" Width="90" IsReadOnly="True"
                             <!-- 2. Filters & DataGrid: Docked flush in Row 1 -->
                             <Grid Grid.Row="1">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="240"/>
+                                    <ColumnDefinition Width="208"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
 
@@ -2107,7 +2161,7 @@ Binding="{Binding sheet_number}" Width="90" IsReadOnly="True"
                                                     Style="{StaticResource T3.Button.Secondary}" Margin="0,0,0,16"/>
 
                                             <TextBlock Text="PREVIEW FILTER" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                                            <CheckBox x:Name="tmpl_preview_unused_chk" Content="Show only unused templates"
+                                            <CheckBox x:Name="tmpl_preview_unused_chk" Content="Unused templates only"
                                                       Style="{StaticResource T3.CheckBox}" Margin="0,0,0,8"/>
                                         </StackPanel>
                                     </ScrollViewer>
@@ -2122,23 +2176,26 @@ Binding="{Binding sheet_number}" Width="90" IsReadOnly="True"
                                               HorizontalScrollBarVisibility="Disabled"
                                               EnableRowVirtualization="True">
                                         <DataGrid.Columns>
-                                            <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False">
+                                            <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
+                                                                    HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                                                    CellStyle="{StaticResource T3.DataGridCell.Check}">
                                                 <DataGridTemplateColumn.Header>
-                                                    <CheckBox x:Name="chk_all_tmpl_grid" Style="{StaticResource T3.CheckBox}"
+                                                    <CheckBox x:Name="chk_all_tmpl_grid" Style="{StaticResource T3.CheckBox.Cell}"
                                                               Click="select_all_tmpl_grid_clicked"
-                                                              HorizontalAlignment="Center" VerticalAlignment="Center"
                                                               ToolTip="Select all rows"/>
                                                 </DataGridTemplateColumn.Header>
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
-                                                        <CheckBox IsChecked="{Binding is_selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                                  Style="{StaticResource T3.CheckBox}"
-                                                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                        <Grid>
+                                                            <TextBlock x:Name="row_is_selected_text_2" Text="{Binding is_selected}" Visibility="Collapsed"/>
+                                                            <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text_2, Mode=OneWay}"
+                                                                      Style="{StaticResource T3.CheckBox.Cell}"/>
+                                                        </Grid>
                                                     </DataTemplate>
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>
                                             <DataGridTextColumn Header="TEMPLATE NAME" HeaderStyle="{StaticResource T3.DataGridColumnHeader.Filter}"
-Binding="{Binding name}" Width="*"
+Binding="{Binding name}" Width="*" MinWidth="140"
                                                                 ElementStyle="{StaticResource T3.Cell.Mono}">
                                                 <DataGridTextColumn.CellStyle>
                                                     <Style TargetType="DataGridCell" BasedOn="{StaticResource T3.DataGridCell}">
@@ -2170,8 +2227,20 @@ Binding="{Binding usage_percentage}" Width="80" IsReadOnly="True"
                                     </DataGrid>
 
                                     <!-- Empty State -->
-                                    <TextBlock x:Name="tmpl_grid_empty" Style="{StaticResource T3.Empty}"
-                                               Text="No matching templates found" Visibility="Collapsed"/>
+                                    <Grid IsHitTestVisible="False" Panel.ZIndex="1">
+                                        <Grid.Style>
+                                            <Style TargetType="Grid">
+                                                <Setter Property="Margin" Value="{StaticResource T3.Pad.Panel}"/>
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ElementName=tmpl_grid, Path=HasItems}" Value="False">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Grid.Style>
+                                        <TextBlock x:Name="tmpl_grid_empty" Text="No view templates match the current filters.&#x0a;Clear the search and reset filters, or create a view template in Revit." Style="{StaticResource T3.Empty}"/>
+                                    </Grid>
                                 </Grid>
                             </Grid>
 

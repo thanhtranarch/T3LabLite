@@ -1,8 +1,5 @@
 title: "Modeling & Datum"
 layout:
   - Create
-  - ManaFami
-  - FamiGen
+  - DatumSync
   - ElementAdjust
-  - Text to Element
-  - Tile Layout

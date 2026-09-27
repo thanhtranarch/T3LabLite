@@ -13,7 +13,7 @@
       ], 
       "kind": "script", 
       "panel": "Annotation & Select.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\AutoDimension.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Annotation & Select.panel\\Mana.stack\\AutoDimension.pushbutton\\script.py", 
       "title": "Auto Dimension", 
       "url": "", 
       "xaml": [
@@ -33,31 +33,11 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\AutoJoin.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\AutoJoin.pushbutton\\script.py", 
       "title": "Auto Join", 
       "url": "", 
       "xaml": [
         "AutoJoin"
-      ]
-    }, 
-    "AutoWork.pushbutton": {
-      "aliases": [], 
-      "button": "AutoWork.pushbutton", 
-      "doc": "Automated Drawing QA/QC, Spellcheck & Annotation Clash Audit Engine", 
-      "intent": "open_autowork", 
-      "keywords": [
-        "auto work", 
-        "autowork", 
-        "auto", 
-        "work"
-      ], 
-      "kind": "script", 
-      "panel": "Standard.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standard.panel\\AutoWork.pushbutton\\script.py", 
-      "title": "Auto Work", 
-      "url": "", 
-      "xaml": [
-        "AutoWork"
       ]
     }, 
     "Autodesk Forma.urlbutton": {
@@ -94,26 +74,6 @@
       "url": "https://health.autodesk.com/", 
       "xaml": []
     }, 
-    "BCF Reader.pushbutton": {
-      "aliases": [], 
-      "button": "BCF Reader.pushbutton", 
-      "doc": "Read BCF/BCFzip files and navigate issues in Revit.", 
-      "intent": "open_bcf_reader", 
-      "keywords": [
-        "bcf reader", 
-        "bcfreader", 
-        "reader", 
-        "bcf"
-      ], 
-      "kind": "script", 
-      "panel": "Data & IFC-SG.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\BCF Reader.pushbutton\\script.py", 
-      "title": "BCF Reader", 
-      "url": "", 
-      "xaml": [
-        "BCFReader"
-      ]
-    }, 
     "BG Theme.pushbutton": {
       "aliases": [
         "BG Theme"
@@ -131,7 +91,7 @@
       ], 
       "kind": "script", 
       "panel": "Support.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\BG Theme.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Support.panel\\UI.stack\\BG Theme.pushbutton\\script.py", 
       "title": "Background Theme", 
       "url": "", 
       "xaml": [
@@ -154,7 +114,7 @@
       ], 
       "kind": "script", 
       "panel": "Standards & Settings.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\BatchLink.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Standards & Settings.panel\\BatchLink.pushbutton\\script.py", 
       "title": "Batch Link", 
       "url": "", 
       "xaml": [
@@ -189,11 +149,11 @@
         "cad to elements", 
         "cadtoelements", 
         "cadtofloor", 
-        "cadtowall", 
         "cadtobeam", 
+        "cadtowall", 
         "elements", 
-        "floor", 
         "layer", 
+        "floor", 
         "cadto", 
         "wall", 
         "beam", 
@@ -203,7 +163,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\CADToElements.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\CADToElements.pushbutton\\script.py", 
       "title": "CAD to Elements", 
       "url": "", 
       "xaml": [
@@ -212,6 +172,46 @@
         "CadtoFloor", 
         "CadtoFloorLayerItem", 
         "CADtoBeam"
+      ]
+    }, 
+    "CropSync.pushbutton": {
+      "aliases": [], 
+      "button": "CropSync.pushbutton", 
+      "doc": "Synchronize View Crop Region shape, dimensions, and annotation crop.", 
+      "intent": "open_cropsync", 
+      "keywords": [
+        "crop sync", 
+        "cropsync", 
+        "crop", 
+        "sync"
+      ], 
+      "kind": "script", 
+      "panel": "Views & Sheets.panel", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Views & Sheets.panel\\CropSync.pushbutton\\script.py", 
+      "title": "Crop Sync", 
+      "url": "", 
+      "xaml": [
+        "CropSync"
+      ]
+    }, 
+    "DatumSync.pushbutton": {
+      "aliases": [], 
+      "button": "DatumSync.pushbutton", 
+      "doc": "Synchronize 2D extents, bubble visibility, and leaders of Grids and Levels.", 
+      "intent": "open_datumsync", 
+      "keywords": [
+        "datum sync", 
+        "datumsync", 
+        "datum", 
+        "sync"
+      ], 
+      "kind": "script", 
+      "panel": "Modeling & Datum.panel", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\DatumSync.pushbutton\\script.py", 
+      "title": "Datum Sync", 
+      "url": "", 
+      "xaml": [
+        "DatumSync"
       ]
     }, 
     "DoorThreshold.pushbutton": {
@@ -227,7 +227,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\DoorThreshold.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\DoorThreshold.pushbutton\\script.py", 
       "title": "Door Threshold", 
       "url": "", 
       "xaml": [
@@ -246,7 +246,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\FamiGen.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\FamiGen.pushbutton\\script.py", 
       "title": "FamiGen", 
       "url": "", 
       "xaml": [
@@ -267,31 +267,11 @@
       ], 
       "kind": "script", 
       "panel": "Support.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\Assistant Tools.stack\\Feedback.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Support.panel\\Assistant Tools.stack\\Feedback.pushbutton\\script.py", 
       "title": "Send Feedback", 
       "url": "", 
       "xaml": [
         "Feedback"
-      ]
-    }, 
-    "Foundation Volume.pushbutton": {
-      "aliases": [], 
-      "button": "Foundation Volume.pushbutton", 
-      "doc": "Write Revit computed volume into a selected shared parameter on Structural Foundation elements.", 
-      "intent": "open_foundation_volume", 
-      "keywords": [
-        "foundation volume", 
-        "foundationvolume", 
-        "foundation", 
-        "volume"
-      ], 
-      "kind": "script", 
-      "panel": "Data & IFC-SG.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\Foundation Volume.pushbutton\\script.py", 
-      "title": "Foundation Volume", 
-      "url": "", 
-      "xaml": [
-        "FoundationVolume"
       ]
     }, 
     "IFC-SG.pushbutton": {
@@ -307,14 +287,14 @@
         "ifc-sg", 
         "ifcsg", 
         "suite", 
-        "ifc", 
-        "col", 
         "map", 
+        "col", 
+        "ifc", 
         "sg"
       ], 
       "kind": "script", 
       "panel": "Data & IFC-SG.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\IFC-SG.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Data & IFC-SG.panel\\IFC-SG.pushbutton\\script.py", 
       "title": "IFC-SG Suite", 
       "url": "", 
       "xaml": [
@@ -336,7 +316,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\ImageToDrafting.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\ImageToDrafting.pushbutton\\script.py", 
       "title": "Image to Drafting", 
       "url": "", 
       "xaml": [
@@ -357,7 +337,7 @@
       ], 
       "kind": "script", 
       "panel": "Support.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\Assistant Tools.stack\\LLMsSetting.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Support.panel\\Assistant Tools.stack\\LLMsSetting.pushbutton\\script.py", 
       "title": "LLMs Setting", 
       "url": "", 
       "xaml": [
@@ -377,7 +357,7 @@
       ], 
       "kind": "script", 
       "panel": "Support.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\Assistant Tools.stack\\MCPControl.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Support.panel\\Assistant Tools.stack\\MCPControl.pushbutton\\script.py", 
       "title": "MCP Control", 
       "url": "", 
       "xaml": [
@@ -397,7 +377,7 @@
       ], 
       "kind": "script", 
       "panel": "Annotation & Select.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\ManaAnno.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Annotation & Select.panel\\ManaAnno.pushbutton\\script.py", 
       "title": "Mana Anno", 
       "url": "", 
       "xaml": [
@@ -412,20 +392,28 @@
       "doc": "Find elements in spatial containers or collect element data into spatial elements.", 
       "intent": "open_manacontains", 
       "keywords": [
+        "containsdefinevalue", 
+        "containssetparam", 
         "contains manager", 
         "mana contains", 
         "manacontains", 
         "contains", 
         "manager", 
-        "mana"
+        "define", 
+        "param", 
+        "value", 
+        "mana", 
+        "set"
       ], 
       "kind": "script", 
       "panel": "Data & IFC-SG.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaContains.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaContains.pushbutton\\script.py", 
       "title": "Contains Manager", 
       "url": "", 
       "xaml": [
-        "ManaContains"
+        "ManaContains", 
+        "ContainsDefineValue", 
+        "ContainsSetParam"
       ]
     }, 
     "ManaDWG.pushbutton": {
@@ -446,7 +434,7 @@
       ], 
       "kind": "script", 
       "panel": "Annotation & Select.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\ManaDWG.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Annotation & Select.panel\\Mana.stack\\ManaDWG.pushbutton\\script.py", 
       "title": "DWG Manager", 
       "url": "", 
       "xaml": [
@@ -473,7 +461,7 @@
       ], 
       "kind": "script", 
       "panel": "Standards & Settings.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaGroup.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Standards & Settings.panel\\ManaGroup.pushbutton\\script.py", 
       "title": "Group Manager", 
       "url": "", 
       "xaml": [
@@ -499,7 +487,7 @@
       ], 
       "kind": "script", 
       "panel": "Standards & Settings.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaLoca.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Standards & Settings.panel\\ManaLoca.pushbutton\\script.py", 
       "title": "Location Manager", 
       "url": "", 
       "xaml": [
@@ -515,16 +503,16 @@
       "intent": "open_manapara", 
       "keywords": [
         "parameter manager", 
-        "mana para", 
         "parameter", 
+        "mana para", 
         "manapara", 
         "manager", 
-        "mana", 
-        "para"
+        "para", 
+        "mana"
       ], 
       "kind": "script", 
       "panel": "Data & IFC-SG.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaPara.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaPara.pushbutton\\script.py", 
       "title": "Parameter Manager", 
       "url": "", 
       "xaml": [
@@ -549,7 +537,7 @@
       ], 
       "kind": "script", 
       "panel": "Data & IFC-SG.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaSched.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Data & IFC-SG.panel\\manaData.stack\\ManaSched.pushbutton\\script.py", 
       "title": "Schedule Manager", 
       "url": "", 
       "xaml": [
@@ -569,7 +557,7 @@
       ], 
       "kind": "script", 
       "panel": "Annotation & Select.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Annotation & Select.panel\\Mana.stack\\ManaSelect.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Annotation & Select.panel\\Mana.stack\\ManaSelect.pushbutton\\script.py", 
       "title": "Mana Select", 
       "url": "", 
       "xaml": [
@@ -594,7 +582,7 @@
       ], 
       "kind": "script", 
       "panel": "Views & Sheets.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\ManaSheets.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Views & Sheets.panel\\ManaSheets.pushbutton\\script.py", 
       "title": "Sheet Manager", 
       "url": "", 
       "xaml": [
@@ -612,13 +600,13 @@
         "visual & styles", 
         "mana styles", 
         "manastyles", 
-        "visual", 
         "styles", 
+        "visual", 
         "mana"
       ], 
       "kind": "script", 
       "panel": "Standards & Settings.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaStyles.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Standards & Settings.panel\\ManaStyles.pushbutton\\script.py", 
       "title": "Visual & Styles", 
       "url": "", 
       "xaml": [
@@ -637,13 +625,13 @@
         "mana tabs", 
         "manatabs", 
         "manager", 
-        "mana", 
         "tabs", 
+        "mana", 
         "tab"
       ], 
       "kind": "script", 
       "panel": "Support.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\ManaTabs.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Support.panel\\UI.stack\\ManaTabs.pushbutton\\script.py", 
       "title": "Tab Manager", 
       "url": "", 
       "xaml": [
@@ -668,7 +656,7 @@
       ], 
       "kind": "script", 
       "panel": "Views & Sheets.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\ManaViews.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Views & Sheets.panel\\ManaViews.pushbutton\\script.py", 
       "title": "View Manager", 
       "url": "", 
       "xaml": [
@@ -692,7 +680,7 @@
       ], 
       "kind": "script", 
       "panel": "Standards & Settings.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ManaWorkset.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Standards & Settings.panel\\ManaWorkset.pushbutton\\script.py", 
       "title": "Workset Manager", 
       "url": "", 
       "xaml": [
@@ -705,18 +693,21 @@
       "doc": "Model Auditor \u2014 Model check, warnings, in-place models, and material lists.", 
       "intent": "open_modelauditor", 
       "keywords": [
+        "modelauditordetail", 
         "model auditor", 
         "modelauditor", 
         "auditor", 
+        "detail", 
         "model"
       ], 
       "kind": "script", 
       "panel": "Standards & Settings.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standards & Settings.panel\\ModelAuditor.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Standards & Settings.panel\\ModelAuditor.pushbutton\\script.py", 
       "title": "Model Auditor", 
       "url": "", 
       "xaml": [
-        "ModelAuditor"
+        "ModelAuditor", 
+        "ModelAuditorDetail"
       ]
     }, 
     "PDF import.pushbutton": {
@@ -732,7 +723,7 @@
       ], 
       "kind": "script", 
       "panel": "Support.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\PDF import.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Support.panel\\PDF import.pushbutton\\script.py", 
       "title": "PDF Import", 
       "url": "", 
       "xaml": [
@@ -747,14 +738,14 @@
       "keywords": [
         "point cloud to model", 
         "pointcloud", 
+        "cloud", 
         "model", 
         "point", 
-        "cloud", 
         "to"
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\PointCloud.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\PointCloud.pushbutton\\script.py", 
       "title": "Point Cloud to Model", 
       "url": "", 
       "xaml": [
@@ -774,7 +765,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\PropertyLine.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\Create.stack\\PropertyLine.pushbutton\\script.py", 
       "title": "Property Line", 
       "url": "", 
       "xaml": [
@@ -799,7 +790,7 @@
       ], 
       "kind": "script", 
       "panel": "Support.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Support.panel\\UI.stack\\Ribbon Names.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Support.panel\\UI.stack\\Ribbon Names.pushbutton\\script.py", 
       "title": "Ribbon Name Manager", 
       "url": "", 
       "xaml": [
@@ -820,7 +811,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\RoomToFloor.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\RoomToFloor.pushbutton\\script.py", 
       "title": "Room To Floor", 
       "url": "", 
       "xaml": [
@@ -845,7 +836,7 @@
       ], 
       "kind": "script", 
       "panel": "Views & Sheets.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Views & Sheets.panel\\SheetGen.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Views & Sheets.panel\\SheetGen.pushbutton\\script.py", 
       "title": "Create Plan Views", 
       "url": "", 
       "xaml": [
@@ -865,7 +856,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\SplitElements.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\SplitElements.pushbutton\\script.py", 
       "title": "Split Elements", 
       "url": "", 
       "xaml": [
@@ -886,7 +877,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\Text to Element.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\Create.stack\\Create Elements.pulldown\\Text to Element.pushbutton\\script.py", 
       "title": "Text to Element", 
       "url": "", 
       "xaml": [
@@ -906,33 +897,11 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\Create.stack\\Tile Layout.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\Create.stack\\Tile Layout.pushbutton\\script.py", 
       "title": "Tile Layout", 
       "url": "", 
       "xaml": [
         "TileLayout"
-      ]
-    }, 
-    "UIShowcase.pushbutton": {
-      "aliases": [], 
-      "button": "UIShowcase.pushbutton", 
-      "doc": "Check and review the T3Lab UI Design Standard (T3)", 
-      "intent": "open_uishowcase", 
-      "keywords": [
-        "uistandardshowcase", 
-        "ui showcase", 
-        "uishowcase", 
-        "uistandard", 
-        "showcase", 
-        "ui"
-      ], 
-      "kind": "script", 
-      "panel": "Standard.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Standard.panel\\UIShowcase.pushbutton\\script.py", 
-      "title": "UI Showcase", 
-      "url": "", 
-      "xaml": [
-        "UIStandardShowcase"
       ]
     }, 
     "Wall Cut Profile.pushbutton": {
@@ -949,7 +918,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\Wall Cut Profile.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\Wall Cut Profile.pushbutton\\script.py", 
       "title": "Wall Cut Profile", 
       "url": "", 
       "xaml": [
@@ -974,7 +943,7 @@
       ], 
       "kind": "script", 
       "panel": "Modeling & Datum.panel", 
-      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\Wall_Adjust Base.pushbutton\\script.py", 
+      "script_path": "D:\\01. T3Lab\\t3lab-revit-api\\T3Lab.extension\\T3Lab_Dev.tab\\Modeling & Datum.panel\\ElementAdjust.pulldown\\Wall_Adjust Base.pushbutton\\script.py", 
       "title": "Auto Adj Base Offset", 
       "url": "", 
       "xaml": [

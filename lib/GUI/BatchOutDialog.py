@@ -13,21 +13,8 @@ __title__   = "BatchOut Dialog"
 import os
 import sys
 
-for _env in ('APPDATA', 'PROGRAMDATA'):
-    _base = os.environ.get(_env, '')
-    if _base:
-        for _clone in ('pyRevit-Master', 'pyRevit'):
-            _ceng = os.path.join(_base, _clone, 'bin', 'cengines', 'CPY3123')
-            if os.path.isdir(_ceng):
-                for _d in (_ceng, os.path.join(_ceng, 'Lib')):
-                    if hasattr(os, 'add_dll_directory'):
-                        try:
-                            os.add_dll_directory(_d)
-                        except Exception:
-                            pass
-                for _p in (_ceng, os.path.join(_ceng, 'Lib'), os.path.join(_ceng, 'python312.zip')):
-                    if os.path.exists(_p) and _p not in sys.path:
-                        sys.path.insert(0, _p)
+# CPython engine paths are injected by lib/_cpython_bootstrap.py below;
+# it discovers the engine whatever the pyRevit clone is called.
 
 
 _script_dir = os.path.dirname(__file__)
@@ -38,14 +25,7 @@ if _lib_dir not in sys.path:
 
 try:
     import _cpython_bootstrap
-    _cpython_bootstrap.init_cpython_paths()
-except Exception:
-    pass
-
-try:
-    from importlib import reload as _reload
-    if 'GUI.WPF_Base' in sys.modules:
-        _reload(sys.modules['GUI.WPF_Base'])
+    _cpython_bootstrap.init_cpython_paths()   # also hot-reloads an edited WPF_Base
 except Exception:
     pass
 
@@ -95,7 +75,6 @@ from Snippets._compat import eid_value, make_eid
 
 try:
     from Intelligence.api_learner import SmartAPIAdapter, RevitAPILearner
-    from Intelligence.api_updater import auto_check_and_update
     HAS_API_LEARNER = True
     _api_learner_err = None
 except Exception as _api_learner_ex:
@@ -184,6 +163,63 @@ VIEW_TYPE_LABELS = _build_view_type_labels()
 NON_EXPORTABLE_VIEW_TYPES = _build_non_exportable_view_types()
 
 
+def _enum_member(enum_name, *members):
+    """First member of DB.<enum_name> this Revit build has, or None."""
+    enum = getattr(DB, enum_name, None)
+    for member in members:
+        value = getattr(enum, member, None) if enum is not None else None
+        if value is not None:
+            return value
+    return None
+
+
+def apply_revit_display_fidelity(options, for_sheets=True):
+    """Make a DWG export look like the Revit view it came from.
+
+    Returns the settings that were applied, for the log.
+
+    - Colors = TrueColorPerView ("True color (RGB values) per view"): every
+      entity carries the RGB Revit draws it in, object styles plus V/G
+      overrides and view filters. The default, IndexColors, colours each layer
+      from the export layer table instead (AIA: magenta text, orange doors,
+      blue schedule fills), which is not what the sheet looks like in Revit.
+      Falls back to TrueColor on a build without the per-view mode.
+    - PropOverrides = ByEntity: element overrides (red dashed demolition,
+      halftone, filter colour / line weight / pattern) stay on the entity
+      instead of being flattened into the category layer.
+    - LineScaling: PaperSpace for sheets (PSLTSCALE = 1, dashes sized per
+      viewport as on the sheet), ViewScale for a view exported on its own.
+    - A hatch background, when the setup turns it on, is the white paper
+      Revit shows — never forced on: it is one colour behind every hatch,
+      which Revit does not draw.
+
+    Line weights go out as Revit's own; AutoCAD draws them only with LWDISPLAY on.
+    """
+    applied = []
+    for prop, value, label in (
+            ('Colors', _enum_member('ExportColorMode', 'TrueColorPerView', 'TrueColor'),
+             'true colors'),
+            ('PropOverrides', _enum_member('PropOverrideMode', 'ByEntity'),
+             'overrides by entity'),
+            ('LineScaling', _enum_member('LineScaling',
+                                         'PaperSpace' if for_sheets else 'ViewScale'),
+             'linetype scale')):
+        if value is None or not hasattr(options, prop):
+            continue
+        try:
+            setattr(options, prop, value)
+            applied.append(label)
+        except Exception as ex:
+            logger.debug("Could not set DWG {}: {}".format(prop, ex))
+    try:
+        if getattr(options, 'UseHatchBackgroundColor', False):
+            options.HatchBackgroundColor = DB.Color(255, 255, 255)
+            applied.append('white hatch background')
+    except Exception as ex:
+        logger.debug("Could not set DWG HatchBackgroundColor: {}".format(ex))
+    return applied
+
+
 def detect_persistent_engine():
     """True only when __persistentengine__ is actually baked into the loaded
     command metadata (pyRevit bakes it at ribbon build — needs a Reload after
@@ -219,8 +255,8 @@ def detect_persistent_engine():
 # debugging instead of just a mysteriously absent smart-adaptation feature.
 if not HAS_API_LEARNER:
     logger.warning(
-        "BatchOut Intelligence helpers unavailable (api_learner/api_updater); "
-        "smart API adaptation & auto-update disabled: {}".format(_api_learner_err))
+        "BatchOut Intelligence helper unavailable (api_learner); "
+        "smart API adaptation disabled: {}".format(_api_learner_err))
 
 # Get Revit version information
 # Read from the Application, not the document: `revit.doc` is None when this
@@ -523,6 +559,8 @@ class ExportProfile(object):
         self.CADExportSetup = "Use setup from file"
         self.CADExportViewsOnSheets = False
         self.CADExportLinksAsExternal = False
+        # Colors / line weights / linetype scale as the Revit view shows them
+        self.CADMatchRevitDisplay = True
 
         # File organization
         self.OutputFolder = os.path.join(os.path.expanduser('~'), 'Documents', 'Revit Exports')
@@ -558,6 +596,7 @@ class ExportProfile(object):
             'CADExportSetup': self.CADExportSetup,
             'CADExportViewsOnSheets': self.CADExportViewsOnSheets,
             'CADExportLinksAsExternal': self.CADExportLinksAsExternal,
+            'CADMatchRevitDisplay': self.CADMatchRevitDisplay,
             'OutputFolder': self.OutputFolder,
             'SplitByFormat': self.SplitByFormat,
             'ReverseOrder': self.ReverseOrder,
@@ -622,6 +661,9 @@ class _PendingExportError(RuntimeError):
 
 class ExportManagerWindow(T3WPFWindow):
     """Export Manager Window."""
+    # Click= trong DataTemplate không nằm trong namescope của window, nếu
+    # không bật cờ này handler của checkbox/nút từng dòng không bao giờ chạy.
+    WIRE_TEMPLATED_CLICKS = True
 
     # Auto-saved "latest setup" — lives beside profiles but is not listed as one
     LATEST_SETUP_FILENAME = '_latest_setup.json'
@@ -725,11 +767,12 @@ class ExportManagerWindow(T3WPFWindow):
             # Initialize Smart API Adapter for self-learning capability
             if HAS_API_LEARNER:
                 try:
+                    # No web check here: the weekly revitapidocs.com probe that
+                    # used to run at this point was a synchronous WebClient
+                    # download on Revit's UI thread (100 s default timeout),
+                    # holding the window closed on every first open of the week
+                    # for a result that was only ever written to the debug log.
                     self.api_adapter = SmartAPIAdapter(self.doc, REVIT_VERSION)
-                    logger.info("Smart API Adapter initialized successfully")
-
-                    # Check for API updates (non-blocking, runs in background)
-                    self._check_for_api_updates()
                 except Exception as adapter_ex:
                     logger.warning("Could not initialize Smart API Adapter: {}".format(adapter_ex))
                     self.api_adapter = None
@@ -784,186 +827,11 @@ class ExportManagerWindow(T3WPFWindow):
 
             # Update button text based on current tab
             self.update_navigation_buttons()
-            self._init_ai_mode()
 
         except Exception as ex:
             logger.error("Error initializing BatchOut window: {}".format(ex))
             raise
 
-    # ── AI Mode Support ──────────────────────────────────────────────────
-
-    def _init_ai_mode(self):
-        self._prev_naming_backup = []
-        try:
-            if hasattr(self, 'is_ai_mode_active') and self.is_ai_mode_active():
-                if hasattr(self, 'ai_mode_badge') and self.ai_mode_badge:
-                    self.ai_mode_badge.Visibility = Visibility.Visible
-                if hasattr(self, 'txt_ai_status') and self.txt_ai_status:
-                    info = self.get_ai_status_info()
-                    self.txt_ai_status.Text = "AI Mode: {}".format(info.get('model', 'Ready'))
-        except Exception as ex:
-            logger.warning("AI Mode init failed: {}".format(ex))
-
-    def ai_verify_naming_clicked(self, sender, e):
-        """AI QA: Audit sheet numbers and names, and suggest standardized filenames (ISO 19650 compliant)."""
-        btn = getattr(self, 'btn_ai_verify_naming', None)
-        orig_content = "✨ AI Naming / QA"
-
-        def _restore_btn():
-            if btn:
-                btn.Content = orig_content
-                btn.IsEnabled = True
-
-        try:
-            items_list = self.all_sheets if self.selection_mode == 'sheets' else self.all_views
-            selected_items = [item for item in items_list if item.IsSelected]
-            target_items = selected_items if selected_items else items_list[:25]
-
-            if not target_items:
-                forms.alert("No items found to verify.", title="AI Naming QA")
-                return
-
-            def _apply_classic():
-                self._prev_naming_backup = [(item, getattr(item, 'CustomFilename', '')) for item in target_items]
-                undo_btn = getattr(self, 'btn_ai_undo_naming', None)
-                if undo_btn:
-                    undo_btn.Visibility = Visibility.Visible
-
-                applied = 0
-                for item in target_items:
-                    num = getattr(item, 'SheetNumber', getattr(item, 'Name', ''))
-                    name = getattr(item, 'SheetName', '')
-                    base = "{}_{}".format(num, name).strip('_') if name else num
-                    clean_name = re.sub(r'[\\/*?:"<>|]', '_', base)
-                    item.CustomFilename = clean_name
-                    applied += 1
-                self.sheets_listview.Items.Refresh()
-                self.status_text.Text = "Rule-based Naming: Applied standard format to {} item(s)".format(applied)
-                _restore_btn()
-
-            if not hasattr(self, 'is_ai_mode_active') or not self.is_ai_mode_active():
-                _apply_classic()
-                return
-
-            if btn:
-                btn.Content = "⏳ Verifying..."
-                btn.IsEnabled = False
-
-            self.status_text.Text = "AI auditing naming conventions for {} item(s)...".format(len(target_items))
-
-            data_payload = []
-            for item in target_items:
-                data_payload.append({
-                    "number": str(getattr(item, 'SheetNumber', getattr(item, 'Name', ''))),
-                    "name": str(getattr(item, 'SheetName', '')),
-                    "rev": str(getattr(item, 'Revision', '')),
-                    "current_custom": str(getattr(item, 'CustomFilename', ''))
-                })
-
-            prompt = (
-                "You are a BIM Manager specializing in ISO 19650 and AEC drawing deliverables.\n"
-                "Audit the following sheets/views and generate standardized, clean export filenames.\n"
-                "Follow ISO 19650 pattern where possible ([Discipline]-[Level]-[Type]-[Number]_[Title]), "
-                "or clean AEC standard [SheetNumber]_[SheetName]. Remove invalid filesystem characters.\n"
-                "Return JSON ONLY with structure:\n"
-                "{\n"
-                "  \"items\": [\n"
-                "    {\"number\": string, \"suggested_filename\": string, \"standard\": string}\n"
-                "  ],\n"
-                "  \"summary\": string\n"
-                "}\n"
-                "Sheets:\n" + json.dumps(data_payload)
-            )
-
-            def _worker():
-                return self.ai_bridge.ask_json(prompt, fast=True)
-
-            def _callback(res, err):
-                try:
-                    if err or not res or not isinstance(res, dict) or 'items' not in res:
-                        _apply_classic()
-                        return
-
-                    self._prev_naming_backup = [(item, getattr(item, 'CustomFilename', '')) for item in target_items]
-                    undo_btn = getattr(self, 'btn_ai_undo_naming', None)
-                    if undo_btn:
-                        undo_btn.Visibility = Visibility.Visible
-
-                    suggestions = res.get('items', [])
-                    summary = res.get('summary', 'Naming verified')
-                    sug_map = {s['number']: s['suggested_filename'] for s in suggestions if 'number' in s and 'suggested_filename' in s}
-
-                    applied = 0
-                    for item in target_items:
-                        num = str(getattr(item, 'SheetNumber', getattr(item, 'Name', '')))
-                        if num in sug_map:
-                            item.CustomFilename = sug_map[num]
-                            applied += 1
-
-                    self.sheets_listview.Items.Refresh()
-                    self.status_text.Text = "AI Naming: {}. Updated {} filename(s).".format(summary, applied)
-                finally:
-                    _restore_btn()
-
-            self.run_ai_async(_worker, _callback)
-
-        except Exception as ex:
-            _restore_btn()
-            logger.error("Error in ai_verify_naming_clicked: {}".format(ex))
-            self.status_text.Text = "AI Naming error: {}".format(ex)
-
-    def ai_undo_naming_clicked(self, sender, e):
-        """Revert custom filenames changed by the last AI/rule naming operation."""
-        try:
-            if not getattr(self, '_prev_naming_backup', None):
-                forms.alert("No naming history to undo.", title="AI Naming Undo")
-                return
-
-            restored = 0
-            for item, old_val in self._prev_naming_backup:
-                item.CustomFilename = old_val
-                restored += 1
-
-            self._prev_naming_backup = []
-            undo_btn = getattr(self, 'btn_ai_undo_naming', None)
-            if undo_btn:
-                undo_btn.Visibility = Visibility.Collapsed
-
-            self.sheets_listview.Items.Refresh()
-            self.status_text.Text = "Reverted filenames for {} item(s).".format(restored)
-        except Exception as ex:
-            logger.error("Error in ai_undo_naming_clicked: {}".format(ex))
-            self.status_text.Text = "Undo error: {}".format(ex)
-
-    def _check_for_api_updates(self):
-        """Check for API updates in the background (non-blocking)."""
-        try:
-            # Auto-check for updates (this runs on Fridays or if never checked)
-            update_result = auto_check_and_update()
-
-            if update_result.get('checked'):
-                # Log the check
-                logger.info("API update check performed")
-
-                # Log notifications instead of print_md — any print here pops
-                # the pyRevit output window on every tool open, which defeats
-                # this method being a silent background check.
-                notifications = update_result.get('notifications', [])
-                for notif in notifications:
-                    logger.info("API update [{}]: {}".format(
-                        notif.get('severity', 'info'), notif.get('message', '')))
-
-                # Show learner info
-                if self.api_adapter:
-                    learner_info = self.api_adapter.get_learner_info()
-                    logger.info("API Learner: Cached date: {}, Source: {}".format(
-                        learner_info.get('cached_date'),
-                        learner_info.get('learned_from')
-                    ))
-
-        except Exception as ex:
-            # Don't fail initialization if update check fails
-            logger.debug("API update check failed: {}".format(ex))
 
     def load_profiles(self):
         """Load all saved profiles from disk."""
@@ -1005,30 +873,6 @@ class ExportManagerWindow(T3WPFWindow):
         except Exception as ex:
             logger.error("Error loading profiles: {}".format(ex))
 
-    def save_profiles(self):
-        """Save all profiles to disk."""
-        try:
-            # Create profiles folder if it doesn't exist
-            if not os.path.exists(self.profiles_folder):
-                os.makedirs(self.profiles_folder)
-
-            # Save each profile as a JSON file
-            for profile in self.profiles:
-                # Create safe filename from profile name
-                safe_name = "".join(c for c in profile.Name if c.isalnum() or c in (' ', '-', '_')).strip()
-                filename = "{}.json".format(safe_name)
-                filepath = os.path.join(self.profiles_folder, filename)
-
-                try:
-                    with open(filepath, 'w') as f:
-                        json.dump(profile.to_dict(), f, indent=2)
-                except Exception as file_ex:
-                    logger.warning("Could not save profile {}: {}".format(profile.Name, file_ex))
-
-            logger.info("Saved {} profiles".format(len(self.profiles)))
-
-        except Exception as ex:
-            logger.error("Error saving profiles: {}".format(ex))
 
     def save_latest_setup(self):
         """Auto-save current settings as the latest setup (restored on next open)."""
@@ -1069,6 +913,8 @@ class ExportManagerWindow(T3WPFWindow):
         stale handler/WPF proxy is destroyed mid-teardown — the 0xc0000005
         'Invalid WPFWndProxy' exit crash (journal.0090, 2026-07-15).
         """
+        if getattr(self, '_api_handler', None) is not None:
+            self._api_handler.clear()
         try:
             if self._api_event is not None:
                 self._api_event.Dispose()
@@ -1089,12 +935,27 @@ class ExportManagerWindow(T3WPFWindow):
         """
         if self.modeless:
             if self._api_event is None:
-                return  # window already closed and event disposed
+                self.status_text.Text = "Revit connection is closed. Reopen BatchOut."
+                return False
             self._api_handler.add(action)
-            self._api_event.Raise()
+            try:
+                outcome = str(self._api_event.Raise())
+                if outcome not in ('Accepted', 'Pending'):
+                    raise RuntimeError("Revit rejected the request: " + outcome)
+            except Exception as ex:
+                self._api_handler.remove(action)
+                self.status_text.Text = "Could not queue the action. Try again when Revit is ready."
+                logger.error("BatchOut could not queue action: {}".format(ex))
+                return False
         else:
-            self.Dispatcher.BeginInvoke(DispatcherPriority.Background,
-                                        Action(action))
+            try:
+                self.Dispatcher.BeginInvoke(DispatcherPriority.Background,
+                                            Action(action))
+            except Exception as ex:
+                self.status_text.Text = "Could not queue the action. Reopen BatchOut and retry."
+                logger.error("BatchOut dispatcher failed: {}".format(ex))
+                return False
+        return True
 
     def get_current_settings_as_profile(self):
         """Capture current UI settings as a profile."""
@@ -1128,6 +989,7 @@ class ExportManagerWindow(T3WPFWindow):
             profile.CADExportSetup = self.cad_export_setup.SelectedItem.Content
         profile.CADExportViewsOnSheets = self.cad_export_views_on_sheets.IsChecked if self.cad_export_views_on_sheets.IsChecked is not None else False
         profile.CADExportLinksAsExternal = self.cad_export_links_as_external.IsChecked if self.cad_export_links_as_external.IsChecked is not None else False
+        profile.CADMatchRevitDisplay = bool(self.cad_match_revit_display.IsChecked)
 
         # File organization
         profile.OutputFolder = self.output_folder.Text if self.output_folder.Text else ""
@@ -1196,6 +1058,7 @@ class ExportManagerWindow(T3WPFWindow):
 
             self.cad_export_views_on_sheets.IsChecked = profile.CADExportViewsOnSheets
             self.cad_export_links_as_external.IsChecked = profile.CADExportLinksAsExternal
+            self.cad_match_revit_display.IsChecked = bool(profile.CADMatchRevitDisplay)
 
             # File organization
             self.output_folder.Text = profile.OutputFolder
@@ -1214,238 +1077,6 @@ class ExportManagerWindow(T3WPFWindow):
             logger.error("Error applying profile to UI: {}".format(ex))
             forms.alert("Error applying profile:\n{}".format(str(ex)))
 
-    def save_profile_clicked(self, sender, e):
-        """Save current settings as a new profile."""
-        try:
-            # Prompt for profile name and description
-            from System.Windows import Window, TextBlock, TextBox, Button, Thickness, VerticalAlignment, HorizontalAlignment
-            from System.Windows.Controls import StackPanel, Label
-            from System.Windows.Media import SolidColorBrush, Color
-
-            # Create dialog window
-            dialog = Window()
-            dialog.Title = "Save Profile"
-            dialog.Width = 400
-            dialog.Height = 250
-            dialog.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner
-            dialog.Owner = self
-
-            # Create content panel
-            panel = StackPanel()
-            panel.Margin = Thickness(20)
-
-            # Name label and textbox
-            name_label = TextBlock()
-            name_label.Text = "Profile Name:"
-            name_label.Margin = Thickness(0, 0, 0, 5)
-            panel.Children.Add(name_label)
-
-            name_textbox = TextBox()
-            name_textbox.Height = 28
-            name_textbox.Margin = Thickness(0, 0, 0, 15)
-            panel.Children.Add(name_textbox)
-
-            # Description label and textbox
-            desc_label = TextBlock()
-            desc_label.Text = "Description (optional):"
-            desc_label.Margin = Thickness(0, 0, 0, 5)
-            panel.Children.Add(desc_label)
-
-            desc_textbox = TextBox()
-            desc_textbox.Height = 60
-            desc_textbox.TextWrapping = System.Windows.TextWrapping.Wrap
-            desc_textbox.AcceptsReturn = True
-            desc_textbox.VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto
-            desc_textbox.Margin = Thickness(0, 0, 0, 20)
-            panel.Children.Add(desc_textbox)
-
-            # Buttons panel
-            buttons_panel = StackPanel()
-            buttons_panel.Orientation = System.Windows.Controls.Orientation.Horizontal
-            buttons_panel.HorizontalAlignment = HorizontalAlignment.Right
-
-            # OK button
-            ok_button = Button()
-            ok_button.Content = "Save"
-            ok_button.Width = 80
-            ok_button.Height = 28
-            ok_button.Margin = Thickness(0, 0, 10, 0)
-
-            def ok_clicked(s, ev):
-                if not name_textbox.Text or name_textbox.Text.strip() == "":
-                    forms.alert("Please enter a profile name.", title="Profile Name Required")
-                    return
-                dialog.DialogResult = True
-                dialog.Close()
-
-            ok_button.Click += ok_clicked
-            buttons_panel.Children.Add(ok_button)
-
-            # Cancel button
-            cancel_button = Button()
-            cancel_button.Content = "Cancel"
-            cancel_button.Width = 80
-            cancel_button.Height = 28
-
-            def cancel_clicked(s, ev):
-                dialog.DialogResult = False
-                dialog.Close()
-
-            cancel_button.Click += cancel_clicked
-            buttons_panel.Children.Add(cancel_button)
-
-            panel.Children.Add(buttons_panel)
-            dialog.Content = panel
-
-            # Show dialog
-            result = dialog.ShowDialog()
-
-            if result:
-                # Create profile from current settings
-                profile = self.get_current_settings_as_profile()
-                profile.Name = name_textbox.Text.strip()
-                profile.Description = desc_textbox.Text.strip()
-
-                # Add to profiles list
-                self.profiles.append(profile)
-
-                # Save to disk
-                self.save_profiles()
-
-                # Refresh listview
-                self.profiles_listview.ItemsSource = None
-                self.profiles_listview.ItemsSource = to_items_source(self.profiles)
-
-                self.status_text.Text = "Profile '{}' saved successfully".format(profile.Name)
-
-        except Exception as ex:
-            logger.error("Error saving profile: {}".format(ex))
-            forms.alert("Error saving profile:\n{}".format(str(ex)))
-
-    def load_profile_clicked(self, sender, e):
-        """Load selected profile and apply to UI."""
-        try:
-            selected_profile = self.profiles_listview.SelectedItem
-            if not selected_profile:
-                forms.alert("Please select a profile to load.", title="No Profile Selected")
-                return
-
-            # Apply profile to UI
-            self.apply_profile_to_ui(selected_profile)
-
-        except Exception as ex:
-            logger.error("Error loading profile: {}".format(ex))
-            forms.alert("Error loading profile:\n{}".format(str(ex)))
-
-    def delete_profile_clicked(self, sender, e):
-        """Delete selected profile."""
-        try:
-            selected_profile = self.profiles_listview.SelectedItem
-            if not selected_profile:
-                forms.alert("Please select a profile to delete.", title="No Profile Selected")
-                return
-
-            # Confirm deletion
-            if not forms.alert("Are you sure you want to delete profile '{}'?".format(selected_profile.Name),
-                              title="Confirm Deletion",
-                              yes=True, no=True):
-                return
-
-            # Remove from list
-            self.profiles.remove(selected_profile)
-
-            # Delete file
-            safe_name = "".join(c for c in selected_profile.Name if c.isalnum() or c in (' ', '-', '_')).strip()
-            filename = "{}.json".format(safe_name)
-            filepath = os.path.join(self.profiles_folder, filename)
-            if os.path.exists(filepath):
-                os.remove(filepath)
-
-            # Refresh listview
-            self.profiles_listview.ItemsSource = None
-            self.profiles_listview.ItemsSource = to_items_source(self.profiles)
-
-            self.status_text.Text = "Profile '{}' deleted successfully".format(selected_profile.Name)
-
-        except Exception as ex:
-            logger.error("Error deleting profile: {}".format(ex))
-            forms.alert("Error deleting profile:\n{}".format(str(ex)))
-
-    def import_profile_clicked(self, sender, e):
-        """Import profile from file."""
-        try:
-            from System.Windows.Forms import OpenFileDialog, DialogResult
-
-            # Show open file dialog
-            dialog = OpenFileDialog()
-            dialog.Title = "Import Profile"
-            dialog.Filter = "Profile Files (*.json)|*.json|All Files (*.*)|*.*"
-            dialog.FilterIndex = 1
-
-            if dialog.ShowDialog() == DialogResult.OK:
-                # Load profile from file
-                with open(dialog.FileName, 'r') as f:
-                    data = json.load(f)
-                    profile = ExportProfile.from_dict(data)
-
-                # Check if profile with same name already exists
-                existing = [p for p in self.profiles if p.Name == profile.Name]
-                if existing:
-                    if not forms.alert("A profile with name '{}' already exists.\n\nDo you want to replace it?".format(profile.Name),
-                                      title="Profile Exists",
-                                      yes=True, no=True):
-                        return
-                    # Remove existing profile
-                    for p in existing:
-                        self.profiles.remove(p)
-
-                # Add to profiles list
-                self.profiles.append(profile)
-
-                # Save to disk
-                self.save_profiles()
-
-                # Refresh listview
-                self.profiles_listview.ItemsSource = None
-                self.profiles_listview.ItemsSource = to_items_source(self.profiles)
-
-                self.status_text.Text = "Profile '{}' imported successfully".format(profile.Name)
-
-        except Exception as ex:
-            logger.error("Error importing profile: {}".format(ex))
-            forms.alert("Error importing profile:\n{}".format(str(ex)))
-
-    def export_profile_clicked(self, sender, e):
-        """Export selected profile to file."""
-        try:
-            selected_profile = self.profiles_listview.SelectedItem
-            if not selected_profile:
-                forms.alert("Please select a profile to export.", title="No Profile Selected")
-                return
-
-            from System.Windows.Forms import SaveFileDialog, DialogResult
-
-            # Show save file dialog
-            dialog = SaveFileDialog()
-            dialog.Title = "Export Profile"
-            dialog.Filter = "Profile Files (*.json)|*.json|All Files (*.*)|*.*"
-            dialog.FilterIndex = 1
-            dialog.FileName = "{}.json".format(selected_profile.Name)
-
-            if dialog.ShowDialog() == DialogResult.OK:
-                # Save profile to file
-                with open(dialog.FileName, 'w') as f:
-                    json.dump(selected_profile.to_dict(), f, indent=2)
-
-                self.status_text.Text = "Profile '{}' exported to {}".format(
-                    selected_profile.Name, os.path.basename(dialog.FileName))
-
-                forms.alert("Profile exported successfully to:\n{}".format(dialog.FileName),
-                           title="Export Complete")
-
-        except Exception as ex:
-            logger.error("Error exporting profile: {}".format(ex))
-            forms.alert("Error exporting profile:\n{}".format(str(ex)))
 
     # Pre-computed paper sizes lookup table for O(1) matching
     # Format: (rounded_width, rounded_height) -> size_name
@@ -2601,11 +2232,11 @@ class ExportManagerWindow(T3WPFWindow):
                 if hasattr(child, 'Tag') and child.Tag is not None and child.IsChecked
             ]
             if not checked:
-                self.sheet_set_label.Text = "All Sheets/Views"
+                self.sheet_set_summary.Text = "All Sheets/Views"
             elif len(checked) == 1:
-                self.sheet_set_label.Text = checked[0]
+                self.sheet_set_summary.Text = checked[0]
             else:
-                self.sheet_set_label.Text = "{} sets selected".format(len(checked))
+                self.sheet_set_summary.Text = "{} sets selected".format(len(checked))
         except Exception as ex:
             logger.debug("Error updating sheet set label: {}".format(ex))
 
@@ -2649,7 +2280,7 @@ class ExportManagerWindow(T3WPFWindow):
             self.sheets_listview.Items.Refresh()
             self.update_selection_count()
             self.status_text.Text = "'{}': {} sheets selected".format(
-                self.sheet_set_label.Text, selected_count)
+                self.sheet_set_summary.Text, selected_count)
 
         except Exception as ex:
             logger.error("Error applying sheet set filter: {}".format(ex))
@@ -2693,15 +2324,10 @@ class ExportManagerWindow(T3WPFWindow):
 
         except Exception as ex:
             logger.error("Error loading sheets: {}".format(ex))
-            forms.alert("Error loading sheets: {}".format(ex), exitscript=True)
+            # Không exitscript: hàm này cũng chạy trong event handler của window
+            # modeless — SystemExit bay qua biên .NET có thể làm Revit crash.
+            forms.alert("Error loading sheets: {}".format(ex))
 
-    def _lazy_load_init(self):
-        """Kick off chunked Revision loading — no titleblock queries at startup."""
-        try:
-            self._lazy_load_index = 0
-            self._run_in_api_context(self._lazy_load_chunk)
-        except Exception as ex:
-            logger.debug("Error in lazy load init: {}".format(ex))
 
     def _lazy_load_chunk(self):
         """Load Revision for a batch of sheets, then schedule the next batch.
@@ -2742,9 +2368,6 @@ class ExportManagerWindow(T3WPFWindow):
         if not getattr(self, '_titleblock_cache_loaded', False):
             self._batch_load_titleblock_sizes()
 
-    def _load_extra_sheet_data(self):
-        """Legacy helper kept for compatibility – now delegates to chunked loader."""
-        self._lazy_load_init()
 
     def load_views(self):
         """Load all views — Phase 1: instant display, Phase 2: chunked lazy loading.
@@ -2807,7 +2430,9 @@ class ExportManagerWindow(T3WPFWindow):
 
         except Exception as ex:
             logger.error("Error loading views: {}".format(ex))
-            forms.alert("Error loading views: {}".format(ex), exitscript=True)
+            # Không exitscript: hàm này cũng chạy trong event handler của window
+            # modeless — SystemExit bay qua biên .NET có thể làm Revit crash.
+            forms.alert("Error loading views: {}".format(ex))
 
     def _lazy_view_load_chunk(self):
         """Load Phase/ViewTemplate for a batch of views, then schedule the next batch."""
@@ -2866,14 +2491,16 @@ class ExportManagerWindow(T3WPFWindow):
             items = self.filtered_sheets if self.selection_mode == "sheets" else self.filtered_views
             total_count = len(items)
             selected_count = sum(1 for s in items if s.IsSelected)
+            all_items = self.all_sheets if self.selection_mode == "sheets" else self.all_views
+            total_selected = sum(1 for item in all_items if item.IsSelected)
+            hidden_selected = total_selected - selected_count
 
             if hasattr(self, 'selection_count_text'):
-                if self.selection_mode == "sheets":
-                    self.selection_count_text.Text = "{} sheets and 0 views selected. Total: {}".format(
-                        selected_count, total_count)
-                else:
-                    self.selection_count_text.Text = "0 sheets and {} views selected. Total: {}".format(
-                        selected_count, total_count)
+                label = "{} {} selected | {} shown".format(
+                    total_selected, self.selection_mode, total_count)
+                if hidden_selected:
+                    label += " | {} selected hidden by filters".format(hidden_selected)
+                self.selection_count_text.Text = label
 
             # Sync header checkbox (True = all, False = none, None = indeterminate)
             if hasattr(self, 'header_checkbox') and self.header_checkbox:
@@ -2978,15 +2605,14 @@ class ExportManagerWindow(T3WPFWindow):
     def row_checkbox_clicked(self, sender, e):
         """Handle direct click on row CheckBox."""
         try:
-            # Synchronously update data_item.IsSelected to match CheckBox.IsChecked
-            # to eliminate WPF data binding latency from causing the selected count to lag by 1
+            # The ONLY writer of the model: the row CheckBox is bound OneWay
+            # (through the hidden row_selected_text bridge in the XAML).
             if hasattr(sender, 'DataContext') and sender.DataContext is not None:
                 sender.DataContext.IsSelected = bool(sender.IsChecked)
 
-            # Refresh the ListView so ListViewItem.IsSelected binding picks up
-            # the new SheetItem.IsSelected value (highlight stays in sync).
-            # Required because SheetItem is a plain Python object without CLR
-            # INotifyPropertyChanged, so TwoWay binding only auto-pushes UI→model.
+            # SheetItem is a plain Python object without CLR
+            # INotifyPropertyChanged; re-read every visible row so the ticks
+            # always show the model.
             self.sheets_listview.Items.Refresh()
 
             self.update_selection_count()
@@ -2999,11 +2625,6 @@ class ExportManagerWindow(T3WPFWindow):
         # Double-click just toggles like single click
         # This prevents accidental double-click from causing issues
         pass
-
-    def textbox_prevent_toggle(self, sender, e):
-        """Prevent row toggle when clicking on textbox in Custom Filename column."""
-        # Stop propagation so that clicking in textbox doesn't toggle row selection
-        e.Handled = True
 
     def on_listview_size_changed(self, sender, e):
         """Resize Sheet Name and Custom Filename columns to fill available ListView width with ZERO gaps."""
@@ -3072,107 +2693,6 @@ class ExportManagerWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug("Error in header_checkbox_clicked: {}".format(ex))
 
-    def select_all_sheets(self, sender, e):
-        """Select all items (sheets or views)."""
-        items = self.filtered_sheets if self.selection_mode == "sheets" else self.filtered_views
-        self._batch_updating = True
-        try:
-            for item in items:
-                item.IsSelected = True
-        finally:
-            self._batch_updating = False
-
-        self.sheets_listview.Items.Refresh()
-        if self.selection_mode == "sheets":
-            self.status_text.Text = "Selected {} sheets".format(len(items))
-        else:
-            self.status_text.Text = "Selected {} views".format(len(items))
-
-        # Update selection count
-        self.update_selection_count()
-
-    def select_none_sheets(self, sender, e):
-        """Deselect all items (sheets or views)."""
-        items = self.filtered_sheets if self.selection_mode == "sheets" else self.filtered_views
-        self._batch_updating = True
-        try:
-            for item in items:
-                item.IsSelected = False
-        finally:
-            self._batch_updating = False
-
-        self.sheets_listview.Items.Refresh()
-        if self.selection_mode == "sheets":
-            self.status_text.Text = "Deselected all sheets"
-        else:
-            self.status_text.Text = "Deselected all views"
-
-        # Update selection count
-        self.update_selection_count()
-
-    def refresh_sheets(self, sender, e):
-        """Refresh the list (sheets or views)."""
-        if self.selection_mode == "sheets":
-            self.load_sheets()
-        else:
-            self.load_views()
-
-    def load_sheet_set_clicked(self, sender, e):
-        """Queue loading from a saved ViewSheetSet — reads collectors, needs API context."""
-        self._run_in_api_context(self._load_sheet_set_api)
-
-    def _load_sheet_set_api(self):
-        """Load sheets from a saved ViewSheetSet."""
-        try:
-            if self.selection_mode == "sheets":
-                # Get all saved ViewSheetSet names from the document
-                saved_set_names = self.get_saved_sheet_set_names()
-
-                if not saved_set_names:
-                    forms.alert("No Sheet Sets found in this document.\n\nSheet Sets are created in Revit's Print dialog (File > Print > Sheet Set).",
-                               title="No Sheet Sets Found")
-                    return
-
-                # Show selection dialog
-                selected_set_name = forms.SelectFromList.show(
-                    sorted(saved_set_names),
-                    title="Select Sheet Set",
-                    button_name="Load",
-                    multiselect=False
-                )
-
-                if not selected_set_name:
-                    return
-
-                # Load the selected sheet set and get sheet IDs
-                sheet_ids = self.get_sheet_ids_from_set(selected_set_name)
-
-                if not sheet_ids:
-                    forms.alert("Could not load sheets from set '{}'".format(selected_set_name),
-                               title="Error Loading Sheet Set")
-                    return
-
-                # Select sheets that are in the set
-                selected_count = 0
-                for sheet_item in self.all_sheets:
-                    if sheet_item.Sheet.Id in sheet_ids:
-                        sheet_item.IsSelected = True
-                        selected_count += 1
-                    else:
-                        sheet_item.IsSelected = False
-
-                # Refresh the ListView
-                self.sheets_listview.Items.Refresh()
-                self.status_text.Text = "Loaded '{}': {} sheets selected".format(selected_set_name, selected_count)
-
-            else:
-                # For views mode, we can implement similar functionality if needed
-                forms.alert("Sheet Set loading is only available in Sheets mode.\n\nPlease switch to Sheets mode first.",
-                           title="Views Mode Active")
-
-        except Exception as ex:
-            logger.error("Error loading sheet set: {}".format(ex))
-            forms.alert("Error loading sheet set:\n{}".format(str(ex)), title="Error")
 
     def get_saved_sheet_set_names(self):
         """Get names of all saved ViewSheetSets from the document.
@@ -3288,21 +2808,6 @@ class ExportManagerWindow(T3WPFWindow):
         """Legacy handler — delegates to the multi-select implementation."""
         self._apply_sheet_set_filter()
 
-    def filter_by_vs_changed(self, sender, e):
-        """Handle Filter by V/S checkbox change."""
-        try:
-            # Re-apply filters when checkbox state changes
-            if hasattr(self, 'filter_by_vs_checkbox') and self.filter_by_vs_checkbox.IsChecked:
-                # Filter is now enabled - apply sheet set filter
-                self.filter_by_sheet_set(sender, e)
-            else:
-                # Filter is now disabled - remove sheet set filtering
-                self.apply_filters()
-
-            self.update_selection_count()
-
-        except Exception as ex:
-            logger.error("Error handling Filter by V/S change: {}".format(ex))
 
     def save_vs_set_clicked(self, sender, e):
         """Handle Save V/S Set button click."""
@@ -3533,51 +3038,6 @@ class ExportManagerWindow(T3WPFWindow):
         except Exception as ex:
             logger.error("Error handling auto-detect change: {}".format(ex))
 
-    def button_custom_parameters(self, sender, e):
-        """Queue the custom parameters dialog — it reads doc parameters, needs API context."""
-        self._run_in_api_context(self._button_custom_parameters_api)
-
-    def _button_custom_parameters_api(self):
-        """Open custom parameters dialog to select parameters for filename.
-
-        When a pattern is selected, it automatically applies to ALL items (sheets or views).
-        """
-        try:
-            # Import the parameter selector dialog
-            try:
-                from GUI.ParameterSelectorDialog import ParameterSelectorDialog
-            except ImportError:
-                sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'lib', 'GUI'))
-                from ParameterSelectorDialog import ParameterSelectorDialog
-
-            # Determine element type based on current selection mode
-            element_type = 'sheet' if self.selection_mode == 'sheets' else 'view'
-
-            # Show the parameter selector dialog
-            pattern = ParameterSelectorDialog.show_dialog(self.doc, element_type)
-
-            if pattern:
-                # Update the naming pattern textbox
-                self.naming_pattern.Text = pattern
-
-                # Auto-apply the pattern to ALL items (not just selected)
-                items_list = self.all_sheets if self.selection_mode == 'sheets' else self.all_views
-
-                # Apply the naming pattern to each item
-                for item in items_list:
-                    # Generate filename using the current naming pattern
-                    filename = self.get_export_filename(item)
-                    # Set it to the CustomFilename property
-                    item.CustomFilename = filename
-
-                # Refresh the ListView to show the updated CustomFilename values
-                self.sheets_listview.Items.Refresh()
-
-                self.status_text.Text = "Pattern applied to {} item(s)".format(len(items_list))
-
-        except Exception as ex:
-            logger.error("Error opening custom parameters dialog: {}".format(ex))
-            forms.alert("Error opening custom parameters dialog:\n{}".format(str(ex)))
 
     def edit_filename_clicked(self, sender, e):
         """Queue the filename pattern dialog — it reads doc parameters, needs API context."""
@@ -3632,60 +3092,6 @@ class ExportManagerWindow(T3WPFWindow):
             logger.error("Error editing filename pattern: {}".format(ex))
             forms.alert("Error editing filename pattern:\n{}".format(str(ex)))
 
-    def button_row_naming_pattern(self, sender, e):
-        """Queue the row naming dialog — it reads doc parameters, needs API context."""
-        item = sender.Tag
-        if not item:
-            return
-        self._run_in_api_context(lambda: self._row_naming_pattern_api(item))
-
-    def _row_naming_pattern_api(self, item):
-        """Open parameter selector dialog for a specific row.
-
-        This applies the naming pattern to only the selected row's item.
-        """
-        try:
-            # Import the parameter selector dialog
-            try:
-                from GUI.ParameterSelectorDialog import ParameterSelectorDialog
-            except ImportError:
-                sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'lib', 'GUI'))
-                if 'ParameterSelectorDialog' in sys.modules:
-                    del sys.modules['ParameterSelectorDialog']
-                from ParameterSelectorDialog import ParameterSelectorDialog
-
-            # Determine element type based on current selection mode
-            element_type = 'sheet' if self.selection_mode == 'sheets' else 'view'
-
-            # Show the parameter selector dialog
-            pattern = ParameterSelectorDialog.show_dialog(self.doc, element_type)
-
-            if pattern:
-                # Store the pattern temporarily
-                temp_pattern = self.naming_pattern.Text if hasattr(self, 'naming_pattern') else ""
-
-                # Temporarily set the pattern
-                if hasattr(self, 'naming_pattern'):
-                    self.naming_pattern.Text = pattern
-
-                # Generate filename using the selected pattern
-                filename = self.get_export_filename(item)
-
-                # Restore the original pattern
-                if hasattr(self, 'naming_pattern') and temp_pattern:
-                    self.naming_pattern.Text = temp_pattern
-
-                # Set the generated filename to this item's CustomFilename
-                item.CustomFilename = filename
-
-                # Refresh the ListView to show the updated CustomFilename value
-                self.sheets_listview.Items.Refresh()
-
-                self.status_text.Text = "Pattern applied to row"
-
-        except Exception as ex:
-            logger.error("Error opening row naming pattern dialog: {}".format(ex))
-            forms.alert("Error opening row naming pattern dialog:\n{}".format(str(ex)))
 
     def reverse_order_changed(self, sender, e):
         """Handle reverse order checkbox change."""
@@ -3814,7 +3220,9 @@ class ExportManagerWindow(T3WPFWindow):
             # Modeless window: export must run inside API context. If Revit is
             # busy (user mid-command), the event fires once Revit is idle.
             self.status_text.Text = "Export queued — waiting for Revit..."
-            self._run_in_api_context(self.start_export)
+            if not self._run_in_api_context(self.start_export):
+                self._export_running = False
+                self.IsEnabled = True
 
     def build_export_preview(self):
         """Build the export preview list."""
@@ -4132,6 +3540,13 @@ class ExportManagerWindow(T3WPFWindow):
         """Start the export process."""
         total_exported = 0
         try:
+            if not any(getattr(self, name).IsChecked for name in (
+                    'export_pdf', 'export_dwg', 'export_dwf', 'export_dgn',
+                    'export_nwd', 'export_ifc', 'export_img')):
+                self.status_text.Text = "Choose at least one export format"
+                forms.alert("Choose at least one format in Settings before exporting.",
+                            title="No Export Format Selected")
+                return
             self._ensure_titleblock_cache()
 
             # Get selected items based on mode
@@ -4173,14 +3588,9 @@ class ExportManagerWindow(T3WPFWindow):
             self.back_button.IsEnabled = False
             self.status_text.Text = "Exporting..."
 
-            # The Queue rows carry each item's status column, and _overall_total
-            # is read from them. Rebuild if they are missing (Queue tab never
-            # opened) so no item exports without a visible row.
-            if not self.export_items:
-                try:
-                    self.build_export_preview()
-                except Exception as preview_ex:
-                    logger.debug("Could not build export preview: {}".format(preview_ex))
+            # Rebuild for every run: a previous run leaves completed statuses,
+            # and selection or formats may have changed since the last preview.
+            self.build_export_preview()
 
             # Export to each format — overall progress tracked per-sheet via _overall_counter
             total_exported = 0
@@ -4363,18 +3773,18 @@ class ExportManagerWindow(T3WPFWindow):
                     logger.warning("Could not apply export setup '{}': {}".format(
                         selected_setup_name, setup_ex))
                     dwg_options = DWGExportOptions()
-                    # Fallback: Set PropOverrides to ByEntity to match Revit colors
-                    try:
-                        dwg_options.PropOverrides = PropOverrideMode.ByEntity
-                    except:
-                        pass
             else:
                 dwg_options = DWGExportOptions()
-                # No setup selected - ensure colors match Revit by using ByEntity mode
-                try:
-                    dwg_options.PropOverrides = PropOverrideMode.ByEntity
-                except Exception as prop_ex:
-                    logger.debug("Could not set PropOverrides: {}".format(prop_ex))
+
+            # "Match Revit display" (default on): colours, overrides and
+            # linetype scale as the view shows them, whatever the setup says.
+            # A setup on IndexColors + ByLayer paints Revit's black linework in
+            # the layer table's colours (magenta text, orange doors, ...).
+            # Off: the selected setup is used exactly as saved (CAD standard).
+            if self.cad_match_revit_display.IsChecked:
+                applied = apply_revit_display_fidelity(
+                    dwg_options, for_sheets=(self.selection_mode == "sheets"))
+                logger.debug("DWG match Revit display: {}".format(", ".join(applied)))
 
             # Set AutoCAD version (overrides whatever the setup/default specifies)
             dwg_version_index = self.dwg_version.SelectedIndex
@@ -5438,196 +4848,6 @@ class ExportManagerWindow(T3WPFWindow):
             logger.error("Image export failed: {}".format(ex))
             return 0
 
-    def profile_button_clicked(self, sender, e):
-        """Show profile management dialog."""
-        try:
-            from System.Windows import Window, TextBlock, Button, Thickness, VerticalAlignment, HorizontalAlignment
-            from System.Windows.Controls import StackPanel, ListView, Grid, RowDefinition, ColumnDefinition, GridLength, GridUnitType, Border, ScrollViewer, ScrollBarVisibility
-            from System.Windows.Media import SolidColorBrush, Color
-
-            # Create dialog window
-            dialog = Window()
-            dialog.Title = "Profile Management"
-            dialog.Width = 800
-            dialog.Height = 500
-            dialog.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterOwner
-            dialog.Owner = self
-            dialog.ShowInTaskbar = False
-
-            # Create main grid
-            main_grid = Grid()
-            main_grid.Margin = Thickness(20)
-
-            # Define rows
-            row1 = RowDefinition()
-            row1.Height = GridLength(1, GridUnitType.Star)
-            row2 = RowDefinition()
-            row2.Height = GridLength.Auto
-            main_grid.RowDefinitions.Add(row1)
-            main_grid.RowDefinitions.Add(row2)
-
-            # Create content grid for listview and buttons
-            content_grid = Grid()
-            Grid.SetRow(content_grid, 0)
-
-            # Define columns
-            col1 = ColumnDefinition()
-            col1.Width = GridLength(1, GridUnitType.Star)
-            col2 = ColumnDefinition()
-            col2.Width = GridLength(200, GridUnitType.Pixel)
-            content_grid.ColumnDefinitions.Add(col1)
-            content_grid.ColumnDefinitions.Add(col2)
-
-            # Profile ListView
-            profile_list = ListView()
-            profile_list.Margin = Thickness(0, 0, 10, 0)
-            profile_list.ItemsSource = to_items_source(self.profiles)
-            Grid.SetColumn(profile_list, 0)
-
-            # Create custom template for listview items
-            from System.Windows import DataTemplate, FrameworkElementFactory
-            from System.Windows.Controls import TextBlock as WPFTextBlock
-            template = DataTemplate()
-
-            # Stack panel for each item
-            stack_factory = FrameworkElementFactory(StackPanel)
-            stack_factory.SetValue(StackPanel.MarginProperty, Thickness(5))
-
-            # Name TextBlock
-            name_factory = FrameworkElementFactory(WPFTextBlock)
-            name_factory.SetBinding(WPFTextBlock.TextProperty, System.Windows.Data.Binding("Name"))
-            name_factory.SetValue(WPFTextBlock.FontWeightProperty, System.Windows.FontWeights.Bold)
-            name_factory.SetValue(WPFTextBlock.FontSizeProperty, 14.0)
-            stack_factory.AppendChild(name_factory)
-
-            # Description TextBlock
-            desc_factory = FrameworkElementFactory(WPFTextBlock)
-            desc_factory.SetBinding(WPFTextBlock.TextProperty, System.Windows.Data.Binding("Description"))
-            desc_factory.SetValue(WPFTextBlock.FontSizeProperty, 11.0)
-            desc_factory.SetValue(WPFTextBlock.ForegroundProperty, SolidColorBrush(Color.FromRgb(127, 140, 141)))
-            desc_factory.SetValue(WPFTextBlock.MarginProperty, Thickness(0, 2, 0, 0))
-            stack_factory.AppendChild(desc_factory)
-
-            # Date TextBlock
-            date_factory = FrameworkElementFactory(WPFTextBlock)
-            date_factory.SetBinding(WPFTextBlock.TextProperty, System.Windows.Data.Binding("CreatedDate"))
-            date_factory.SetValue(WPFTextBlock.FontSizeProperty, 10.0)
-            date_factory.SetValue(WPFTextBlock.ForegroundProperty, SolidColorBrush(Color.FromRgb(149, 165, 166)))
-            date_factory.SetValue(WPFTextBlock.MarginProperty, Thickness(0, 5, 0, 0))
-            stack_factory.AppendChild(date_factory)
-
-            template.VisualTree = stack_factory
-            profile_list.ItemTemplate = template
-
-            content_grid.Children.Add(profile_list)
-
-            # Buttons panel
-            buttons_panel = StackPanel()
-            buttons_panel.Margin = Thickness(10, 0, 0, 0)
-            Grid.SetColumn(buttons_panel, 1)
-
-            # Save button
-            save_btn = Button()
-            save_btn.Content = "Save Current Settings"
-            save_btn.Height = 32
-            save_btn.Margin = Thickness(0, 0, 0, 8)
-            save_btn.Click += lambda s, ev: (self.save_profile_clicked(s, ev), dialog.Close() if hasattr(self, '_profile_saved') else None)
-            buttons_panel.Children.Add(save_btn)
-
-            # Load button
-            load_btn = Button()
-            load_btn.Content = "Load Profile"
-            load_btn.Height = 32
-            load_btn.Margin = Thickness(0, 0, 0, 8)
-
-            def load_and_close(s, ev):
-                if profile_list.SelectedItem:
-                    self.load_profile_clicked(s, ev)
-                    dialog.Close()
-
-            load_btn.Click += load_and_close
-            buttons_panel.Children.Add(load_btn)
-
-            # Delete button
-            delete_btn = Button()
-            delete_btn.Content = "Delete Profile"
-            delete_btn.Height = 32
-            delete_btn.Margin = Thickness(0, 0, 0, 8)
-
-            def delete_and_refresh(s, ev):
-                self.delete_profile_clicked(s, ev)
-                profile_list.ItemsSource = None
-                profile_list.ItemsSource = to_items_source(self.profiles)
-
-            delete_btn.Click += delete_and_refresh
-            buttons_panel.Children.Add(delete_btn)
-
-            # Separator
-            from System.Windows.Controls import Separator
-            sep = Separator()
-            sep.Margin = Thickness(0, 15, 0, 15)
-            buttons_panel.Children.Add(sep)
-
-            # Import button
-            import_btn = Button()
-            import_btn.Content = "Import from File..."
-            import_btn.Height = 32
-            import_btn.Margin = Thickness(0, 0, 0, 8)
-
-            def import_and_refresh(s, ev):
-                self.import_profile_clicked(s, ev)
-                profile_list.ItemsSource = None
-                profile_list.ItemsSource = to_items_source(self.profiles)
-
-            import_btn.Click += import_and_refresh
-            buttons_panel.Children.Add(import_btn)
-
-            # Export button
-            export_btn = Button()
-            export_btn.Content = "Export to File..."
-            export_btn.Height = 32
-            export_btn.Margin = Thickness(0, 0, 0, 8)
-            export_btn.Click += self.export_profile_clicked
-            buttons_panel.Children.Add(export_btn)
-
-            content_grid.Children.Add(buttons_panel)
-            main_grid.Children.Add(content_grid)
-
-            # Close button at bottom
-            close_button = Button()
-            close_button.Content = "Close"
-            close_button.Width = 100
-            close_button.Height = 32
-            close_button.HorizontalAlignment = HorizontalAlignment.Right
-            close_button.Margin = Thickness(0, 15, 0, 0)
-            close_button.Click += lambda s, ev: dialog.Close()
-            Grid.SetRow(close_button, 1)
-            main_grid.Children.Add(close_button)
-
-            dialog.Content = main_grid
-
-            # Store reference for event handlers
-            self.profiles_listview = profile_list
-
-            # Show dialog
-            dialog.ShowDialog()
-
-        except Exception as ex:
-            logger.error("Error showing profile dialog: {}".format(ex))
-            forms.alert("Error showing profile dialog:\n{}".format(str(ex)))
-
-    def help_button_clicked(self, sender, e):
-        """Show help information."""
-        help_message = ("BatchOut - Batch Export Tool\n\n"
-                        "This tool allows you to batch export sheets and views to multiple formats.\n\n"
-                        "Features:\n"
-                        "• Export to PDF, DWG, DWF, DGN, NWC, IFC, and Image formats\n"
-                        "• Custom naming patterns with parameters\n"
-                        "• Advanced export options\n"
-                        "• Profile management for saving/loading configurations\n"
-                        "• Real-time progress tracking\n\n"
-                        "For more help, please refer to the documentation.")
-        forms.alert(help_message, title="BatchOut Help")
 
     def minimize_button_clicked(self, sender, e):
         """Minimize the window."""
@@ -5644,11 +4864,6 @@ class ExportManagerWindow(T3WPFWindow):
 
     def close_button_clicked(self, sender, e):
         """Close the window."""
-        self.Close()
-
-
-    def cancel_export(self, sender, e):
-        """Cancel and close the window."""
         self.Close()
 
 

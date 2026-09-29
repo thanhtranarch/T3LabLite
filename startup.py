@@ -5,6 +5,8 @@ T3Lab Extension Startup Script
 Runs during pyRevit's OnStartup phase.
 
 Responsibilities:
+  0. Fix pyRevit's PYREVIT_CPYVERSION ("3.12.3" -> "3123") so '#! python3'
+     tools can start at all (startup_fix_cpyversion.py, next to this file).
   1. Register the T3Lab Assistant as a native Revit DockablePane.
   2. Register the right-click context-menu entry (Revit 2025+).
   3. Start the file-based task watcher.
@@ -32,6 +34,18 @@ _LIB_DIR     = os.path.join(_STARTUP_DIR, 'lib')
 for _p in (_STARTUP_DIR, _LIB_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+# ─── FIX: "The input string '3.12.3' was not in a correct format" ──────────────
+# KHÔNG XÓA / DO NOT DELETE — and keep it first. pyRevit < 6.5.0 seeds
+# PYREVIT_CPYVERSION as "3.12.3", then int.Parse()s it on every '#! python3'
+# click, so every CPython tool dies with "Command Failure for External Command".
+# This rewrites it to "3123" before any tool runs; no-op on fixed pyRevit.
+# Details: startup_fix_cpyversion.py (next to this file).
+try:
+    import startup_fix_cpyversion
+    startup_fix_cpyversion.apply()
+except Exception:
+    pass
 
 try:
     import _cpython_bootstrap

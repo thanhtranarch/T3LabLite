@@ -17,6 +17,15 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+- **Every CPython tool failing with "The input string '3.12.3' was not in a
+  correct format"** (Command Failure for External Command). pyRevit builds
+  before 6.5.0 seed `PYREVIT_CPYVERSION` as the dotted string `3.12.3`, then
+  `int.Parse()` it on every `#! python3` click (pyRevit bug #3284).
+  `startup.py` now rewrites it to the integer engine version (`3123`) first
+  thing on every Revit start and pyRevit Reload, via the new
+  `startup_fix_cpyversion.py` next to it. No-op on pyRevit 6.5.0+.
+
 ## [1.4.2] - 2026-09-29
 
 ### Added

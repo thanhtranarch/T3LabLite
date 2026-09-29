@@ -17,6 +17,19 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-09-29
+
+### Added
+- **Family Transfer (`FamiTransfer`)**: New tool on the Modeling & Datum panel to copy Revit families and selected types between open projects and loaded link models. Features quick search, category filtering, source/target document selectors, conflict resolution (overwrite, rename, skip), and single-transaction undo.
+- **Make Pattern**: Vector hatch studio (`patmaker`) for interactive authoring and export of Revit fill pattern (`.pat`) files with tiling controls and real-time preview.
+- **Anonymous Telemetry**: Privacy-preserving, non-blocking asynchronous telemetry service (`telemetry_service.py`) for tracking session start, ribbon tool clicks, and MCP invocations with machine/user hash anonymization and opt-out support via settings.
+- **Panel Theme Styling**: Added consistent background accent color (`#2CE07B00`) across all six T3Lab ribbon panel bundle configurations.
+
+### Changed
+- **Revit 2025+ Compatibility & Stability**: Added `pyrevit_patches.py` for safe pyRevit reload handling, .NET disposal wrappers, and enhanced API compatibility for Revit 2025/2026.
+- **MCP Bridge Health**: Added health checks and auto-recovery for the MCP server bridge across Revit session restarts.
+- **Dialog Error Handling**: Enhanced `ErrorGuard` protection and UI reliability across CropSync, DatumSync, and management dialogs.
+
 ## [1.4.1] - 2026-09-27
 
 ### Added

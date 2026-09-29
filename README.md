@@ -116,6 +116,9 @@ Assign parameter values to contained elements from their container, or aggregate
 #### DatumSync
 Synchronize grid lines, levels, and reference planes across views. Align 2D/3D extents, datum bubbles, and visibility between a source view and target views to maintain clean documentation.
 
+#### Family Transfer
+Transfer families and selected types between open project documents or loaded links with category filtering, conflict resolution (overwrite, rename, skip), and single-transaction undo.
+
 #### Property Line
 Create property lines from Lightbox parcel survey data. Supports metes-and-bounds descriptions and coordinate-based input.
 

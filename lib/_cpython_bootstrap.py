@@ -387,55 +387,6 @@ def init_cpython_paths():
         except Exception:
             pass
 
-    # Record ribbon tool execution telemetry
-    try:
-        _track_caller_script()
-    except Exception:
-        pass
-
-
-def _track_caller_script():
-    """Detect if caller is a T3Lab ribbon tool and log usage telemetry."""
-    try:
-        frame = sys._getframe(1)
-    except Exception:
-        return
-
-    caller_file = ''
-    while frame:
-        f_name = getattr(frame.f_code, 'co_filename', '') or ''
-        if f_name.endswith('script.py') and 'T3Lab.tab' in f_name:
-            caller_file = f_name
-            break
-        frame = frame.f_back
-
-    if not caller_file:
-        return
-
-    try:
-        norm = caller_file.replace('/', '\\')
-        parts = norm.split('\\')
-        tool_name = None
-        panel_name = None
-        for part in parts:
-            if part.endswith('.panel'):
-                panel_name = part[:-6]
-            if part.endswith(('.pushbutton', '.smartbutton', '.linkbutton')):
-                tool_name = part.rsplit('.', 1)[0]
-
-        if not tool_name:
-            tool_name = os.path.basename(os.path.dirname(caller_file))
-
-        from Services.telemetry_service import TelemetryService
-        TelemetryService.record_tool_usage(
-            tool_name=tool_name,
-            tool_type='ribbon',
-            panel=panel_name,
-            purpose=u"Người dùng chạy công cụ {} trên Revit Ribbon".format(tool_name)
-        )
-    except Exception:
-        pass
-
 
 class _NullStream(object):
     """Stand-in for a stdout/stderr that has no write() (pyRevit ScriptIO)."""
@@ -1013,8 +964,20 @@ def enable_safe_engine_shutdown():
 
     `RuntimeData.FormatterType` exists precisely to replace BinaryFormatter:
     Stash does `Activator.CreateInstance(FormatterType)` and serializes through
-    it. Pointing it at a no-op formatter discards the stash, which is what a
-    reload wants anyway - fresh modules, not restored engine state.
+    it. Pointing it at a no-op formatter lets Shutdown - and so the reload -
+    complete.
+
+    CORRECTION (2026-09-29, Revit 2026.5 journal): the stash is NOT discarded.
+    pythonnet still stores an empty `sys.clr_data` capsule (the interpreter is
+    never finalized), so the NEXT Initialize runs RestoreRuntimeData, gets None
+    from Deserialize and dies with NullReferenceException in
+    RestoreRuntimeDataImpl. The runtime is left half-initialized, and every
+    later click fails in CPythonEngine.Start -> Runtime.set_PythonDLL with
+    "This property must be set before runtime is initialized" until Revit
+    restarts. This function only moves the failure from the reload to the next
+    click; the real fix is not shutting CPython down on reload at all
+    (lib/pyrevit_patches.py, opt-in because it edits pyRevit's install).
+    startup.py detects the stuck state and asks for a restart.
 
     Note the earlier version of this function imported `Python.Runtime.NoopFormatter`,
     which does NOT exist in pyRevit's pythonnet build (verified 2026-09-04

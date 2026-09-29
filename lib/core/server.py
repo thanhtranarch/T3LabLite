@@ -271,6 +271,44 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+    def do_GET(self):
+        """Handle GET requests.
+
+        Never called by name — BaseHTTPRequestHandler dispatches on
+        'do_' + HTTP verb — so a reference count reports it as dead code. It
+        is not: the dead-code sweep af2a9ab (2026-09-26) deleted it, GET
+        /health started answering 501, and the bridge (_port_alive) treated
+        every Revit window started since as dead — Claude could only reach
+        the one window still running the pre-sweep build. The one-port-per-
+        process guard (MCPService._local_server_ports) probes /health too.
+        """
+        path = urlparse(self.path).path
+
+        if path == '/health':
+            # pid + port let external diagnostics attribute a listener to its
+            # Revit process — the same pid answering on SEVERAL ports in the
+            # range means orphaned duplicate servers (broken singleton
+            # anchor), not several Revit windows.
+            self._send_json({'status': 'ok', 'pid': os.getpid(),
+                             'port': self.server.server_port})
+
+        elif path == '/':
+            self._send_json({
+                'name': 'T3LabAI MCP Server',
+                'version': '1.0.0',
+                'protocol': 'mcp',
+                'status': 'running'
+            })
+
+        elif path in ('/v1/models', '/models'):
+            # Tolerate OpenAI-compatible clients that probe for a model list,
+            # so they don't repeatedly hit an "unexpected endpoint" 404.
+            self._send_json({'object': 'list', 'data': []})
+
+        else:
+            self._send_json({'error': 'Not found'}, 404)
+
+
     def do_POST(self):
         """Handle POST requests (MCP messages)"""
         parsed = urlparse(self.path)
@@ -2580,16 +2618,9 @@ class T3LabAIServer(object):
             }
 
         # Execute tool and return result
-        t_start = time.time()
         try:
             result = self._execute_tool(tool_name, arguments)
             self._teach_record_step(tool_name, arguments, result)
-            try:
-                from Services.telemetry_service import TelemetryService
-                duration_ms = int((time.time() - t_start) * 1000)
-                TelemetryService.record_mcp_call(tool_name, arguments, result, duration_ms)
-            except Exception:
-                pass
             return {
                 'content': [{
                     'type': 'text',
@@ -2603,12 +2634,6 @@ class T3LabAIServer(object):
         except Exception as e:
             self._teach_record_step(
                 tool_name, arguments, {'error': str(e), 'tool': tool_name})
-            try:
-                from Services.telemetry_service import TelemetryService
-                duration_ms = int((time.time() - t_start) * 1000)
-                TelemetryService.record_mcp_call(tool_name, arguments, {'error': str(e)}, duration_ms)
-            except Exception:
-                pass
             return {
                 'content': [{
                     'type': 'text',
@@ -9967,7 +9992,10 @@ class T3LabAIServer(object):
 
         # ── create_project_parameter ─────────────────────────────────────────
         elif tool_name == 'create_project_parameter':
-            from Autodesk.Revit.DB import (Transaction, BuiltInParameterGroup,
+            # BuiltInParameterGroup is gone on Revit 2025+: importing it here
+            # made this tool fail before it started. Only the legacy fallback
+            # below imports it.
+            from Autodesk.Revit.DB import (Transaction,
                                            ExternalDefinitionCreationOptions)
             import os as _os
             try:
@@ -10046,6 +10074,7 @@ class T3LabAIServer(object):
                         from Autodesk.Revit.DB import GroupTypeId
                         group_param = GroupTypeId.Data
                     except Exception:
+                        from Autodesk.Revit.DB import BuiltInParameterGroup
                         group_param = BuiltInParameterGroup.PG_DATA
 
                     try:
@@ -10053,6 +10082,7 @@ class T3LabAIServer(object):
                         if not ok:
                             ok = doc.ParameterBindings.ReInsert(ext_def, binding, group_param)
                     except Exception:
+                        from Autodesk.Revit.DB import BuiltInParameterGroup
                         ok = doc.ParameterBindings.Insert(ext_def, binding, BuiltInParameterGroup.PG_DATA)
                         if not ok:
                             ok = doc.ParameterBindings.ReInsert(ext_def, binding, BuiltInParameterGroup.PG_DATA)

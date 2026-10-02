@@ -359,13 +359,10 @@ except Exception:
     # Never crash Revit startup — Check Update on the ribbon still works.
     pass
 
-# ─── Usage tracking: session start (Lite only, code in tracking/) ─────────────
+# ─── Usage tracking: session start (Lite only, code in lib/tracking/) ─────────
 # lite_guard/manifest.json fails the commit if this goes missing.
 try:
-    _TRACKING_DIR = os.path.join(_STARTUP_DIR, 'tracking')
-    if _TRACKING_DIR not in sys.path:
-        sys.path.append(_TRACKING_DIR)
-    from tracking_hooks import track_session_start
+    from tracking import track_session_start
     track_session_start()
 except Exception:
     pass

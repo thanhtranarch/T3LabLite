@@ -387,16 +387,12 @@ def init_cpython_paths():
         except Exception:
             pass
 
-    # Usage tracking (Lite only, code in <extension>/tracking/). Every
-    # T3Lab.tab script.py calls init_cpython_paths(), so this is the one place
-    # that sees every ribbon click. 5751bd2 dropped it once when copying from
+    # Usage tracking (Lite only, code in lib/tracking/). Every T3Lab.tab
+    # script.py calls init_cpython_paths(), so this is the one place that
+    # sees every ribbon click. 5751bd2 dropped it once when copying from
     # t3lab_dev -- lite_guard/manifest.json now fails the commit if it goes.
     try:
-        _tracking_dir = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), 'tracking')
-        if _tracking_dir not in sys.path:
-            sys.path.append(_tracking_dir)
-        from tracking_hooks import track_ribbon_click
+        from tracking import track_ribbon_click
         track_ribbon_click()
     except Exception:
         pass

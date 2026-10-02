@@ -9,10 +9,6 @@ Usage tracking entry points -- the only functions the rest of T3Lab calls.
 
 None of them ever raises or blocks: TelemetryService sends on a daemon thread.
 
-This folder sits next to lib/, not inside it, so replacing lib/ with the
-t3lab_dev copy cannot touch it. Each call site puts this folder on sys.path
-itself; module names carry a tracking_ prefix so nothing else is shadowed.
-
 Lite only. The call sites live in files shared with t3lab_dev, so a copy from
 dev can drop them; lite_guard/manifest.json fails the commit when that happens.
 """
@@ -24,7 +20,7 @@ import time
 
 
 def _service():
-    from tracking_service import TelemetryService
+    from tracking.service import TelemetryService
     return TelemetryService
 
 

@@ -17,9 +17,9 @@ rows for a whole release.
 
 ## Where usage tracking lives
 
-All tracking code is in `tracking/` at the repo root, next to `lib/` (Lite
-only, listed under `lite_only`). See `tracking/README.md`. Only three small
-call blocks sit in files shared with t3lab_dev, and `markers` checks each one:
+All tracking code is in `lib/tracking/` (Lite only, listed under `lite_only`).
+See `lib/tracking/README.md`. Only three one-line calls sit in files shared
+with t3lab_dev, and `markers` checks each one:
 
 | File | Call | Records |
 |---|---|---|
@@ -49,8 +49,10 @@ python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI "T3Lab.tab/Modeling & Da
 - `KEEP`: only Lite has it. Left as is.
 - `SKIP`: listed under `lite_only` in `manifest.json`.
 
-If you still copy in Explorer: copy and overwrite, never delete the folder
-first, then run `python lite_guard/guard.py` before you commit.
+If you copy in Explorer: replace only the sub-folders of `lib/` you are
+updating (delete `lib/GUI`, paste the dev `lib/GUI`), never `lib/` as a whole
+and never `lib/tracking/`. Lite-only files inside a replaced sub-folder are
+lost too, so run `python lite_guard/guard.py` before you commit.
 
 ## Checks
 
@@ -59,7 +61,7 @@ python lite_guard/guard.py            # working tree
 python lite_guard/guard.py --staged   # what the next commit records
 ```
 
-- `markers`: the files in `tracking/` and the three calls above are
+- `markers`: the files in `lib/tracking/` and the three calls above are
   still there, and `GITHUB_REPO` in `lib/core/updater.py` still points at
   T3LabLite.
 - `tools`: every ribbon folder in `manifest.json` still exists, and every

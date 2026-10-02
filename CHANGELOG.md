@@ -17,6 +17,8 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [1.4.3] - 2026-10-02
+
 ### Fixed
 - **Every CPython tool failing with "The input string '3.12.3' was not in a
   correct format"** (Command Failure for External Command). pyRevit builds
@@ -25,12 +27,13 @@ Releasing a new version:
   `startup.py` now rewrites it to the integer engine version (`3123`) first
   thing on every Revit start and pyRevit Reload, via the new
   `startup_fix_cpyversion.py` next to it. No-op on pyRevit 6.5.0+.
-- **Usage dashboard getting no ribbon or MCP records.** The 1.4.2 release
-  (commit `5751bd2`) dropped the telemetry calls from
+- **Anonymous usage statistics for ribbon tools and MCP calls.** 1.4.2
+  (commit `5751bd2`) accidentally dropped these calls from
   `_cpython_bootstrap.init_cpython_paths()` and `core/server.py`, so only
-  `session_start` was sent. Both are back; ribbon clicks are also found when
-  pyRevit runs the script from a string (via the script's `__file__`), and
-  IronPython falls back to .NET `WebClient` when `urllib2` HTTPS fails.
+  Revit start-ups were counted. Both are back; ribbon clicks are also found
+  when pyRevit runs the script from a string (via the script's `__file__`),
+  and IronPython falls back to .NET `WebClient` when `urllib2` HTTPS fails.
+  Opt-out is unchanged: `"tracking_enabled": false` in settings.
 
 ## [1.4.2] - 2026-09-29
 

@@ -55,6 +55,11 @@ COMPONENT_EXTS = CONTAINER_EXTS + SCRIPT_EXTS + BUNDLE_EXTS + (
 
 SKIP_DIRS = ('.git', '__pycache__')
 
+# Tool folders hold no tracking code: a ribbon click is recorded because every
+# T3Lab.tab script.py calls _cpython_bootstrap.init_cpython_paths(). A tool
+# folder replaced from t3lab_dev must keep that call.
+RIBBON_TRACKING_RE = re.compile(r'init_cpython_paths\(')
+
 
 # ── file sources ─────────────────────────────────────────────────────────────
 
@@ -257,6 +262,12 @@ def check_tools(tree, manifest, report):
         if folder.endswith(SCRIPT_EXTS):
             if not any(c.startswith('script.') for c in children):
                 report.error('tools', 'button has no script.py: {}'.format(folder))
+            elif 'script.py' in children:
+                text = _text(tree.read(folder + '/script.py'))
+                if not RIBBON_TRACKING_RE.search(text):
+                    report.error('tools', '{}/script.py does not call '
+                                          '_cpython_bootstrap.init_cpython_paths(), '
+                                          'so clicks on it are not tracked'.format(folder))
         elif folder.endswith(BUNDLE_EXTS):
             if 'bundle.yaml' not in children:
                 report.error('tools', 'button has no bundle.yaml: {}'.format(folder))

@@ -84,6 +84,11 @@ def _block_reasons(path, lite_raw, dev_raw, markers):
             reasons.append('drops ' + marker['why'])
 
     folder, name = path.rsplit('/', 1) if '/' in path else ('', path)
+    if (name == 'script.py' and folder.endswith(guard.SCRIPT_EXTS) and
+            guard.RIBBON_TRACKING_RE.search(lite_text or '') and
+            not guard.RIBBON_TRACKING_RE.search(dev_text or '')):
+        reasons.append('drops ribbon click tracking (no init_cpython_paths() call)')
+
     if name == 'bundle.yaml' and folder.endswith(guard.CONTAINER_EXTS):
         lite_layout = guard.read_layout(lite_text) or []
         dev_layout = guard.read_layout(dev_text) or []

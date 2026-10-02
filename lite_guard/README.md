@@ -51,7 +51,9 @@ python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI "T3Lab.tab/Modeling & Da
 
 If you copy in Explorer: replace only the sub-folders of `lib/` you are
 updating (delete `lib/GUI`, paste the dev `lib/GUI`), never `lib/` as a whole
-and never `lib/tracking/`. Lite-only files inside a replaced sub-folder are
+and never `lib/tracking/`. Replacing a whole tool folder
+(`T3Lab.tab/.../X.pushbutton`) is fine as long as the dev `script.py` still
+calls `_cpython_bootstrap.init_cpython_paths()`. Lite-only files inside a replaced sub-folder are
 lost too, so run `python lite_guard/guard.py` before you commit.
 
 ## Checks
@@ -64,8 +66,10 @@ python lite_guard/guard.py --staged   # what the next commit records
 - `markers`: the files in `lib/tracking/` and the three calls above are
   still there, and `GITHUB_REPO` in `lib/core/updater.py` still points at
   T3LabLite.
-- `tools`: every ribbon folder in `manifest.json` still exists, and every
-  button has its `script.py` / `bundle.yaml`.
+- `tools`: every ribbon folder in `manifest.json` still exists, every
+  button has its `script.py` / `bundle.yaml`, and every `script.py` calls
+  `_cpython_bootstrap.init_cpython_paths()` (that call is what tracks the
+  click; tool folders hold no tracking code of their own).
 - `imports`: ribbon scripts and `lib/` modules only import `lib/` modules
   that exist.
 - `xaml`: every `.xaml` file named in Python code exists.

@@ -387,62 +387,13 @@ def init_cpython_paths():
         except Exception:
             pass
 
-    # Ribbon usage for the T3Lab usage dashboard. Every T3Lab.tab script.py
-    # calls init_cpython_paths(), so this is the one place that sees all
-    # button clicks. 5751bd2 removed it once with no mention and the
-    # dashboard silently stopped getting ribbon rows -- keep it.
+    # Usage tracking (Lite only, code in lib/tracking/). Every T3Lab.tab
+    # script.py calls init_cpython_paths(), so this is the one place that
+    # sees every ribbon click. 5751bd2 dropped it once when copying from
+    # t3lab_dev -- lite_guard/manifest.json now fails the commit if it goes.
     try:
-        _track_caller_script()
-    except Exception:
-        pass
-
-
-def _find_caller_script():
-    """Path of the T3Lab.tab script.py up the call stack, or ''."""
-    try:
-        frame = sys._getframe(1)
-    except Exception:
-        return ''
-
-    while frame:
-        # pyRevit may compile the script from a string ("<string>"), so also
-        # look at the __file__ it sets in the script's globals.
-        candidates = (getattr(frame.f_code, 'co_filename', '') or '',
-                      frame.f_globals.get('__file__') or '')
-        for f_name in candidates:
-            if f_name.endswith('script.py') and 'T3Lab.tab' in f_name:
-                return f_name
-        frame = frame.f_back
-    return ''
-
-
-def _track_caller_script():
-    """Detect if caller is a T3Lab ribbon tool and log usage telemetry."""
-    caller_file = _find_caller_script()
-    if not caller_file:
-        return
-
-    try:
-        norm = caller_file.replace('/', '\\')
-        parts = norm.split('\\')
-        tool_name = None
-        panel_name = None
-        for part in parts:
-            if part.endswith('.panel'):
-                panel_name = part[:-6]
-            if part.endswith(('.pushbutton', '.smartbutton', '.linkbutton')):
-                tool_name = part.rsplit('.', 1)[0]
-
-        if not tool_name:
-            tool_name = os.path.basename(os.path.dirname(caller_file))
-
-        from Services.telemetry_service import TelemetryService
-        TelemetryService.record_tool_usage(
-            tool_name=tool_name,
-            tool_type='ribbon',
-            panel=panel_name,
-            purpose=u"Người dùng chạy công cụ {} trên Revit Ribbon".format(tool_name)
-        )
+        from tracking import track_ribbon_click
+        track_ribbon_click()
     except Exception:
         pass
 

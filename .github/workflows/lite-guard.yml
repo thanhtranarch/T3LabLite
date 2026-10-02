@@ -1,0 +1,16 @@
+# Fails a push or pull request that loses a ribbon tool or the usage tracking,
+# e.g. after copying folders over from t3lab_dev. See lite_guard/guard.py.
+name: Lite guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tools and tracking hooks
+        run: python3 lite_guard/guard.py

@@ -15,7 +15,7 @@ Privacy & Reliability:
   - Fail-safe: all network exceptions are caught and silenced.
   - Opt-out: set "tracking_enabled": false in %APPDATA%/T3LabAI/mcp_paths.json.
 
-Lite only. The rest of the extension calls it through tracking/hooks.py.
+Lite only. The rest of the extension calls it through tracking_hooks.py.
 """
 
 from __future__ import unicode_literals

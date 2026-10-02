@@ -2,39 +2,44 @@
   "_doc": "What lite_guard protects. markers: Lite-only code that must stay in a file shared with t3lab_dev (regex, re.M). lite_only: paths sync_from_dev.py never copies. ignore_imports: broken imports that were already there, so they do not fail every check. tools: every ribbon folder that ships -- refresh with `python lite_guard/guard.py --update` after adding or removing a tool on purpose.",
   "markers": [
     {
-      "file": "lib/tracking/service.py",
+      "file": "tracking/tracking_service.py",
       "pattern": "^\\s+def record_tool_usage\\(",
       "why": "usage tracking service (ribbon + startup rows)"
     },
     {
-      "file": "lib/tracking/service.py",
+      "file": "tracking/tracking_service.py",
       "pattern": "^\\s+def record_mcp_call\\(",
       "why": "usage tracking service (MCP rows)"
     },
     {
-      "file": "lib/tracking/hooks.py",
+      "file": "tracking/tracking_hooks.py",
       "pattern": "^def track_session_start\\(",
       "why": "session start tracking entry point"
     },
     {
-      "file": "lib/tracking/hooks.py",
+      "file": "tracking/tracking_hooks.py",
       "pattern": "^def track_ribbon_click\\(",
       "why": "ribbon click tracking entry point"
     },
     {
-      "file": "lib/tracking/hooks.py",
+      "file": "tracking/tracking_hooks.py",
       "pattern": "^def track_mcp_call\\(",
       "why": "MCP tool call tracking entry point"
     },
     {
-      "file": "lib/tracking/__init__.py",
-      "pattern": "^from tracking\\.hooks import",
-      "why": "`from tracking import track_...` at the call sites needs these re-exports"
+      "file": "startup.py",
+      "pattern": "^\\s+from tracking_hooks import track_session_start",
+      "why": "startup.py must put tracking/ on sys.path and import track_session_start"
     },
     {
       "file": "startup.py",
       "pattern": "^\\s+track_session_start\\(\\)",
       "why": "startup.py must call track_session_start() on every Revit start"
+    },
+    {
+      "file": "lib/_cpython_bootstrap.py",
+      "pattern": "^\\s+from tracking_hooks import track_ribbon_click",
+      "why": "init_cpython_paths() must put tracking/ on sys.path and import track_ribbon_click"
     },
     {
       "file": "lib/_cpython_bootstrap.py",
@@ -48,8 +53,13 @@
     },
     {
       "file": "lib/core/server.py",
+      "pattern": "^\\s+from tracking_hooks import track_mcp_call",
+      "why": "_record_mcp_telemetry() must put tracking/ on sys.path and import track_mcp_call"
+    },
+    {
+      "file": "lib/core/server.py",
       "pattern": "^\\s+track_mcp_call\\(",
-      "why": "_record_mcp_telemetry() must call tracking.track_mcp_call()"
+      "why": "_record_mcp_telemetry() must call track_mcp_call()"
     },
     {
       "file": "lib/core/server.py",
@@ -69,8 +79,8 @@
     "CHANGELOG.md",
     "README.md",
     "extension.json",
-    "lib/tracking",
     "lite_guard",
+    "tracking",
     "version.txt"
   ],
   "ignore_imports": [

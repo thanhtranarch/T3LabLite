@@ -9,6 +9,10 @@ Usage tracking entry points -- the only functions the rest of T3Lab calls.
 
 None of them ever raises or blocks: TelemetryService sends on a daemon thread.
 
+This folder sits next to lib/, not inside it, so replacing lib/ with the
+t3lab_dev copy cannot touch it. Each call site puts this folder on sys.path
+itself; module names carry a tracking_ prefix so nothing else is shadowed.
+
 Lite only. The call sites live in files shared with t3lab_dev, so a copy from
 dev can drop them; lite_guard/manifest.json fails the commit when that happens.
 """
@@ -20,7 +24,7 @@ import time
 
 
 def _service():
-    from tracking.service import TelemetryService
+    from tracking_service import TelemetryService
     return TelemetryService
 
 
@@ -36,12 +40,21 @@ def track_session_start():
         pass
 
 
+# init_cpython_paths() runs twice per click: once when script.py imports
+# _cpython_bootstrap (it calls itself at module level) and once when the
+# script calls it. Both runs see the same script globals, so the first one
+# stamps them and the second one, a moment later, is skipped. The time limit
+# keeps a later click counted even if pyRevit reuses the globals.
+_CLICK_STAMP = '__t3lab_tracked_at__'
+_SAME_CLICK_SECONDS = 5.0
+
+
 def find_caller_script():
-    """Path of the T3Lab.tab script.py up the call stack, or ''."""
+    """(path, globals) of the T3Lab.tab script.py up the call stack, or ('', None)."""
     try:
         frame = sys._getframe(1)
     except Exception:
-        return ''
+        return '', None
 
     while frame:
         # pyRevit may compile the script from a string ("<string>"), so also
@@ -50,9 +63,20 @@ def find_caller_script():
                       frame.f_globals.get('__file__') or '')
         for f_name in candidates:
             if f_name.endswith('script.py') and 'T3Lab.tab' in f_name:
-                return f_name
+                return f_name, frame.f_globals
         frame = frame.f_back
-    return ''
+    return '', None
+
+
+def _already_tracked(script_globals):
+    """True when this script run already sent its ribbon row."""
+    now = time.time()
+    try:
+        last = script_globals.get(_CLICK_STAMP)
+        script_globals[_CLICK_STAMP] = now
+    except Exception:
+        return False
+    return last is not None and now - last < _SAME_CLICK_SECONDS
 
 
 def track_ribbon_click():
@@ -61,8 +85,8 @@ def track_ribbon_click():
     Does nothing when the caller is not a T3Lab.tab script (tests, MCP code).
     """
     try:
-        caller_file = find_caller_script()
-        if not caller_file:
+        caller_file, script_globals = find_caller_script()
+        if not caller_file or _already_tracked(script_globals):
             return
 
         parts = caller_file.replace('/', '\\').split('\\')

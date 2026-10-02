@@ -85,14 +85,18 @@ def _set_process_anchor(inst):
 
 
 def _record_mcp_telemetry(tool_name, arguments, result, t_start):
-    """Usage tracking for one MCP tool call (Lite only, code in lib/tracking/).
+    """Usage tracking for one MCP tool call (Lite only, code in <extension>/tracking/).
 
     5751bd2 dropped the calls in _handle_tool_call once when copying from
     t3lab_dev -- lite_guard/manifest.json now fails the commit if this helper
     or either call to it goes missing.
     """
     try:
-        from tracking import track_mcp_call
+        tracking_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), 'tracking')
+        if tracking_dir not in sys.path:
+            sys.path.append(tracking_dir)
+        from tracking_hooks import track_mcp_call
         track_mcp_call(tool_name, arguments, result, t_start)
     except Exception:
         pass

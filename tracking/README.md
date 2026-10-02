@@ -1,21 +1,25 @@
-# lib/tracking -- usage tracking (Lite only)
+# tracking -- usage tracking (Lite only)
 
 All the code that feeds the T3Lab Space usage dashboard
 (`https://t3lab.space/api/revit/tracking`) lives here.
 
 **t3lab_dev has no copy of this folder.** Do not delete it, and do not replace
-it from dev. `lite_guard/sync_from_dev.py` never copies into it, and
-`lite_guard/guard.py` fails the commit if a file here goes missing.
+it from dev. It sits next to `lib/`, not inside it, so replacing `lib/` with
+the dev copy does not touch it. `lite_guard/sync_from_dev.py` never copies into
+it, and `lite_guard/guard.py` fails the commit if a file here goes missing.
 
 | File | What it does |
 |---|---|
-| `hooks.py` | The three entry points below. They never raise and never block. |
-| `service.py` | `TelemetryService`: builds the payload, anonymous user hash, sends it on a background thread. |
-| `__init__.py` | Re-exports the entry points, so callers write `from tracking import track_...`. |
+| `tracking_hooks.py` | The three entry points below. They never raise and never block. |
+| `tracking_service.py` | `TelemetryService`: builds the payload, anonymous user hash, sends it on a background thread. |
+
+pyRevit only puts `lib/` on `sys.path`, so each call site adds this folder to
+`sys.path` first. The modules carry a `tracking_` prefix so that adding the
+folder cannot shadow any other module.
 
 ## Call sites (files shared with t3lab_dev)
 
-Only these one-line calls live outside this folder. A copy from dev can still
+Only these small blocks live outside this folder. A copy from dev can still
 drop them, so `lite_guard/manifest.json` checks each one.
 
 | Entry point | Called from | Records |
@@ -24,8 +28,9 @@ drop them, so `lite_guard/manifest.json` checks each one.
 | `track_ribbon_click()` | `lib/_cpython_bootstrap.py`, end of `init_cpython_paths()` | Every T3Lab ribbon button click |
 | `track_mcp_call(...)` | `lib/core/server.py`, `_record_mcp_telemetry()` in `_handle_tool_call()` | Every MCP tool call, success and error |
 
-If a dev copy overwrites one of those files, put the call back, wrapped in
-`try: ... except Exception: pass` as it is now.
+If a dev copy overwrites one of those files, put the block back as it is now:
+add `<extension>/tracking` to `sys.path`, import from `tracking_hooks`, call,
+all inside `try: ... except Exception: pass`.
 
 ## Settings
 

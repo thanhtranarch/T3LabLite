@@ -25,6 +25,12 @@ Releasing a new version:
   `startup.py` now rewrites it to the integer engine version (`3123`) first
   thing on every Revit start and pyRevit Reload, via the new
   `startup_fix_cpyversion.py` next to it. No-op on pyRevit 6.5.0+.
+- **Usage dashboard getting no ribbon or MCP records.** The 1.4.2 release
+  (commit `5751bd2`) dropped the telemetry calls from
+  `_cpython_bootstrap.init_cpython_paths()` and `core/server.py`, so only
+  `session_start` was sent. Both are back; ribbon clicks are also found when
+  pyRevit runs the script from a string (via the script's `__file__`), and
+  IronPython falls back to .NET `WebClient` when `urllib2` HTTPS fails.
 
 ## [1.4.2] - 2026-09-29
 

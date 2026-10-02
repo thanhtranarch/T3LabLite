@@ -83,6 +83,22 @@ def _set_process_anchor(inst):
         pass
     setattr(sys, _PROCESS_SINGLETON_KEY, inst)
 
+
+def _record_mcp_telemetry(tool_name, arguments, result, t_start):
+    """Send one MCP tool call to the T3Lab usage dashboard (never raises).
+
+    The call in _handle_tool_call was lost once already (5751bd2 dropped it
+    with no mention), and the dashboard silently stopped getting MCP rows --
+    keep it in this one helper.
+    """
+    try:
+        from Services.telemetry_service import TelemetryService
+        duration_ms = int((time.time() - t_start) * 1000)
+        TelemetryService.record_mcp_call(tool_name, arguments, result, duration_ms)
+    except Exception:
+        pass
+
+
 from Snippets._compat import eid_value, make_eid, net_list
 try:
     from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -2618,9 +2634,11 @@ class T3LabAIServer(object):
             }
 
         # Execute tool and return result
+        t_start = time.time()
         try:
             result = self._execute_tool(tool_name, arguments)
             self._teach_record_step(tool_name, arguments, result)
+            _record_mcp_telemetry(tool_name, arguments, result, t_start)
             return {
                 'content': [{
                     'type': 'text',
@@ -2634,6 +2652,7 @@ class T3LabAIServer(object):
         except Exception as e:
             self._teach_record_step(
                 tool_name, arguments, {'error': str(e), 'tool': tool_name})
+            _record_mcp_telemetry(tool_name, arguments, {'error': str(e)}, t_start)
             return {
                 'content': [{
                     'type': 'text',

@@ -269,13 +269,20 @@ class TelemetryService(object):
                 url = cls.get_tracking_url()
                 json_data = json.dumps(payload).encode("utf-8")
 
+                sent = False
                 if urlopen is not None and Request is not None:
-                    req = Request(url, data=json_data, headers={
-                        "Content-Type": "application/json",
-                        "User-Agent": "T3Lab-Lite-Telemetry/1.0",
-                    })
-                    urlopen(req, timeout=3.5)
-                else:
+                    try:
+                        req = Request(url, data=json_data, headers={
+                            "Content-Type": "application/json",
+                            "User-Agent": "T3Lab-Lite-Telemetry/1.0",
+                        })
+                        urlopen(req, timeout=3.5)
+                        sent = True
+                    except Exception:
+                        # IronPython's urllib2 HTTPS can fail where .NET works
+                        if sys.platform != "cli":
+                            raise
+                if not sent:
                     # .NET WebClient fallback for IronPython
                     import clr
                     clr.AddReference("System")

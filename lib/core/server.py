@@ -89,7 +89,8 @@ def _record_mcp_telemetry(tool_name, arguments, result, t_start):
 
     The call in _handle_tool_call was lost once already (5751bd2 dropped it
     with no mention), and the dashboard silently stopped getting MCP rows --
-    keep it in this one helper.
+    keep it in this one helper. lite_guard/manifest.json fails the commit if
+    the helper or either call to it goes missing.
     """
     try:
         from Services.telemetry_service import TelemetryService

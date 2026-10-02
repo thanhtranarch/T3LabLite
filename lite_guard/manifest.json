@@ -1,0 +1,119 @@
+{
+  "_doc": "What lite_guard protects. markers: Lite-only code that must stay in a file shared with t3lab_dev (regex, re.M). lite_only: paths sync_from_dev.py never copies. ignore_imports: broken imports that were already there, so they do not fail every check. tools: every ribbon folder that ships -- refresh with `python lite_guard/guard.py --update` after adding or removing a tool on purpose.",
+  "markers": [
+    {
+      "file": "lib/Services/telemetry_service.py",
+      "pattern": "^\\s+def record_tool_usage\\(",
+      "why": "usage tracking service (ribbon + startup rows)"
+    },
+    {
+      "file": "lib/Services/telemetry_service.py",
+      "pattern": "^\\s+def record_mcp_call\\(",
+      "why": "usage tracking service (MCP rows)"
+    },
+    {
+      "file": "lib/_cpython_bootstrap.py",
+      "pattern": "^def _track_caller_script\\(",
+      "why": "ribbon click tracking helper"
+    },
+    {
+      "file": "lib/_cpython_bootstrap.py",
+      "pattern": "^\\s+_track_caller_script\\(\\)",
+      "why": "init_cpython_paths() must call _track_caller_script(), or no ribbon clicks reach the dashboard"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^def _record_mcp_telemetry\\(",
+      "why": "MCP tool call tracking helper"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^\\s+_record_mcp_telemetry\\(tool_name",
+      "min_count": 2,
+      "why": "_handle_tool_call() must record MCP calls on both the success and the error path"
+    },
+    {
+      "file": "startup.py",
+      "pattern": "tool_name=['\"]session_start['\"]",
+      "why": "session_start tracking on every Revit start"
+    },
+    {
+      "file": "lib/core/updater.py",
+      "pattern": "^GITHUB_REPO\\s*=\\s*['\"]thanhtranarch/T3LabLite['\"]",
+      "why": "Check Update must pull from the T3LabLite repo, not t3lab_dev"
+    }
+  ],
+  "lite_only": [
+    ".github",
+    ".gitignore",
+    "CHANGELOG.md",
+    "README.md",
+    "extension.json",
+    "lib/Services/telemetry_service.py",
+    "lite_guard",
+    "version.txt"
+  ],
+  "ignore_imports": [
+    {
+      "file": "lib/Services/SheetManager/sheet_core/main_window.py",
+      "module": "ui.sheet_list_tab",
+      "why": "known before lite_guard: main_window.py is not imported anywhere and ui/sheet_list_tab.py has never been in this repo"
+    }
+  ],
+  "tools": [
+    "T3Lab.tab",
+    "T3Lab.tab/Annotation & Select.panel",
+    "T3Lab.tab/Annotation & Select.panel/Mana.stack",
+    "T3Lab.tab/Annotation & Select.panel/Mana.stack/AutoDimension.pushbutton",
+    "T3Lab.tab/Annotation & Select.panel/Mana.stack/ManaDWG.pushbutton",
+    "T3Lab.tab/Annotation & Select.panel/Mana.stack/ManaSelect.pushbutton",
+    "T3Lab.tab/Data.panel",
+    "T3Lab.tab/Data.panel/manaData.stack",
+    "T3Lab.tab/Data.panel/manaData.stack/ManaContains.pushbutton",
+    "T3Lab.tab/Data.panel/manaData.stack/ManaPara.pushbutton",
+    "T3Lab.tab/Data.panel/manaData.stack/ManaSched.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/Create Elements.pulldown",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/Create Elements.pulldown/CADToElements.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/Create Elements.pulldown/DoorThreshold.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/Create Elements.pulldown/ImageToDrafting.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/Create Elements.pulldown/PointCloud.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/Create Elements.pulldown/RoomToFloor.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/Create Elements.pulldown/Text to Element.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/PropertyLine.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/Create.stack/Tile Layout.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/DatumSync.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/ElementAdjust.pulldown",
+    "T3Lab.tab/Modeling & Datum.panel/ElementAdjust.pulldown/AutoJoin.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/ElementAdjust.pulldown/SplitElements.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/ElementAdjust.pulldown/Wall Cut Profile.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/ElementAdjust.pulldown/Wall_Adjust Base.pushbutton",
+    "T3Lab.tab/Modeling & Datum.panel/FamiTransfer.pushbutton",
+    "T3Lab.tab/Standards & Settings.panel",
+    "T3Lab.tab/Standards & Settings.panel/BatchLink.pushbutton",
+    "T3Lab.tab/Standards & Settings.panel/ManaGroup.pushbutton",
+    "T3Lab.tab/Standards & Settings.panel/ModelAuditor.pushbutton",
+    "T3Lab.tab/Support.panel",
+    "T3Lab.tab/Support.panel/Assistant Tools.stack",
+    "T3Lab.tab/Support.panel/Assistant Tools.stack/Feedback.pushbutton",
+    "T3Lab.tab/Support.panel/Assistant Tools.stack/LLMsSetting.pushbutton",
+    "T3Lab.tab/Support.panel/Assistant Tools.stack/MCPControl.pushbutton",
+    "T3Lab.tab/Support.panel/CheckUpdate.pushbutton",
+    "T3Lab.tab/Support.panel/CloudLinks.stack",
+    "T3Lab.tab/Support.panel/CloudLinks.stack/Autodesk Forma.urlbutton",
+    "T3Lab.tab/Support.panel/CloudLinks.stack/Autodesk Health.urlbutton",
+    "T3Lab.tab/Support.panel/CloudLinks.stack/Bluebeam Status.urlbutton",
+    "T3Lab.tab/Support.panel/PDF import.pushbutton",
+    "T3Lab.tab/Support.panel/UI.stack",
+    "T3Lab.tab/Support.panel/UI.stack/BG Theme.pushbutton",
+    "T3Lab.tab/Support.panel/UI.stack/ManaTabs.pushbutton",
+    "T3Lab.tab/Support.panel/UI.stack/Ribbon Names.pushbutton",
+    "T3Lab.tab/Views & Sheets.panel",
+    "T3Lab.tab/Views & Sheets.panel/BatchOut.pushbutton",
+    "T3Lab.tab/Views & Sheets.panel/CropSync.pushbutton",
+    "T3Lab.tab/Views & Sheets.panel/ManaSheets.pushbutton",
+    "T3Lab.tab/Views & Sheets.panel/ManaViews.pushbutton",
+    "T3Lab.tab/Views & Sheets.panel/SheetGen.pushbutton"
+  ]
+}

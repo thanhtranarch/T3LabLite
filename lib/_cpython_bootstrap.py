@@ -391,6 +391,7 @@ def init_cpython_paths():
     # calls init_cpython_paths(), so this is the one place that sees all
     # button clicks. 5751bd2 removed it once with no mention and the
     # dashboard silently stopped getting ribbon rows -- keep it.
+    # lite_guard/manifest.json fails the commit if this call goes missing.
     try:
         _track_caller_script()
     except Exception:

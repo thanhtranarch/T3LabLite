@@ -360,6 +360,7 @@ except Exception:
     pass
 
 # ─── Telemetry: Session Start ──────────────────────────────────────────────────
+# Lite only -- protected by lite_guard/manifest.json, keep when copying from dev.
 try:
     from Services.telemetry_service import TelemetryService
     TelemetryService.record_tool_usage(

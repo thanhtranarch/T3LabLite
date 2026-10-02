@@ -1,0 +1,18 @@
+#!/bin/sh
+# T3LabLite pre-commit: stop a commit that loses a ribbon tool or the usage
+# tracking (see lite_guard/guard.py).
+#
+# Turn on once per clone:  python lite_guard/guard.py --install-hook
+# Skip once, on purpose:   git commit --no-verify
+
+root=$(git rev-parse --show-toplevel) || exit 1
+
+# The Windows Store "python3" stub exists but cannot run, so test each one.
+for py in python3 python py; do
+    if "$py" -c "import sys; sys.exit(sys.version_info[0] < 3)" >/dev/null 2>&1; then
+        exec "$py" "$root/lite_guard/guard.py" --staged
+    fi
+done
+
+echo "lite_guard: Python 3 not found, commit check skipped (GitHub CI still runs it)." >&2
+exit 0

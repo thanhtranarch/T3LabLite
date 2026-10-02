@@ -24,16 +24,16 @@ drop them, so `lite_guard/manifest.json` checks each one.
 |---|---|---|
 | `track_session_start()` | `startup.py` | One row per Revit start / pyRevit reload |
 | `track_ribbon_click()` | `lib/_cpython_bootstrap.py`, end of `init_cpython_paths()` | Every T3Lab ribbon button click |
+| `track_mcp_call(...)` | `lib/core/server.py`, `_record_mcp_telemetry()` in `_handle_tool_call()` | Every MCP tool call, success and error |
+
+If a dev copy overwrites one of those files, put the call back, wrapped in
+`try: ... except Exception: pass` as it is now.
 
 Tool folders (`T3Lab.tab/.../X.pushbutton`) hold no tracking code. A click is
 tracked because the tool's `script.py` calls
 `_cpython_bootstrap.init_cpython_paths()` near the top, which every tool does.
 So a tool folder can be deleted and pasted from dev, as long as the dev
 `script.py` keeps that call; `lite_guard` fails the commit if it does not.
-| `track_mcp_call(...)` | `lib/core/server.py`, `_record_mcp_telemetry()` in `_handle_tool_call()` | Every MCP tool call, success and error |
-
-If a dev copy overwrites one of those files, put the call back, wrapped in
-`try: ... except Exception: pass` as it is now.
 
 ## Settings
 

@@ -359,14 +359,10 @@ except Exception:
     # Never crash Revit startup — Check Update on the ribbon still works.
     pass
 
-# ─── Telemetry: Session Start ──────────────────────────────────────────────────
-# Lite only -- protected by lite_guard/manifest.json, keep when copying from dev.
+# ─── Usage tracking: session start (Lite only, code in lib/tracking/) ─────────
+# lite_guard/manifest.json fails the commit if this goes missing.
 try:
-    from Services.telemetry_service import TelemetryService
-    TelemetryService.record_tool_usage(
-        tool_name='session_start',
-        tool_type='startup',
-        purpose='Khởi động phiên làm việc Revit / pyRevit'
-    )
+    from tracking import track_session_start
+    track_session_start()
 except Exception:
     pass

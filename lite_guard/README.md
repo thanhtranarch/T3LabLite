@@ -17,17 +17,15 @@ rows for a whole release.
 
 ## Where usage tracking lives
 
-| File | Hook | Records |
+All tracking code is in `lib/tracking/` (Lite only, listed under `lite_only`).
+See `lib/tracking/README.md`. Only three one-line calls sit in files shared
+with t3lab_dev, and `markers` checks each one:
+
+| File | Call | Records |
 |---|---|---|
-| `lib/Services/telemetry_service.py` | `TelemetryService` (Lite only) | Sends rows to `https://t3lab.space/api/revit/tracking` on a background thread |
-| `startup.py` | `record_tool_usage(tool_name='session_start')` | One row per Revit start / pyRevit reload |
-| `lib/_cpython_bootstrap.py` | `init_cpython_paths()` -> `_track_caller_script()` | Every ribbon button click (every `script.py` calls `init_cpython_paths()`) |
-| `lib/core/server.py` | `_handle_tool_call()` -> `_record_mcp_telemetry()` | Every MCP tool call, success and error |
-
-Opt-out: `"tracking_enabled": false` in `%APPDATA%\T3LabAI\mcp_paths.json`.
-
-`lib/Intelligence/telemetry.py` is a different thing: a local JSONL log of
-T3Lab Assistant turn timings. It sends nothing.
+| `startup.py` | `track_session_start()` | One row per Revit start / pyRevit reload |
+| `lib/_cpython_bootstrap.py` | `init_cpython_paths()` -> `track_ribbon_click()` | Every ribbon button click (every `script.py` calls `init_cpython_paths()`) |
+| `lib/core/server.py` | `_handle_tool_call()` -> `_record_mcp_telemetry()` -> `track_mcp_call()` | Every MCP tool call, success and error |
 
 ## Setup (once per clone)
 
@@ -61,8 +59,9 @@ python lite_guard/guard.py            # working tree
 python lite_guard/guard.py --staged   # what the next commit records
 ```
 
-- `markers`: the tracking hooks above, and `GITHUB_REPO` in
-  `lib/core/updater.py` still points at T3LabLite.
+- `markers`: the files in `lib/tracking/` and the three calls above are
+  still there, and `GITHUB_REPO` in `lib/core/updater.py` still points at
+  T3LabLite.
 - `tools`: every ribbon folder in `manifest.json` still exists, and every
   button has its `script.py` / `bundle.yaml`.
 - `imports`: ribbon scripts and `lib/` modules only import `lib/` modules

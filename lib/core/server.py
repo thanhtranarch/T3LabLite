@@ -85,17 +85,15 @@ def _set_process_anchor(inst):
 
 
 def _record_mcp_telemetry(tool_name, arguments, result, t_start):
-    """Send one MCP tool call to the T3Lab usage dashboard (never raises).
+    """Usage tracking for one MCP tool call (Lite only, code in lib/tracking/).
 
-    The call in _handle_tool_call was lost once already (5751bd2 dropped it
-    with no mention), and the dashboard silently stopped getting MCP rows --
-    keep it in this one helper. lite_guard/manifest.json fails the commit if
-    the helper or either call to it goes missing.
+    5751bd2 dropped the calls in _handle_tool_call once when copying from
+    t3lab_dev -- lite_guard/manifest.json now fails the commit if this helper
+    or either call to it goes missing.
     """
     try:
-        from Services.telemetry_service import TelemetryService
-        duration_ms = int((time.time() - t_start) * 1000)
-        TelemetryService.record_mcp_call(tool_name, arguments, result, duration_ms)
+        from tracking import track_mcp_call
+        track_mcp_call(tool_name, arguments, result, t_start)
     except Exception:
         pass
 

@@ -60,6 +60,15 @@ fourteen buttons that were missing, brought over with their current dialogs.
 ### Changed
 - **Restart Revit after updating.** The ribbon gained a panel and a stack, and
   a pyRevit Reload may not build them.
+- **Automatic update now runs once a week instead of once a day, with no click
+  needed.** On the first Revit start of each week (Monday to Sunday) T3Lab
+  checks GitHub and installs the newest version in the background. A week only
+  counts once GitHub answered, so an offline start is retried on the next day's
+  first start. `"auto_update": false` still turns it off, and the new
+  `"auto_update_interval": "daily"` keeps the old daily check. Check Update
+  still updates on demand, and a manual check counts as that week's check.
+  The schedule is in `lib/core/update_schedule.py`, tested by
+  `lite_guard/test_update_schedule.py`.
 - The restored tools use the latest t3lab-revit-api dialogs and windows
   (T3 design system), and the Revit 2022-2027 API helpers they were written
   against.

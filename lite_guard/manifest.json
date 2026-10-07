@@ -37,6 +37,11 @@
       "why": "startup.py must call track_session_start() on every Revit start"
     },
     {
+      "file": "startup.py",
+      "pattern": "^\\s+start_auto_update\\(\\)",
+      "why": "startup.py must start the weekly auto-update, or users have to click Check Update to get new versions"
+    },
+    {
       "file": "lib/_cpython_bootstrap.py",
       "pattern": "^\\s+track_ribbon_click\\(\\)",
       "why": "init_cpython_paths() must call track_ribbon_click(), or no ribbon clicks reach the dashboard"
@@ -69,6 +74,8 @@
     "CHANGELOG.md",
     "README.md",
     "extension.json",
+    "lib/core/update_schedule.py",
+    "lib/core/updater.py",
     "lib/tracking",
     "lite_guard",
     "version.txt"

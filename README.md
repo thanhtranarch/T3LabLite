@@ -21,16 +21,20 @@ T3Lab Lite is installed as a pyRevit extension.
 
 #### Staying up to date
 
-On the first Revit start of each day, T3Lab checks GitHub for a newer release
-and downloads it in the background. Revit keeps running the version it loaded,
-so the update takes effect the next time you start Revit (or click
-pyRevit ▸ Reload) — a notification tells you when that is worth doing.
+You never have to click anything. On the first Revit start of each week
+(Monday to Sunday), T3Lab checks GitHub for a newer release and installs it in
+the background. Revit keeps running the version it loaded, so the update takes
+effect the next time you start Revit (or click pyRevit ▸ Reload) — a
+notification tells you when that is worth doing. If GitHub cannot be reached
+(offline, blocked), the next day's first start tries again until the check
+gets an answer, so a bad Monday does not cost you the week.
 
 A clone with local commits or edits is only ever fast-forwarded, never
-overwritten. To turn the daily check off, set `"auto_update": false` in
-`%APPDATA%\T3LabAI\mcp_paths.json`. **Check Update** on the Support panel
-still works either way, and `%APPDATA%\T3LabAI\update.log` records what
-happened.
+overwritten. Two settings in `%APPDATA%\T3LabAI\mcp_paths.json`:
+`"auto_update": false` turns the automatic check off, and
+`"auto_update_interval": "daily"` checks every day instead of every week.
+**Check Update** on the Support panel updates on demand either way, and
+`%APPDATA%\T3LabAI\update.log` records what happened.
 
 ---
 
@@ -220,7 +224,7 @@ which can be switched off (see [Staying up to date](#staying-up-to-date)).
 
 | Component | Destination | When |
 |---|---|---|
-| Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each day, unless `"auto_update": false` |
+| Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each week (retried the next day if GitHub was unreachable), unless `"auto_update": false` |
 | T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `api.deepseek.com` — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
 | Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
 | Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |

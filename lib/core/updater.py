@@ -5,7 +5,7 @@ T3Lab Update Core
 Everything needed to find out whether a newer version of the extension is
 published on GitHub, and to bring the local copy up to date. No UI lives
 here: `Support.panel/CheckUpdate.pushbutton` drives it interactively, and
-`startup.py` drives it silently once a day.
+`startup.py` drives it silently once a week.
 
 Update strategies, in order of preference:
     1. `git pull --ff-only` -- when the extension is a git clone and git.exe
@@ -14,17 +14,24 @@ Update strategies, in order of preference:
     2. The repository zip, copied over the extension folder. Used when the
        extension is *not* a git clone (a plain download install).
 
-Daily auto-update
------------------
-`startup.py` calls `start_daily_update()` on every Revit start. The first
-start of a calendar day checks GitHub on a background thread and updates
-silently; every later start that day is a no-op. The downloaded code becomes
-active on the next Revit start (or pyRevit reload) -- the running session
-keeps the code it already loaded, so the user is told with a toast.
+Weekly auto-update
+------------------
+`startup.py` calls `start_auto_update()` on every Revit start. The first start
+of a week (ISO weeks, Monday to Sunday) checks GitHub on a background thread
+and updates silently, with no click; every later start that week is a no-op.
+A week only counts as checked once GitHub actually answered, so a machine that
+was offline on Monday tries again on Tuesday's first start. The downloaded code
+becomes active on the next Revit start (or pyRevit reload) -- the running
+session keeps the code it already loaded, so the user is told with a toast.
+
+When a check is due is decided in `core/update_schedule.py`, which has no .NET
+dependency and is tested by `lite_guard/test_update_schedule.py`.
 
 Settings live in %APPDATA%\\T3LabAI\\mcp_paths.json:
-    "auto_update"       -- false turns the daily check off (default true)
-    "last_update_check" -- 'YYYY-MM-DD' stamp of the last check
+    "auto_update"          -- false turns the automatic check off (default true)
+    "auto_update_interval" -- "weekly" (default) or "daily"
+    "last_update_check"    -- period of the last completed check ('2026-W41')
+    "last_update_attempt"  -- 'YYYY-MM-DD' of the last attempt, any outcome
 
 Progress is logged to %APPDATA%\\T3LabAI\\update.log.
 """
@@ -46,6 +53,8 @@ from System.Net import (WebClient, ServicePointManager,
                         SecurityProtocolType, CredentialCache)
 from System.Text import Encoding
 from System.Diagnostics import Process, ProcessStartInfo
+
+from core import update_schedule as _schedule
 
 
 # ── Locations ───────────────────────────────────────────────────────────────────
@@ -76,9 +85,12 @@ REMOTE_CHANGELOG_URLS = [
 REMOTE_ZIP_URL = "https://github.com/{repo}/archive/refs/heads/{branch}.zip".format(
     repo=GITHUB_REPO, branch=GITHUB_BRANCH)
 
-# Settings keys in mcp_paths.json
-ENABLED_KEY = 'auto_update'
-STAMP_KEY   = 'last_update_check'
+# Settings keys in mcp_paths.json (the schedule keys are defined next to the
+# logic that reads them, in core/update_schedule.py)
+ENABLED_KEY  = 'auto_update'
+INTERVAL_KEY = _schedule.INTERVAL_KEY
+STAMP_KEY    = _schedule.STAMP_KEY
+ATTEMPT_KEY  = _schedule.ATTEMPT_KEY
 
 # Seconds to wait after Revit startup before touching the network, so the
 # ribbon is fully built and the user is never waiting on us.
@@ -408,10 +420,10 @@ def update_with_zip():
 
 
 # ============================================================
-# DAILY AUTO-UPDATE
+# AUTOMATIC UPDATE (weekly by default)
 # ============================================================
 def _today():
-    return datetime.now().strftime('%Y-%m-%d')
+    return datetime.now().date()
 
 
 def is_auto_update_enabled():
@@ -431,24 +443,53 @@ def is_auto_update_enabled():
         return True
 
 
-def checked_today():
-    """True when the daily check already ran today."""
+def auto_update_interval():
+    """'weekly' (default) or 'daily', from "auto_update_interval" in mcp_paths.json.
+
+    Written back on first read so the option is visible in the file.
+    """
     try:
         from core import paths as _paths
-        return _paths.load_settings().get(STAMP_KEY) == _today()
+        value = _paths.load_settings().get(INTERVAL_KEY)
+        if value is None:
+            _paths.set_setting(INTERVAL_KEY, _schedule.DEFAULT_INTERVAL)
+        return _schedule.normalize_interval(value)
     except Exception:
-        return False
+        return _schedule.DEFAULT_INTERVAL
 
 
-def stamp_today():
-    """Record that today's check has been attempted.
+def check_due():
+    """True when this week's (or today's, when daily) check still has to run."""
+    try:
+        from core import paths as _paths
+        return _schedule.is_due(_paths.load_settings(), _today())
+    except Exception:
+        return True
+
+
+def mark_attempt():
+    """Record that a check was attempted today, whatever its outcome.
 
     Stamped before the network work, not after: a machine that is offline all
     day should try once, not on every single Revit start.
     """
     try:
         from core import paths as _paths
-        _paths.set_setting(STAMP_KEY, _today())
+        _paths.set_setting(ATTEMPT_KEY, _schedule.day_id(_today()))
+    except Exception:
+        pass
+
+
+def stamp_check():
+    """Record that this period's check is complete (GitHub was reached).
+
+    Only a completed check stamps the week: one that could not reach GitHub, or
+    could not apply the update, is retried on the next day's first start.
+    """
+    try:
+        from core import paths as _paths
+        _paths.set_setting(
+            STAMP_KEY, _schedule.period_id(_today(), auto_update_interval()))
     except Exception:
         pass
 
@@ -476,7 +517,7 @@ def auto_apply_update():
     return True, "updated via zip"
 
 
-def run_daily_update(force=False):
+def run_auto_update(force=False):
     """One full check-and-update pass. Returns (status, detail).
 
     status is one of: 'disabled', 'skipped', 'current', 'updated', 'failed'.
@@ -486,9 +527,9 @@ def run_daily_update(force=False):
         if not force:
             if not is_auto_update_enabled():
                 return 'disabled', 'auto_update is off in mcp_paths.json'
-            if checked_today():
-                return 'skipped', 'already checked today'
-            stamp_today()
+            if not check_due():
+                return 'skipped', 'already checked this period'
+            mark_attempt()
 
         enable_tls12()
         local_text = read_local_version()
@@ -500,6 +541,7 @@ def run_daily_update(force=False):
             return 'failed', "could not reach GitHub: {}".format(ex)
 
         if parse_version(remote_text) <= parse_version(local_text):
+            stamp_check()
             log("up to date (installed {}, latest {})".format(local_text, remote_text))
             return 'current', remote_text
 
@@ -509,6 +551,7 @@ def run_daily_update(force=False):
             log("auto-update skipped: {}".format(detail))
             return 'failed', detail
 
+        stamp_check()
         log("auto-update finished: {} (now {})".format(detail, remote_text))
         return 'updated', remote_text
 
@@ -530,26 +573,34 @@ def _notify_updated(new_version):
         log("could not show update toast: {}".format(ex))
 
 
-def _daily_worker(delay):
+def _auto_worker(delay):
     if delay:
         time.sleep(delay)
-    status, detail = run_daily_update()
+    status, detail = run_auto_update()
     if status == 'updated':
         _notify_updated(detail)
 
 
-def start_daily_update(delay=STARTUP_DELAY):
-    """Kick off the once-a-day update check on a background thread.
+def start_auto_update(delay=STARTUP_DELAY):
+    """Kick off the automatic update check on a background thread.
 
     Called from startup.py on every Revit start. Returns True when a check was
-    actually started (first start of the day, auto-update on).
+    actually started (the first start of the week, auto-update on, and no
+    attempt yet today).
     """
     if not is_auto_update_enabled():
         return False
-    if checked_today():
+    if not check_due():
         return False
 
-    worker = threading.Thread(target=_daily_worker, args=(delay,))
+    worker = threading.Thread(target=_auto_worker, args=(delay,))
     worker.daemon = True
     worker.start()
     return True
+
+
+# Names the daily version exported; kept so a Check Update or startup.py still
+# held in memory by a running session keeps working across the update.
+stamp_today = stamp_check
+run_daily_update = run_auto_update
+start_daily_update = start_auto_update

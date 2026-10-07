@@ -12,8 +12,8 @@ Responsibilities:
   3. Start the file-based task watcher.
   4. Deploy the MCP bridge to %APPDATA%/T3LabAI/bridge.py and auto-start the
      MCP server (default on; "auto_start_mcp": false in mcp_paths.json opts out).
-  5. Run the once-a-day update check against GitHub (default on;
-     "auto_update": false in mcp_paths.json opts out).
+  5. Run the once-a-week update check against GitHub, no click needed
+     (default on; "auto_update": false in mcp_paths.json opts out).
 
 In the startup script context, `__revit__` is the UIControlledApplication
 (available during Revit's OnStartup), which is required for DockablePane registration.
@@ -343,18 +343,22 @@ except Exception:
     # Never crash Revit startup — MCP can still be started from the ribbon.
     pass
 
-# ─── Daily auto-update from GitHub ─────────────────────────────────────────────
-# On the first Revit start of each calendar day, check GitHub for a newer
-# release and download it. The check runs on a background thread after a short
-# delay, so startup is never held up by the network; every later start that day
-# is a no-op (the date stamp lives in mcp_paths.json under "last_update_check").
+# ─── Weekly auto-update from GitHub (Lite only, code in lib/core/updater.py) ───
+# On the first Revit start of each week (Monday to Sunday), check GitHub for a
+# newer release and install it — no click on Check Update. The check runs on a
+# background thread after a short delay, so startup is never held up by the
+# network; every later start that week is a no-op. A week only counts once
+# GitHub answered, so an offline start is retried on the next day's first start.
+# When a check is due: lib/core/update_schedule.py.
 #
 # The running session keeps the code it already loaded — the new version becomes
 # active on the next Revit start or pyRevit reload, which the toast says.
-# Set "auto_update": false in %APPDATA%/T3LabAI/mcp_paths.json to opt out.
+# In %APPDATA%/T3LabAI/mcp_paths.json: "auto_update": false opts out,
+# "auto_update_interval": "daily" checks every day instead of every week.
+# lite_guard/manifest.json fails the commit if this call goes missing.
 try:
-    from core.updater import start_daily_update
-    start_daily_update()
+    from core.updater import start_auto_update
+    start_auto_update()
 except Exception:
     # Never crash Revit startup — Check Update on the ribbon still works.
     pass

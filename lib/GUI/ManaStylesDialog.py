@@ -7,6 +7,7 @@ import re
 import random
 import time
 import json
+import math
 import System
 from collections import OrderedDict
 
@@ -34,8 +35,19 @@ from Autodesk.Revit.DB import (
 
 from pyrevit import forms, revit
 from GUI.WPF_Base import T3WPFWindow
-from System.Windows import WindowState, Visibility, Thickness, CornerRadius, GridLength, GridUnitType, MessageBox, MessageBoxButton, MessageBoxImage, MessageBoxResult, Rect, Point
-from System.Windows.Media import SolidColorBrush, Color, DoubleCollection, DrawingBrush, GeometryDrawing, GeometryGroup, LineGeometry, Pen, TileMode, BrushMappingMode
+from GUI.inline_rename import InlineRenameController
+# Line-pattern dashes are printed sizes: shown in the paper unit (mm in a
+# metric project, inches in an imperial one). Read per window.
+from Snippets._units import project_paper_unit, MILLIMETERS
+from Services.style_naming import (
+    LINE_STYLE, LINE_PATTERN, FILL_PATTERN,
+    check_renamable, validate_style_rename, rename_tooltip, renamed_status,
+    sorted_position, kind_label)
+from Services.style_rename import (
+    rename_line_style, rename_line_pattern, rename_fill_pattern)
+from System.Windows.Input import Key
+from System.Windows import WindowState, Visibility, Thickness, CornerRadius, GridLength, GridUnitType, MessageBox, MessageBoxButton, MessageBoxImage, MessageBoxResult
+from System.Windows.Media import SolidColorBrush, Color, DoubleCollection
 from System.Windows.Controls import (
     Grid,
     RowDefinition,
@@ -81,6 +93,66 @@ def _make_double_collection(values):
         return dc
     except Exception:
         return None
+
+# ── Cột ILLUSTRATION ──────────────────────────────────────────────────────
+# Dòng là object Python nên WPF nhận thuộc tính dưới dạng PyObject: đổi sang
+# chữ được, nhưng KHÔNG đổi được sang Brush / double / DoubleCollection /
+# Geometry — binding thẳng `Stroke="{Binding color_hex}"` hỏng im lặng và cột
+# ILLUSTRATION trống trơn. Vì vậy mọi giá trị hình vẽ ở đây là CHUỖI, XAML đọc
+# qua TextBlock ẩn (string bridge, như checkbox) rồi để TypeConverter của WPF
+# parse chuỗi đó.
+
+# Ô preview fill pattern: Border 60×18 viền 1px → vùng vẽ 58×16.
+_FILL_PREVIEW_W = 58.0
+_FILL_PREVIEW_H = 16.0
+_FILL_PREVIEW_SOLID = "M0,0 H58 V16 H0 Z"
+
+
+def _dash_view(dash_str, thickness):
+    """Dash (px) → StrokeDashArray của WPF, vốn tính theo BỘI SỐ StrokeThickness.
+
+    Nét càng dày thì dash được kéo dài theo (tối thiểu x1, x nửa độ dày) để nét
+    đứt của line weight lớn vẫn đọc ra là nét đứt thay vì một dải chấm.
+    """
+    if not dash_str:
+        return ""
+    try:
+        t = float(thickness) or 1.0
+        scale = max(1.0, t / 2.0)
+        return " ".join("{:.2f}".format(float(v) * scale / t) for v in dash_str.split())
+    except (TypeError, ValueError):
+        return ""
+
+
+def _parallel_lines(angle, step):
+    """Họ đường song song (góc Revit, radian, ngược chiều kim đồng hồ) phủ kín ô preview."""
+    w, h = _FILL_PREVIEW_W, _FILL_PREVIEW_H
+    cx, cy = w / 2.0, h / 2.0
+    reach = math.hypot(w, h) / 2.0 + 1.0
+    dx, dy = math.cos(angle), -math.sin(angle)   # màn hình: trục y hướng xuống
+    nx, ny = -dy, dx
+    count = int(math.ceil(reach / step))
+    parts = []
+    for k in range(-count, count + 1):
+        px, py = cx + nx * k * step, cy + ny * k * step
+        parts.append("M{:.1f},{:.1f} L{:.1f},{:.1f}".format(
+            px - dx * reach, py - dy * reach, px + dx * reach, py + dy * reach))
+    return " ".join(parts)
+
+
+def _hatch_geometry(grids):
+    """Path Data cho các fill grid: đúng góc, khoảng cách quy về 3–12 px."""
+    parts = []
+    for grid in grids or []:
+        try:
+            angle = float(grid.Angle)
+            spacing_mm = abs(float(grid.Offset)) * 304.8
+        except Exception:
+            continue
+        step = max(3.0, min(12.0, spacing_mm * 1.5)) if spacing_mm > 0 else 6.0
+        parts.append(_parallel_lines(angle, step))
+    return " ".join(parts)
+
 
 # ============================================================================
 # STYLE MANAGER WORKER ENTITIES
@@ -128,59 +200,25 @@ class FillPatternItem(_Reactive):
             
         self._is_system = "Solid fill" in self._name or self._name.startswith("<") or self._name.startswith("Solid")
 
-        # Construct wpf_brush
-        self._wpf_brush = None
+        # Preview: Path Data (chuỗi) vẽ đúng góc + mật độ các fill grid thật
         is_solid = False
+        grids = None
         try:
             fill_pattern = element.GetFillPattern()
             if fill_pattern:
                 is_solid = fill_pattern.IsSolidFill
-        except:
+                grids = fill_pattern.GetFillGrids()
+        except Exception:
             pass
-            
+
         if is_solid or "solid" in self._name.lower():
-            self._wpf_brush = SolidColorBrush(Color.FromRgb(161, 161, 170)) # Zinc-400
-            try:
-                self._wpf_brush.Freeze()
-            except Exception:
-                pass
+            self._preview_geometry = _FILL_PREVIEW_SOLID
         else:
-            try:
-                db = DrawingBrush()
-                db.TileMode = TileMode.Tile
-                db.Viewport = Rect(0, 0, 10, 10)
-                db.ViewportUnits = BrushMappingMode.Absolute
-                
-                group = GeometryGroup()
-                pen = Pen(SolidColorBrush(Color.FromRgb(161, 161, 170)), 1)
-                try:
-                    pen.Freeze()
-                except Exception:
-                    pass
-                
-                if self._settings == "Parallel lines":
-                    group.Children.Add(LineGeometry(Point(0, 5), Point(10, 5)))
-                elif self._settings == "Crosshatch":
-                    group.Children.Add(LineGeometry(Point(0, 5), Point(10, 5)))
-                    group.Children.Add(LineGeometry(Point(5, 0), Point(5, 10)))
-                else:
-                    group.Children.Add(LineGeometry(Point(0, 0), Point(10, 10)))
-                    
-                db.Drawing = GeometryDrawing(None, pen, group)
-                try:
-                    db.Freeze()
-                except Exception:
-                    pass
-                self._wpf_brush = db
-            except Exception:
-                self._wpf_brush = SolidColorBrush(Color.FromRgb(228, 228, 231))
-                try:
-                    self._wpf_brush.Freeze()
-                except Exception:
-                    pass
+            self._preview_geometry = (_hatch_geometry(grids)
+                                      or _parallel_lines(math.pi / 4.0, 6.0))
 
     @property
-    def wpf_brush(self): return self._wpf_brush
+    def preview_geometry(self): return self._preview_geometry
 
     @property
     def element(self): return self._element
@@ -196,6 +234,10 @@ class FillPatternItem(_Reactive):
             
     @property
     def pattern_type(self): return self._pattern_type
+    @property
+    def target_str(self): return self._pattern_type   # TARGET column
+    @property
+    def rename_tip(self): return rename_tooltip(FILL_PATTERN, self._is_system)
     @property
     def grid_count(self): return self._grid_count
     @property
@@ -262,7 +304,10 @@ class LineStyleItem(_Reactive):
         except Exception:
             self._pattern = "Solid"
             
-        self._is_system = self._name.startswith('<') and self._name.endswith('>')
+        # Built-in line styles: "<Hidden>", "<Thin Lines>"... AND the built-in
+        # "Lines" / "Thin Lines" / "Medium Lines" / "Wide Lines" (negative ids).
+        self._is_system = ((self._name.startswith('<') and self._name.endswith('>'))
+                           or self._id < 0)
         self._usage_count = 0
 
         # Construct color_hex & wpf_brush
@@ -338,6 +383,8 @@ class LineStyleItem(_Reactive):
     @property
     def dash_str(self): return self._dash_str
     @property
+    def dash_view(self): return _dash_view(self._dash_str, self._thickness_val)
+    @property
     def wpf_brush(self): return self._wpf_brush
     @property
     def thickness_val(self): return self._thickness_val
@@ -356,6 +403,8 @@ class LineStyleItem(_Reactive):
             self._name = v
             self._notify("name")
             
+    @property
+    def rename_tip(self): return rename_tooltip(LINE_STYLE, self._is_system)
     @property
     def color(self): return self._color
     @property
@@ -388,10 +437,21 @@ class LineStyleItem(_Reactive):
         for h in self._handlers: h(self, PropertyChangedEventArgs(prop))
 
 
+def segment_text(length_ft, paper=None):
+    """A dash / space / dot length on paper: '3.00 mm' (2 decimals, as the
+    grid always showed) or '0.125\"' (3 decimals — 1/8\" text would round a
+    1.5 mm dash to nothing)."""
+    paper = paper or MILLIMETERS
+    value = paper.from_feet(length_ft)
+    if paper.is_metric:
+        return "{:.2f} {}".format(value, paper.tag)
+    return "{:.3f}\"".format(value)
+
+
 class LinePatternItem(_Reactive):
     SYSTEM_PATTERNS = ["Solid", "Dash", "Dot", "Dash dot", "Dash dot dot"]
     
-    def __init__(self, element):
+    def __init__(self, element, paper=None):
         self._handlers = []
         self._element = element
         self._is_selected = False
@@ -411,7 +471,7 @@ class LinePatternItem(_Reactive):
                 values = []
                 for seg in segments:
                     types.append(seg.Type.ToString())
-                    values.append("{:.2f}mm".format(seg.Length * 304.8))
+                    values.append(segment_text(seg.Length, paper))
                 self._segments_type = ", ".join(types) if types else "Solid"
                 self._segments_value = ", ".join(values) if values else "-"
             else:
@@ -480,6 +540,8 @@ class LinePatternItem(_Reactive):
     @property
     def dash_str(self): return self._dash_str
     @property
+    def dash_view(self): return _dash_view(self._dash_str, self._thickness_val)
+    @property
     def wpf_brush(self): return self._wpf_brush
     @property
     def dash_array(self): return self._dash_array
@@ -496,6 +558,8 @@ class LinePatternItem(_Reactive):
             self._name = v
             self._notify("name")
             
+    @property
+    def rename_tip(self): return rename_tooltip(LINE_PATTERN, self._is_system)
     @property
     def segment_count(self): return self._segment_count
     @property
@@ -1148,6 +1212,14 @@ class ManaStylesWindow(T3WPFWindow):
         self._load_style_manager_data()
         self._init_color_splasher()
 
+        # Inline rename on the NAME column of the three Style Manager grids
+        # (double-click / F2 / Enter). Same commit path as the Rename button.
+        self._inline_renamers = [
+            self._make_inline_renamer(LINE_STYLE, self.grid_style),
+            self._make_inline_renamer(LINE_PATTERN, self.grid_pattern),
+            self._make_inline_renamer(FILL_PATTERN, self.grid_fill),
+        ]
+
 
     # ========================================================================
     # MAIN WINDOW NAVIGATION & CHROME CONTROLS
@@ -1295,7 +1367,8 @@ class ManaStylesWindow(T3WPFWindow):
     def _load_line_patterns(self):
         try:
             col = FilteredElementCollector(doc).OfClass(LinePatternElement)
-            self.line_patterns = [LinePatternItem(e) for e in col]
+            paper = project_paper_unit(doc)
+            self.line_patterns = [LinePatternItem(e, paper) for e in col]
             self.line_patterns.sort(key=lambda x: x.name)
             self._filter_line_patterns()
         except Exception as ex:
@@ -1315,6 +1388,167 @@ class ManaStylesWindow(T3WPFWindow):
     def _on_fill_filter_changed(self, s, e): self._filter_fill_patterns()
     def _on_style_filter_changed(self, s, e): self._filter_line_styles()
     def _on_pattern_filter_changed(self, s, e): self._filter_line_patterns()
+
+    # ========================================================================
+    # RENAME — one path for the inline editor AND the footer Rename buttons
+    # ========================================================================
+    # kind -> (all rows attr, filtered ObservableCollection attr, grid x:Name)
+    _RENAME_KINDS = {
+        LINE_STYLE: ('line_styles', 'filtered_line_styles', 'grid_style'),
+        LINE_PATTERN: ('line_patterns', 'filtered_line_patterns', 'grid_pattern'),
+        FILL_PATTERN: ('fill_patterns', 'filtered_fill_patterns', 'grid_fill'),
+    }
+
+    def _make_inline_renamer(self, kind, grid):
+        return InlineRenameController(
+            grid,
+            can_begin=lambda item: check_renamable(kind, item.name, item.is_system),
+            validate=lambda item, text: self._validate_rename(kind, item, text),
+            apply=lambda item, clean: self._apply_rename(kind, item, clean),
+            report=self._report_status)
+
+    def _report_status(self, message):
+        if message:
+            self.status_text.Text = message
+
+    def _handle_esc_key(self, sender, args):
+        """Esc while a NAME cell is being edited cancels the edit instead of
+        closing the window (T3WPFWindow closes on Esc in PreviewKeyDown,
+        which tunnels before the grid ever sees the key)."""
+        try:
+            if args.Key == Key.Escape:
+                for renamer in getattr(self, '_inline_renamers', ()):
+                    if renamer.handle_escape():
+                        args.Handled = True
+                        return
+        except Exception:
+            pass
+        T3WPFWindow._handle_esc_key(self, sender, args)
+
+    def _peer_names(self, kind, item):
+        """Names the new name must not clash with (same kind; for fill
+        patterns, same Drafting/Model target — Revit scopes them per target)."""
+        rows = getattr(self, self._RENAME_KINDS[kind][0])
+        if kind == FILL_PATTERN:
+            rows = [r for r in rows if r.pattern_type == item.pattern_type]
+        return [r.name for r in rows if r is not item]
+
+    def _validate_rename(self, kind, item, text):
+        return validate_style_rename(kind, item.name, text,
+                                     self._peer_names(kind, item), item.is_system)
+
+    def _apply_rename(self, kind, item, new_name):
+        """Rename one row in Revit (ONE transaction, see Services.style_rename)
+        and update it in place. Returns the row now showing the name, or None."""
+        old_name = item.name
+        label = kind_label(kind)
+        new_sub, moved = None, 0
+        try:
+            if kind == LINE_PATTERN:
+                rename_line_pattern(doc, item.element, new_name)
+            elif kind == FILL_PATTERN:
+                rename_fill_pattern(doc, item.element, new_name)
+            else:
+                new_sub, moved = rename_line_style(doc, item.category, new_name)
+        except Exception as ex:
+            self.status_text.Text = "Rename failed: {} '{}' was not changed.".format(label, old_name)
+            MessageBox.Show(
+                "Could not rename {} '{}' to '{}'.\n\n{}\n\n"
+                "Nothing was changed in the model. Fix the cause above and "
+                "try again.".format(label, old_name, new_name, ex),
+                "Rename {}".format(label.title()), MessageBoxButton.OK, MessageBoxImage.Error)
+            return None
+
+        extra = "({} line(s) moved to it)".format(moved) if moved else ""
+        try:
+            if new_sub is not None:
+                # A line style rename is a new subcategory (new id) -> new row.
+                row = LineStyleItem(new_sub)
+                row.usage_count = item.usage_count
+                row.is_selected = item.is_selected
+            else:
+                item.name = new_name
+                row = item
+            # Rows are plain Python objects: WPF never subscribes to their
+            # PropertyChanged, so re-put the row to redraw its cells.
+            self._replace_row(kind, item, row)
+            self._resort_row(kind, row)
+        except Exception:
+            # The model is renamed; only the in-place update failed -> reload.
+            {LINE_STYLE: self._load_line_styles, LINE_PATTERN: self._load_line_patterns,
+             FILL_PATTERN: self._load_fill_patterns}[kind]()
+            row = None
+        self.status_text.Text = renamed_status(kind, old_name, new_name, extra)
+        return row
+
+    def _replace_row(self, kind, old_row, new_row):
+        """Swap a row in place (same object = just redraw it)."""
+        all_attr, filtered_attr, _grid = self._RENAME_KINDS[kind]
+        rows = getattr(self, all_attr)
+        for i, r in enumerate(rows):
+            if r is old_row:
+                rows[i] = new_row
+                break
+        coll = getattr(self, filtered_attr)
+        for i in range(coll.Count):
+            if coll[i] is old_row:
+                coll[i] = new_row
+                break
+
+    def _resort_row(self, kind, row):
+        """Keep the lists sorted by name after a rename, without reloading:
+        move the row to its new place, keep it selected and in view."""
+        all_attr, filtered_attr, grid_name = self._RENAME_KINDS[kind]
+        getattr(self, all_attr).sort(key=lambda x: x.name)
+        coll = getattr(self, filtered_attr)
+        index = -1
+        for i in range(coll.Count):
+            if coll[i] is row:
+                index = i
+                break
+        if index >= 0:
+            names = [coll[i].name for i in range(coll.Count)]
+            target = sorted_position(names, row.name, index)
+            if target != index:
+                coll.Move(index, target)
+        grid = getattr(self, grid_name)
+        try:
+            if grid.Items.SortDescriptions.Count > 0:
+                grid.Items.Refresh()        # user sorted by a column header
+            for i in range(grid.Items.Count):
+                if grid.Items[i] is row:
+                    grid.SelectedIndex = i
+                    grid.ScrollIntoView(grid.Items[i])
+                    break
+        except Exception:
+            pass
+
+    def _rename_ticked(self, kind, title):
+        """Footer Rename button: the one ticked row, name asked in a prompt,
+        then the same validation + Revit path as the inline editor."""
+        rows = getattr(self, self._RENAME_KINDS[kind][0])
+        selected = [item for item in rows if item.is_selected]
+        if len(selected) != 1:
+            MessageBox.Show(
+                "Tick exactly one {} to rename ({} ticked).\n\n"
+                "Tip: double-click a name (or press F2) to rename it in place."
+                .format(kind_label(kind), len(selected)),
+                title, MessageBoxButton.OK, MessageBoxImage.Warning)
+            return
+        item = selected[0]
+        ok, message = check_renamable(kind, item.name, item.is_system)
+        if not ok:
+            MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error)
+            return
+        new_name = forms.ask_for_string(prompt="Enter new name:", default=item.name, title=title)
+        if new_name is None:
+            return
+        ok, clean, message = self._validate_rename(kind, item, new_name)
+        if not ok:
+            if message:
+                MessageBox.Show(message, title, MessageBoxButton.OK, MessageBoxImage.Warning)
+            return
+        self._apply_rename(kind, item, clean)
 
     # ========================================================================
     # ACTIONS HANDLERS (LINE STYLES)
@@ -1368,82 +1602,7 @@ class ManaStylesWindow(T3WPFWindow):
             MessageBox.Show("Error calculating usage: {}".format(str(ex)), "Error", MessageBoxButton.OK, MessageBoxImage.Error)
 
     def _on_style_rename(self, s, e):
-        selected = [item for item in self.line_styles if item.is_selected]
-        if len(selected) != 1:
-            MessageBox.Show("Please select exactly one item to rename!", "Warning", MessageBoxButton.OK, MessageBoxImage.Warning)
-            return
-            
-        item = selected[0]
-        if item.is_system:
-            MessageBox.Show("Cannot rename system line styles!", "Error", MessageBoxButton.OK, MessageBoxImage.Error)
-            return
-            
-        new_name = forms.ask_for_string(prompt="Enter new name:", default=item.name, title="Rename Line Style")
-        if not new_name or new_name.strip() == "" or new_name == item.name:
-            return
-            
-        new_name = re.sub(r'[\/:*?"<>|\\\[\]]', '', new_name).strip()
-        for style in self.line_styles:
-            if style.name == new_name:
-                MessageBox.Show("A line style with this name already exists!", "Error", MessageBoxButton.OK, MessageBoxImage.Error)
-                return
-                
-        old_style = item.category
-        lines_category = doc.Settings.Categories.get_Item(BuiltInCategory.OST_Lines)
-        
-        tg = TransactionGroup(doc, "Rename Line Style")
-        tg.Start()
-        try:
-            t1 = Transaction(doc, "Create New Line Style")
-            t1.Start()
-            new_subcategory = doc.Settings.Categories.NewSubcategory(lines_category, new_name)
-            new_subcategory.LineColor = old_style.LineColor
-            new_subcategory.SetLineWeight(old_style.GetLineWeight(GraphicsStyleType.Projection), GraphicsStyleType.Projection)
-            pat_id = old_style.GetLinePatternId(GraphicsStyleType.Projection)
-            if pat_id and _eid_int(pat_id) > 0:
-                new_subcategory.SetLinePatternId(pat_id, GraphicsStyleType.Projection)
-            t1.Commit()
-            
-            lines_to_change = []
-            col = FilteredElementCollector(doc).OfClass(CurveElement)
-            for curve in col:
-                try:
-                    style_param = curve.get_Parameter(BuiltInParameter.BUILDING_CURVE_GSTYLE)
-                    if style_param:
-                        style_id = style_param.AsElementId()
-                        if style_id:
-                            style_elem = doc.GetElement(style_id)
-                            if style_elem and hasattr(style_elem, 'GraphicsStyleCategory'):
-                                style_cat = style_elem.GraphicsStyleCategory
-                                if style_cat and _eid_int(style_cat.Id) == _eid_int(old_style.Id):
-                                    lines_to_change.append(curve)
-                except:
-                    pass
-            
-            lines_changed = 0
-            if lines_to_change:
-                t2 = Transaction(doc, "Transfer Lines to New Style")
-                t2.Start()
-                new_graphics_style = new_subcategory.GetGraphicsStyle(GraphicsStyleType.Projection)
-                for line in lines_to_change:
-                    try:
-                        line.LineStyle = new_graphics_style
-                        lines_changed += 1
-                    except:
-                        pass
-                t2.Commit()
-                
-            t3 = Transaction(doc, "Delete Old Line Style")
-            t3.Start()
-            doc.Delete(old_style.Id)
-            t3.Commit()
-            
-            tg.Assimilate()
-            self._load_line_styles()
-            MessageBox.Show("Line style renamed successfully!\nLines transferred: {}".format(lines_changed), "Success", MessageBoxButton.OK, MessageBoxImage.Information)
-        except Exception as ex:
-            tg.RollBack()
-            MessageBox.Show("Error renaming line style:\n\n{}".format(str(ex)), "Error", MessageBoxButton.OK, MessageBoxImage.Error)
+        self._rename_ticked(LINE_STYLE, "Rename Line Style")
 
     def _on_style_delete(self, s, e):
         selected = [item for item in self.line_styles if item.is_selected]
@@ -1492,36 +1651,7 @@ class ManaStylesWindow(T3WPFWindow):
         self._load_line_patterns()
 
     def _on_pattern_rename(self, s, e):
-        selected = [item for item in self.line_patterns if item.is_selected]
-        if len(selected) != 1:
-            MessageBox.Show("Please select exactly one item to rename!", "Warning", MessageBoxButton.OK, MessageBoxImage.Warning)
-            return
-            
-        item = selected[0]
-        if item.is_system:
-            MessageBox.Show("Cannot rename system line patterns!", "Error", MessageBoxButton.OK, MessageBoxImage.Error)
-            return
-            
-        new_name = forms.ask_for_string(prompt="Enter new name:", default=item.name, title="Rename Line Pattern")
-        if not new_name or new_name.strip() == "" or new_name == item.name:
-            return
-            
-        new_name = re.sub(r'[\/:*?"<>|\\\[\]]', '', new_name).strip()
-        for pat in self.line_patterns:
-            if pat.name == new_name:
-                MessageBox.Show("A line pattern with this name already exists!", "Error", MessageBoxButton.OK, MessageBoxImage.Error)
-                return
-                
-        t = Transaction(doc, "Rename Line Pattern")
-        t.Start()
-        try:
-            item.element.Name = new_name
-            t.Commit()
-            self._load_line_patterns()
-            MessageBox.Show("Line pattern renamed successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information)
-        except Exception as ex:
-            t.RollBack()
-            MessageBox.Show("Error: {}".format(str(ex)), "Error", MessageBoxButton.OK, MessageBoxImage.Error)
+        self._rename_ticked(LINE_PATTERN, "Rename Line Pattern")
 
     def _on_pattern_duplicate(self, s, e):
         selected = [item for item in self.line_patterns if item.is_selected]
@@ -1594,36 +1724,7 @@ class ManaStylesWindow(T3WPFWindow):
         self._load_fill_patterns()
 
     def _on_fill_rename(self, s, e):
-        selected = [item for item in self.fill_patterns if item.is_selected]
-        if len(selected) != 1:
-            MessageBox.Show("Please select exactly one item to rename!", "Warning", MessageBoxButton.OK, MessageBoxImage.Warning)
-            return
-            
-        item = selected[0]
-        if item.is_system:
-            MessageBox.Show("Cannot rename system fill patterns!", "Error", MessageBoxButton.OK, MessageBoxImage.Error)
-            return
-            
-        new_name = forms.ask_for_string(prompt="Enter new name:", default=item.name, title="Rename Fill Pattern")
-        if not new_name or new_name.strip() == "" or new_name == item.name:
-            return
-            
-        new_name = re.sub(r'[\/:*?"<>|\\\[\]]', '', new_name).strip()
-        for pat in self.fill_patterns:
-            if pat.name == new_name:
-                MessageBox.Show("A fill pattern with this name already exists!", "Error", MessageBoxButton.OK, MessageBoxImage.Error)
-                return
-                
-        t = Transaction(doc, "Rename Fill Pattern")
-        t.Start()
-        try:
-            item.element.Name = new_name
-            t.Commit()
-            self._load_fill_patterns()
-            MessageBox.Show("Fill pattern renamed successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information)
-        except Exception as ex:
-            t.RollBack()
-            MessageBox.Show("Error: {}".format(str(ex)), "Error", MessageBoxButton.OK, MessageBoxImage.Error)
+        self._rename_ticked(FILL_PATTERN, "Rename Fill Pattern")
 
     def _on_fill_duplicate(self, s, e):
         selected = [item for item in self.fill_patterns if item.is_selected]

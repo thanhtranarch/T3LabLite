@@ -1,0 +1,9 @@
+title: "Mana\nFami"
+tooltip: "Family Manager - Batch rename families and types, and load new families, in one dialog."
+description: |
+  Batch Operations (opens first): list families, system types, model groups or assemblies
+  Find and replace, add a prefix or suffix, and change case of family and type names
+  Review every staged change in the grid, then apply it in one undoable step
+  Family Loader: load new families from a local folder directly into the project
+author: "Tran Tien Thanh"
+version: "1.0.0"

@@ -415,6 +415,60 @@ def setup_window_logo(win_or_elem):
     return None
 
 
+def clip_rounded_panel_child(panel):
+    """Clip a rounded Border's child to the inside of its outline.
+
+    The geometry goes on the child, never on the Border, so the Border's own
+    stroke is not shaved (see T3WPFWindow._install_rounded_window_clip).
+    """
+    try:
+        child = getattr(panel, 'Child', None)
+        if child is None:
+            return
+        width = float(child.ActualWidth)
+        height = float(child.ActualHeight)
+        if width <= 0.0 or height <= 0.0:
+            return
+        radius = rounded_window_inner_radius(panel)
+        if radius <= 0.0:
+            child.Clip = None
+            return
+        from System.Windows import Rect
+        from System.Windows.Media import RectangleGeometry
+        child.Clip = RectangleGeometry(Rect(0.0, 0.0, width, height),
+                                       radius, radius)
+    except BaseException:
+        pass
+
+
+def rounded_window_inner_radius(root):
+    """Radius of the inner edge of the root's border, seen from its child.
+
+    WPF strokes a uniform Border along a centre line of radius
+    ``CornerRadius``, so the inner edge of a ``t``px line has radius
+    ``CornerRadius - t/2``; Padding moves the child further in again.
+    Returns 0 when the root is square (docked Assistant, CornerRadius 0).
+    """
+    corner = getattr(root, 'CornerRadius', None)
+    if corner is None:
+        return 0.0
+    radius = min(float(corner.TopLeft), float(corner.TopRight),
+                 float(corner.BottomRight), float(corner.BottomLeft))
+    if radius <= 0.0:
+        return 0.0
+
+    def _sides(name):
+        value = getattr(root, name, None)
+        if value is None:
+            return (0.0,)
+        return (float(value.Left), float(value.Top),
+                float(value.Right), float(value.Bottom))
+
+    stroke = max(_sides('BorderThickness'))
+    padding = min(_sides('Padding'))
+    return max(0.0, radius - stroke / 2.0 - padding)
+
+
 class T3WPFWindow(Window):
     """
     Universal WPF Window base class supporting both CPython 3 and IronPython.
@@ -495,11 +549,178 @@ class T3WPFWindow(Window):
             # CPython engine: use sanitized XamlReader
             self._load_via_xaml_reader(xaml_content)
 
+        # A Border's ClipToBounds only clips to its rectangular bounds; it does
+        # not honour CornerRadius.  Frameless windows therefore need an explicit
+        # rounded geometry or their title/footer backgrounds paint square
+        # corners over the rounded 1px outline.  Install it centrally so every
+        # T3 custom-chrome window behaves the same while resizing.
+        self._install_rounded_window_clip()
+        self._install_rounded_panel_clips()
+
         if set_owner:
             self.setup_owner()
         if handle_esc:
             self.setup_default_handlers()
         self._install_dispatcher_guard()
+
+    def _install_rounded_window_clip(self):
+        """Clip the content of a rounded root surface inside its outline.
+
+        WPF ``Border.ClipToBounds`` clips children to a rectangle, not to the
+        rounded outline painted by ``Border.CornerRadius``.  With a transparent
+        frameless Window the square title/footer backgrounds of the child would
+        otherwise paint over the corner arcs of the 1px border line and poke out
+        past them.  The geometry goes on the root's CHILD, never on the root:
+        clipping the root itself also shaves the outer half of its own stroke,
+        which is exactly what made the corner line fade out.  It follows the
+        surface during resize and is disabled while maximized so the window
+        fills the monitor edge-to-edge.
+        """
+        try:
+            from System.Windows import WindowStyle as _WindowStyle
+            frameless = getattr(_WindowStyle, 'None')
+            if self.WindowStyle != frameless or not bool(self.AllowsTransparency):
+                return
+
+            root = getattr(self, 'Content', None)
+            corner = getattr(root, 'CornerRadius', None)
+            if root is None or corner is None:
+                return
+
+            self._t3_rounded_window_root = root
+            self._t3_rounded_window_handler = self._refresh_rounded_window_clip
+            root.SizeChanged += self._t3_rounded_window_handler
+            self.Loaded += self._t3_rounded_window_handler
+            self.StateChanged += self._t3_rounded_window_handler
+            self.Closed += self._remove_rounded_window_clip
+
+            # Some hosted surfaces (notably the docked Assistant) deliberately
+            # switch CornerRadius between 12 and 0 without resizing. Listen to
+            # the dependency property so the clip follows that mode change
+            # immediately instead of preserving a stale floating-window radius.
+            try:
+                from System import EventHandler
+                from System.ComponentModel import DependencyPropertyDescriptor
+                from System.Windows.Controls import Border
+                descriptor = DependencyPropertyDescriptor.FromProperty(
+                    Border.CornerRadiusProperty, root.GetType())
+                if descriptor is not None:
+                    corner_handler = EventHandler(
+                        self._refresh_rounded_window_clip)
+                    descriptor.AddValueChanged(root, corner_handler)
+                    self._t3_rounded_window_corner_descriptor = descriptor
+                    self._t3_rounded_window_corner_handler = corner_handler
+            except BaseException:
+                pass
+            self._refresh_rounded_window_clip()
+        except BaseException:
+            # A non-Border root or a host without full WPF geometry support does
+            # not need rounded clipping; never prevent the tool from opening.
+            pass
+
+    def _install_rounded_panel_clips(self):
+        """Clip rounded panels (T3.Panel, Padding 0) the same way.
+
+        ClipToBounds on a panel clips to its rectangle, so a SurfaceSunken
+        header band or a DataGrid header flush with the panel edge painted
+        square corners over the panel's 6px arcs (Clone Drawing, BVBS Export,
+        Mana Fami, Mana Select, CAD to Elements). Every Border in the logical
+        tree that asks for ClipToBounds and has rounded corners its child
+        actually touches gets its child clipped; padded panels compute a
+        radius of 0 and are left alone. Never raises.
+        """
+        try:
+            from System import Object
+            from System.Windows import DependencyObject, LogicalTreeHelper
+            from System.Windows.Controls import Border
+            root = getattr(self, 'Content', None)
+            if root is None:
+                return
+            panels = []
+            stack = [root]
+            while stack:
+                node = stack.pop()
+                try:
+                    stack.extend(c for c in LogicalTreeHelper.GetChildren(node)
+                                 if isinstance(c, DependencyObject))
+                except BaseException:
+                    continue
+                if (isinstance(node, Border) and bool(node.ClipToBounds)
+                        and not Object.ReferenceEquals(node, root)
+                        and rounded_window_inner_radius(node) > 0.0):
+                    panels.append(node)
+            for panel in panels:
+                def _refresh(sender=None, e=None, _panel=panel):
+                    clip_rounded_panel_child(_panel)
+                panel.SizeChanged += _refresh
+                _refresh()
+        except BaseException:
+            pass
+
+    def _refresh_rounded_window_clip(self, sender=None, e=None):
+        try:
+            root = self._t3_rounded_window_root
+            # Bản cũ đặt Clip lên chính root: hình cắt trùng mép ngoài nên nó
+            # gọt mất nửa ngoài nét viền ở góc. Root không bao giờ bị cắt nữa.
+            root.Clip = None
+            child = getattr(root, 'Child', None)
+            if child is None:
+                return
+            if getattr(self, 'WindowState', None) == WindowState.Maximized:
+                child.Clip = None
+                # Square the outline too, or its 12px arcs leave a notch and
+                # see-through pixels at each screen corner. Saved once, put
+                # back on restore.
+                if getattr(self, '_t3_maximized_chrome', None) is None:
+                    from System.Windows import CornerRadius, Thickness
+                    # Saved BEFORE assigning: the CornerRadius change re-enters
+                    # this method and must find it already squared.
+                    self._t3_maximized_chrome = (root.CornerRadius,
+                                                 root.BorderThickness)
+                    root.CornerRadius = CornerRadius(0)
+                    root.BorderThickness = Thickness(0)
+                return
+            saved = getattr(self, '_t3_maximized_chrome', None)
+            if saved is not None:
+                self._t3_maximized_chrome = None
+                root.CornerRadius, root.BorderThickness = saved
+
+            width = float(child.ActualWidth)
+            height = float(child.ActualHeight)
+            if width <= 0.0 or height <= 0.0:
+                return
+
+            radius = rounded_window_inner_radius(root)
+            if radius <= 0.0:
+                child.Clip = None
+                root.InvalidateVisual()
+                return
+
+            from System.Windows import Rect
+            from System.Windows.Media import RectangleGeometry
+            child.Clip = RectangleGeometry(Rect(0.0, 0.0, width, height),
+                                           radius, radius)
+            root.InvalidateVisual()
+        except BaseException:
+            pass
+
+    def _remove_rounded_window_clip(self, sender=None, e=None):
+        try:
+            root = getattr(self, '_t3_rounded_window_root', None)
+            handler = getattr(self, '_t3_rounded_window_handler', None)
+            if root is not None and handler is not None:
+                root.SizeChanged -= handler
+                descriptor = getattr(
+                    self, '_t3_rounded_window_corner_descriptor', None)
+                corner_handler = getattr(
+                    self, '_t3_rounded_window_corner_handler', None)
+                if descriptor is not None and corner_handler is not None:
+                    descriptor.RemoveValueChanged(root, corner_handler)
+            if handler is not None:
+                self.Loaded -= handler
+                self.StateChanged -= handler
+        except BaseException:
+            pass
 
     def _install_dispatcher_guard(self):
         """Catch exceptions WPF raises outside our handlers while this window
@@ -687,6 +908,26 @@ class T3WPFWindow(Window):
                                 disp.BeginInvoke(Action(_set_title))
                     except BaseException:
                         pass
+
+        # Rendering properties every T3 XAML sets on <Window>. They inherit
+        # down the visual tree, so dropping them here took UseLayoutRounding
+        # and Display text formatting away from the whole window: the 1px
+        # outline and its corner arcs went soft at 125% / 150% scaling. Copied
+        # only when the XAML sets them, so other windows keep WPF's defaults.
+        try:
+            from System.Windows import (DependencyProperty, FrameworkElement,
+                                        UIElement)
+            from System.Windows.Controls import Control
+            from System.Windows.Media import TextOptions
+            for dp in (FrameworkElement.UseLayoutRoundingProperty,
+                       UIElement.SnapsToDevicePixelsProperty,
+                       TextOptions.TextFormattingModeProperty,
+                       Control.ForegroundProperty):
+                value = loaded_win.ReadLocalValue(dp)
+                if not DependencyProperty.UnsetValue.Equals(value):
+                    self.SetValue(dp, value)
+        except BaseException:
+            pass
 
         # Copy WindowChrome if present
         try:
@@ -1012,7 +1253,7 @@ class T3WPFWindow(Window):
                 return
 
             is_max = (self.WindowState == WindowState.Maximized)
-            glyph = u"\uE923" if is_max else u"\uE922"   # E923 = ChromeRestore, E922 = ChromeMaximize
+            glyph = u"\uE923" if is_max else u"\uE922"   # T3 table: E923 Restore, E922 Maximize
             tooltip = "Restore" if is_max else "Maximize"
 
             try:
@@ -1158,8 +1399,11 @@ class T3WPFWindow(Window):
     PP_STOP       = "btn_stop"
     PP_STATUS     = "status_text"
 
-    PP_PAUSE_LABEL  = u"⏸  Pause"
-    PP_RESUME_LABEL = u"▶  Resume"
+    # Fallback Button.Content label for windows without the icon/label pair;
+    # _pp_button_content() puts the MDL2 glyph in front (T3 rule 22: no
+    # Unicode pause/play characters as icons).
+    PP_PAUSE_LABEL  = u"Pause"
+    PP_RESUME_LABEL = u"Resume"
     PP_STOP_MSG     = u"Stopping… finishing current item"
     PP_PAUSED_MSG   = u"Paused — click Resume to continue"
 
@@ -1202,9 +1446,42 @@ class T3WPFWindow(Window):
             else:
                 btn = self._pp_el(self.PP_PAUSE)
                 if btn is not None:
-                    btn.Content = self.PP_RESUME_LABEL if paused else self.PP_PAUSE_LABEL
+                    btn.Content = self._pp_button_content(
+                        self.PP_RESUME_GLYPH if paused else self.PP_PAUSE_GLYPH,
+                        self.PP_RESUME_LABEL if paused else self.PP_PAUSE_LABEL)
         except Exception:
             pass
+
+    def _pp_button_content(self, glyph, text):
+        """MDL2 glyph + label for a Pause/Resume button with no named TextBlocks.
+
+        T3 rule 22: the icon is a TextBlock styled T3.Icon.Lead, never a Unicode
+        character inside Button.Content. Falls back to the plain label when WPF
+        is unavailable.
+        """
+        try:
+            from System.Windows import VerticalAlignment
+            from System.Windows.Controls import Orientation, StackPanel, TextBlock
+            icon = TextBlock()
+            icon.Text = glyph
+            try:
+                icon.Style = self.FindResource("T3.Icon.Lead")
+            except Exception:
+                from System.Windows import Thickness
+                from System.Windows.Media import FontFamily
+                icon.FontFamily = FontFamily("Segoe MDL2 Assets")
+                icon.Margin = Thickness(0, 0, 8, 0)
+                icon.VerticalAlignment = VerticalAlignment.Center
+            label = TextBlock()
+            label.Text = text
+            label.VerticalAlignment = VerticalAlignment.Center
+            panel = StackPanel()
+            panel.Orientation = Orientation.Horizontal
+            panel.Children.Add(icon)
+            panel.Children.Add(label)
+            return panel
+        except Exception:
+            return text
 
     def _pp_set_status(self, text):
         """Write to the window's status area."""
@@ -1423,6 +1700,35 @@ class T3WPFWindow(Window):
             header_cb.IsChecked = False
         else:
             header_cb.IsChecked = None      # indeterminate
+
+    def enable_bulk_tick(self, grid, prop, on_change=None, header=None,
+                         context_menu=True):
+        """Bật cử chỉ tick hàng loạt cho cột checkbox (bridged) của `grid`.
+
+        Shift+click checkbox = tick theo khoảng · nhấn checkbox rồi kéo = tô
+        (tự cuộn sát mép) · bôi đen dòng + Space = tick/bỏ tick nhóm · chuột
+        phải = menu Tick selected / Untick selected / Tick all visible /
+        Untick all / Invert ticks. Sau mỗi thao tác header select-all
+        (`header`, mặc định `chk_all_<grid.Name>`) được đồng bộ rồi gọi
+        `on_change()`. Chi tiết: GUI/bulk_tick.py.
+
+        Trả về controller (None nếu không gắn được — bảng vẫn chạy như cũ).
+        """
+        if grid is None or not prop:
+            return None
+        try:
+            from GUI.bulk_tick import BulkTick
+            ctl = BulkTick(self, grid, prop, on_change=on_change, header=header,
+                           context_menu=context_menu)
+        except BaseException:
+            return None
+        # Giữ controller: nó giữ các delegate, GC thu mất thì cử chỉ chết.
+        store = getattr(self, '_t3_bulk_tick', None)
+        if store is None:
+            store = []
+            self._t3_bulk_tick = store
+        store.append(ctl)
+        return ctl
 
     # ── AI Mode Helpers ──────────────────────────────────────────────────
     @property

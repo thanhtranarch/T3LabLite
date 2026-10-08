@@ -83,6 +83,20 @@ instead of seven, the same buttons in the same places.
 - **Split Elements** shows that splitting is not available yet instead of a
   file-not-found error, and Wall Cut Profile no longer offers "Edit Wall
   Profile", which did nothing.
+- **ManaFami**: the Family Loader listed no families and Load loaded nothing;
+  thumbnails now show, and Export List saves a `.csv`.
+- **ManaStyles**: Duplicate did nothing for fill and line patterns; All / Clear
+  / Custom now tick the boxes you see; Color Splasher says link sources need a
+  View Filter instead of reporting 0 changes.
+- **FamiGen**: Export & Place placed 0 instances.
+- **Model Auditor**: Duplicate Elements detail rows and Select in Model work;
+  run history is kept in `%APPDATA%\T3LabAI` instead of the extension folder
+  (which also left git installs unable to update); status colours show.
+- **BatchLink**: a link that fails to move to a workset no longer leaves its
+  other instances half moved.
+- **ManaGroup**: edited New Name cells turn amber.
+- The Maximize button of ManaStyles and ManaFami toggled twice, so it did
+  nothing.
 - **ManaViews**: Excel export and Excel import failed every time.
 - **PDF Import**: after unticking a view, All / None or switching mode, the
   PAGE column kept old numbers, so a view could get a different page than the

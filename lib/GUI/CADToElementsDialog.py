@@ -62,6 +62,7 @@ _HERE = os.path.dirname(__file__)  # …/lib/GUI/
 if os.path.dirname(_HERE) not in sys.path:
     sys.path.insert(0, os.path.dirname(_HERE))  # …/lib on path for GUI.* imports
 from GUI.ProgressPauseMixin import ProgressPauseMixin
+from Snippets._compat import elem_name
 _TOOLS_DIR = os.path.join(_HERE, "Tools")
 _XAML_HUB = os.path.join(_TOOLS_DIR, "CADToElements.xaml")
 _XAML_WALL = os.path.join(_TOOLS_DIR, "CadtoWall.xaml")
@@ -145,7 +146,7 @@ def _add_cad_to_list(doc, inst, cad_list):
         cad_type = doc.GetElement(inst.GetTypeId())
         if cad_type:
             try:
-                name = DB.Element.Name.GetValue(cad_type)
+                name = elem_name(cad_type)
             except Exception:
                 try:
                     p = cad_type.LookupParameter("Name")
@@ -239,7 +240,7 @@ def get_levels(doc):
     lvs = []
     for lv in collector:
         try:
-            name = DB.Element.Name.GetValue(lv)
+            name = elem_name(lv)
             lvs.append({"name": name, "id": lv.Id, "elevation": lv.Elevation})
         except Exception:
             pass
@@ -549,7 +550,7 @@ def find_base_wall_type(doc):
             kind = wt.Kind
             if kind != DB.WallKind.Basic:
                 continue
-            name = DB.Element.Name.GetValue(wt)
+            name = elem_name(wt)
             any_basic = wt
             if "generic" in name.lower():
                 generic_type = wt
@@ -567,7 +568,7 @@ def get_or_create_wall_type(doc, thickness_mm, base_type):
     collector = FilteredElementCollector(doc).OfClass(WallType)
     for wt in collector:
         try:
-            name = DB.Element.Name.GetValue(wt)
+            name = elem_name(wt)
             if name == target_name:
                 return wt
         except Exception:
@@ -1026,7 +1027,7 @@ def get_or_create_beam_type(doc, family_name, width_mm, height_mm):
 
     for s in target_symbols:
         try:
-            if DB.Element.Name.GetValue(s) == type_name:
+            if elem_name(s) == type_name:
                 return s
         except Exception:
             pass
@@ -1152,7 +1153,7 @@ def _collect_types_by_class(doc, cls):
         collector = FilteredElementCollector(doc).OfClass(cls)
         for el in collector:
             try:
-                name = DB.Element.Name.GetValue(el)
+                name = elem_name(el)
                 results.append({"id": el.Id, "name": name or "Unknown", "element": el})
             except Exception:
                 pass
@@ -1170,7 +1171,7 @@ def _collect_system_types(doc, cls):
         for st in collector:
             try:
                 if isinstance(st, cls):
-                    name = DB.Element.Name.GetValue(st)
+                    name = elem_name(st)
                     results.append({"id": st.Id, "name": name or "Unknown", "element": st})
             except Exception:
                 pass

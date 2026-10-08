@@ -65,6 +65,24 @@ instead of seven, the same buttons in the same places.
   to other types.
 - **Auto Dimension**: whole dimension strings were rejected with "Invalid
   number of references" when a grid or wall was slightly off axis.
+- **Wall Cut Profile** and **Auto Adjust Base Offset** did not open at all;
+  Pick then Apply now runs inside Revit's API context (the window closes while
+  you pick and reopens with your inputs).
+- **CAD to Elements**: the Level list and the wall / beam / MEP type lists were
+  always empty, so every run stopped at "Select a Level."
+- **Image to Drafting**: both tracing modes failed to load the tracer. Works on
+  Revit 2022-2024; Revit 2025+ now says tracing is not available there yet.
+- **Tile Layout**: Apply to Model created no tiles while reporting success, and
+  Export CSV always failed.
+- **Text to Element**: Pick items no longer picks while the dialog is still
+  open (a known Revit crash pattern).
+- **Point Cloud**: roofs were never created.
+- **Room To Floor, Door Threshold, Point Cloud, Tile Layout, Wall Cut Profile,
+  Auto Adjust Base Offset**: the second click in a session failed with
+  "Duplicate type name within an assembly".
+- **Split Elements** shows that splitting is not available yet instead of a
+  file-not-found error, and Wall Cut Profile no longer offers "Edit Wall
+  Profile", which did nothing.
 - **ManaViews**: Excel export and Excel import failed every time.
 - **PDF Import**: after unticking a view, All / None or switching mode, the
   PAGE column kept old numbers, so a view could get a different page than the

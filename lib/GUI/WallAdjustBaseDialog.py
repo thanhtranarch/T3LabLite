@@ -11,7 +11,9 @@ try:
 except Exception:
     _theme = None
 
-from GUI.WPF_Base import T3WPFWindow
+import System
+
+from GUI.WPF_Base import T3WPFWindow, set_items_source
 from Snippets._compat import eid_value
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'WallAdjustBase.xaml')
@@ -37,8 +39,15 @@ except Exception:
     DB = None
 
 
+import uuid
+# The pushbutton script importlib.reload()s this module on every click; a
+# fixed __namespace__ would define the same .NET type twice and raise
+# "Duplicate type name within an assembly" (rule S15).
+_NS_SUFFIX = uuid.uuid4().hex[:8]
+
+
 class WarningSwallower(IFailuresPreprocessor if DB else object):
-    __namespace__ = "T3Lab.WallAdjustBase_Failures"
+    __namespace__ = "T3Lab.WallAdjustBase_Failures_" + _NS_SUFFIX
 
     def PreprocessFailures(self, fa):
         for f in fa.GetFailureMessages():
@@ -48,7 +57,7 @@ class WarningSwallower(IFailuresPreprocessor if DB else object):
 
 
 class ElementSelectionFilter(ISelectionFilter if DB else object):
-    __namespace__ = "T3Lab.WallAdjustBase_Filter"
+    __namespace__ = "T3Lab.WallAdjustBase_Filter_" + _NS_SUFFIX
 
     def AllowElement(self, elem):
         if isinstance(elem, (Wall, Floor)):
@@ -77,17 +86,25 @@ class LevelItem(object):
 
 
 class WallAdjustBaseWindow(T3WPFWindow):
-    def __init__(self, doc, uidoc):
+    def __init__(self, doc, uidoc, state=None):
         T3WPFWindow.__init__(self, _XAML)
         self._doc = doc
         self._uidoc = uidoc
         self._elements = []
         self._levels = []
+        # Set by "Pick Elements": the window closes and show_wall_adjust_base
+        # picks inside the live command, then reopens it with `state`. Hiding a
+        # ShowDialog window ends ShowDialog, so Apply then ran outside the
+        # Revit API context and Transaction.Start threw.
+        self.pick_request = False
 
         self._adopt_host_font()
         self._apply_theme()
         self._load_levels()
-        self._check_initial_selection()
+        if state is None:
+            self._check_initial_selection()
+        else:
+            self._restore_state(state)
 
     def _adopt_host_font(self):
         if _theme is None:
@@ -118,7 +135,7 @@ class WallAdjustBaseWindow(T3WPFWindow):
         self._levels = [LevelItem(lvl) for lvl in levels]
 
         if hasattr(self, 'cmb_levels') and self.cmb_levels:
-            self.cmb_levels.ItemsSource = [item.display for item in self._levels]
+            set_items_source(self.cmb_levels, [item.display for item in self._levels])
             if len(self._levels) > 0:
                 self.cmb_levels.SelectedIndex = 0
 
@@ -144,28 +161,30 @@ class WallAdjustBaseWindow(T3WPFWindow):
             else:
                 self.txt_selection_status.Text = "{} element(s) selected ready to adjust".format(count)
 
+    def get_state(self):
+        """What the window must keep across the close–pick–reopen cycle."""
+        return {
+            'elements': list(self._elements),
+            'level_index': self.cmb_levels.SelectedIndex,
+            'adjust_top': bool(self.rb_top.IsChecked),
+        }
+
+    def _restore_state(self, state):
+        self._elements = list(state.get('elements') or [])
+        idx = state.get('level_index', -1)
+        if 0 <= idx < len(self._levels):
+            self.cmb_levels.SelectedIndex = idx
+        if state.get('adjust_top'):
+            self.rb_top.IsChecked = True
+        self._update_selection_ui()
+
     def btn_pick_clicked(self, sender, e):
         if not self._uidoc:
             return
-        self.Hide()
-        try:
-            refs = self._uidoc.Selection.PickObjects(
-                ObjectType.Element,
-                ElementSelectionFilter(),
-                "Select elements (Walls, Floors, Columns, Beams), then click Finish"
-            )
-            elems = []
-            if refs:
-                for r in refs:
-                    el = self._doc.GetElement(r.ElementId)
-                    if el:
-                        elems.append(el)
-            self._elements = elems
-        except Exception:
-            pass
-        finally:
-            self.Show()
-            self._update_selection_ui()
+        # Close and let show_wall_adjust_base pick inside the live command
+        # context — never Hide() a ShowDialog window to pick.
+        self.pick_request = True
+        self.Close()
 
     def btn_cancel_clicked(self, sender, e):
         self.Close()
@@ -267,9 +286,33 @@ class WallAdjustBaseWindow(T3WPFWindow):
             return False
 
 
+def _pick_elements_into(doc, uidoc, state):
+    """PickObjects with no window open; Esc keeps the previous selection."""
+    try:
+        refs = uidoc.Selection.PickObjects(
+            ObjectType.Element,
+            ElementSelectionFilter(),
+            "Select elements (Walls, Floors, Columns, Beams), then click Finish"
+        )
+    except Exception:
+        return
+    elems = []
+    for r in refs or []:
+        el = doc.GetElement(r.ElementId)
+        if el:
+            elems.append(el)
+    state['elements'] = elems
+
+
 def show_wall_adjust_base(doc, uidoc):
     if not doc or not uidoc:
         forms.alert("No active Revit document found.", title="Wall Adjust Base")
         return
-    win = WallAdjustBaseWindow(doc, uidoc)
-    win.ShowDialog()
+    state = None
+    while True:
+        win = WallAdjustBaseWindow(doc, uidoc, state)
+        win.ShowDialog()
+        if not win.pick_request:
+            break
+        state = win.get_state()
+        _pick_elements_into(doc, uidoc, state)

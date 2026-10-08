@@ -144,8 +144,13 @@ def mm_to_ft(mm):
 import uuid
 from Snippets._compat import disposing
 
+# The pushbutton script importlib.reload()s this module on every click; a
+# fixed __namespace__ would define the same .NET type twice and raise
+# "Duplicate type name within an assembly" (rule S15).
+_NS_SUFFIX = uuid.uuid4().hex[:8]
+
 class PointCloudSelectionFilter(ISelectionFilter):
-    __namespace__ = "T3Lab.PointCloud"
+    __namespace__ = "T3Lab.PointCloud_" + _NS_SUFFIX
     def AllowElement(self, element):
         return isinstance(element, PointCloudInstance)
 
@@ -1295,7 +1300,7 @@ class PointCloudAnalyzer(object):
 # ── Section 6: ElementBuilder ─────────────────────────────────────────────────
 
 class WarningSwallower(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.PointCloud_Warning"
+    __namespace__ = "T3Lab.PointCloud_Warning_" + _NS_SUFFIX
     """
     Suppress Revit's modal warning dialogs during batch creation.
 
@@ -1635,10 +1640,11 @@ class ElementBuilder(object):
                     p2 = pts[(i + 1) % n]
                     if p1.DistanceTo(p2) > 0.01:
                         ca.Append(Line.CreateBound(p1, p2))
-                # NewFootPrintRoof has an 'out ModelCurveArray' parameter —
-                # IronPython requires a clr.Reference box for it
-                ma_ref = clr.Reference[DB.ModelCurveArray]()
-                roof = self.doc.Create.NewFootPrintRoof(ca, lv, rt, ma_ref)
+                # NewFootPrintRoof has an 'out ModelCurveArray' parameter.
+                # pythonnet 3 has no clr.Reference: pass a placeholder and the
+                # call returns (roof, model_curves) instead.
+                result = self.doc.Create.NewFootPrintRoof(ca, lv, rt, None)
+                roof = result[0] if isinstance(result, tuple) else result
                 self._set_offset_from_level(
                     roof, BuiltInParameter.ROOF_LEVEL_OFFSET_PARAM,
                     z_ft - lv.Elevation)

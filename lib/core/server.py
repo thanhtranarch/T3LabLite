@@ -358,7 +358,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
 
         try:
             request = json.loads(body) if body else {}
-        except json.JSONDecodeError:
+        except ValueError:      # IronPython 2.7 has no json.JSONDecodeError
             self._send_json({'error': 'Invalid JSON'}, 400)
             return
 

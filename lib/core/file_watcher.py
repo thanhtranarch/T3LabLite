@@ -149,12 +149,46 @@ else:
 _PROCESS_WATCHER_KEY = '_t3lab_task_watcher_singleton'
 
 
+class _ForeignWatcher(object):
+    """Stand-in for a watcher another Python engine runs in this Revit.
+
+    startup.py (IronPython) starts the watcher at Revit start and anchors it on
+    the AppDomain. A `#! python3` tool reading that anchor gets an opaque CLR
+    object whose Python methods it cannot call, so MCP Control showed
+    "'Object_1$1' object has no attribute 'get_status'" and disabled the row
+    for a watcher that was running fine. This reports it as running, and keeps
+    CPython from starting a second watcher next to it.
+    """
+
+    def get_status(self):
+        return {
+            'running':        True,
+            'data_dir':       T3LAB_DATA_DIR,
+            'task_file':      TASK_FILE,
+            'result_file':    RESULT_FILE,
+            'task_py_file':   TASK_PY_FILE,
+            'result_txt':     RESULT_TXT,
+            'has_ext_event':  True,
+        }
+
+    def start(self):
+        return True
+
+    def stop(self):
+        raise RuntimeError('The file watcher was started with Revit; '
+                           'restart Revit to stop it.')
+
+
+def _usable(inst):
+    return callable(getattr(inst, 'get_status', None))
+
+
 def _get_process_watcher():
     try:
         from System import AppDomain
         existing = AppDomain.CurrentDomain.GetData(_PROCESS_WATCHER_KEY)
         if existing is not None:
-            return existing
+            return existing if _usable(existing) else _ForeignWatcher()
     except Exception:
         pass
     return getattr(sys, _PROCESS_WATCHER_KEY, None)

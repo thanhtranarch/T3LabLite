@@ -4,7 +4,7 @@ description: |
   Compares the installed T3Lab version with the latest version on GitHub
   Shows what's new in the latest release (from CHANGELOG.md)
   Updates automatically via git pull, or direct download as fallback
-  Offers to reload pyRevit so the new version is active immediately
+  Asks you to restart Revit so the new version is loaded
   T3Lab also checks by itself on the first Revit start of each week - clicking is optional
 author: "Tran Tien Thanh"
 version: "1.0.0"

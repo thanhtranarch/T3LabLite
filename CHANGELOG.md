@@ -52,6 +52,26 @@ instead of seven, the same buttons in the same places.
   T3Lab moves the folders the update left behind to the `_retired_ribbon`
   folder of the extension on the next Revit start and says when a restart
   finishes the job (`lib/core/ribbon_retire.py`).
+- **Check Update never updated**: its "Update now?" question always came back
+  as "no" under CPython, so the click did nothing. After an update it now asks
+  you to restart Revit instead of offering a pyRevit Reload -- on Revit 2025+ a
+  Reload stops every T3Lab tool until Revit restarts.
+- **Make Pattern**: Create Pattern failed every time.
+- **ManaSelect**: the Quick Select, Select Similar, On Sheets and Warnings tiles
+  snapped back to Explore; Quick Select now also fills its list when opened.
+- **ManaSched**: importing Excel values back wrote lengths in feet (2500 mm
+  became 2500 ft); values are read in the project's display units.
+- **IFC-SG Suite**: after sorting a column, Apply to Selected wrote the subtype
+  to other types.
+- **Auto Dimension**: whole dimension strings were rejected with "Invalid
+  number of references" when a grid or wall was slightly off axis.
+- **MCP Control**: the file watcher row showed an error and a disabled button
+  while the watcher was running; the watcher started at Revit start is now
+  reported as running.
+- Missing imports that raised NameError: the file task watcher never started,
+  MCP find_elements failed on name/level/type filters, View Manager Yes/No
+  confirmations, IFC-SG subtype matching with more than 35 candidates, and the
+  Assistant's task cards.
 - The T3Lab Assistant's fallback for opening BatchOut looked for the script in
   the wrong folder. Image to Drafting (`potrace.exe`), the Assistant and the
   Assistant dock pane now find a button by its folder name, wherever it sits

@@ -566,7 +566,7 @@ def _notify_updated(new_version):
         from pyrevit import forms
         forms.toast(
             "T3Lab Lite {} was downloaded. "
-            "Restart Revit (or pyRevit > Reload) to use it.".format(new_version),
+            "Restart Revit to use it.".format(new_version),
             title="T3Lab update ready",
             appid="T3Lab Lite")
     except Exception as ex:

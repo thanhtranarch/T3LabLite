@@ -14,7 +14,7 @@ How it works:
        and updates the extension:
          - 'git pull' when the extension is a git clone and git is available
          - otherwise downloads the repository zip and copies it over
-    4. Offers to reload pyRevit so the new version is active immediately
+    4. Tells the user to restart Revit so the new version is loaded
 
 The check/download logic lives in lib/core/updater.py, shared with the
 once-a-week automatic update that startup.py runs in the background. This
@@ -58,27 +58,16 @@ logger = script.get_logger()
 # CLASS/FUNCTIONS
 # ==============================================================================
 def _offer_reload(new_version):
-    # Revit never removes a ribbon item once created, so a reload can only
-    # update buttons that kept their bundle name. A release that moves or
-    # renames buttons is fully applied on the next Revit start.
-    res = forms.alert(
+    # Restart, never a pyRevit Reload: on Revit 2025+ a Reload shuts down the
+    # CPython engine and pythonnet cannot start it again, so every T3Lab tool
+    # fails with "This property must be set before runtime is initialized"
+    # until Revit restarts. A restart also builds the ribbon from scratch,
+    # which a Reload cannot do for buttons that moved.
+    forms.alert(
         "T3Lab has been updated to version {}.\n\n"
-        "Reload pyRevit now to start using the new version?\n"
-        "If the T3Lab ribbon looks incomplete afterwards, restart Revit "
-        "once -- ribbon layout changes only apply on a fresh start.".format(
-            new_version),
+        "Restart Revit to start using the new version.".format(new_version),
         title="Update complete",
-        options=["Reload pyRevit now", "Later"])
-    if res == "Reload pyRevit now":
-        try:
-            from pyrevit.loader.sessionmgr import reload_pyrevit
-            reload_pyrevit()
-        except Exception as ex:
-            logger.error("Automatic reload failed: %s", ex)
-            forms.alert(
-                "Could not reload automatically.\n\n"
-                "Please click pyRevit > Reload to finish the update.",
-                title="Reload required")
+        warn_icon=False)
 
 
 def _run_update(remote_text):

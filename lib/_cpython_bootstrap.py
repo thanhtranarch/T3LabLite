@@ -498,10 +498,22 @@ def _t3_alert(msg, title=None, sub_msg=None, expanded=None, footer='',
     """CPython-safe stand-in for `pyrevit.forms.alert`, backed by GUI.T3Dialog."""
     caption = title or 'T3Lab'
     details = expanded or sub_msg or footer or None
-    answer = True
+    labels = [u'{}'.format(o) for o in (options or ())]
+    # With `options`, pyRevit returns the label of the button picked (None
+    # when the dialog is closed). Returning True there made every
+    # `if res == "Update now":` false, so Check Update never updated.
+    answer = None if labels else True
     try:
         from GUI.T3Dialog import show_info, show_warning, confirm
-        if yes or no or cancel:
+        if len(labels) == 1:
+            (show_warning if warn_icon else show_info)(msg, title=caption, details=details)
+            answer = labels[0]
+        elif labels:
+            # T3Dialog has two buttons: the first two options. No caller passes more.
+            answer = labels[0] if confirm(msg, title=caption, details=details,
+                                          ok_text=labels[0],
+                                          cancel_text=labels[1]) else labels[1]
+        elif yes or no or cancel:
             # Label the buttons the way the caller asked the question: a
             # yes/no prompt answered by "Proceed"/"Cancel" reads as a different
             # question than the one on screen.

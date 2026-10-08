@@ -24,8 +24,9 @@ T3Lab Lite is installed as a pyRevit extension.
 You never have to click anything. On the first Revit start of each week
 (Monday to Sunday), T3Lab checks GitHub for a newer release and installs it in
 the background. Revit keeps running the version it loaded, so the update takes
-effect the next time you start Revit (or click pyRevit ▸ Reload) — a
-notification tells you when that is worth doing. If GitHub cannot be reached
+effect the next time you start Revit — a notification tells you when
+that is worth doing. Restart Revit rather than using pyRevit ▸ Reload: on
+Revit 2025+ a Reload stops every T3Lab tool until Revit restarts. If GitHub cannot be reached
 (offline, blocked), the next day's first start tries again until the check
 gets an answer, so a bad Monday does not cost you the week.
 
@@ -69,7 +70,7 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
   - **Version Detection** — queries GitHub repository releases and mirrors (jsDelivr) to prevent rate limits.
   - **What's New Preview** — automatically extracts release notes from `CHANGELOG.md` between local and remote versions.
   - **Safe Updating** — pulls updates via `git pull --ff-only` when running from a git clone (protecting local edits) or downloads and extracts the release archive.
-  - **Live Reload** — prompts to reload pyRevit immediately to start using updated tools.
+  - **Restart prompt** — tells you to restart Revit so the updated tools load.
 
 #### Cloud Links
 Quick links to Autodesk Forma, Autodesk Health dashboard, and Bluebeam Status.

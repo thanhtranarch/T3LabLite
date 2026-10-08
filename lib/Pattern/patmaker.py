@@ -13,7 +13,7 @@ import os
 import re
 import time
 from math import sqrt, pi, sin, cos, degrees, atan2
-from Snippets._compat import disposing
+from Snippets._compat import disposing, net_list
 
 # Fallback logger
 try:
@@ -472,7 +472,8 @@ class PatternCompiler(object):
 
         fp_target = DB.FillPatternTarget.Model if self.is_model else DB.FillPatternTarget.Drafting
         fill_pat = DB.FillPattern(self.name, fp_target, DB.FillPatternHostOrientation.ToHost)
-        fill_pat.SetFillGrids(ClrList[DB.FillGrid](rvt_grids))
+        # List[T](python_list) has no matching constructor under pythonnet 3.
+        fill_pat.SetFillGrids(net_list(DB.FillGrid, rvt_grids))
 
         # Check existing FillPatternElement
         collector = DB.FilteredElementCollector(doc).OfClass(DB.FillPatternElement)

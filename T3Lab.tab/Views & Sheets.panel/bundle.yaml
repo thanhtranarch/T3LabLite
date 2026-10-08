@@ -2,8 +2,7 @@ title: "Views & Sheets"
 background:
   title: "#46E07B00"
 layout:
+  - ViewTools
   - ManaViews
   - ManaSheets
-  - SheetGen
-  - CropSync
   - BatchOut

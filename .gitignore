@@ -3,3 +3,12 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Per-user tool state. It lives in %APPDATA%\T3LabAI now; a copy written next to
+# a script made the clone dirty and blocked the auto-update `git pull`.
+T3Lab.tab/**/dqt_bg_config.json
+T3Lab.tab/**/dqt_ribbon_*.json
+**/.ribbon-*.tmp
+
+# Ribbon folders an update left behind, moved here by lib/core/ribbon_retire.py.
+_retired_ribbon/

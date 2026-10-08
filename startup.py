@@ -54,6 +54,19 @@ try:
 except Exception:
     pass
 
+# ─── Retire ribbon folders an update left behind (Lite only) ───────────────────
+# The download-and-copy update never deletes files, so after the ribbon regroup
+# the old panel folders stayed on disk and pyRevit showed them as a second copy
+# of the old panels. This moves them to <extension>\_retired_ribbon once the new
+# layout is in place; the leftovers already loaded for this session go away on
+# the next Revit start, which the toast says. Code: lib/core/ribbon_retire.py.
+# lite_guard/manifest.json fails the commit if this call goes missing.
+try:
+    from core.ribbon_retire import retire_old_ribbon_folders, notify_retired
+    notify_retired(retire_old_ribbon_folders())
+except Exception:
+    pass
+
 # ─── Reload-survival probe ─────────────────────────────────────────────────────
 # init_cpython_paths() installs the no-op IFormatter that stops `Reload pyRevit`
 # from crashing on BinaryFormatter (see _cpython_bootstrap.enable_safe_engine_

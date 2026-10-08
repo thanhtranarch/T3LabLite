@@ -1,0 +1,10 @@
+title: "Standards & Families"
+background:
+  title: "#46E07B00"
+layout:
+  - Standards
+  - Managers
+  - ManaFami
+  - FamiTransfer
+  - FamiGen
+

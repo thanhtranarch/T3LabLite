@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- tier A - ban ve CAD (trang) -> cau kien (tuong) -->
+  <rect x="3.5" y="5.5" width="11" height="15" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
+  <path d="M6 9h6v1H6zM6 12h6v1H6zM6 15h4v1H6z" fill="#858585"/>
+  <polygon points="16,13 20,13 20,10 25,14.5 20,19 20,16 16,16" fill="#E07B00"/>
+  <rect x="26.5" y="4.5" width="3" height="22" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
+</svg>

@@ -1,8 +1,7 @@
 layout:
   - Support
-  - Standards & Settings
-  - Data
-  - Modeling & Datum
-  - Annotation & Select
-  - Views & Sheets
+  - Standards & Families
+  - Model & Datum
   - Rebar & Assembly
+  - Annotation & Data
+  - Views & Sheets

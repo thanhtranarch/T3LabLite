@@ -33,14 +33,14 @@ A clone with local commits or edits is only ever fast-forwarded, never
 overwritten. Two settings in `%APPDATA%\T3LabAI\mcp_paths.json`:
 `"auto_update": false` turns the automatic check off, and
 `"auto_update_interval": "daily"` checks every day instead of every week.
-**Check Update** on the Support panel updates on demand either way, and
+**Check Update** (Support ▸ Settings) updates on demand either way, and
 `%APPDATA%\T3LabAI\update.log` records what happened.
 
 ---
 
 ### Tools
 
-The ribbon is organised into seven panels: **Support**, **Standards & Settings**, **Data**, **Modeling & Datum**, **Annotation & Select**, **Views & Sheets**, and **Rebar & Assembly**. All tools run on the high-performance **CPython 3** engine.
+The ribbon has the same six panels as t3lab-revit-api: **Support**, **Standards & Families**, **Model & Datum**, **Rebar & Assembly**, **Annotation & Data** and **Views & Sheets**. All tools run on the high-performance **CPython 3** engine.
 
 Tools that process many elements — Model Auditor, ManaSheets, ManaViews, SheetGen, FamiGen, IFC-SG Suite, Tile Layout, Auto Join, Room To Floor, Image to Drafting, CAD to Elements and BatchOut — show a progress bar with **Pause** and **Stop** while they run, so a long batch can be paused or cancelled without killing Revit.
 
@@ -58,143 +58,77 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
 - **PDF comments** — read markups from a PDF, trace them to the matching sheet, and resolve them item by item.
 - **Spell check** — proofread every Text Note in the model or just the active view.
 
-#### Assistant Tools
+#### Settings (pulldown)
 - **MCP Control** — start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit. Configure host, port, and authentication settings.
 - **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, DeepSeek, Ollama, LM Studio), model, API key or local server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs.
 - **Feedback** — send feedback or suggestions to the T3Lab team directly from Revit.
-
-#### PDF Import
-Import PDF pages into selected Revit views sequentially. Supports 150 / 300 / 600 DPI.
-
-#### UI Theme & Tabs
 - **ManaTabs** — hide or show Revit ribbon tabs to reduce clutter.
 - **Ribbon Names** — shorten or restore ribbon tab names with inline editing and saved mappings.
 - **BG Theme** — set the model-view background colour. Presets, RGB sliders, HEX input, and live preview. SHIFT+Click cycles Black → Gray → White.
-
-#### Check Update
-Compare the installed version (`version.txt`) with the latest release on GitHub and update via git or direct download — see [Staying up to date](#staying-up-to-date).
-- **Version Detection** — queries GitHub repository releases and mirrors (jsDelivr) to prevent rate limits.
-- **What's New Preview** — automatically extracts release notes from `CHANGELOG.md` between local and remote versions.
-- **Safe Updating** — pulls updates via `git pull --ff-only` when running from a git clone (protecting local edits) or downloads and extracts the release archive.
-- **Live Reload** — prompts to reload pyRevit immediately to start using updated tools.
+- **Check Update** — compare the installed version (`version.txt`) with the latest release on GitHub and update via git or direct download — see [Staying up to date](#staying-up-to-date).
+  - **Version Detection** — queries GitHub repository releases and mirrors (jsDelivr) to prevent rate limits.
+  - **What's New Preview** — automatically extracts release notes from `CHANGELOG.md` between local and remote versions.
+  - **Safe Updating** — pulls updates via `git pull --ff-only` when running from a git clone (protecting local edits) or downloads and extracts the release archive.
+  - **Live Reload** — prompts to reload pyRevit immediately to start using updated tools.
 
 #### Cloud Links
 Quick links to Autodesk Forma, Autodesk Health dashboard, and Bluebeam Status.
 
 ---
 
-### Standards & Settings
+### Standards & Families
 
-#### Model Auditor
-Consolidated model health checks in one window.
-- **Model Check** — verify model standards and quality rules.
-- **Smart Purge** — safe, category-based model cleanup removing unreferenced views, unused families, and unplaced elements.
-- **Warnings** — review and address the Revit warning list.
-- **In-Place Models** — list and manage in-place family instances.
-- **Material List** — audit all materials used in the model.
-
-#### ManaGroup
-Manage Revit Model Groups and Detail Groups: list group types and placed instances, count references, and audit unused group definitions.
-
-#### BatchLink
-Manage Revit and CAD link paths in bulk: verify link statuses, repath missing links, reload links across documents, and audit external dependencies.
-
-#### Standards (ManaStyles · ManaWorkset · ManaLoca)
+#### Standards (Model Auditor · ManaStyles · ManaWorkset)
+- **Model Auditor** — consolidated model health checks in one window:
+  - **Model Check** — verify model standards and quality rules.
+  - **Smart Purge** — safe, category-based model cleanup removing unreferenced views, unused families, and unplaced elements.
+  - **Warnings** — review and address the Revit warning list.
+  - **In-Place Models** — list and manage in-place family instances.
+  - **Material List** — audit all materials used in the model.
 - **ManaStyles** — manage fill patterns, line styles and line patterns, apply graphic override colours by category rule (Color Splasher), and view and adjust element XYZ coordinates in a grid.
 - **ManaWorkset** — enable worksharing on a model, create and delete worksets, assign elements to worksets by rule (category, level, or type), and generate view filters from workset membership.
+
+#### Managers (ManaLoca · ManaGroup · BatchLink)
 - **ManaLoca** — list the elements of the active view or a level and edit their XYZ coordinates in a data grid, committed in one transaction. The window stays open while you work.
-
----
-
-### Data
-
-#### ManaSched
-Export schedule data to Excel with formatting preserved, import updated values back into schedule rows, and duplicate schedules.
-
-#### ManaPara
-Parameter Manager — transfer parameter values between elements by rule, assign Text Note content to element parameters via spatial overlap, and write schedule values into filled region parameters.
-
-#### ManaContains
-Find elements contained in Rooms, Areas, Spaces, Zones, Masses, or Scope Boxes.
-Assign parameter values to contained elements from their container, or aggregate element data back into the container.
-
-#### IFC-SG Suite
-Unified IFC-SG manager. **Subtype Assigner** loads mapping rules from Excel and assigns IFC Export Class and Predefined Type parameters; **Compliance Checker** verifies that required parameters exist and are filled, against CORENET X rules.
-
----
-
-### Modeling & Datum
-
-#### DatumSync
-Synchronize grid lines, levels, and reference planes across views. Align 2D/3D extents, datum bubbles, and visibility between a source view and target views to maintain clean documentation.
-
-#### Family Transfer
-Transfer families and selected types between open project documents or loaded links with category filtering, conflict resolution (overwrite, rename, skip), and single-transaction undo.
+- **ManaGroup** — manage Revit Model Groups and Detail Groups: list group types and placed instances, count references, and audit unused group definitions.
+- **BatchLink** — manage Revit and CAD link paths in bulk: verify link statuses, repath missing links, reload links across documents, and audit external dependencies.
 
 #### ManaFami
 Family manager. Batch Operations lists families, system types, model groups or assemblies; find and replace, add a prefix or suffix and change case, review every staged change in the grid, then apply it in one undoable step. Family Loader loads new families from a local folder (or a cloud catalogue you configure) into the project.
 
+#### Family Transfer
+Transfer families and selected types between open project documents or loaded links with category filtering, conflict resolution (overwrite, rename, skip), and single-transaction undo.
+
 #### FamiGen
 Create Revit families from external data: from CAD (scan imported DWG blocks and export each unique block as an `.rfa`), from a JSON schema (fully parametric families), or in batch from built-in presets. Can draft the schema with your configured AI provider.
 
-#### Property Line
-Create property lines from Lightbox parcel survey data. Supports metes-and-bounds descriptions and coordinate-based input.
+---
 
-#### Tile Layout
-3-step wizard to extract floor boundaries, choose a tile pattern per floor, and place the generated tile layout on the active sheet.
+### Model & Datum
 
-#### Create Elements (CAD to BIM)
-- **CAD to Elements** — convert CAD linework into Walls, Floors, or Beams by layer and colour mapping.
+#### CAD to Elements
+Convert CAD linework into Walls, Floors, or Beams by layer and colour mapping.
+
+#### Point Cloud to Model
+Scan-to-BIM wizard that auto-detects Walls, Floors, Ceilings, Doors, Windows, Columns, Stairs, and Roof planes from a point cloud.
+
+#### Tools (Finishes · Reference · Modify)
+**Finishes**
 - **Room To Floor** — create architectural or structural floors from selected room boundaries.
 - **Door Threshold** — create threshold floors at the base of selected doors, sized to the opening and host wall.
-- **Point Cloud to Model** — Scan-to-BIM wizard that auto-detects Walls, Floors, Ceilings, Doors, Windows, Columns, Stairs, and Roof planes from a point cloud.
+- **Tile Layout** — 3-step wizard to extract floor boundaries, choose a tile pattern per floor, and place the generated tile layout on the active sheet.
+
+**Reference**
 - **Image to Drafting** — create a Drafting View and import an image from disk or clipboard.
+- **Property Line** — create property lines from Lightbox parcel survey data. Supports metes-and-bounds descriptions and coordinate-based input.
 - **Text to Element** — transfer Text Note content to element parameters via bounding-box overlap in the active view.
 
-#### Element Adjust
+**Modify**
 - **Auto Join** — automatically join intersecting elements by category rules (Shift+Click for quick join).
 - **Split Elements** — split Walls, Columns, or Floors at selected levels, preserving parameters.
 - **Wall Cut Profile** — cut wall profiles or create openings based on intersecting linked model elements.
+- **DatumSync** — synchronize grid lines, levels, and reference planes across views. Align 2D/3D extents, datum bubbles, and visibility between a source view and target views to maintain clean documentation.
 - **Auto Adjust Base Offset** — recalculate Base Offset when changing Base Constraint so elements keep their absolute elevation.
-
----
-
-### Annotation & Select
-
-#### ManaAnno
-Annotation manager for Dimensions and Text Notes in one window: find dimensions or notes by type name or content and jump to their view, delete selected dimension instances, auto-rename Dimension and Text Note types from their properties, and set prefix, suffix, above, below or override text on dimensions.
-
-#### Make Pattern
-Vector hatch studio. Draw model and drafting fill patterns on a canvas with grid snapping and ortho lock, set the unit module and stagger shift (running bond), preview the pattern tiled over a large surface, then create it in Revit as a Fill Pattern / Filled Region or export an AutoCAD `.pat`. Linework can be imported from the selection in the active view.
-
-#### ManaDWG
-Manage CAD imports and CAD links — list, rename, and delete DWG imports and links from a single interface.
-
-#### Auto Dimension
-Automatically create dimension chains for walls, columns, doors, lifts, and grids in the active or a chosen view.
-
-#### ManaSelect
-Smart selection manager with 4 modes: Quick Select (filter by parameter value or text), Select Similar (by type, family, or category), Select on Sheets (locate title blocks and CAD imports), and a Quick Filters sidebar.
-
----
-
-### Views & Sheets
-
-#### ManaViews
-Browse and filter all views, rename views in bulk with naming rules, update view templates across multiple views, and remove unused views.
-
-#### ManaSheets
-Manage sheets in one unified interface — browse with live search, sync sheet data to/from Excel, place views on sheets, create sheet sets, and renumber sheets.
-
-#### SheetGen
-Create floor-plan views from a room list. Select rooms, choose a View Family Type and naming template, and generate all views in one transaction.
-
-#### CropSync
-Synchronize crop regions, annotation crops, and crop view settings across selected views to ensure consistent sheet alignment and view boundaries.
-
-#### BatchOut
-Export sheets to PDF, DWG, NWD, and IFC formats in batch.
-Supports combined PDF, custom naming patterns, sheet ordering, and revision tracking.
 
 ---
 
@@ -214,6 +148,48 @@ Write BVBS BF2D `.abs` files for bending machines from shape-driven rebar — on
 
 #### Rebar Wizard
 Reinforce rectangular beams, columns and pad footings from a preset: beam bottom and top bars with stirrups denser at both ends, column verticals with ties denser at top and bottom, and a two-layer pad-footing mesh. New bars join the host's assembly; presets are saved per user, and one Ctrl+Z undoes the whole run.
+
+---
+
+### Annotation & Data
+
+#### Mana (ManaDWG · Auto Dimension · ManaSelect)
+- **ManaDWG** — manage CAD imports and CAD links — list, rename, and delete DWG imports and links from a single interface.
+- **Auto Dimension** — automatically create dimension chains for walls, columns, doors, lifts, and grids in the active or a chosen view.
+- **ManaSelect** — smart selection manager with 4 modes: Quick Select (filter by parameter value or text), Select Similar (by type, family, or category), Select on Sheets (locate title blocks and CAD imports), and a Quick Filters sidebar.
+
+#### manaData (ManaSched · ManaPara · ManaContains)
+- **ManaSched** — export schedule data to Excel with formatting preserved, import updated values back into schedule rows, and duplicate schedules.
+- **ManaPara** — Parameter Manager — transfer parameter values between elements by rule, assign Text Note content to element parameters via spatial overlap, and write schedule values into filled region parameters.
+- **ManaContains** — find elements contained in Rooms, Areas, Spaces, Zones, Masses, or Scope Boxes. Assign parameter values to contained elements from their container, or aggregate element data back into the container.
+
+#### ManaAnno
+Annotation manager for Dimensions and Text Notes in one window: find dimensions or notes by type name or content and jump to their view, delete selected dimension instances, auto-rename Dimension and Text Note types from their properties, and set prefix, suffix, above, below or override text on dimensions.
+
+#### Make Pattern
+Vector hatch studio. Draw model and drafting fill patterns on a canvas with grid snapping and ortho lock, set the unit module and stagger shift (running bond), preview the pattern tiled over a large surface, then create it in Revit as a Fill Pattern / Filled Region or export an AutoCAD `.pat`. Linework can be imported from the selection in the active view.
+
+#### IFC-SG Suite
+Unified IFC-SG manager. **Subtype Assigner** loads mapping rules from Excel and assigns IFC Export Class and Predefined Type parameters; **Compliance Checker** verifies that required parameters exist and are filled, against CORENET X rules.
+
+---
+
+### Views & Sheets
+
+#### View Tools (SheetGen · CropSync · PDF Import)
+- **SheetGen** — create floor-plan views from a room list. Select rooms, choose a View Family Type and naming template, and generate all views in one transaction.
+- **CropSync** — synchronize crop regions, annotation crops, and crop view settings across selected views to ensure consistent sheet alignment and view boundaries.
+- **PDF Import** — import PDF pages into selected Revit views sequentially. Supports 150 / 300 / 600 DPI.
+
+#### ManaViews
+Browse and filter all views, rename views in bulk with naming rules, update view templates across multiple views, and remove unused views.
+
+#### ManaSheets
+Manage sheets in one unified interface — browse with live search, sync sheet data to/from Excel, place views on sheets, create sheet sets, and renumber sheets.
+
+#### BatchOut
+Export sheets to PDF, DWG, NWD, and IFC formats in batch.
+Supports combined PDF, custom naming patterns, sheet ordering, and revision tracking.
 
 ---
 

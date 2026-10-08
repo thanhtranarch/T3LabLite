@@ -17,6 +17,46 @@ Releasing a new version:
 
 ## [Unreleased]
 
+The T3Lab ribbon now has exactly the layout of t3lab-revit-api: six panels
+instead of seven, the same buttons in the same places.
+
+### Changed
+- **Ribbon regrouped** -- restart Revit after updating (a pyRevit Reload cannot
+  move buttons that already exist):
+  - **Support**: Cloud Links, T3Lab Assistant, and a new **Settings** pulldown
+    holding Feedback, MCP Control, LLMs Setting, ManaTabs, Ribbon Names,
+    BG Theme and **Check Update**.
+  - **Standards & Families** (was Standards & Settings): Standards stack
+    (Model Auditor, ManaStyles, ManaWorkset), Managers stack (ManaLoca,
+    ManaGroup, BatchLink), then ManaFami, Family Transfer and FamiGen.
+  - **Model & Datum** (was Modeling & Datum): CAD to Elements and Point Cloud
+    as large buttons, then a Tools stack of three pulldowns -- Finishes (Room
+    To Floor, Door Threshold, Tile Layout), Reference (Image to Drafting,
+    Property Line, Text to Element) and Modify (Auto Join, Split Elements,
+    Wall Cut Profile, DatumSync, Auto Adjust Base Offset).
+  - **Rebar & Assembly** moves next to Model & Datum.
+  - **Annotation & Data** (Annotation & Select and Data merged): Mana stack,
+    manaData stack, ManaAnno, Make Pattern, IFC-SG Suite.
+  - **Views & Sheets**: View Tools stack (SheetGen, CropSync, PDF Import),
+    ManaViews, ManaSheets, BatchOut.
+- Ribbon icons follow the t3lab-revit-api icon set (28 buttons redrawn, a new
+  Check Update icon).
+- **Ribbon Names** keeps its maps in `%APPDATA%\T3LabAI\ribbon_names` instead of
+  next to its script. Writing them inside the extension folder left a git
+  install with local changes that blocked the next automatic update. Your
+  existing names are carried over once.
+
+### Fixed
+- After a download-and-copy update (no git on the machine, or "Download latest
+  version" in Check Update) the old panels no longer show up a second time:
+  T3Lab moves the folders the update left behind to the `_retired_ribbon`
+  folder of the extension on the next Revit start and says when a restart
+  finishes the job (`lib/core/ribbon_retire.py`).
+- The T3Lab Assistant's fallback for opening BatchOut looked for the script in
+  the wrong folder. Image to Drafting (`potrace.exe`), the Assistant and the
+  Assistant dock pane now find a button by its folder name, wherever it sits
+  on the ribbon.
+
 ## [1.5.0] - 2026-10-07
 
 Every tool on the t3lab-revit-api ribbon is now on the T3Lab Lite ribbon too:

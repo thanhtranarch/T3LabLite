@@ -41,6 +41,25 @@ except ImportError:
 # One Revit process must expose exactly one port.
 _PROCESS_SINGLETON_KEY = '_t3lab_mcp_server_singleton'
 
+# Which Python runs this module. IronPython reports sys.platform 'cli'.
+_IS_IRONPYTHON = sys.platform == 'cli'
+ENGINE_LABEL = '{} {}.{}'.format('IronPython' if _IS_IRONPYTHON else 'CPython',
+                                 sys.version_info[0], sys.version_info[1])
+
+
+def _anchor_key():
+    """AppDomain key for THIS Python runtime's singleton.
+
+    One key per runtime (IronPython 2, IronPython 3, CPython): each runtime
+    sees the others' objects as opaque CLR objects, and with one shared key
+    the last engine to build an instance overwrote the anchor — a CPython
+    button opened after the IronPython hook started the server left the
+    DocumentClosed hook unable to find it, so the port was never released.
+    """
+    if _IS_IRONPYTHON:
+        return '{}.ipy{}'.format(_PROCESS_SINGLETON_KEY, sys.version_info[0])
+    return '{}.cpy'.format(_PROCESS_SINGLETON_KEY)
+
 
 def _anchor_usable(inst):
     """
@@ -66,7 +85,7 @@ def _anchor_usable(inst):
 def _get_process_anchor():
     try:
         from System import AppDomain
-        existing = AppDomain.CurrentDomain.GetData(_PROCESS_SINGLETON_KEY)
+        existing = AppDomain.CurrentDomain.GetData(_anchor_key())
         if _anchor_usable(existing):
             return existing
     except Exception:
@@ -78,7 +97,7 @@ def _get_process_anchor():
 def _set_process_anchor(inst):
     try:
         from System import AppDomain
-        AppDomain.CurrentDomain.SetData(_PROCESS_SINGLETON_KEY, inst)
+        AppDomain.CurrentDomain.SetData(_anchor_key(), inst)
     except Exception:
         pass
     setattr(sys, _PROCESS_SINGLETON_KEY, inst)
@@ -303,9 +322,14 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             # pid + port let external diagnostics attribute a listener to its
             # Revit process — the same pid answering on SEVERAL ports in the
             # range means orphaned duplicate servers (broken singleton
-            # anchor), not several Revit windows.
+            # anchor), not several Revit windows. engine + tools let MCP
+            # Control, running in another engine, report what actually
+            # serves the port.
+            owner = getattr(self.server, 'mcp_server', None)
             self._send_json({'status': 'ok', 'pid': os.getpid(),
-                             'port': self.server.server_port})
+                             'port': self.server.server_port,
+                             'engine': ENGINE_LABEL,
+                             'tools': len(getattr(owner, '_tools', None) or {})})
 
         elif path == '/':
             self._send_json({
@@ -10320,6 +10344,23 @@ class T3LabAIServer(object):
         if self._is_running:
             return True
 
+        # Never host the HTTP server in pyRevit's CPython engine. pyRevit
+        # 6.5.5 calls PythonEngine.Initialize() without BeginAllowThreads(),
+        # so Revit's main thread holds the GIL for the rest of the session and
+        # releases it only while CPython code is running (pythonnet drops it
+        # during each .NET call, e.g. a modal ShowDialog). A server thread
+        # here answered while MCP Control was open and froze the moment it
+        # closed: the port kept accepting connections, /health never replied,
+        # and the bridge reported "no T3Lab MCP server found" while MCP
+        # Control said "Running". MCPService.start_server() hands the start to
+        # IronPython (core/mcp_ipy_host.py), which has no GIL.
+        if HAS_REVIT_UI and not _IS_IRONPYTHON:
+            self._start_error = Exception(
+                'The MCP server cannot run in the CPython engine: it stops '
+                'answering whenever no T3Lab window is open. Start it through '
+                'MCPService.start_server(), which runs it in IronPython.')
+            raise self._start_error
+
         # Prefilter: is something already LISTENING on this port? connect()
         # sees both normal and wildcard (0.0.0.0, e.g. pyRevit Routes)
         # listeners. Deliberately NO bind-test here: IronPython releases a
@@ -10462,6 +10503,7 @@ class T3LabAIServer(object):
             'current_clients': len(self._clients),
             'tools_count': len(self._tools),
             'external_event_ready': self._external_event is not None,
+            'engine': ENGINE_LABEL,
         }
 
 

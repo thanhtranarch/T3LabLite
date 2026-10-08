@@ -184,9 +184,9 @@ def _probe_health(port, timeout=0.35):
         return None
 
 
-def _local_server_ports():
+def _local_servers():
     """
-    Ports already hosting a T3Lab server inside THIS Revit process.
+    [(port, /health payload)] for every T3Lab server inside THIS Revit process.
 
     Matched by pid, so a server in another Revit window is correctly ignored —
     those are legitimate and the bridge switches between them on purpose.
@@ -199,8 +199,187 @@ def _local_server_ports():
     for port in range(SERVER_PORT_MIN, SERVER_PORT_MAX + 1):
         info = _probe_health(port)
         if info and info.get('status') == 'ok' and info.get('pid') == mypid:
-            found.append(port)
+            found.append((port, info))
     return found
+
+
+def _local_server_ports():
+    """Ports already hosting a T3Lab server inside THIS Revit process."""
+    return [port for port, _info in _local_servers()]
+
+
+# ─── Engine routing: the HTTP server lives in IronPython ──────────────────────
+# pyRevit's CPython engine keeps the GIL on Revit's main thread whenever no
+# CPython code is running (see core/server.py, start_server). A server thread
+# started from a `#! python3` tool therefore froze as soon as the tool's window
+# closed: MCP Control said "Running on port 48884" while the bridge found no
+# server. So CPython never hosts it. It asks pyRevit's script executor to run
+# core/mcp_ipy_host.py in the IronPython engine — the same engine and the same
+# call pyRevit uses for the DocumentOpened hook that auto-starts the server.
+
+IPY_HOST_ID     = 't3lab-mcp-ipy-host'
+IPY_HOST_RESULT = '_t3lab_mcp_ipy_host_result'     # = mcp_ipy_host.RESULT_KEY
+_EXEC_SUCCEEDED, _EXEC_DELAYED = 0, 11             # ScriptExecutorResultCodes
+
+
+def _cpython_in_revit():
+    """True in pyRevit's CPython engine inside Revit — the one engine that
+    must not host the HTTP server. False under IronPython and in dev runs."""
+    if sys.platform == 'cli':
+        return False
+    try:
+        _ensure_lib_in_path()
+        from core import server as _srv
+        return bool(_srv.HAS_REVIT_UI)
+    except Exception:
+        return False
+
+
+def _lib_dir():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _pyrevit_runtime():
+    """pyRevit's PyRevitLabs.PyRevit.Runtime namespace (ScriptExecutor & co)."""
+    import clr
+    try:
+        import PyRevitLabs.PyRevit.Runtime as runtime
+        runtime.ScriptExecutor
+        return runtime
+    except Exception:
+        pass
+    # Not registered with pythonnet yet: find the loaded assembly that holds
+    # the executor and add it by path, as pyrevit.runtime.types does.
+    from System import AppDomain
+    for asm in AppDomain.CurrentDomain.GetAssemblies():
+        try:
+            if asm.GetType('PyRevitLabs.PyRevit.Runtime.ScriptExecutor') is not None:
+                clr.AddReference(asm.Location)
+                break
+        except Exception:
+            continue
+    import PyRevitLabs.PyRevit.Runtime as runtime
+    return runtime
+
+
+def _ipy_search_paths(runtime):
+    """sys.path for the IronPython host: the search paths pyRevit gave this
+    extension's own hooks when it can tell, else the extension and pyRevit's
+    library folders. Never CPython's sys.path — its stdlib is Python 3."""
+    lib_dir = _lib_dir()
+    ext_dir = os.path.dirname(lib_dir)
+    hooks_dir = os.path.normcase(os.path.join(ext_dir, 'hooks'))
+    try:
+        for hook in runtime.EventHooks.GetAllEventHooks():
+            script = os.path.normcase(os.path.dirname(str(hook.Script)))
+            if script == hooks_dir:
+                paths = [str(p) for p in hook.SearchPaths if p]
+                if paths:
+                    return paths
+    except Exception:
+        pass
+    paths = [lib_dir, ext_dir]
+    try:
+        import pyrevit
+        pyrevitlib = os.path.dirname(os.path.dirname(os.path.abspath(pyrevit.__file__)))
+        paths.append(pyrevitlib)
+        site = os.path.join(os.path.dirname(pyrevitlib), 'site-packages')
+        if os.path.isdir(site):
+            paths.append(site)
+    except Exception:
+        pass
+    return paths
+
+
+def _host_uiapp():
+    """The UIApplication of this pyRevit session, or None."""
+    try:
+        import builtins
+        app = getattr(builtins, '__revit__', None)
+        if app is not None and hasattr(app, 'ActiveUIDocument'):
+            return app
+    except Exception:
+        pass
+    try:
+        from pyrevit import HOST_APP
+        return HOST_APP.uiapp
+    except Exception:
+        return None
+
+
+def _run_ipy_host(action, port=None):
+    """
+    Run core/mcp_ipy_host.py in pyRevit's IronPython engine.
+
+    On Revit's main thread pyRevit runs it right away and the host's answer is
+    returned. From a worker thread pyRevit queues it on its own ExternalEvent
+    and it runs when Revit is idle — that request returns (True, None) at once.
+
+    Returns:
+        (success: bool, error_message: str|None)
+    """
+    try:
+        from System import AppDomain, String
+        from Autodesk.Revit.DB import ElementSet
+        _ensure_lib_in_path()
+        from Snippets._compat import net_list
+        runtime = _pyrevit_runtime()
+
+        script = os.path.join(_lib_dir(), 'core', 'mcp_ipy_host.py')
+        data = runtime.ScriptData()
+        data.ScriptPath = script
+        data.ConfigScriptPath = script
+        data.CommandUniqueId = IPY_HOST_ID
+        data.CommandName = 'T3Lab MCP server host'
+        data.CommandBundle = 'T3Lab.hooks'
+        data.CommandExtension = 'T3Lab'
+        data.HelpSource = ''
+
+        args = [action] + ([str(port)] if port else [])
+        cfg = runtime.ScriptRuntimeConfigs()
+        cfg.CommandData = None
+        cfg.SelectedElements = ElementSet()
+        cfg.SearchPaths = net_list(String, _ipy_search_paths(runtime))
+        cfg.Arguments = net_list(String, args)
+        # Same frame settings as pyRevit's hooks; the type keys pin IronPython
+        # on pyRevit 6 and are ignored by older builds, where the missing
+        # shebang already selects it.
+        cfg.EngineConfigs = ('{"full_frame": true, "type": "IronPython", '
+                             '"type_explicit": true}')
+        cfg.RefreshEngine = False
+        cfg.ConfigMode = False
+        cfg.DebugMode = False
+        cfg.ExecutedFromUI = False
+        try:
+            cfg.SuppressOutput = True       # pyRevit 6+: no output window
+        except Exception:
+            pass
+        uiapp = _host_uiapp()
+        if uiapp is not None:
+            cfg.UIApp = uiapp
+
+        exec_cfg = runtime.ScriptExecutorConfigs()
+        exec_cfg.WaitForResult = False      # never spin a worker thread
+        exec_cfg.SendTelemetry = False
+
+        AppDomain.CurrentDomain.SetData(IPY_HOST_RESULT, None)
+        code = int(runtime.ScriptExecutor.ExecuteScript(data, cfg, exec_cfg))
+        result = AppDomain.CurrentDomain.GetData(IPY_HOST_RESULT)
+    except Exception as ex:
+        return False, 'Could not run the IronPython server host: {}'.format(ex)
+    return _host_outcome(code, result)
+
+
+def _host_outcome(code, result):
+    """(success, error) from pyRevit's result code and the host's report."""
+    if code == _EXEC_DELAYED:
+        return True, None
+    result = str(result) if result is not None else ''
+    if code == _EXEC_SUCCEEDED and result == 'ok':
+        return True, None
+    if result.startswith('error: '):
+        return False, result[len('error: '):]
+    return False, 'The IronPython server host ended with code {}'.format(code)
 
 
 # ─── AI client registry ────────────────────────────────────────────────────────
@@ -535,9 +714,10 @@ class MCPService(object):
                             error (str|None)
 
         `foreign` is True when the live server belongs to ANOTHER pyRevit engine
-        in this same Revit process (see the cross-engine note above): it is
-        running and usable over HTTP, but its Python object cannot be called
-        from here, so Stop is not available without restarting Revit.
+        in this same Revit process (see the cross-engine note above) and
+        cannot be stopped from here. From CPython it is always False: the
+        server lives in IronPython by design and Stop is routed there.
+        `engine` names the Python that serves the port ('IronPython 2.7' …).
         """
         try:
             server = _get_server()
@@ -550,6 +730,7 @@ class MCPService(object):
                     'commands_processed':   stats.get('commands_processed', 0),
                     'external_event_ready': stats.get('external_event_ready', False),
                     'foreign':              False,
+                    'engine':               stats.get('engine'),
                     'error':                None,
                 }
             own_error = None
@@ -558,15 +739,18 @@ class MCPService(object):
             # raw AttributeError: the server may well be up and serving.
             own_error = str(ex)
 
-        ports = _local_server_ports()
-        if ports:
-            return {'running': True, 'port': ports[0], 'tools_count': 0,
+        servers = _local_servers()
+        if servers:
+            port, info = servers[0]
+            return {'running': True, 'port': port,
+                    'tools_count': info.get('tools') or 0,
                     'commands_processed': 0, 'external_event_ready': False,
-                    'foreign': True, 'error': None}
+                    'foreign': not _cpython_in_revit(),
+                    'engine': info.get('engine'), 'error': None}
 
         return {'running': False, 'port': 48884, 'tools_count': 0,
                 'commands_processed': 0, 'external_event_ready': False,
-                'foreign': False, 'error': own_error}
+                'foreign': False, 'engine': None, 'error': own_error}
 
     @staticmethod
     def ensure_external_event():
@@ -607,6 +791,11 @@ class MCPService(object):
         if existing:
             return True, None
 
+        # A `#! python3` tool must not host the server itself — it would stop
+        # answering once the tool's window closes. IronPython hosts it.
+        if _cpython_in_revit():
+            return _run_ipy_host('start', port)
+
         try:
             server = _get_server()
             if port:
@@ -638,10 +827,13 @@ class MCPService(object):
             err = str(ex)
 
         # The object we hold could not stop it. If a server in this process is
-        # still answering, it belongs to another pyRevit engine (startup.py runs
-        # under IronPython, `#! python3` buttons under CPython) and only a Revit
-        # restart releases it. Say so instead of repeating a raw AttributeError.
+        # still answering, it belongs to another pyRevit engine. From CPython
+        # that is the IronPython host by design, so ask it to stop. Anywhere
+        # else only a Revit restart releases it — say so instead of repeating
+        # a raw AttributeError.
         if _local_server_ports():
+            if _cpython_in_revit():
+                return _run_ipy_host('stop')
             return False, ('The running server was started by another pyRevit '
                            'engine in this Revit session and cannot be stopped '
                            'from here — restart Revit to release it.')

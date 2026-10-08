@@ -27,6 +27,21 @@ with t3lab_dev, and `markers` checks each one:
 | `lib/_cpython_bootstrap.py` | `init_cpython_paths()` -> `track_ribbon_click()` | Every ribbon button click (every `script.py` calls `init_cpython_paths()`) |
 | `lib/core/server.py` | `_handle_tool_call()` -> `_record_mcp_telemetry()` -> `track_mcp_call()` | Every MCP tool call, success and error |
 
+## The weekly auto-update
+
+`startup.py` calls `start_auto_update()` (`lib/core/updater.py`) on every Revit
+start; `markers` fails the commit if that call goes. Which start actually
+checks GitHub is decided by `lib/core/update_schedule.py` (first start of the
+ISO week, retried the next day if GitHub was unreachable). Both files are
+Lite only and listed under `lite_only`.
+
+```
+python lite_guard/test_update_schedule.py
+```
+
+runs the schedule tests and a stubbed run of `updater.py` (no Revit, no
+network). CI runs it with `guard.py`.
+
 ## Setup (once per clone)
 
 ```

@@ -17,7 +17,8 @@ How it works:
     4. Offers to reload pyRevit so the new version is active immediately
 
 The check/download logic lives in lib/core/updater.py, shared with the
-once-a-day automatic update that startup.py runs in the background.
+once-a-week automatic update that startup.py runs in the background. This
+button is for updating on demand, between those weekly checks.
 
 Author: Tran Tien Thanh
 Mail: trantienthanh909@gmail.com
@@ -130,9 +131,9 @@ def main():
             exitscript=True)
         return
 
-    # A manual check counts as today's check, so the automatic one on the
-    # next Revit start does not repeat the same work.
-    updater.stamp_today()
+    # GitHub answered, so a manual check counts as this week's check and the
+    # automatic one on the next Revit start does not repeat the same work.
+    updater.stamp_check()
 
     if updater.parse_version(remote_text) <= updater.parse_version(local_text):
         forms.alert(

@@ -1,5 +1,6 @@
 # Fails a push or pull request that loses a ribbon tool or the usage tracking,
 # e.g. after copying folders over from t3lab_dev. See lite_guard/guard.py.
+# Also runs the weekly auto-update tests (lite_guard/test_update_schedule.py).
 name: Lite guard
 
 on:
@@ -14,3 +15,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check tools and tracking hooks
         run: python3 lite_guard/guard.py
+      - name: Test the automatic update schedule
+        run: python3 lite_guard/test_update_schedule.py

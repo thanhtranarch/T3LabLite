@@ -5,5 +5,6 @@ description: |
   Shows what's new in the latest release (from CHANGELOG.md)
   Updates automatically via git pull, or direct download as fallback
   Offers to reload pyRevit so the new version is active immediately
+  T3Lab also checks by itself on the first Revit start of each week - clicking is optional
 author: "Tran Tien Thanh"
 version: "1.0.0"

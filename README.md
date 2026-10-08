@@ -1,7 +1,7 @@
 # T3Lab Lite
 
 **T3Lab Lite** is a pyRevit extension running on **CPython 3** built for Revit users who want to work faster.
-It covers batch export, sheet & view management, datum & crop synchronization, CAD-to-BIM conversion, model auditing, a built-in AI assistant that runs Revit tools from plain Vietnamese or English, and MCP integration that lets Claude AI work with Revit directly.
+It covers batch export, sheet & view management, datum & crop synchronization, CAD-to-BIM conversion, model auditing, rebar and assembly detailing (cast units, drawing cloning, BVBS export), IFC-SG compliance, family generation and management, a built-in AI assistant that runs Revit tools from plain Vietnamese or English, and MCP integration that lets Claude AI work with Revit directly.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's new in each release.
 
@@ -21,31 +21,35 @@ T3Lab Lite is installed as a pyRevit extension.
 
 #### Staying up to date
 
-On the first Revit start of each day, T3Lab checks GitHub for a newer release
-and downloads it in the background. Revit keeps running the version it loaded,
-so the update takes effect the next time you start Revit (or click
-pyRevit ▸ Reload) — a notification tells you when that is worth doing.
+You never have to click anything. On the first Revit start of each week
+(Monday to Sunday), T3Lab checks GitHub for a newer release and installs it in
+the background. Revit keeps running the version it loaded, so the update takes
+effect the next time you start Revit (or click pyRevit ▸ Reload) — a
+notification tells you when that is worth doing. If GitHub cannot be reached
+(offline, blocked), the next day's first start tries again until the check
+gets an answer, so a bad Monday does not cost you the week.
 
 A clone with local commits or edits is only ever fast-forwarded, never
-overwritten. To turn the daily check off, set `"auto_update": false` in
-`%APPDATA%\T3LabAI\mcp_paths.json`. **Check Update** on the Support panel
-still works either way, and `%APPDATA%\T3LabAI\update.log` records what
-happened.
+overwritten. Two settings in `%APPDATA%\T3LabAI\mcp_paths.json`:
+`"auto_update": false` turns the automatic check off, and
+`"auto_update_interval": "daily"` checks every day instead of every week.
+**Check Update** on the Support panel updates on demand either way, and
+`%APPDATA%\T3LabAI\update.log` records what happened.
 
 ---
 
 ### Tools
 
-The ribbon is organised into six panels: **Support**, **Standards & Settings**, **Data**, **Modeling & Datum**, **Annotation & Select**, and **Views & Sheets**. All tools run on the high-performance **CPython 3** engine.
+The ribbon is organised into seven panels: **Support**, **Standards & Settings**, **Data**, **Modeling & Datum**, **Annotation & Select**, **Views & Sheets**, and **Rebar & Assembly**. All tools run on the high-performance **CPython 3** engine.
 
-Tools that process many elements — Model Auditor, ManaSheets, ManaViews, SheetGen, Tile Layout, Auto Join, Room To Floor, Image to Drafting, CAD to Elements and BatchOut — show a progress bar with **Pause** and **Stop** while they run, so a long batch can be paused or cancelled without killing Revit.
+Tools that process many elements — Model Auditor, ManaSheets, ManaViews, SheetGen, FamiGen, IFC-SG Suite, Tile Layout, Auto Join, Room To Floor, Image to Drafting, CAD to Elements and BatchOut — show a progress bar with **Pause** and **Stop** while they run, so a long batch can be paused or cancelled without killing Revit.
 
 ---
 
 ### Support
 
 #### T3Lab Assistant
-The AI assistant, in Revit. Ask about the model or tell it what to change, in Vietnamese or English — it calls real Revit tools, opens T3Lab tools for you, and by default presents a plan and waits for your confirmation before changing the model (deletes always ask). It opens as a window, docks as a native Revit pane beside Properties / Project Browser, and is also in the right-click menu (Revit 2025+).
+The AI assistant, in Revit. Ask about the model or tell it what to change, in Vietnamese or English — it calls real Revit tools, opens T3Lab tools for you, and by default presents a plan and waits for your confirmation before changing the model (deletes always ask). It opens from the **T3Lab Assistant** button on this panel as a window, docks as a native Revit pane beside Properties / Project Browser, and is also in the right-click menu (Revit 2025+).
 
 - **Skills** — reusable instruction packs that activate on what you ask, 25 built in (ISO 19650 naming, LOD, worksets, QA checklist, BEP, COBie handover, clash coordination, sheet & annotation standards, …). Type `/skill-name` to force one, or install more from a GitHub repo — Claude's `SKILL.md` format is read as-is.
 - **Knowledge (RAG)** — index folders of PDF / TXT / MD and get answers with citations. Keyword search works offline; semantic search is optional and runs on a local Ollama embedding model.
@@ -95,6 +99,11 @@ Manage Revit Model Groups and Detail Groups: list group types and placed instanc
 #### BatchLink
 Manage Revit and CAD link paths in bulk: verify link statuses, repath missing links, reload links across documents, and audit external dependencies.
 
+#### Standards (ManaStyles · ManaWorkset · ManaLoca)
+- **ManaStyles** — manage fill patterns, line styles and line patterns, apply graphic override colours by category rule (Color Splasher), and view and adjust element XYZ coordinates in a grid.
+- **ManaWorkset** — enable worksharing on a model, create and delete worksets, assign elements to worksets by rule (category, level, or type), and generate view filters from workset membership.
+- **ManaLoca** — list the elements of the active view or a level and edit their XYZ coordinates in a data grid, committed in one transaction. The window stays open while you work.
+
 ---
 
 ### Data
@@ -109,6 +118,9 @@ Parameter Manager — transfer parameter values between elements by rule, assign
 Find elements contained in Rooms, Areas, Spaces, Zones, Masses, or Scope Boxes.
 Assign parameter values to contained elements from their container, or aggregate element data back into the container.
 
+#### IFC-SG Suite
+Unified IFC-SG manager. **Subtype Assigner** loads mapping rules from Excel and assigns IFC Export Class and Predefined Type parameters; **Compliance Checker** verifies that required parameters exist and are filled, against CORENET X rules.
+
 ---
 
 ### Modeling & Datum
@@ -118,6 +130,12 @@ Synchronize grid lines, levels, and reference planes across views. Align 2D/3D e
 
 #### Family Transfer
 Transfer families and selected types between open project documents or loaded links with category filtering, conflict resolution (overwrite, rename, skip), and single-transaction undo.
+
+#### ManaFami
+Family manager. Batch Operations lists families, system types, model groups or assemblies; find and replace, add a prefix or suffix and change case, review every staged change in the grid, then apply it in one undoable step. Family Loader loads new families from a local folder (or a cloud catalogue you configure) into the project.
+
+#### FamiGen
+Create Revit families from external data: from CAD (scan imported DWG blocks and export each unique block as an `.rfa`), from a JSON schema (fully parametric families), or in batch from built-in presets. Can draft the schema with your configured AI provider.
 
 #### Property Line
 Create property lines from Lightbox parcel survey data. Supports metes-and-bounds descriptions and coordinate-based input.
@@ -142,6 +160,12 @@ Create property lines from Lightbox parcel survey data. Supports metes-and-bound
 ---
 
 ### Annotation & Select
+
+#### ManaAnno
+Annotation manager for Dimensions and Text Notes in one window: find dimensions or notes by type name or content and jump to their view, delete selected dimension instances, auto-rename Dimension and Text Note types from their properties, and set prefix, suffix, above, below or override text on dimensions.
+
+#### Make Pattern
+Vector hatch studio. Draw model and drafting fill patterns on a canvas with grid snapping and ortho lock, set the unit module and stagger shift (running bond), preview the pattern tiled over a large surface, then create it in Revit as a Fill Pattern / Filled Region or export an AutoCAD `.pat`. Linework can be imported from the selection in the active view.
 
 #### ManaDWG
 Manage CAD imports and CAD links — list, rename, and delete DWG imports and links from a single interface.
@@ -174,6 +198,25 @@ Supports combined PDF, custom naming patterns, sheet ordering, and revision trac
 
 ---
 
+### Rebar & Assembly
+
+#### Cast Unit Manager
+Create assemblies with their rebar for many beams, columns or footings at once (from the selection or a filter), sync loose rebar into its assembly, rename marks as a series (prefix + start + step per assembly type), and set the rebar Partition by rule (assembly mark, level, host type or workset). Hosts in a group, from a link, or already in an assembly are skipped, with the reason shown before anything runs.
+
+#### Clone Drawing
+Copy the finished drawing of one assembly — views, sheet, annotations, tags, dimensions and spot elevations — to similar assemblies. Clone settings are chosen per object type and saved as presets; whatever cannot be matched on a target is listed with the reason. One undo step for the whole run; views, sheets and model elements are never deleted.
+
+#### Rebar Check
+Data checks Revit does not run: rebar without a valid host, rebar missing from its assembly, assemblies without drawings, duplicate numbers, bars outside their host, no partition, unknown shape. The scan is read-only; **Fix** syncs loose rebar into its assembly in one undo step.
+
+#### BVBS Export
+Write BVBS BF2D `.abs` files for bending machines from shape-driven rebar — one file per assembly or one for all. Preview every mark with the legs that will be written; free-form 3D bars and curved legs are listed as skipped, never exported. Each file is read back and its checksums verified.
+
+#### Rebar Wizard
+Reinforce rectangular beams, columns and pad footings from a preset: beam bottom and top bars with stirrups denser at both ends, column verticals with ties denser at top and bottom, and a two-layer pad-footing mesh. New bars join the host's assembly; presets are saved per user, and one Ctrl+Z undoes the whole run.
+
+---
+
 ### Network Traffic
 
 Every connection is either **user-initiated** or the once-a-day update check,
@@ -181,7 +224,7 @@ which can be switched off (see [Staying up to date](#staying-up-to-date)).
 
 | Component | Destination | When |
 |---|---|---|
-| Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each day, unless `"auto_update": false` |
+| Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each week (retried the next day if GitHub was unreachable), unless `"auto_update": false` |
 | T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `api.deepseek.com` — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
 | Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
 | Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |

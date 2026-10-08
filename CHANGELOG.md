@@ -17,6 +17,77 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-07
+
+Every tool on the t3lab-revit-api ribbon is now on the T3Lab Lite ribbon too:
+fourteen buttons that were missing, brought over with their current dialogs.
+
+### Added
+- **Rebar & Assembly** panel (new, the last panel on the tab), five tools for
+  rebar and precast detailing:
+  - **Cast Unit Manager** -- create assemblies with their rebar for many
+    beams, columns or footings at once, sync loose rebar into its assembly,
+    rename marks as a series and set rebar partitions by rule.
+  - **Clone Drawing** -- copy the finished drawing of one assembly (views,
+    sheet, annotations, tags, dimensions) to similar assemblies; anything that
+    cannot be matched is listed with the reason.
+  - **Rebar Check** -- data checks Revit does not run: rebar without a host,
+    rebar missing from its assembly, assemblies without drawings, duplicate
+    numbers, bars outside their host. Read-only until you press Fix.
+  - **BVBS Export** -- write BVBS BF2D `.abs` files for bending machines;
+    each file is read back and its checksums verified.
+  - **Rebar Wizard** -- reinforce rectangular beams, columns and pad footings
+    from a preset, added to the host's assembly.
+- **Standards** stack on the Standards & Settings panel:
+  - **ManaStyles** -- fill patterns, line styles, line patterns, Color
+    Splasher and a coordinate editor.
+  - **ManaWorkset** -- enable worksharing, create and delete worksets, assign
+    elements to worksets by rule, generate workset view filters.
+  - **ManaLoca** -- list elements of a view or level and edit their XYZ in a
+    grid; stays open while you work.
+- **IFC-SG Suite** on the Data panel: Subtype Assigner (Excel mapping to IFC
+  Export Class and Predefined Type) and Compliance Checker (CORENET X rules).
+- **ManaAnno** and **Make Pattern** on the Annotation & Select panel. ManaAnno
+  finds, removes and renames Dimensions and Text Notes and edits dimension
+  text; Make Pattern draws model and drafting hatch patterns on a vector canvas
+  and creates them in Revit or exports `.pat`.
+- **ManaFami** and **FamiGen** on the Modeling & Datum panel, next to Family
+  Transfer. ManaFami batch-renames families and types and loads families;
+  FamiGen creates families from CAD blocks, a JSON schema or built-in presets.
+- **T3Lab Assistant** button on the Support panel. It runs the same assistant
+  as the dock pane and the right-click menu.
+
+### Changed
+- **Restart Revit after updating.** The ribbon gained a panel and a stack, and
+  a pyRevit Reload may not build them.
+- **Automatic update now runs once a week instead of once a day, with no click
+  needed.** On the first Revit start of each week (Monday to Sunday) T3Lab
+  checks GitHub and installs the newest version in the background. A week only
+  counts once GitHub answered, so an offline start is retried on the next day's
+  first start. `"auto_update": false` still turns it off, and the new
+  `"auto_update_interval": "daily"` keeps the old daily check. Check Update
+  still updates on demand, and a manual check counts as that week's check.
+  The schedule is in `lib/core/update_schedule.py`, tested by
+  `lite_guard/test_update_schedule.py`.
+- The restored tools use the latest t3lab-revit-api dialogs and windows
+  (T3 design system), and the Revit 2022-2027 API helpers they were written
+  against.
+- **BG Theme** now keeps its colours in
+  `%APPDATA%\T3LabAI\bg_theme\bg_theme_config.json` instead of a file inside
+  the tool folder. An existing `dqt_bg_config.json` is copied over once and left
+  where it is.
+- Pause and Stop now also cover **FamiGen** and **IFC-SG Suite**; the Pause /
+  Resume button shows an icon instead of an emoji.
+- Shared code the new tools depend on was brought up to the t3lab-revit-api
+  version, additions only: `GUI/WPF_Base.py` (rounded window and panel
+  clipping, maximize), `GUI/ProgressPauseMixin.py`, `GUI/GridPendingEdits.py`,
+  `Snippets/_compat.py` (Revit-version-safe rebar, assembly and family-parameter
+  helpers), `Services/workset_service.py`, `core/paths.py` (`user_data_path`)
+  and `core/extension_paths.py` (`find_bundle` / `bundle_path`: a button is
+  found by its folder name, never by its panel path). `tab_path` was removed
+  from `core/extension_paths.py`; the BG Theme service was its only caller.
+- `lite_guard/manifest.json` records the new ribbon folders.
+
 ## [1.4.3] - 2026-10-02
 
 ### Fixed

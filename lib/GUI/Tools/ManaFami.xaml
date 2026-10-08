@@ -9,7 +9,7 @@
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
-        ResizeMode="CanResizeWithGrip"
+        ResizeMode="CanResize"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display">
@@ -219,6 +219,12 @@
                Cách dùng — icon LUÔN là <TextBlock>, không bao giờ là Content của Button:
                  <TextBlock Text="&#xE721;" Style="{StaticResource T3.Icon.Field}"/>
 
+               Ô rail (T3.Rail.Tile) cũng vậy — glyph T3.Icon.Rail, KHÔNG tự vẽ <Path>:
+                 <RadioButton x:Name="nav_browse" Style="{StaticResource T3.Rail.Tile}"
+                              ToolTip="Browse Parameters" ...>
+                   <TextBlock Text="&#xE8FD;" Style="{StaticResource T3.Icon.Rail}"/>
+                 </RadioButton>
+
                Bảng glyph chuẩn (dùng đúng glyph này cho đúng khái niệm, toàn dự án):
                  E721 Search      E8BB Close      E921 Minimize   E922 Maximize
                  E768 Play        E769 Pause      E71A Stop       E72C Refresh
@@ -227,13 +233,30 @@
                  E70D ChevronDown E70E ChevronUp  E76B ChevronLeft E76C ChevronRight
                  E74E Save        E8E5 OpenFile   E774 Globe      E7A7 Undo
                  E8A3 Zoom        E7B3 Isolate    E7C9 Pick       E7C3 Document
-                 E896 Download    EA80 Insight
+                 E896 Download/Export  EA80 Insight  F140 Hide    E923 Restore
+                 E74A ArrowUp (move to top, north)  E74B ArrowDown (move to bottom)
+                 E9A6 Fit (zoom to fit)  EA3A Open (unresolved)  E707 Map  E753 PointCloud
+
+               Khái niệm trang — glyph của ô rail chọn theo VIỆC trang đó làm:
+                 E8FD List/inventory   E9D5 Audit/checklist  E945 Automation
+                 E8B5 Import/load      E8AB Swap/transfer    E71B Link
+                 E8C8 Duplicate        E8AC Rename/renumber  E9E9 Template/preset
+                 E70F Edit/override    E81C History/log      E8A1 Preview/mockup
+                 E8F1 Families         E81E Worksets         E90F Tools/bulk edit
+                 F158 3D view          E95E Model health     E8EF Aggregate
+                 E790 Colour           E943 Code/JSON        ED5E Dimension
+                 E8D2 Text             E727 Pattern          E8EC Classify/assign
+                 E80F Room             E809 Floor            E80A Ceiling
+                 ECA5 Wall             E825 Column           E933 Beam
+                 E7B7 Grid             EF90 Line             E95F MEP run
+                 (+ E713 Settings · E896 Export · E7BA Warning · E74D Delete/purge)
 
                Thêm glyph mới thì kiểm hai thứ (xem mục Icon của T3LAB_UI_STANDARD.md):
                  1. Không TRÔNG GIỐNG glyph đã có — E71E cũng là kính lúp y hệt E721
                     Search, nên Zoom phải là E8A3 (kính lúp có dấu +).
-                 2. Codepoint có thật trong font — glyph không tồn tại ra ô vuông tofu và
-                    audit_t3.py không bắt được, nó chỉ grep source.
+                 2. Codepoint có thật trong Segoe MDL2 Assets — glyph không tồn tại ra ô
+                    vuông tofu. audit_t3.py đối chiếu dev/icons/mdl2_codepoints.tsv
+                    (P1). ED1A Hide là glyph của Segoe Fluent Icons, KHÔNG có trong MDL2.
           -->
 
           <!-- Icon nền: cỡ Label (11), màu thừa kế từ control chứa nó. -->
@@ -268,6 +291,15 @@
             <Setter Property="FontSize"   Value="{StaticResource T3.Size.Caption}"/>
             <Setter Property="Margin"     Value="0,0,8,0"/>
             <Setter Property="VerticalAlignment" Value="Top"/>
+          </Style>
+
+          <!-- Icon của ô rail (T3.Rail.Tile, 42×42). Cỡ 16 = lưới thiết kế gốc của
+               Segoe MDL2 — nét rơi đúng pixel, sắc ở 100% lẫn 125%. Đây là cỡ ICON, không
+               thuộc thang 7 size chữ. KHÔNG set Foreground: glyph thừa kế màu từ tile
+               (T3.TextMuted → T3.Ink khi hover/checked) qua ContentPresenter. -->
+          <Style x:Key="T3.Icon.Rail" TargetType="TextBlock" BasedOn="{StaticResource T3.Icon}">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
           </Style>
 
           <!-- ══════════════════ 6 · BUTTONS ══════════════════
@@ -449,6 +481,9 @@
             <Setter Property="Padding" Value="{StaticResource T3.Pad.Field}"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <!-- No dotted WPF focus rectangle (Clone Drawing 2026-10-07): keyboard
+                 focus shows as the T3.Ink border instead, like T3.TextBox. -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="ItemContainerStyle" Value="{StaticResource T3.ComboBoxItem}"/>
             <Setter Property="Template">
               <Setter.Value>
@@ -496,7 +531,7 @@
                                     RelativeSource={RelativeSource TemplatedParent}}">
                       <Border Background="{StaticResource T3.Surface}"
                               BorderBrush="{StaticResource T3.Border}" BorderThickness="1"
-                              CornerRadius="{StaticResource T3.R.Control}"
+                              CornerRadius="{StaticResource T3.R.Control}" Padding="0,4"
                               MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                               MaxHeight="{TemplateBinding MaxDropDownHeight}">
                         <ScrollViewer>
@@ -510,6 +545,9 @@
                       <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
                     </Trigger>
                     <Trigger Property="IsDropDownOpen" Value="True">
+                      <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
+                    </Trigger>
+                    <Trigger Property="IsKeyboardFocusWithin" Value="True">
                       <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
                     </Trigger>
                     <Trigger Property="IsEnabled" Value="False">
@@ -740,7 +778,9 @@
 
           <!-- Background/BorderBrush/BorderThickness đi qua TemplateBinding để một cột
                có thể tô sáng riêng ô của nó (ví dụ ô vừa sửa, đang chờ Apply) bằng
-               <Column.CellStyle> + DataTrigger. Mặc định vẫn trong suốt, không đổi. -->
+               <Column.CellStyle>. Dòng là object Python thì dùng cell bridge
+               (AutomationProperties.ItemStatus + Trigger, xem GUI/GridPendingEdits.py),
+               không DataTrigger bind thẳng field. Mặc định vẫn trong suốt, không đổi. -->
           <Style x:Key="T3.DataGridCell" TargetType="DataGridCell">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
@@ -868,6 +908,15 @@
             </Setter>
           </Style>
 
+          <!-- Cột checkbox của ListView+GridView: bản GridView của
+               T3.DataGridColumnHeader.Check — bỏ Padding 8 và canh giữa để checkbox
+               header nằm đúng trên checkbox dòng (BatchOut 2026-10-02). -->
+          <Style x:Key="T3.GridViewColumnHeader.Check" TargetType="GridViewColumnHeader"
+                 BasedOn="{StaticResource T3.GridViewColumnHeader}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+          </Style>
+
           <Style x:Key="T3.ListViewItem" TargetType="ListViewItem">
             <Setter Property="FontFamily" Value="{StaticResource T3.Font}"/>
             <Setter Property="FontSize"   Value="{StaticResource T3.Size.Body}"/>
@@ -939,7 +988,9 @@
           <Style TargetType="ListViewItem" BasedOn="{StaticResource T3.ListViewItem}"/>
 
           <!-- Status pill: nền tint + dot + CHỮ. Không bao giờ chỉ dùng màu.
-               Row VM cần 2 property: StatusText (string) và Severity ("Success"/"Warning"/"Danger"). -->
+               Row VM cần 2 property: StatusText (string) và Severity ("Success"/"Warning"/"Danger").
+               Severity đi qua TextBlock ẩn "sev" (string bridge): dòng là object Python thì
+               DataTrigger bind thẳng {Binding Severity} không bao giờ khớp. -->
           <DataTemplate x:Key="T3.StatusPill">
             <Border x:Name="pill" CornerRadius="{StaticResource T3.R.Pill}" Padding="7,2"
                     HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -948,20 +999,21 @@
                 <TextBlock x:Name="txt" Text="{Binding StatusText}"
                            FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"
                            VerticalAlignment="Center"/>
+                <TextBlock x:Name="sev" Text="{Binding Severity}" Visibility="Collapsed"/>
               </StackPanel>
             </Border>
             <DataTemplate.Triggers>
-              <DataTrigger Binding="{Binding Severity}" Value="Success">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Success">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Success.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Success.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Success.Text}"/>
               </DataTrigger>
-              <DataTrigger Binding="{Binding Severity}" Value="Warning">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Warning">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Warning.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Warning.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Warning.Text}"/>
               </DataTrigger>
-              <DataTrigger Binding="{Binding Severity}" Value="Danger">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Danger">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Danger.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Danger.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Danger.Text}"/>
@@ -1666,9 +1718,9 @@
 
     <!-- Outer Window Container (Zero-Gap) -->
     <Border Background="{StaticResource T3.Surface}"
-            BorderBrush="{StaticResource T3.Border}"
-            BorderThickness="1.5"
-            CornerRadius="12" ClipToBounds="True">
+            BorderBrush="{StaticResource T3.BorderStrong}"
+            BorderThickness="1"
+            CornerRadius="{StaticResource T3.R.Window}" ClipToBounds="True">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="48"/>      <!-- Row 0: Full-width Title Bar -->
@@ -1692,8 +1744,8 @@
                                    VerticalAlignment="Center"
                                    RenderOptions.BitmapScalingMode="HighQuality"/>
                             <StackPanel Orientation="Vertical" VerticalAlignment="Center">
-                                <TextBlock x:Name="lbl_title" Text="Family Loader" Style="{StaticResource T3.Title}"/>
-                                <TextBlock x:Name="lbl_subtitle" Text="Load and manage Revit families from local or cloud libraries" Style="{StaticResource T3.Subtitle}"/>
+                                <TextBlock x:Name="lbl_title" Text="Family Management" Style="{StaticResource T3.Title}"/>
+                                <TextBlock x:Name="lbl_subtitle" Text="Batch rename families and types, change case, and add a prefix or suffix" Style="{StaticResource T3.Subtitle}"/>
                             </StackPanel>
                         </StackPanel>
 
@@ -1734,201 +1786,32 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Tab 0: Family Loader -->
-                    <ToggleButton x:Name="nav_loader" Grid.Row="0"
+                    <!-- Mode 0: Family Management / Batch Operations (default) -->
+                    <ToggleButton x:Name="nav_management" Grid.Row="0"
                                   Style="{StaticResource T3.Rail.Tile}"
                                   Margin="0,0,0,8" IsChecked="True"
-                                  ToolTip="Family Loader" Click="nav_toggle_clicked">
-                        <Path Data="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z M3.27 6.96L12 12.01l8.73-5.05 M12 22.08V12"
-                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"
-                              StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                              Width="18" Height="18" Stretch="Uniform"
-                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                  ToolTip="Family Management" Click="nav_toggle_clicked">
+                        <TextBlock Text="&#xE8F1;" Style="{StaticResource T3.Icon.Rail}"/>
                     </ToggleButton>
 
-                    <!-- Tab 1: Family Management -->
-                    <ToggleButton x:Name="nav_management" Grid.Row="1"
+                    <!-- Mode 1: Family Loader -->
+                    <ToggleButton x:Name="nav_loader" Grid.Row="1"
                                   Style="{StaticResource T3.Rail.Tile}"
                                   Margin="0,0,0,8"
-                                  ToolTip="Family Management" Click="nav_toggle_clicked">
-                        <Path Data="M4 21v-7 M4 10V3 M12 21v-9 M12 8V3 M20 21v-5 M20 12V3 M1 14h6 M9 8h6 M17 16h6"
-                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"
-                              StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                              Width="18" Height="18" Stretch="Uniform"
-                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                  ToolTip="Family Loader" Click="nav_toggle_clicked">
+                        <TextBlock Text="&#xE8B5;" Style="{StaticResource T3.Icon.Rail}"/>
                     </ToggleButton>
                 </Grid>
             </Border>
 
                 <!-- ══════════════════ COL 1: MAIN WORKSPACE ══════════════════ -->
                 <!-- ══════════════════ ROW 1: CONTENT TABCONTROL ══════════════════ -->
-                <TabControl x:Name="main_tab_control" Grid.Column="1" BorderThickness="0" Background="Transparent" Padding="0">
+                <TabControl x:Name="main_tab_control" Grid.Column="1" SelectedIndex="0" BorderThickness="0" Background="Transparent" Padding="0">
                     <TabControl.ItemContainerStyle>
                         <Style TargetType="TabItem" BasedOn="{StaticResource T3.TabItem.Hidden}"/>
                     </TabControl.ItemContainerStyle>
 
-                    <!-- ── TAB 0: FAMILY LOADER ── -->
-                    <TabItem>
-                        <Grid Margin="0">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/> <!-- Search & Folder Bar -->
-                                <RowDefinition Height="*"/>    <!-- Split View: Categories & Family Cards -->
-                                <RowDefinition Height="Auto"/> <!-- Action Bar -->
-                            </Grid.RowDefinitions>
-
-                            <!-- Row 0: Search & Folder Selection Strip -->
-                            <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
-                                    BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                    Padding="16,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="320"/>
-                                        <ColumnDefinition Width="16"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-
-                                    <!-- Search Input -->
-                                    <TextBox x:Name="txt_search" Grid.Column="0"
-                                             Style="{StaticResource T3.Search}"
-                                             Tag="Search families…"
-                                             Height="28"/>
-
-                                    <!-- Folder Path & Selector -->
-                                    <DockPanel Grid.Column="2" VerticalAlignment="Center">
-                                        <Button x:Name="btn_select_folder" Content="Update Folder"
-                                                Style="{StaticResource T3.Button.Secondary}"
-                                                Height="28" Padding="12,0" DockPanel.Dock="Left"/>
-                                        <TextBlock x:Name="txt_current_folder" Text="No folder selected"
-                                                   Style="{StaticResource T3.Caption}"
-                                                   VerticalAlignment="Center" Margin="12,0,0,0"
-                                                   TextTrimming="CharacterEllipsis"/>
-                                    </DockPanel>
-                                </Grid>
-                            </Border>
-
-                            <!-- Row 1: Split View: Categories Tree (Left) + Family Cards (Right) -->
-                            <Grid Grid.Row="1">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="220"/>
-                                    <ColumnDefinition Width="1"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- Left: Categories TreeView -->
-                                <Grid Grid.Column="0" Background="{StaticResource T3.Surface}">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
-                                    </Grid.RowDefinitions>
-                                    <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
-                                            BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                            Padding="16,8">
-                                        <TextBlock Text="CATEGORIES" Style="{StaticResource T3.Label}"/>
-                                    </Border>
-                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                                        <TreeView x:Name="tree_categories" BorderThickness="0" Background="Transparent" Padding="8"/>
-                                    </ScrollViewer>
-                                </Grid>
-
-                                <!-- Zero-Gap Divider -->
-                                <Border Grid.Column="1" Background="{StaticResource T3.Border}"/>
-
-                                <!-- Right: Family Cards Grid -->
-                                <Grid Grid.Column="2" Background="{StaticResource T3.Surface}">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
-                                    </Grid.RowDefinitions>
-
-                                    <!-- Filter Toolbar -->
-                                    <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
-                                            BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                            Padding="16,8">
-                                        <Grid>
-                                            <TextBlock x:Name="txt_result_count" Text="0 families found"
-                                                       Style="{StaticResource T3.BodyStrong}"
-                                                       VerticalAlignment="Center" HorizontalAlignment="Left"/>
-                                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                                <Button x:Name="btn_select_all_loader" Content="Select All"
-                                                        Style="{StaticResource T3.Button.Secondary}"
-                                                        Height="28" Padding="12,0" Margin="0,0,8,0"/>
-                                                <Button x:Name="btn_select_none_loader" Content="Select None"
-                                                        Style="{StaticResource T3.Button.Secondary}"
-                                                        Height="28" Padding="12,0"/>
-                                            </StackPanel>
-                                        </Grid>
-                                    </Border>
-
-                                    <!-- Cards Scrollable Area -->
-                                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
-                                                  VerticalScrollBarVisibility="Auto" Padding="16">
-                                        <ItemsControl x:Name="items_families">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <WrapPanel/>
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <StackPanel Width="152" Margin="8">
-                                                        <Border Height="140" CornerRadius="4" Cursor="Hand"
-                                                                BorderThickness="1" BorderBrush="{StaticResource T3.Border}"
-                                                                Background="{StaticResource T3.Surface}">
-                                                            <Border.Style>
-                                                                <Style TargetType="Border">
-                                                                    <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding IsChecked}" Value="True">
-                                                                            <Setter Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
-                                                                            <Setter Property="BorderThickness" Value="2"/>
-                                                                            <Setter Property="Background" Value="{StaticResource T3.SurfaceSunken}"/>
-                                                                        </DataTrigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </Border.Style>
-                                                            <Grid>
-                                                                <Border Background="{StaticResource T3.SurfaceSunken}"/>
-                                                                <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="8"/>
-                                                                <Grid>
-                                                                    <TextBlock x:Name="row_is_checked_text" Text="{Binding IsChecked}" Visibility="Collapsed"/>
-                                                                    <CheckBox IsChecked="{Binding Text, ElementName=row_is_checked_text, Mode=OneWay}"
-                                                                              VerticalAlignment="Top" HorizontalAlignment="Left"
-                                                                              Margin="8" Style="{StaticResource T3.CheckBox}"/>
-                                                                </Grid>
-                                                            </Grid>
-                                                        </Border>
-                                                        <TextBlock Text="{Binding Name}" Style="{StaticResource T3.Caption}"
-                                                                   TextWrapping="Wrap" MaxHeight="32" Margin="0,4,0,0"
-                                                                   ToolTip="{Binding FullPath}"/>
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
-                                    </ScrollViewer>
-                                </Grid>
-                            </Grid>
-
-                            <!-- Row 2: Loader Action Bar -->
-                            <Border Grid.Row="2" Background="{StaticResource T3.SurfaceSunken}"
-                                    BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0"
-                                    Padding="16,8">
-                                <Grid>
-                                    <TextBlock x:Name="txt_selected_count" Text="0 families selected"
-                                               Style="{StaticResource T3.Body.Secondary}"
-                                               VerticalAlignment="Center" HorizontalAlignment="Left"/>
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                                        <Button x:Name="btn_cancel_loader" Content="Cancel"
-                                                Style="{StaticResource T3.Button.Secondary}"
-                                                Height="28" Padding="16,0" Margin="0,0,8,0"/>
-                                        <Button x:Name="btn_load" Content="Load"
-                                                Style="{StaticResource T3.Button.Primary}" IsDefault="True"
-                                                Height="28" Padding="24,0" IsEnabled="False"/>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-                        </Grid>
-                    </TabItem>
-
-                    <!-- ── TAB 1: FAMILY MANAGEMENT ── -->
+                    <!-- ── TAB 0: FAMILY MANAGEMENT (Batch Operations — default mode) ── -->
                     <TabItem>
                         <Grid Margin="0">
                             <Grid.ColumnDefinitions>
@@ -1945,137 +1828,165 @@
                                     <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
+                                <!-- Header strip: same height as the grid toolbar on the right -->
                                 <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
                                         BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
                                         Padding="16,8">
-                                    <TextBlock Text="BATCH OPERATIONS" Style="{StaticResource T3.Label}"/>
+                                    <Grid Height="{StaticResource T3.H.Control}">
+                                        <TextBlock Text="BATCH OPERATIONS" Style="{StaticResource T3.Label}"
+                                                   VerticalAlignment="Center"/>
+                                    </Grid>
                                 </Border>
 
-                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="16">
-                                    <StackPanel>
-                                        <!-- Scope Selector -->
-                                        <TextBlock Text="SCOPE" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                                        <StackPanel Margin="0,0,0,16">
-                                            <RadioButton x:Name="rb_scope_all" Content="All Loaded Families"
+                                <!-- Scrollable settings (rule 16: scrollbar pinned to the panel edge) -->
+                                <Border Grid.Row="1" Padding="0" ClipToBounds="True">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled"
+                                                  Padding="16,16,12,16">
+                                        <StackPanel>
+                                            <!-- ─ Scope ─ -->
+                                            <TextBlock Text="SCOPE" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                            <RadioButton x:Name="rb_scope_all" Content="All loaded families"
                                                          IsChecked="True" Style="{StaticResource T3.RadioButton}"
                                                          Margin="0,0,0,8" Checked="scope_changed"/>
-                                            <RadioButton x:Name="rb_scope_view" Content="Active View Only"
+                                            <RadioButton x:Name="rb_scope_view" Content="Active view only"
                                                          Style="{StaticResource T3.RadioButton}"
                                                          Margin="0,0,0,8" Checked="scope_changed"/>
-                                            <RadioButton x:Name="rb_scope_selection" Content="Currently Selected"
+                                            <RadioButton x:Name="rb_scope_selection" Content="Current selection"
                                                          Style="{StaticResource T3.RadioButton}"
-                                                         Checked="scope_changed"/>
+                                                         Margin="0,0,0,16" Checked="scope_changed"/>
+
+                                            <!-- ─ Category ─ -->
+                                            <TextBlock Text="CATEGORY" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                            <ComboBox x:Name="cb_category" SelectedIndex="0"
+                                                      Style="{StaticResource T3.ComboBox}"
+                                                      Margin="0,0,0,16" SelectionChanged="category_changed">
+                                                <ComboBoxItem Content="Loadable Families"/>
+                                                <ComboBoxItem Content="System Families"/>
+                                                <ComboBoxItem Content="Model Groups"/>
+                                                <ComboBoxItem Content="Assemblies"/>
+                                            </ComboBox>
+
+                                            <Separator Style="{StaticResource T3.Rule}" Margin="0,0,0,16"/>
+
+                                            <!-- ─ Find and replace ─ -->
+                                            <TextBlock Text="FIND AND REPLACE" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                            <TextBlock Text="Find" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                            <TextBox x:Name="tb_find" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
+                                            <CheckBox x:Name="chk_match_case" Content="Match case"
+                                                      Style="{StaticResource T3.CheckBox}" Margin="0,0,0,8"
+                                                      ToolTip="Match upper and lower case exactly"/>
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="8"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="btn_find_next" Grid.Column="0" Content="Find Next"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Highlight the next row whose family or type name contains the text"/>
+                                                <Button x:Name="btn_find_all" Grid.Column="2" Content="Find All"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Tick every row whose family or type name contains the text"/>
+                                            </Grid>
+                                            <TextBlock Text="Replace with" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                            <TextBox x:Name="tb_replace" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
+                                            <Grid Margin="0,0,0,16">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="8"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="btn_replace" Grid.Column="0" Content="Replace"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Replace in the highlighted row only"/>
+                                                <Button x:Name="btn_replace_all" Grid.Column="2" Content="Replace All"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Replace in the ticked rows, or in every row when none is ticked"/>
+                                            </Grid>
+
+                                            <Separator Style="{StaticResource T3.Rule}" Margin="0,0,0,16"/>
+
+                                            <!-- ─ Prefix / suffix ─ -->
+                                            <TextBlock Text="PREFIX / SUFFIX" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                            <TextBlock Text="Prefix" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                            <TextBox x:Name="tb_prefix" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
+                                            <Grid Margin="0,0,0,12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="8"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="btn_prefix_sel" Grid.Column="0" Content="Add to ticked"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Add the prefix to the family and type names of the ticked rows"/>
+                                                <Button x:Name="btn_prefix_all" Grid.Column="2" Content="Add to all"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Add the prefix to the family and type names of every row in the list"/>
+                                            </Grid>
+                                            <TextBlock Text="Suffix" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                            <TextBox x:Name="tb_suffix" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
+                                            <Grid Margin="0,0,0,16">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="8"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button x:Name="btn_suffix_sel" Grid.Column="0" Content="Add to ticked"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Add the suffix to the family and type names of the ticked rows"/>
+                                                <Button x:Name="btn_suffix_all" Grid.Column="2" Content="Add to all"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Add the suffix to the family and type names of every row in the list"/>
+                                            </Grid>
+
+                                            <Separator Style="{StaticResource T3.Rule}" Margin="0,0,0,16"/>
+
+                                            <!-- ─ Case ─ -->
+                                            <TextBlock Text="CASE" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                            <TextBlock Text="Apply to" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                            <ComboBox x:Name="cb_case_target" SelectedIndex="0"
+                                                      Style="{StaticResource T3.ComboBox}" Margin="0,0,0,8">
+                                                <ComboBoxItem Content="Family and type names"/>
+                                                <ComboBoxItem Content="Family names only"/>
+                                                <ComboBoxItem Content="Type names only"/>
+                                            </ComboBox>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="8"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto"/>
+                                                    <RowDefinition Height="8"/>
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+                                                <Button x:Name="btn_case_upper" Grid.Row="0" Grid.Column="0" Content="UPPERCASE"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Ticked rows, or every row when none is ticked"/>
+                                                <Button x:Name="btn_case_lower" Grid.Row="0" Grid.Column="2" Content="lowercase"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Ticked rows, or every row when none is ticked"/>
+                                                <Button x:Name="btn_case_title" Grid.Row="2" Grid.Column="0" Content="Title Case"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Ticked rows, or every row when none is ticked"/>
+                                                <Button x:Name="btn_case_sentence" Grid.Row="2" Grid.Column="2" Content="Sentence case"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        ToolTip="Ticked rows, or every row when none is ticked"/>
+                                            </Grid>
                                         </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
 
-                                        <!-- Category Selector -->
-                                        <TextBlock Text="CATEGORY" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                                        <ComboBox x:Name="cb_category" SelectedIndex="0"
-                                                  Style="{StaticResource T3.ComboBox}" Height="28"
-                                                  Margin="0,0,0,16" SelectionChanged="category_changed">
-                                            <ComboBoxItem Content="Loadable Families"/>
-                                            <ComboBoxItem Content="System Families"/>
-                                            <ComboBoxItem Content="Model Groups"/>
-                                            <ComboBoxItem Content="Assemblies"/>
-                                        </ComboBox>
-
-                                        <!-- Find and Replace -->
-                                        <TextBlock Text="FIND AND REPLACE" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                                        <TextBlock Text="Find:" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
-                                        <Grid Margin="0,0,0,8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="32"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBox x:Name="tb_find" Grid.Column="0" Style="{StaticResource T3.TextBox}" Height="28"/>
-                                            <ToggleButton x:Name="btn_match_case" Grid.Column="2"
-                                                          Style="{StaticResource T3.Rail.Tile}" Width="32" Height="28"
-                                                          ToolTip="Match Case" Click="match_case_click">
-                                                <TextBlock Text="Aa" FontWeight="Bold" Style="{StaticResource T3.Caption}"/>
-                                            </ToggleButton>
-                                        </Grid>
-                                        <Grid Margin="0,0,0,12">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <Button x:Name="btn_find_next" Grid.Column="0" Content="Find Next" Style="{StaticResource T3.Button.Secondary}" Height="28"/>
-                                            <Button x:Name="btn_find_all" Grid.Column="2" Content="Find All" Style="{StaticResource T3.Button.Secondary}" Height="28"/>
-                                        </Grid>
-
-                                        <TextBlock Text="Replace with:" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
-                                        <TextBox x:Name="tb_replace" Style="{StaticResource T3.TextBox}" Height="28" Margin="0,0,0,8"/>
-                                        <Grid Margin="0,0,0,16">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <Button x:Name="btn_replace" Grid.Column="0" Content="Replace" Style="{StaticResource T3.Button.Secondary}" Height="28"/>
-                                            <Button x:Name="btn_replace_all" Grid.Column="2" Content="Replace All" Style="{StaticResource T3.Button.Secondary}" Height="28"/>
-                                        </Grid>
-
-                                        <!-- Prefix / Suffix -->
-                                        <TextBlock Text="PREFIX / SUFFIX" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                                        <TextBlock Text="Prefix:" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
-                                        <Grid Margin="0,0,0,8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBox x:Name="tb_prefix" Grid.Column="0" Style="{StaticResource T3.TextBox}" Height="28"/>
-                                            <Button x:Name="btn_prefix_sel" Grid.Column="2" Content="Sel" Style="{StaticResource T3.Button.Secondary}" Height="28" Padding="8,0"/>
-                                            <Button x:Name="btn_prefix_all" Grid.Column="4" Content="All" Style="{StaticResource T3.Button.Secondary}" Height="28" Padding="8,0"/>
-                                        </Grid>
-
-                                        <TextBlock Text="Suffix:" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
-                                        <Grid Margin="0,0,0,16">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBox x:Name="tb_suffix" Grid.Column="0" Style="{StaticResource T3.TextBox}" Height="28"/>
-                                            <Button x:Name="btn_suffix_sel" Grid.Column="2" Content="Sel" Style="{StaticResource T3.Button.Secondary}" Height="28" Padding="8,0"/>
-                                            <Button x:Name="btn_suffix_all" Grid.Column="4" Content="All" Style="{StaticResource T3.Button.Secondary}" Height="28" Padding="8,0"/>
-                                        </Grid>
-
-                                        <!-- Case Converter -->
-                                        <TextBlock Text="CASE MODIFICATION" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                                        <ComboBox x:Name="cb_case_target" SelectedIndex="0" Style="{StaticResource T3.ComboBox}" Height="28" Margin="0,0,0,8">
-                                            <ComboBoxItem Content="Target: Family and Type"/>
-                                            <ComboBoxItem Content="Target: Family Only"/>
-                                            <ComboBoxItem Content="Target: Type Only"/>
-                                        </ComboBox>
-                                        <Grid Margin="0,0,16,16">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <Button x:Name="btn_case_upper" Grid.Column="0" Content="UPPER" Style="{StaticResource T3.Button.Secondary}" Height="28" FontSize="11"/>
-                                            <Button x:Name="btn_case_lower" Grid.Column="2" Content="lower" Style="{StaticResource T3.Button.Secondary}" Height="28" FontSize="11"/>
-                                            <Button x:Name="btn_case_title" Grid.Column="4" Content="Title" Style="{StaticResource T3.Button.Secondary}" Height="28" FontSize="11"/>
-                                            <Button x:Name="btn_case_sentence" Grid.Column="6" Content="Sent." Style="{StaticResource T3.Button.Secondary}" Height="28" FontSize="11"/>
-                                        </Grid>
-                                    </StackPanel>
-                                </ScrollViewer>
-
+                                <!-- Bottom strip: same height and rule line as the grid action bar on the right -->
                                 <Border Grid.Row="2" Background="{StaticResource T3.SurfaceSunken}"
                                         BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0"
                                         Padding="16,8">
                                     <Button x:Name="btn_clear_settings" Content="Clear Settings"
-                                            Style="{StaticResource T3.Button.Ghost}" Height="28"/>
+                                            Style="{StaticResource T3.Button.Ghost}" Height="28" Padding="12,0"
+                                            HorizontalAlignment="Left"
+                                            ToolTip="Empty the find, replace, prefix and suffix boxes"/>
                                 </Border>
                             </Grid>
 
@@ -2134,23 +2045,12 @@
                                                     </DataTemplate>
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>
-                                            <DataGridTextColumn Header="FAMILY NAME" Binding="{Binding FamilyName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="240"/>
-                                            <DataGridTextColumn Header="TYPE NAME" Binding="{Binding TypeName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="*"
+                                            <DataGridTextColumn Header="FAMILY NAME" Binding="{Binding FamilyName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="2*" MinWidth="200"/>
+                                            <DataGridTextColumn Header="TYPE NAME" Binding="{Binding TypeName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="2*" MinWidth="160"
                                                                 ElementStyle="{StaticResource T3.Cell.Muted}"/>
-                                            <DataGridTextColumn Header="CATEGORY" Binding="{Binding CategoryName}" Width="150" IsReadOnly="True"
+                                            <DataGridTextColumn Header="CATEGORY" Binding="{Binding CategoryName}" Width="*" MinWidth="120" IsReadOnly="True"
                                                                 ElementStyle="{StaticResource T3.Body.Secondary}"/>
-                                            <DataGridTemplateColumn Header="WORKSET" Width="150">
-                                                <DataGridTemplateColumn.CellTemplate>
-                                                    <DataTemplate>
-                                                        <ComboBox ItemsSource="{Binding RelativeSource={RelativeSource AncestorType={x:Type DataGrid}}, Path=DataContext.Worksets}"
-                                                                  SelectedValue="{Binding WorksetId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                                  DisplayMemberPath="Name" SelectedValuePath="Id"
-                                                                  Style="{StaticResource T3.ComboBox}"
-                                                                  Height="24" Padding="4,0"/>
-                                                    </DataTemplate>
-                                                </DataGridTemplateColumn.CellTemplate>
-                                            </DataGridTemplateColumn>
-                                            <DataGridTemplateColumn Header="ACTION" Width="60">
+                                            <DataGridTemplateColumn Header="ACTION" Width="64" CanUserResize="False" CanUserSort="False">
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
                                                         <Button Click="delete_row_click" Style="{StaticResource T3.WinCtrl}" Width="28" Height="24" ToolTip="Remove from list" HorizontalAlignment="Center">
@@ -2179,6 +2079,288 @@
                                     </Grid>
                                 </Border>
                             </Grid>
+                        </Grid>
+                    </TabItem>
+
+                    <!-- ── TAB 1: FAMILY LOADER ── -->
+                    <TabItem>
+                        <Grid Margin="0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/> <!-- Search & Folder Bar -->
+                                <RowDefinition Height="*"/>    <!-- Split View: Categories & Family Cards -->
+                                <RowDefinition Height="Auto"/> <!-- Action Bar -->
+                            </Grid.RowDefinitions>
+
+                            <!-- Row 0: Toolbar — source folder on the left (where the
+                                 categories pane starts), search on the right (above the
+                                 cards it filters). Same 45px strip as Tab 0: 8 + 28 + 8 +
+                                 1px rule. No guidance sentence here — that lives in the
+                                 empty states below. -->
+                            <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
+                                    BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
+                                    Padding="16,8">
+                                <Grid Height="{StaticResource T3.H.Control}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="280"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Folder selector -->
+                                    <Button x:Name="btn_select_folder" Grid.Column="0"
+                                            Style="{StaticResource T3.Button.Secondary}"
+                                            Height="28" Padding="12,0"
+                                            ToolTip="Choose the folder that holds your .rfa files">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE8E5;" Style="{StaticResource T3.Icon.Lead}"/>
+                                            <TextBlock Text="Choose Folder" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+
+                                    <!-- Current folder path (scan progress is appended by Python) -->
+                                    <TextBlock x:Name="txt_current_folder" Grid.Column="1"
+                                               Text="No folder selected"
+                                               Style="{StaticResource T3.Body.Secondary}"
+                                               Margin="12,0,16,0"
+                                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+
+                                    <!-- Search -->
+                                    <TextBox x:Name="txt_search" Grid.Column="2"
+                                             Style="{StaticResource T3.Search}"
+                                             Tag="Search families…"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Row 1: Split — categories | family cards.
+                                 Left pane is 300 wide, same as the Batch Operations settings
+                                 pane, so the divider does not jump when the rail switches page.
+                                 Both header strips use the toolbar geometry (8 + 28 + 8 + 1px
+                                 rule = 45px), so they read as one row across the divider. -->
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="300"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Left: categories panel — header, tree and empty state in one
+                                     T3.Panel (rule 19). Docked flush in the window, so no radius;
+                                     its 1px right edge is the divider between the panes. -->
+                                <Border Grid.Column="0" Style="{StaticResource T3.Panel}"
+                                        Padding="0" CornerRadius="0" BorderThickness="0,0,1,0"
+                                        ClipToBounds="True">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Header: title + folder count -->
+                                        <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
+                                                BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
+                                                Padding="16,8">
+                                            <Grid Height="{StaticResource T3.H.Control}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="Categories"
+                                                           Style="{StaticResource T3.BodyStrong}"/>
+                                                <TextBlock x:Name="txt_category_count" Grid.Column="1" Text="0"
+                                                           Style="{StaticResource T3.Mono}"
+                                                           ToolTip="Folders found under the chosen folder"/>
+                                            </Grid>
+                                        </Border>
+
+                                        <!-- Tree: T3.TreeView scrolls and virtualizes by itself —
+                                             never wrap it in a ScrollViewer. -->
+                                        <TreeView x:Name="tree_categories" Grid.Row="1"
+                                                  Style="{StaticResource T3.TreeView}"/>
+
+                                        <!-- Empty state: shown while the tree has no nodes (no
+                                             folder yet, scanning, scan stopped, no .rfa found).
+                                             ManaFamiDialog._update_loader_empty_states words it. -->
+                                        <Grid Grid.Row="1" Margin="16">
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasItems, ElementName=tree_categories}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock x:Name="txt_categories_empty_title" Text="No categories yet"
+                                                           Style="{StaticResource T3.BodyStrong}"
+                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="txt_categories_empty_hint"
+                                                           Text="Subfolders of the chosen folder appear here."
+                                                           Style="{StaticResource T3.Empty}" Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Right: families panel — header, cards and empty state in one
+                                     T3.Panel (rule 19). -->
+                                <Border Grid.Column="1" Style="{StaticResource T3.Panel}"
+                                        Padding="0" CornerRadius="0" BorderThickness="0"
+                                        ClipToBounds="True">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Header: result count + All / None (ghost, P2) -->
+                                        <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
+                                                BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
+                                                Padding="16,8">
+                                            <Grid Height="{StaticResource T3.H.Control}">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock x:Name="txt_result_count" Grid.Column="0"
+                                                           Text="0 families found"
+                                                           Style="{StaticResource T3.BodyStrong}"/>
+                                                <!-- Nothing to tick while no card is shown: both
+                                                     buttons grey out with the empty state. -->
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasItems, ElementName=items_families}" Value="False">
+                                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
+                                                    <Button x:Name="btn_select_all_loader" Content="Select All"
+                                                            Style="{StaticResource T3.Button.Ghost}"
+                                                            Height="28" Padding="12,0" Margin="0,0,4,0"
+                                                            ToolTip="Tick every family shown below"/>
+                                                    <Button x:Name="btn_select_none_loader" Content="Select None"
+                                                            Style="{StaticResource T3.Button.Ghost}"
+                                                            Height="28" Padding="12,0"
+                                                            ToolTip="Untick every family shown below"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+
+                                        <!-- Cards. Each card carries an 8px margin, so this padding
+                                             puts the card edges at 16 / 16 / 12 / 16 (rule 16) and
+                                             the first card lines up with the header text. -->
+                                        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
+                                                      VerticalScrollBarVisibility="Auto" Padding="8,8,4,8">
+                                            <ItemsControl x:Name="items_families">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Width="152" Margin="8">
+                                                            <!-- The selected look reads IsChecked through the checkbox
+                                                                 bridge below (row_is_checked_text): a DataTrigger bound
+                                                                 straight to the Python attribute compares a PyObject with
+                                                                 "True" and never fires. -->
+                                                            <Border Height="140" CornerRadius="4" Cursor="Hand"
+                                                                    BorderThickness="1" BorderBrush="{StaticResource T3.Border}"
+                                                                    Background="{StaticResource T3.Surface}">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding Text, ElementName=row_is_checked_text}" Value="True">
+                                                                                <Setter Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
+                                                                                <Setter Property="BorderThickness" Value="2"/>
+                                                                                <Setter Property="Background" Value="{StaticResource T3.SurfaceSunken}"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
+                                                                <Grid>
+                                                                    <Border Background="{StaticResource T3.SurfaceSunken}"/>
+                                                                    <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="8"/>
+                                                                    <Grid>
+                                                                        <TextBlock x:Name="row_is_checked_text" Text="{Binding IsChecked}" Visibility="Collapsed"/>
+                                                                        <CheckBox IsChecked="{Binding Text, ElementName=row_is_checked_text, Mode=OneWay}"
+                                                                                  VerticalAlignment="Top" HorizontalAlignment="Left"
+                                                                                  Margin="8" Style="{StaticResource T3.CheckBox}"/>
+                                                                    </Grid>
+                                                                </Grid>
+                                                            </Border>
+                                                            <TextBlock Text="{Binding Name}" Style="{StaticResource T3.Caption}"
+                                                                       TextWrapping="Wrap" MaxHeight="32" Margin="0,4,0,0"
+                                                                       ToolTip="{Binding FullPath}"/>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+
+                                        <!-- Empty state: shown while no card is shown. Icon, title,
+                                             hint and whether the Choose Folder button shows are set
+                                             per scan phase by ManaFamiDialog._update_loader_empty_states
+                                             (no folder / scanning / no .rfa found / no match). -->
+                                        <Grid Grid.Row="1" Margin="24">
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasItems, ElementName=items_families}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                                        MaxWidth="360">
+                                                <TextBlock x:Name="txt_families_empty_icon" Text="&#xE8E5;"
+                                                           Style="{StaticResource T3.Icon.Lg}"
+                                                           Foreground="{StaticResource T3.TextDisabled}"
+                                                           HorizontalAlignment="Center"/>
+                                                <TextBlock x:Name="txt_families_empty_title" Text="No folder loaded"
+                                                           Style="{StaticResource T3.BodyStrong}"
+                                                           HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                                                <TextBlock x:Name="txt_families_empty_hint"
+                                                           Text="Choose a folder of .rfa files. Its subfolders become the categories on the left."
+                                                           Style="{StaticResource T3.Empty}" Margin="0,4,0,0"/>
+                                                <Button x:Name="btn_empty_select_folder"
+                                                        Style="{StaticResource T3.Button.Secondary}"
+                                                        HorizontalAlignment="Center" Margin="0,16,0,0"
+                                                        ToolTip="Choose the folder that holds your .rfa files">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <TextBlock Text="&#xE8E5;" Style="{StaticResource T3.Icon.Lead}"/>
+                                                        <TextBlock Text="Choose Folder" VerticalAlignment="Center"/>
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+
+                            <!-- Row 2: Loader Action Bar -->
+                            <Border Grid.Row="2" Background="{StaticResource T3.SurfaceSunken}"
+                                    BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0"
+                                    Padding="16,8">
+                                <Grid>
+                                    <TextBlock x:Name="txt_selected_count" Text="0 families selected"
+                                               Style="{StaticResource T3.Body.Secondary}"
+                                               VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Button x:Name="btn_cancel_loader" Content="Cancel"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                Height="28" Padding="16,0" Margin="0,0,8,0"/>
+                                        <Button x:Name="btn_load" Content="Load"
+                                                Style="{StaticResource T3.Button.Primary}" IsDefault="True"
+                                                Height="28" Padding="24,0" IsEnabled="False"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
                         </Grid>
                     </TabItem>
                 </TabControl>

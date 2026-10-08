@@ -104,8 +104,9 @@ from GUI.DataGridColumnFilter import ColumnFilterController
 from GUI import GridPendingEdits as _pend
 
 # Row fields the grids let the user edit. Each one also needs a `dirty_<field>`
-# flag on the row (init_pending creates them) and a CellStyle DataTrigger in the
-# XAML bound to that flag, or the amber "pending" highlight never appears.
+# flag on the row (init_pending creates them) and a CellStyle in the XAML that
+# reads it through the cell string bridge (GridPendingEdits.CELL_BRIDGE_PROPERTY),
+# or the amber "pending" highlight never appears.
 VIEW_EDIT_FIELDS = ("name", "view_template", "scale", "detail_level", "title_on_sheet")
 TMPL_EDIT_FIELDS = ("name",)
 
@@ -229,6 +230,11 @@ class ViewManagerWindow(T3WPFWindow):
     PP_PAUSE_TEXT = "mv_btn_pause_label"
     PP_STATUS     = "txt_status_bar"
     PP_STOP_MSG   = u"Stopping… finishing current view"
+
+    # Excel round trip: one column per VIEW_EDIT_FIELDS entry, after "Element ID".
+    _VIEW_EXCEL_COLUMNS = (("name", "View Name"), ("view_template", "View Template"),
+                           ("scale", "Scale"), ("detail_level", "Detail Level"),
+                           ("title_on_sheet", "Title on Sheet"))
 
     def __init__(self):
         T3WPFWindow.__init__(self, XAML_FILE)
@@ -646,7 +652,7 @@ class ViewManagerWindow(T3WPFWindow):
     def _refresh_grid_later(self, grid):
         """Redraw the grid once the edit has finished committing.
 
-        The rows carry no INotifyPropertyChanged, so the amber DataTrigger only
+        The rows carry no INotifyPropertyChanged, so the amber cell style only
         re-reads `dirty_<field>` on a refresh — and calling Refresh() while the
         cell is still committing throws "not allowed during an EditItem
         transaction". Hence the trip through the dispatcher.
@@ -661,6 +667,59 @@ class ViewManagerWindow(T3WPFWindow):
                 grid.Items.Refresh()
             except Exception:
                 pass
+
+    def _excel_view_updates(self, headers, rows):
+        """Turn read_xlsx's (headers, rows) into [(view id, {field: text})].
+
+        Columns are matched by header, case-insensitively, against the labels
+        the export writes or the field names themselves; unknown columns are
+        ignored. The id is None when a row's Element ID is not a number, so the
+        caller counts it as unmatched. Returns (updates, has_id_column).
+        """
+        def norm(text):
+            return " ".join(str(text or "").replace("_", " ").lower().split())
+
+        lookup = {}
+        for field, label in self._VIEW_EXCEL_COLUMNS:
+            lookup[norm(field)] = field
+            lookup[norm(label)] = field
+        id_col = None
+        columns = {}
+        for index, header in enumerate(headers or []):
+            key = norm(header)
+            if key in ("element id", "elementid", "view id", "id"):
+                if id_col is None:
+                    id_col = index
+            elif key in lookup and lookup[key] not in columns.values():
+                columns[index] = lookup[key]
+        if id_col is None:
+            return [], False
+
+        def text(value):
+            if value is None:
+                return u""
+            if isinstance(value, float) and value == int(value):
+                value = int(value)
+            return value if isinstance(value, str) else str(value)
+
+        updates = []
+        for row in rows or []:
+            raw_id = str(row[id_col] if id_col < len(row) else "").strip()
+            try:
+                view_id = int(raw_id)
+            except ValueError:
+                try:
+                    view_id = int(float(raw_id))
+                except (ValueError, OverflowError):
+                    view_id = None
+            data = {}
+            for index, field in columns.items():
+                value = text(row[index] if index < len(row) else None)
+                if field == "name" and not value.strip():
+                    continue            # an empty name can never be applied
+                data[field] = value
+            updates.append((view_id, data))
+        return updates, True
 
     def _on_views_excel(self, sender, args):
         if not self._flush_edits():
@@ -680,8 +739,14 @@ class ViewManagerWindow(T3WPFWindow):
             if sfd.ShowDialog() == DialogResult.OK:
                 try:
                     views_list = list(self.filtered_views)
-                    write_xlsx(sfd.FileName, views_list)
-                    MessageBox.Show("Successfully exported views data to Excel.", "Export Successful")
+                    headers = ["Element ID"] + [label for _, label in self._VIEW_EXCEL_COLUMNS]
+                    rows = [[_eid_int(item.id)] +
+                            [getattr(item, field, "") for field, _ in self._VIEW_EXCEL_COLUMNS]
+                            for item in views_list]
+                    write_xlsx(sfd.FileName, headers, rows)
+                    MessageBox.Show("Exported {} view{} to:\n{}".format(
+                        len(rows), "" if len(rows) == 1 else "s", sfd.FileName),
+                        "Export Successful")
                 except Exception as ex:
                     MessageBox.Show("Error exporting: {}".format(str(ex)), "Error")
                     
@@ -691,15 +756,22 @@ class ViewManagerWindow(T3WPFWindow):
             ofd.Filter = "Excel Files (*.xlsx)|*.xlsx"
             if ofd.ShowDialog() == DialogResult.OK:
                 try:
-                    updates = read_xlsx(ofd.FileName)
+                    headers, rows = read_xlsx(ofd.FileName)
+                    updates, has_id = self._excel_view_updates(headers, rows)
+                    if not has_id:
+                        MessageBox.Show(
+                            "The workbook has no 'Element ID' column, so its rows cannot be "
+                            "matched to views.\nExport from View Manager first, edit that "
+                            "file and import it again.", "Import Excel")
+                        return
                     if not updates:
                         MessageBox.Show("No valid updates found in Excel file.", "Import Excel")
                         return
-                    
+
                     by_id = {_eid_int(item.id): item for item in self.all_views}
                     staged = missing = 0
-                    for view_id, data in updates.items():
-                        item = by_id.get(int(view_id))
+                    for view_id, data in updates:
+                        item = by_id.get(view_id)
                         if item is None:
                             missing += 1
                             continue

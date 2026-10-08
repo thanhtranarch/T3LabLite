@@ -1,0 +1,4 @@
+layout:
+  - SheetGen
+  - CropSync
+  - PDF import

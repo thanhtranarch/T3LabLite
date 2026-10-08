@@ -54,8 +54,8 @@ GitHub Desktop and VS Code both run the hook.
 ## Bringing code over from t3lab_dev
 
 ```
-python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI "T3Lab.tab/Modeling & Datum.panel"
-python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI "T3Lab.tab/Modeling & Datum.panel" --apply
+python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI "T3Lab.tab/Model & Datum.panel"
+python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI "T3Lab.tab/Model & Datum.panel" --apply
 ```
 
 - `NEW` / `CHANGED`: copied with `--apply`.

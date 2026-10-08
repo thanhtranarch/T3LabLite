@@ -48,8 +48,10 @@ from Autodesk.Revit.DB import (
     RevitLinkInstance,
     RevitLinkOptions,
     RevitLinkType,
+    SubTransaction,
     Transaction,
     TransactionGroup,
+    TransactionStatus,
 )
 
 from pyrevit import revit
@@ -58,6 +60,7 @@ from GUI.WPF_Base import T3WPFWindow, to_items_source
 from GUI.T3Dialog import confirm as t3_confirm
 
 from Snippets import _links
+from Snippets._compat import disposing
 
 GUI_DIR = os.path.dirname(__file__)
 XAML_FILE = os.path.join(GUI_DIR, 'Tools', 'BatchLink.xaml')
@@ -688,14 +691,31 @@ class BatchLinkDialog(T3WPFWindow):
         already = 0
         failed = 0
 
+        doc = self.doc
+
+        def move_one(row):
+            # One SubTransaction per link: a link that fails half-way (second
+            # instance owned by someone) is rolled back on its own, the rest
+            # of the Apply still commits.
+            with disposing(SubTransaction(doc)) as sub:
+                sub.Start()
+                ok, message = _links.set_link_workset(
+                    doc, row.record, target.workset_id, include_type)
+                if ok:
+                    sub.Commit()
+                else:
+                    sub.RollBack()
+                return ok, message
+
         self._begin_busy("Moving links to {}".format(target.name))
         transaction = Transaction(self.doc, "Batch Link — link workset")
+        done = []
         try:
             transaction.Start()
             for index, row in enumerate(rows, 1):
                 self._step_busy("Moving links", row.LinkName, index, total)
-                ok, message = _links.set_link_workset(
-                    self.doc, row.record, target.workset_id, include_type)
+                ok, message = move_one(row)
+                done.append(row)
                 if not ok:
                     failed += 1
                     row.StatusText = (message or "Failed")[:26]
@@ -709,11 +729,24 @@ class BatchLinkDialog(T3WPFWindow):
                     row.StatusText = "Moved"
                     row.Severity = "Success"
                 self._do_events()
-            transaction.Commit()
+            if moved == 0:
+                # Nothing changed in the model: leave no empty undo step.
+                transaction.RollBack()
+            else:
+                status = transaction.Commit()
+                if status != TransactionStatus.Committed:
+                    raise RuntimeError("Revit did not commit the change ({})".format(status))
         except Exception as ex:
             if transaction.HasStarted() and not transaction.HasEnded():
                 transaction.RollBack()
-            self._end_busy("Moving links failed: {}".format(str(ex).split("\n")[0][:60]))
+            # Nothing was written: the pills must not still say "Moved".
+            for row in done:
+                if row.Severity == "Success":
+                    row.StatusText = "Rolled back"
+                    row.Severity = "Danger"
+            self.grid_ws_links.ItemsSource = to_items_source(self._ws_filtered)
+            self._end_busy("Nothing was moved — the change was rolled back: {}".format(
+                str(ex).split("\n")[0][:60]))
             return
 
         self._refresh_ws_rows()

@@ -393,8 +393,12 @@ class ManaSelectWindow(T3WPFWindow):
             (self.nav_toggle_select_sheets, MODE_SHEETS),
             (self.nav_toggle_warnings, MODE_WARNINGS),
         )
+        # By x:Name, not `sender is toggle`: pythonnet hands the handler a new
+        # wrapper for the same control, so identity never matched and every
+        # rail tile snapped back to the current mode.
+        name = getattr(sender, 'Name', None)
         for toggle, mode in mapping:
-            if sender is toggle:
+            if name and name == getattr(toggle, 'Name', None):
                 self._apply_mode(mode)
                 return
         # Bấm lại tile đang bật thì ToggleButton tự bỏ tick — ghim lại.
@@ -417,8 +421,24 @@ class ManaSelectWindow(T3WPFWindow):
 
         self._update_selected_count()
         self._set_status(self._mode_status())
+        if mode == MODE_QUICK:
+            self._load_quick_select_once()
         # Sau _set_status: nới cửa sổ có câu trạng thái riêng và phải thắng.
         self._widen_for_mode(mode)
+
+    def _load_quick_select_once(self):
+        """Fill the embedded Quick Select grid the first time its tab opens.
+        QuickSelectWindow loads on its own ContentRendered, which never fires
+        here: only its content is mounted, the window itself is never shown."""
+        win = getattr(self, '_quick_select_win', None)
+        if win is None or getattr(self, '_quick_select_loaded', False):
+            return
+        self._quick_select_loaded = True
+        try:
+            win._on_first_render()
+        except Exception as ex:
+            self._quick_select_loaded = False
+            self._set_status('Quick Select could not load the elements: %s' % ex)
 
     def _widen_for_mode(self, mode):
         """Nới cửa sổ nếu mode cần bề ngang hơn mức đang có. Chỉ NỚI, không thu."""

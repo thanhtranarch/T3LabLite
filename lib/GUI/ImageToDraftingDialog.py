@@ -74,7 +74,7 @@ import Microsoft.Win32
 
 from pyrevit import revit, DB, forms, script
 from GUI.WPF_Base import T3WPFWindow
-from core.extension_paths import tab_dir
+from core.extension_paths import bundle_path
 # Put the extension's lib/ on sys.path so GUI.ProgressPauseMixin imports
 # (mirror main()'s "walk up to T3Lab.extension" logic).
 _ext_dir = os.path.dirname(__file__)
@@ -481,11 +481,38 @@ def svg_to_revit_segments(svg_path, target_width_mm, line_thickness_px):
 # DYNAMIC C# VECTORIZER COMPILER & BITMAP HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
+# The vectorizer is C# compiled at runtime by CodeDom (csc.exe of .NET
+# Framework). .NET 8 (Revit 2025+) has no CodeDom compiler: it throws
+# PlatformNotSupportedException, and there is no pure-Python tracer.
+TRACING_UNAVAILABLE_MSG = (
+    "Image tracing is not available on Revit 2025 and later yet: it compiles "
+    "its tracer with the .NET Framework C# compiler, which .NET 8 does not "
+    "include.\n\nUse Image to Drafting in Revit 2022, 2023 or 2024.")
+
+
+def vectorizer_supported():
+    """True on .NET Framework (Revit 2022–2024), False on .NET 5+ (Revit 2025+)."""
+    import System
+    try:
+        return System.Environment.Version.Major < 5
+    except Exception:
+        return True
+
+
 def compile_csharp_vectorizer():
+    if not vectorizer_supported():
+        raise RuntimeError(TRACING_UNAVAILABLE_MSG)
+    # Compiled earlier in this Revit session: pythonnet still knows the namespace.
+    try:
+        from T3LabImageTrace import Vectorizer
+        return Vectorizer
+    except ImportError:
+        pass
     source_code = """
 using System;
 using System.Collections.Generic;
 
+namespace T3LabImageTrace {
 public class Vectorizer {
     public static int ComputeOtsuThreshold(byte[] pixelData, int w, int h, int stride) {
         int[] hist = new int[256];
@@ -1069,6 +1096,7 @@ public class Vectorizer {
         return output;
     }
 }
+}
 """
     from Microsoft.CSharp import CSharpCodeProvider
     from System.CodeDom.Compiler import CompilerParameters
@@ -1084,9 +1112,16 @@ public class Vectorizer {
         for err in results.Errors:
             errors.append(err.ErrorText)
         raise Exception("C# Compilation failed:\n" + "\n".join(errors))
-    import clr
-    clr.AddReference(results.CompiledAssembly)
-    import Vectorizer
+    asm = results.CompiledAssembly
+    # pythonnet 3: clr.AddReference() only takes a name/path string, so it
+    # cannot take this in-memory Assembly. It does not need to: CodeDom loaded
+    # it with Assembly.Load(bytes) and pythonnet registers the namespaces of
+    # every assembly that loads, so a plain import finds the class.
+    try:
+        from T3LabImageTrace import Vectorizer
+    except ImportError:
+        clr.AddReference(asm)       # IronPython only sees referenced assemblies
+        from T3LabImageTrace import Vectorizer
     return Vectorizer
 
 _VECTORIZER_CLASS = None
@@ -1157,8 +1192,7 @@ class ImageToDraftingWindow(T3WPFWindow):
         self.pdf_path     = None   # original PDF path (None for images)
         self.gs_path      = None   # cached Ghostscript path
         self.temp_files   = []
-        ext_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        pb_potrace = os.path.join(tab_dir(ext_dir), 'Modeling & Datum.panel', 'Create.stack', 'Create Elements.pulldown', 'ImageToDrafting.pushbutton', 'potrace.exe')
+        pb_potrace = bundle_path('ImageToDrafting.pushbutton', 'potrace.exe')
         self.potrace_path = pb_potrace if os.path.isfile(pb_potrace) else os.path.join(os.path.dirname(__file__), 'potrace.exe')
 
     # ── window chrome ──────────────────────────────────────────────────────────
@@ -1344,6 +1378,10 @@ class ImageToDraftingWindow(T3WPFWindow):
             forms.alert("Tolerance must be a non-negative number."); return
 
         invert_colors = bool(self.InvertInput.IsChecked)
+
+        # Both modes need the C# vectorizer; say so before the window closes.
+        if not vectorizer_supported():
+            forms.alert(TRACING_UNAVAILABLE_MSG, title="Image to Drafting"); return
 
         if tracing_mode == 1 and not os.path.exists(self.potrace_path):
             forms.alert("potrace.exe not found next to this button. Cannot run Outline Mode."); return

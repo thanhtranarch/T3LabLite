@@ -15,9 +15,12 @@ A safer replacement for copying folders by hand in Explorer:
 Usage:
   python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI
   python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI lib/core/server.py --apply
-  python lite_guard/sync_from_dev.py D:/t3lab_dev "T3Lab.tab/Modeling & Datum.panel/FamiTransfer.pushbutton" --apply
+  python lite_guard/sync_from_dev.py D:/t3lab_dev "T3Lab.tab/Standards & Families.panel/FamiTransfer.pushbutton" --apply
 
-Paths are relative to the repository root (the same in both repos).
+Paths are relative to the repository root (the same in both repos). The
+ribbon tab is the one exception: t3lab_dev calls it T3Lab_Dev.tab, Lite calls it
+T3Lab.tab, so a T3Lab.tab/... path is read from the dev tab of the same layout.
+dev_dir may be the t3lab-revit-api checkout or its T3Lab.extension folder.
 """
 from __future__ import print_function
 
@@ -32,6 +35,8 @@ import guard  # noqa: E402
 
 ROOT = guard.ROOT
 MAX_KEEP_LINES = 40
+LITE_TAB = guard.TAB_DIR                 # 'T3Lab.tab'
+DEV_TABS = ('T3Lab_Dev.tab', LITE_TAB)   # what t3lab_dev has called its tab
 
 
 def _read(path):
@@ -98,12 +103,44 @@ def _block_reasons(path, lite_raw, dev_raw, markers):
     return reasons
 
 
+def _extension_dir(dev_dir):
+    """The folder that holds lib/ and the ribbon tab: dev_dir itself, or the
+    T3Lab.extension folder of a t3lab-revit-api checkout."""
+    nested = os.path.join(dev_dir, 'T3Lab.extension')
+    if not os.path.isdir(os.path.join(dev_dir, 'lib')) and os.path.isdir(nested):
+        return nested
+    return dev_dir
+
+
+def _dev_tab(dev_dir):
+    for name in DEV_TABS:
+        if os.path.isdir(os.path.join(dev_dir, name)):
+            return name
+    return LITE_TAB
+
+
+def _swap_tab(rel, src_tab, dst_tab):
+    if src_tab != dst_tab and (rel == src_tab or rel.startswith(src_tab + '/')):
+        return dst_tab + rel[len(src_tab):]
+    return rel
+
+
+def to_dev(dev_dir, rel):
+    """Lite-relative path -> the same file's path relative to dev_dir."""
+    return _swap_tab(rel, LITE_TAB, _dev_tab(dev_dir))
+
+
+def to_lite(dev_dir, rel):
+    """dev_dir-relative path -> the matching Lite-relative path."""
+    return _swap_tab(rel, _dev_tab(dev_dir), LITE_TAB)
+
+
 def _normalize_rel(dev_dir, path):
     """Accept repo-relative paths, or absolute ones inside dev_dir."""
     if os.path.isabs(path):
         path = os.path.relpath(path, dev_dir)
     path = path.replace('\\', '/').strip('/')
-    return '.' if path in ('', '.') else path
+    return '.' if path in ('', '.') else to_lite(dev_dir, path)
 
 
 def plan(dev_dir, paths, manifest):
@@ -114,10 +151,11 @@ def plan(dev_dir, paths, manifest):
     seen = set()
 
     for rel in paths:
-        if not os.path.exists(os.path.join(dev_dir, rel)):
-            raise SystemExit('sync_from_dev: "{}" is not in {}'.format(rel, dev_dir))
+        if not os.path.exists(os.path.join(dev_dir, to_dev(dev_dir, rel))):
+            raise SystemExit('sync_from_dev: "{}" is not in {}'.format(
+                to_dev(dev_dir, rel), dev_dir))
 
-        dev_files = set(_walk(dev_dir, rel))
+        dev_files = set(to_lite(dev_dir, p) for p in _walk(dev_dir, to_dev(dev_dir, rel)))
         for path in sorted(dev_files):
             if path in seen:
                 continue
@@ -125,7 +163,7 @@ def plan(dev_dir, paths, manifest):
             if _is_lite_only(path, lite_only):
                 rows['SKIP'].append((path, 'lite_only in manifest.json'))
                 continue
-            dev_raw = _read(os.path.join(dev_dir, path))
+            dev_raw = _read(os.path.join(dev_dir, to_dev(dev_dir, path)))
             lite_raw = _read(os.path.join(ROOT, path))
             if lite_raw is None:
                 rows['NEW'].append((path, ''))
@@ -152,7 +190,7 @@ def print_plan(rows, unchanged, dev_dir):
             print('  {:<8} {}{}'.format(kind, path, '  -- ' + note if note else ''))
             if kind == 'BLOCKED':
                 print('           merge by hand:  git diff --no-index "{}" "{}"'.format(
-                    path, os.path.join(dev_dir, path)))
+                    path, os.path.join(dev_dir, to_dev(dev_dir, path))))
     keep = rows['KEEP']
     for path, note in keep[:MAX_KEEP_LINES]:
         print('  {:<8} {}  -- {}'.format('KEEP', path, note))
@@ -171,7 +209,7 @@ def apply(rows, dev_dir, force):
             parent = os.path.dirname(target)
             if parent and not os.path.isdir(parent):
                 os.makedirs(parent)
-            shutil.copy2(os.path.join(dev_dir, path), target)
+            shutil.copy2(os.path.join(dev_dir, to_dev(dev_dir, path)), target)
             count += 1
     return count
 
@@ -194,7 +232,7 @@ def main(argv=None):
                         help='with --apply, also overwrite BLOCKED files')
     args = parser.parse_args(argv)
 
-    dev_dir = os.path.abspath(args.dev_dir)
+    dev_dir = _extension_dir(os.path.abspath(args.dev_dir))
     if not os.path.isdir(dev_dir):
         raise SystemExit('sync_from_dev: {} is not a folder'.format(dev_dir))
     if os.path.normcase(dev_dir) == os.path.normcase(ROOT):

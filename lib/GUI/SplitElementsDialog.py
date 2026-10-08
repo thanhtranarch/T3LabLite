@@ -85,8 +85,13 @@ class SplitElementsWindow(T3WPFWindow):
         elif idx == 2:
             self._on_split_floors(sender, e)
 
-    def _launch(self, rel_path):
+    def _launch(self, rel_path, label):
         script_path = os.path.normpath(os.path.join(self._script_dir, rel_path))
+        if not os.path.isfile(script_path):
+            # The Split.pulldown tools are not shipped with this build.
+            forms.alert("{} is not available in this version of T3Lab Lite.".format(label),
+                        title="Split Elements")
+            return
         self.Close()
         g = {'__name__': '__main__', '__file__': script_path,
              '__builtins__': __builtin__, '__revit__': self._revit}
@@ -97,13 +102,13 @@ class SplitElementsWindow(T3WPFWindow):
             forms.alert("Error launching tool:\n{}".format(ex))
 
     def _on_split_walls(self, sender, e):
-        self._launch("../Split.pulldown/Wall_Split.pushbutton/script.py")
+        self._launch("../Split.pulldown/Wall_Split.pushbutton/script.py", "Split Walls")
 
     def _on_split_columns(self, sender, e):
-        self._launch("../Split.pulldown/Column_Split.pushbutton/script.py")
+        self._launch("../Split.pulldown/Column_Split.pushbutton/script.py", "Split Columns")
 
     def _on_split_floors(self, sender, e):
-        self._launch("../Split.pulldown/Floor_Split.pushbutton/script.py")
+        self._launch("../Split.pulldown/Floor_Split.pushbutton/script.py", "Split Floors")
 
     def _minimize(self, sender, e):
         import System.Windows

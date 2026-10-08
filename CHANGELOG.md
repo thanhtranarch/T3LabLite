@@ -17,6 +17,110 @@ Releasing a new version:
 
 ## [Unreleased]
 
+The T3Lab ribbon now has exactly the layout of t3lab-revit-api: six panels
+instead of seven, the same buttons in the same places.
+
+### Changed
+- **Ribbon regrouped** -- restart Revit after updating (a pyRevit Reload cannot
+  move buttons that already exist):
+  - **Support**: Cloud Links, T3Lab Assistant, and a new **Settings** pulldown
+    holding Feedback, MCP Control, LLMs Setting, ManaTabs, Ribbon Names,
+    BG Theme and **Check Update**.
+  - **Standards & Families** (was Standards & Settings): Standards stack
+    (Model Auditor, ManaStyles, ManaWorkset), Managers stack (ManaLoca,
+    ManaGroup, BatchLink), then ManaFami, Family Transfer and FamiGen.
+  - **Model & Datum** (was Modeling & Datum): CAD to Elements and Point Cloud
+    as large buttons, then a Tools stack of three pulldowns -- Finishes (Room
+    To Floor, Door Threshold, Tile Layout), Reference (Image to Drafting,
+    Property Line, Text to Element) and Modify (Auto Join, Split Elements,
+    Wall Cut Profile, DatumSync, Auto Adjust Base Offset).
+  - **Rebar & Assembly** moves next to Model & Datum.
+  - **Annotation & Data** (Annotation & Select and Data merged): Mana stack,
+    manaData stack, ManaAnno, Make Pattern, IFC-SG Suite.
+  - **Views & Sheets**: View Tools stack (SheetGen, CropSync, PDF Import),
+    ManaViews, ManaSheets, BatchOut.
+- Ribbon icons follow the t3lab-revit-api icon set (28 buttons redrawn, a new
+  Check Update icon).
+- **Ribbon Names** keeps its maps in `%APPDATA%\T3LabAI\ribbon_names` instead of
+  next to its script. Writing them inside the extension folder left a git
+  install with local changes that blocked the next automatic update. Your
+  existing names are carried over once.
+
+### Fixed
+- After a download-and-copy update (no git on the machine, or "Download latest
+  version" in Check Update) the old panels no longer show up a second time:
+  T3Lab moves the folders the update left behind to the `_retired_ribbon`
+  folder of the extension on the next Revit start and says when a restart
+  finishes the job (`lib/core/ribbon_retire.py`).
+- **Check Update never updated**: its "Update now?" question always came back
+  as "no" under CPython, so the click did nothing. After an update it now asks
+  you to restart Revit instead of offering a pyRevit Reload -- on Revit 2025+ a
+  Reload stops every T3Lab tool until Revit restarts.
+- **Make Pattern**: Create Pattern failed every time.
+- **ManaSelect**: the Quick Select, Select Similar, On Sheets and Warnings tiles
+  snapped back to Explore; Quick Select now also fills its list when opened.
+- **ManaSched**: importing Excel values back wrote lengths in feet (2500 mm
+  became 2500 ft); values are read in the project's display units.
+- **IFC-SG Suite**: after sorting a column, Apply to Selected wrote the subtype
+  to other types.
+- **Auto Dimension**: whole dimension strings were rejected with "Invalid
+  number of references" when a grid or wall was slightly off axis.
+- **Wall Cut Profile** and **Auto Adjust Base Offset** did not open at all;
+  Pick then Apply now runs inside Revit's API context (the window closes while
+  you pick and reopens with your inputs).
+- **CAD to Elements**: the Level list and the wall / beam / MEP type lists were
+  always empty, so every run stopped at "Select a Level."
+- **Image to Drafting**: both tracing modes failed to load the tracer. Works on
+  Revit 2022-2024; Revit 2025+ now says tracing is not available there yet.
+- **Tile Layout**: Apply to Model created no tiles while reporting success, and
+  Export CSV always failed.
+- **Text to Element**: Pick items no longer picks while the dialog is still
+  open (a known Revit crash pattern).
+- **Point Cloud**: roofs were never created.
+- **Room To Floor, Door Threshold, Point Cloud, Tile Layout, Wall Cut Profile,
+  Auto Adjust Base Offset**: the second click in a session failed with
+  "Duplicate type name within an assembly".
+- **Split Elements** shows that splitting is not available yet instead of a
+  file-not-found error, and Wall Cut Profile no longer offers "Edit Wall
+  Profile", which did nothing.
+- **ManaFami**: the Family Loader listed no families and Load loaded nothing;
+  thumbnails now show, and Export List saves a `.csv`.
+- **ManaStyles**: Duplicate did nothing for fill and line patterns; All / Clear
+  / Custom now tick the boxes you see; Color Splasher says link sources need a
+  View Filter instead of reporting 0 changes.
+- **FamiGen**: Export & Place placed 0 instances.
+- **Model Auditor**: Duplicate Elements detail rows and Select in Model work;
+  run history is kept in `%APPDATA%\T3LabAI` instead of the extension folder
+  (which also left git installs unable to update); status colours show.
+- **BatchLink**: a link that fails to move to a workset no longer leaves its
+  other instances half moved.
+- **ManaGroup**: edited New Name cells turn amber.
+- The Maximize button of ManaStyles and ManaFami toggled twice, so it did
+  nothing.
+- **ManaViews**: Excel export and Excel import failed every time.
+- **PDF Import**: after unticking a view, All / None or switching mode, the
+  PAGE column kept old numbers, so a view could get a different page than the
+  one shown.
+- **SheetGen**: Select All also ticked rooms hidden by the search, so Create
+  made views and sheets for every room.
+- **ManaViews / ManaSheets**: edited cells now turn amber before you apply.
+- **ManaSheets**: Export always said it succeeded, even when it failed or fell
+  back to CSV; Excel import works without openpyxl; import counted refused
+  edits as "Updated".
+- **BatchOut** opened from the docked T3Lab Assistant showed "Error loading
+  sheets" and an empty window.
+- **MCP Control**: the file watcher row showed an error and a disabled button
+  while the watcher was running; the watcher started at Revit start is now
+  reported as running.
+- Missing imports that raised NameError: the file task watcher never started,
+  MCP find_elements failed on name/level/type filters, View Manager Yes/No
+  confirmations, IFC-SG subtype matching with more than 35 candidates, and the
+  Assistant's task cards.
+- The T3Lab Assistant's fallback for opening BatchOut looked for the script in
+  the wrong folder. Image to Drafting (`potrace.exe`), the Assistant and the
+  Assistant dock pane now find a button by its folder name, wherever it sits
+  on the ribbon.
+
 ## [1.5.0] - 2026-10-07
 
 Every tool on the t3lab-revit-api ribbon is now on the T3Lab Lite ribbon too:

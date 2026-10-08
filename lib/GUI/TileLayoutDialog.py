@@ -56,7 +56,7 @@ clr.AddReference("WindowsBase")
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, BuiltInCategory, ElementId,
-    XYZ, Line, CurveLoop,
+    XYZ, Line, CurveLoop, GeometryObject,
     GeometryCreationUtilities,
     DirectShape,
     View3D, ViewFamilyType, ViewFamily,
@@ -82,7 +82,7 @@ for _p in (lib_dir, gui_dir):
     if _p not in sys.path:
         sys.path.append(_p)
 
-from Snippets._compat import eid_value, elem_name
+from Snippets._compat import eid_value, elem_name, net_list
 
 # pyRevit caches lib modules between runs while pushbutton scripts are always
 # re-read — after an extension update this script can end up calling engine
@@ -265,6 +265,10 @@ class RevitVisualizer(object):
 
     def __init__(self, view):
         self.view = view
+        # Tile shapes drawn / that could not be built — the caller reports
+        # both, so a run that draws nothing is not announced as a success.
+        self.drawn = 0
+        self.failed = 0
         self._resolve_solid_fill()
 
     def draw_piece(self, piece, z_base):
@@ -275,16 +279,20 @@ class RevitVisualizer(object):
             if not frag or len(frag) < 3: continue
             loop = self._make_curve_loop(frag, z_base)
             if loop is None: continue
+            # pythonnet 3 does not turn a Python list into IList<T>:
+            # pass real .NET lists (a [loop] raised TypeError on every tile).
             try:
                 solid = GeometryCreationUtilities.CreateExtrusionGeometry(
-                    [loop], XYZ(0,0,1), EXTRUDE_H)
+                    net_list(CurveLoop, [loop]), XYZ(0,0,1), EXTRUDE_H)
             except Exception as ex:
                 logger.debug("Extrude failed for {}: {}".format(piece.label, ex))
+                self.failed += 1
                 continue
 
             ds = DirectShape.CreateElement(
                 doc, ElementId(BuiltInCategory.OST_GenericModel))
-            ds.SetShape([solid])
+            ds.SetShape(net_list(GeometryObject, [solid]))
+            self.drawn += 1
             try:
                 ds.SetName(PREVIEW_DS_NAME)
             except Exception:
@@ -626,7 +634,9 @@ class ReportGenerator(object):
 
 
     def export_csv(self, filepath):
-        with open(filepath, 'wb') as fh:
+        # Text mode for csv under Python 3 ('wb' raises "a bytes-like object
+        # is required"); utf-8-sig so Excel reads the file as UTF-8.
+        with open(filepath, 'w', newline='', encoding='utf-8-sig') as fh:
             w = csv.writer(fh)
             w.writerow(['Floor_Id', 'Pattern', 'Option',
                         'Label', 'Type', 'Parent_ID',
@@ -858,9 +868,14 @@ class ReportGenerator(object):
 # ═════════════════════════════════════════════════════════════════════════════
 
 import uuid
+# The pushbutton script importlib.reload()s this module on every click; a
+# fixed __namespace__ would define the same .NET type twice and raise
+# "Duplicate type name within an assembly" (rule S15).
+_NS_SUFFIX = uuid.uuid4().hex[:8]
+
 
 class _FloorFilter(ISelectionFilter):
-    __namespace__ = "T3Lab.TileLayout"
+    __namespace__ = "T3Lab.TileLayout_" + _NS_SUFFIX
     def AllowElement(self, e):
         return (e.Category is not None and
                 eid_value(e.Category.Id) == int(BuiltInCategory.OST_Floors))
@@ -1787,6 +1802,7 @@ class TileLayoutWindow(T3WPFWindow):
             TaskDialog.Show("Tile Layout", "No selections to apply.")
             return
 
+        drawn = failed = 0
         self.begin_progress(len(chosen))
         try:
             with revit.Transaction("Tile Layout — apply selected concepts"):
@@ -1811,6 +1827,8 @@ class TileLayoutWindow(T3WPFWindow):
                         if piece.piece_type == 'waste':
                             continue
                         vis.draw_piece(piece, fi.z)
+                    drawn += vis.drawn
+                    failed += vis.failed
             uidoc.ActiveView = view
         except Exception as exc:
             self.end_progress()
@@ -1828,11 +1846,20 @@ class TileLayoutWindow(T3WPFWindow):
         self.btn_export_report.IsEnabled = True
         if cancelled:
             self.status_text.Text = (
-                "Cancelled. DirectShapes created in 'Tile Layout Preview' for the applied floors.")
+                "Cancelled. {} tile shape(s) created in 'Tile Layout Preview' "
+                "for the applied floors.".format(drawn))
         else:
             self.status_text.Text = (
-                "Applied {} option(s). DirectShapes created in 'Tile Layout Preview'."
-                .format(len(chosen)))
+                "Applied {} option(s): {} tile shape(s) created in 'Tile Layout Preview'."
+                .format(len(chosen), drawn))
+        if failed:
+            self.status_text.Text += " {} tile shape(s) could not be created.".format(failed)
+            if not drawn:
+                TaskDialog.Show(
+                    "Tile Layout",
+                    "No tiles were drawn: Revit could not build any of the {} "
+                    "tile shape(s) in 'Tile Layout Preview'.\n\nCheck the floor "
+                    "boundary and tile size, then apply again.".format(failed))
 
     # ═════════════════════════════════════════════════════════════════════════
     # Action-bar buttons

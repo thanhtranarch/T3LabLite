@@ -1,0 +1,6 @@
+title: "Finishes"
+tooltip: "Room-to-floor, door thresholds and tile layout"
+layout:
+  - RoomToFloor
+  - DoorThreshold
+  - Tile Layout

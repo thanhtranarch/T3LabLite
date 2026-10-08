@@ -475,18 +475,17 @@ except Exception as e:
 # Each function opens the corresponding T3Lab tool.
 
 def _get_tool_script_dir(*parts):
-    """Return the path to a pushbutton script.py given path parts relative to the tab.
+    """Return the path to a pushbutton's script.py. Only the LAST part counts:
+    the button is found by its folder name in whichever tab and panel it sits.
 
     Usage:
-        _get_tool_script_dir('Export.panel', 'BatchOut.pushbutton')
-        _get_tool_script_dir('Annotation & Select.panel', 'Text.stack', 'DimText.pushbutton')
+        _get_tool_script_dir('BatchOut.pushbutton')
     """
-    # __file__ = .../T3Lab_Lite.tab/AI Connection.panel/T3LabAssistant.pushbutton/script.py
-    # dirname x1 = T3LabAssistant.pushbutton/
-    # dirname x2 = AI Connection.panel/
-    # dirname x3 = T3Lab_Lite.tab/
-    tab_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    return os.path.join(tab_dir, *parts + ('script.py',))
+    # It used to climb three folders from __file__, which was right while this
+    # code lived in the pushbutton script; from lib/GUI/ it landed on the
+    # extension folder and the BatchOut fallback pointed at a missing file.
+    from core.extension_paths import bundle_path
+    return bundle_path(parts[-1], 'script.py')
 
 
 def _load_script(name, script_path):
@@ -514,7 +513,7 @@ def _load_batchout_mod():
         return BatchOutDialog
     except Exception:
         pass
-    script_path = _get_tool_script_dir('Views & Sheets.panel', 'BatchOut.pushbutton')
+    script_path = _get_tool_script_dir('BatchOut.pushbutton')
     mod = _load_script('batchout_script', script_path)
     if mod is None:
         raise RuntimeError("Could not load BatchOut module from: {}".format(script_path))
@@ -990,6 +989,20 @@ def get_tool_title(intent):
 LEGACY_DOC_KEY = "default"
 
 
+def _active_doc():
+    """The document Revit has active right now, or None. Never raises.
+
+    Snippets._host.resolve_doc(), because `revit.doc` is None in the docked
+    pane (see _get_doc_key).
+    """
+    try:
+        from Snippets._host import resolve_doc
+        doc, _err = resolve_doc()
+        return doc
+    except Exception:
+        return None
+
+
 def _get_doc_key():
     """Return a filesystem-safe key for the current Revit document.
 
@@ -1218,7 +1231,12 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug(u"_apply_revit_skin error: {}".format(_exc_text(ex)))
 
+        # Docked, revit.doc is None (see _get_doc_key) and the pane is often
+        # built before any document is open; _read_revit_context() keeps
+        # self.doc on the active document from the first context tick on.
         self.doc = revit.doc
+        if self.doc is None and self.is_docked:
+            self.doc = _active_doc()
 
         # ── Session state ─────────────────────────────────────────────────────
         self._busy             = False          # concurrency guard
@@ -1925,7 +1943,10 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._sync_theme()
         if not self._update_revit_context():
             self._ctx_failures = getattr(self, '_ctx_failures', 0) + 1
-            if self._ctx_failures >= 3:
+            # Docked, the pane lives for the whole Revit session: no open
+            # document is a normal state, and stopping here would freeze the
+            # strip (and theme sync) for every document opened afterwards.
+            if self._ctx_failures >= 3 and not self.is_docked:
                 try:
                     self._ctx_timer.Stop()
                 except Exception:
@@ -1944,6 +1965,10 @@ class T3LabAssistantWindow(T3WPFWindow):
         doc = getattr(uidoc, 'Document', None)
         if doc is None:
             return None
+        # The docked pane outlives the document it was opened with; follow
+        # whichever one is active so tools act on what the user is looking at.
+        if self.is_docked:
+            self.doc = doc
         view_name = u""
         try:
             view = doc.ActiveView
@@ -7415,7 +7440,20 @@ class T3LabAssistantWindow(T3WPFWindow):
                                 try:
                                     from core.server import get_t3labai_server
                                     srv = get_t3labai_server()
-                                    tool_result = srv._execute_tool(intent, params)
+                                    # Same gate as the native path (_exec_tool):
+                                    # delete_element, purge_unused with
+                                    # dry_run=false, ungroup, a deep geometry
+                                    # probe … never run without an explicit
+                                    # Confirm click on the card.
+                                    if (srv.is_destructive(intent, params or {})
+                                            and not self._confirm_tool_blocking(
+                                                intent, params or {}, is_vn)):
+                                        tool_result = {
+                                            "cancelled": True,
+                                            "note": u"Cancelled by user: the '{}' "
+                                                    u"action was not run.".format(intent)}
+                                    else:
+                                        tool_result = srv._execute_tool(intent, params)
                                 except Exception as execute_err:
                                     # _exc_text, never str(): a Revit error
                                     # carrying a non-ASCII message made str()
@@ -7763,7 +7801,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._replied = False
             _bot("Export queued. Waiting for Revit..." if intent == "export_direct"
                  else "BatchOut launch queued. Waiting for Revit...")
-            expected_doc = self.doc
+            # Docked, self.doc follows the active document on each context
+            # tick (_read_revit_context); before the first tick it is None.
+            expected_doc = self.doc if self.doc is not None else _active_doc()
             self._batchout_request_id = request_id
             self._batchout_running = False
 
@@ -7773,8 +7813,10 @@ class T3LabAssistantWindow(T3WPFWindow):
             def _run_batchout():
                 if _cancel_batchout():
                     return False, "BatchOut request stopped before execution. No files were created."
+                # resolve_doc(), not revit.doc: docked, revit.doc is None here
+                # (see _get_doc_key), so this refused every BatchOut request.
                 if (expected_doc is None or not expected_doc.IsValidObject
-                        or revit.doc != expected_doc):
+                        or _active_doc() != expected_doc):
                     return False, "The active document changed or closed. Refresh the Assistant context before retrying."
                 self._batchout_running = True
                 if intent == "export_direct":
@@ -8443,6 +8485,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             from System.Windows.Controls import (Border, TextBlock, StackPanel,
                                                   Orientation, Button)
             from System.Windows import Thickness, CornerRadius, TextWrapping
+            from System.Windows.Input import Cursors
             from System.Windows.Media import FontFamily
 
             outer = Border()
@@ -9009,10 +9052,12 @@ class T3LabAssistantWindow(T3WPFWindow):
             """Run a run of read-only calls in ONE crossing to Revit.
 
             Only reachable for plain reads (agent_loop.leading_read_run stops
-            at the first write, launcher or memory call), so none of the
-            _exec_tool preamble above — the action group, the destructive
-            confirm card, the purge dry-run forcing, the doc-guard disarm —
-            can apply to anything in here.
+            at the first write, launcher or memory call). One read CAN still
+            need a card: check_bad_geometry with deep_probe is destructive
+            (it can hard-crash Revit). A batch holding any call
+            srv.is_destructive() flags returns None — AgentLoop then discards
+            the prefetch and runs every call through _exec_tool, confirm card
+            included.
 
             This used to call srv.execute_tools_batch, which the server has
             never defined. AgentLoop wraps the call in `except Exception:
@@ -9022,6 +9067,12 @@ class T3LabAssistantWindow(T3WPFWindow):
             `batch` is [(name, args), ...]; the return must be a list of the
             same length or AgentLoop discards it.
             """
+            try:
+                if any(srv.is_destructive(_name, _args)
+                       for _name, _args in batch):
+                    return None
+            except Exception:
+                return None     # unsure → the gated per-call path decides
             out = []
             for _name, _args in batch:
                 out.append(srv._execute_tool(_name, _args))
@@ -10022,6 +10073,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             waited += 0.25
             loop = self._agent_loop
             if loop is not None and loop.is_cancelled():
+                break
+            # The legacy JSON-intent path asks here too and has no AgentLoop.
+            if self._cancelled():
                 break
 
         if state["decision"] is None:

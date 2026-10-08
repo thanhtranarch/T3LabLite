@@ -11,7 +11,9 @@ try:
 except Exception:
     _theme = None
 
-from GUI.WPF_Base import T3WPFWindow
+import System
+
+from GUI.WPF_Base import T3WPFWindow, set_items_source
 from Snippets._compat import eid_value
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'WallCutProfile.xaml')
@@ -38,8 +40,15 @@ except Exception:
     DB = None
 
 
+import uuid
+# The pushbutton script importlib.reload()s this module on every click; a
+# fixed __namespace__ would define the same .NET type twice and raise
+# "Duplicate type name within an assembly" (rule S15).
+_NS_SUFFIX = uuid.uuid4().hex[:8]
+
+
 class LinkFilter(ISelectionFilter if DB else object):
-    __namespace__ = "T3Lab.WallCutProfile_LinkFilter"
+    __namespace__ = "T3Lab.WallCutProfile_LinkFilter_" + _NS_SUFFIX
 
     def AllowElement(self, elem):
         return isinstance(elem, RevitLinkInstance)
@@ -49,7 +58,7 @@ class LinkFilter(ISelectionFilter if DB else object):
 
 
 class WallFilter(ISelectionFilter if DB else object):
-    __namespace__ = "T3Lab.WallCutProfile_WallFilter"
+    __namespace__ = "T3Lab.WallCutProfile_WallFilter_" + _NS_SUFFIX
 
     def AllowElement(self, elem):
         if not isinstance(elem, Wall):
@@ -64,7 +73,7 @@ class WallFilter(ISelectionFilter if DB else object):
 
 
 class WarningSwallower(IFailuresPreprocessor if DB else object):
-    __namespace__ = "T3Lab.WallCutProfile_Failures"
+    __namespace__ = "T3Lab.WallCutProfile_Failures_" + _NS_SUFFIX
 
     def PreprocessFailures(self, fa):
         for f in fa.GetFailureMessages():
@@ -94,7 +103,9 @@ class OpeningFamilyItem(object):
 
 
 class WallCutProfileWindow(T3WPFWindow):
-    def __init__(self, doc, uidoc):
+    _CATEGORY_CHECKS = ('chk_ducts', 'chk_pipes', 'chk_trays', 'chk_framing', 'chk_columns')
+
+    def __init__(self, doc, uidoc, state=None):
         T3WPFWindow.__init__(self, _XAML)
         self._doc = doc
         self._uidoc = uidoc
@@ -102,12 +113,19 @@ class WallCutProfileWindow(T3WPFWindow):
         self._selected_link = None
         self._picked_walls = []
         self._opening_families = []
+        # 'link' / 'walls' when a Pick button closed the window:
+        # show_wall_cut_profile picks inside the live command, then reopens it
+        # with `state`. Hiding a ShowDialog window ends ShowDialog, so Apply
+        # then ran outside the Revit API context and Transaction.Start threw.
+        self.pick_request = None
 
         self._adopt_host_font()
         self._apply_theme()
         self._init_controls()
         self._load_links()
         self._load_opening_families()
+        if state:
+            self._restore_state(state)
 
     def _adopt_host_font(self):
         if _theme is None:
@@ -131,8 +149,8 @@ class WallCutProfileWindow(T3WPFWindow):
 
     def _init_controls(self):
         if hasattr(self, 'cmb_method') and self.cmb_method:
-            methods = ["Place Opening Family", "Edit Wall Profile", "Wall Opening"]
-            self.cmb_method.ItemsSource = methods
+            methods = ["Place Opening Family", "Wall Opening"]
+            set_items_source(self.cmb_method, methods)
             self.cmb_method.SelectedIndex = 0
 
     def _load_links(self):
@@ -153,7 +171,7 @@ class WallCutProfileWindow(T3WPFWindow):
             names.append(title)
 
         if hasattr(self, 'cmb_links') and self.cmb_links:
-            self.cmb_links.ItemsSource = names
+            set_items_source(self.cmb_links, names)
             if len(names) > 0:
                 self.cmb_links.SelectedIndex = 0
                 self._selected_link = links[0]
@@ -192,7 +210,7 @@ class WallCutProfileWindow(T3WPFWindow):
 
         self._opening_families = sorted(unique, key=lambda x: x.name)
         if hasattr(self, 'cmb_families') and self.cmb_families:
-            self.cmb_families.ItemsSource = [f.name for f in self._opening_families]
+            set_items_source(self.cmb_families, [f.name for f in self._opening_families])
             if len(self._opening_families) > 0:
                 self.cmb_families.SelectedIndex = 0
 
@@ -201,56 +219,55 @@ class WallCutProfileWindow(T3WPFWindow):
         if idx >= 0 and idx < len(self._link_instances):
             self._selected_link = self._link_instances[idx]
 
+    def get_state(self):
+        """What the window must keep across the close–pick–reopen cycle."""
+        return {
+            'link': self._selected_link,
+            'walls': list(self._picked_walls),
+            'walls_sel': bool(self.rb_walls_sel.IsChecked),
+            'wall_status': self.txt_wall_status.Text,
+            'checks': dict((n, bool(getattr(self, n).IsChecked))
+                           for n in self._CATEGORY_CHECKS),
+            'method': self.cmb_method.SelectedIndex,
+            'offset': self.txt_offset.Text,
+            'family': self.cmb_families.SelectedIndex,
+        }
+
+    def _restore_state(self, state):
+        for name, checked in state.get('checks', {}).items():
+            getattr(self, name).IsChecked = checked
+        if 0 <= state.get('method', -1) < self.cmb_method.Items.Count:
+            self.cmb_method.SelectedIndex = state['method']
+        if 0 <= state.get('family', -1) < len(self._opening_families):
+            self.cmb_families.SelectedIndex = state['family']
+        if state.get('offset') is not None:
+            self.txt_offset.Text = state['offset']
+        link = state.get('link')
+        if link is not None:
+            for i, l in enumerate(self._link_instances):
+                if eid_value(l.Id) == eid_value(link.Id):
+                    self.cmb_links.SelectedIndex = i
+                    break
+            self._selected_link = link
+        self._picked_walls = list(state.get('walls') or [])
+        if state.get('walls_sel'):
+            self.rb_walls_sel.IsChecked = True
+        if state.get('wall_status'):
+            self.txt_wall_status.Text = state['wall_status']
+
     def btn_pick_link_clicked(self, sender, e):
         if not self._uidoc:
             return
-        self.Hide()
-        try:
-            ref = self._uidoc.Selection.PickObject(
-                ObjectType.Element,
-                LinkFilter(),
-                "Select a Revit Link Instance in view"
-            )
-            elem = self._doc.GetElement(ref.ElementId)
-            if isinstance(elem, RevitLinkInstance):
-                self._selected_link = elem
-                ldoc = elem.GetLinkDocument()
-                title = ldoc.Title if ldoc else elem.Name
-                # Find in cmb_links
-                for i, l in enumerate(self._link_instances):
-                    if eid_value(l.Id) == eid_value(elem.Id):
-                        self.cmb_links.SelectedIndex = i
-                        break
-        except Exception:
-            pass
-        finally:
-            self.Show()
+        # Close and let show_wall_cut_profile pick inside the live command
+        # context — never Hide() a ShowDialog window to pick.
+        self.pick_request = 'link'
+        self.Close()
 
     def btn_pick_walls_clicked(self, sender, e):
         if not self._uidoc:
             return
-        self.Hide()
-        try:
-            refs = self._uidoc.Selection.PickObjects(
-                ObjectType.Element,
-                WallFilter(),
-                "Select target walls, then click Finish"
-            )
-            walls = []
-            if refs:
-                for r in refs:
-                    w = self._doc.GetElement(r.ElementId)
-                    if w:
-                        walls.append(w)
-            self._picked_walls = walls
-            if hasattr(self, 'rb_walls_sel') and self.rb_walls_sel:
-                self.rb_walls_sel.IsChecked = True
-            if hasattr(self, 'txt_wall_status') and self.txt_wall_status:
-                self.txt_wall_status.Text = "{} wall(s) selected".format(len(walls))
-        except Exception:
-            pass
-        finally:
-            self.Show()
+        self.pick_request = 'walls'
+        self.Close()
 
     def cmb_method_changed(self, sender, e):
         if not hasattr(self, 'panel_family') or not self.panel_family:
@@ -421,9 +438,54 @@ class WallCutProfileWindow(T3WPFWindow):
         return created, errors
 
 
+def _pick_link_into(doc, uidoc, state):
+    """PickObject with no window open; Esc keeps the previous link."""
+    try:
+        ref = uidoc.Selection.PickObject(
+            ObjectType.Element,
+            LinkFilter(),
+            "Select a Revit Link Instance in view"
+        )
+    except Exception:
+        return
+    elem = doc.GetElement(ref.ElementId)
+    if isinstance(elem, RevitLinkInstance):
+        state['link'] = elem
+
+
+def _pick_walls_into(doc, uidoc, state):
+    """PickObjects with no window open; Esc keeps the previous walls."""
+    try:
+        refs = uidoc.Selection.PickObjects(
+            ObjectType.Element,
+            WallFilter(),
+            "Select target walls, then click Finish"
+        )
+    except Exception:
+        return
+    walls = []
+    for r in refs or []:
+        w = doc.GetElement(r.ElementId)
+        if w:
+            walls.append(w)
+    state['walls'] = walls
+    state['walls_sel'] = True
+    state['wall_status'] = "{} wall(s) selected".format(len(walls))
+
+
 def show_wall_cut_profile(doc, uidoc):
     if not doc or not uidoc:
         forms.alert("No active Revit document found.", title="Wall Cut Profile")
         return
-    win = WallCutProfileWindow(doc, uidoc)
-    win.ShowDialog()
+    state = None
+    while True:
+        win = WallCutProfileWindow(doc, uidoc, state)
+        win.ShowDialog()
+        req = win.pick_request
+        if req is None:
+            break
+        state = win.get_state()
+        if req == 'link':
+            _pick_link_into(doc, uidoc, state)
+        else:
+            _pick_walls_into(doc, uidoc, state)

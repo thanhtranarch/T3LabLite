@@ -263,7 +263,7 @@ if not HAS_API_LEARNER:
 # tool is launched from the Assistant pane or with no project open, and the
 # old `int(revit.doc.Application.VersionNumber)` raised at IMPORT time
 # ('NoneType' object has no attribute 'Application') so the window never opened.
-from Snippets._host import get_revit_version
+from Snippets._host import get_revit_version, resolve_doc
 REVIT_VERSION = get_revit_version()
 
 # CLASS/FUNCTIONS
@@ -677,7 +677,14 @@ class ExportManagerWindow(T3WPFWindow):
                 xaml_file_path = os.path.join(ext_dir, 'lib', 'GUI', 'Tools', 'ExportManager.xaml')
             T3WPFWindow.__init__(self, xaml_file_path)
 
-            self.doc = revit.doc
+            # Not `revit.doc`: it is None when this window is opened from the
+            # docked T3Lab Assistant pane, and load_sheets then failed with
+            # "Error loading sheets". resolve_doc() falls back to the active
+            # document of the UIApplication; with none it says what to do.
+            self.doc, doc_err = resolve_doc()
+            if self.doc is None:
+                raise RuntimeError(doc_err or u"No Revit model is open. "
+                                              u"Open a project and try again.")
 
             # Modeless is only safe when pyRevit keeps this engine alive.
             # __persistentengine__ is baked into the command metadata at

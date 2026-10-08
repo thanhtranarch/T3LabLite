@@ -16,11 +16,11 @@ clr.AddReference('System.Windows.Forms')
 
 import System
 from System.Windows import (Window, MessageBox, MessageBoxButton, MessageBoxImage, 
-                            GridLength, GridUnitType, Thickness, WindowState)
+                            MessageBoxResult, GridLength, GridUnitType, Thickness, WindowState)
 from System.Windows.Controls import (Grid, RowDefinition, ColumnDefinition, Border,
                                       StackPanel, TextBlock, TextBox, Button,
                                       ComboBox, ComboBoxItem, DataGrid, Orientation,
-                                      DataGridTextColumn, ScrollViewer, ListBox, ListBoxItem,
+                                      DataGridTextColumn, DataGridLength, ScrollViewer, ListBox, ListBoxItem,
                                       ContextMenu, MenuItem)
 from System.Windows.Media import SolidColorBrush, Color, Brushes
 from System.Windows.Forms import SaveFileDialog, OpenFileDialog, DialogResult

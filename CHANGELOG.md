@@ -65,6 +65,18 @@ instead of seven, the same buttons in the same places.
   to other types.
 - **Auto Dimension**: whole dimension strings were rejected with "Invalid
   number of references" when a grid or wall was slightly off axis.
+- **ManaViews**: Excel export and Excel import failed every time.
+- **PDF Import**: after unticking a view, All / None or switching mode, the
+  PAGE column kept old numbers, so a view could get a different page than the
+  one shown.
+- **SheetGen**: Select All also ticked rooms hidden by the search, so Create
+  made views and sheets for every room.
+- **ManaViews / ManaSheets**: edited cells now turn amber before you apply.
+- **ManaSheets**: Export always said it succeeded, even when it failed or fell
+  back to CSV; Excel import works without openpyxl; import counted refused
+  edits as "Updated".
+- **BatchOut** opened from the docked T3Lab Assistant showed "Error loading
+  sheets" and an empty window.
 - **MCP Control**: the file watcher row showed an error and a disabled button
   while the watcher was running; the watcher started at Revit start is now
   reported as running.

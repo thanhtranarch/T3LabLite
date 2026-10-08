@@ -1176,9 +1176,10 @@ class CreateRoomPlanWindow(T3WPFWindow):
 
     # ── Toolbar handlers ──────────────────────────────
     def select_all_clicked(self, sender, e):
-        for r in self._all_rooms:
-            r.IsSelected = True
-        self.room_datagrid.Items.Refresh()
+        # Only the rows the search leaves visible: ticking rooms the user cannot
+        # see would make Create build views/sheets for every room in the model.
+        # toggle_all_rows walks grid.Items (the filtered list) and refreshes.
+        self.toggle_all_rows(self.room_datagrid, "IsSelected", True)
         self._update_status()
         # Giu checkbox select-all o header khop voi nut nay.
         self.sync_header_checkbox(
@@ -1759,6 +1760,7 @@ class CreateRoomPlanWindow(T3WPFWindow):
     def select_all_room_datagrid_clicked(self, sender, e):
         """Header checkbox: chon/bo chon moi dong dang hien thi cua room_datagrid."""
         self.toggle_all_rows(self.room_datagrid, "IsSelected", sender.IsChecked)
+        self._update_status()
 
 
 # ╔╦╗╔═╗╦╔╗╔

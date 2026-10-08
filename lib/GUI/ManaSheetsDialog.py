@@ -76,8 +76,9 @@ from GUI import GridPendingEdits as _pend
 from core import mana_sheets as _sheets
 
 # Row fields the grid lets the user edit. Each needs a matching `dirty_<field>`
-# flag on the row and a CellStyle DataTrigger in ManaSheets.xaml bound to it,
-# otherwise the amber "waiting for Apply" highlight never shows.
+# flag on the row and a CellStyle in ManaSheets.xaml that reads it through the
+# cell string bridge (GridPendingEdits.CELL_BRIDGE_PROPERTY), otherwise the amber
+# "waiting for Apply" highlight never shows.
 SHEET_EDIT_FIELDS = ("sheet_number", "sheet_name", "designed_by",
                      "checked_by", "approved_by", "drawn_by")
 
@@ -530,7 +531,7 @@ class SheetManagerWindow(T3WPFWindow):
     def _refresh_sheets_grid_later(self):
         """Redraw once the edit has finished committing.
 
-        SheetModel carries no INotifyPropertyChanged, so the amber DataTrigger
+        SheetModel carries no INotifyPropertyChanged, so the amber cell style
         only re-reads `dirty_<field>` on a refresh — and calling Refresh() while
         the cell is still committing throws "not allowed during an EditItem
         transaction". Hence the trip through the dispatcher.
@@ -634,8 +635,24 @@ class SheetManagerWindow(T3WPFWindow):
                             "approved_by": s.approved_by,
                             "id": eid_value(s.id)
                         })
-                    self.excel_service.export_sheets(sfd.FileName, data_to_export)
-                    MessageBox.Show("Successfully exported sheets to Excel.", "Export Successful")
+                    if not self.excel_service.export_sheets(sfd.FileName, data_to_export):
+                        MessageBox.Show(
+                            "Export failed: {} could not be written.\n"
+                            "Close the file if it is open in Excel, check the folder is "
+                            "writable and try again.".format(sfd.FileName), "Export Failed")
+                        return
+                    written = getattr(self.excel_service, "last_export_path", None) or sfd.FileName
+                    count = "{} sheet{}".format(len(data_to_export),
+                                                "" if len(data_to_export) == 1 else "s")
+                    if written.lower().endswith(".csv"):
+                        MessageBox.Show(
+                            "Excel output needs the openpyxl package, which is not available "
+                            "in this Revit session, so {} were saved as CSV instead:\n{}\n\n"
+                            "To import edits back, open it in Excel and save it as .xlsx.".format(
+                                count, written), "Exported as CSV")
+                    else:
+                        MessageBox.Show("Exported {} to:\n{}".format(count, written),
+                                        "Export Successful")
                 except Exception as ex:
                     MessageBox.Show("Error exporting Excel: {}".format(str(ex)), "Error")
                     
@@ -646,6 +663,12 @@ class SheetManagerWindow(T3WPFWindow):
             if ofd.ShowDialog() == DialogResult.OK:
                 try:
                     imported_data = self.excel_service.import_sheets(ofd.FileName)
+                    if imported_data is None:
+                        MessageBox.Show(
+                            "Could not read {}.\nMake sure it is a valid .xlsx workbook and "
+                            "is not open in Excel, then try again. No sheets were "
+                            "changed.".format(ofd.FileName), "Excel Import")
+                        return
                     if not imported_data:
                         MessageBox.Show("No valid sheet updates found in Excel file.", "Excel Import")
                         return
@@ -659,6 +682,7 @@ class SheetManagerWindow(T3WPFWindow):
                         sheets_by_number.setdefault(str(s.sheet_number), s)
                     success = 0
                     failed = 0
+                    failed_numbers = []
 
                     self.begin_progress(len(imported_data))
                     for _idx, row in enumerate(imported_data):
@@ -695,18 +719,29 @@ class SheetManagerWindow(T3WPFWindow):
                                         if param and not param.IsReadOnly:
                                             param.Set(str(val))
                                             
-                                # Apply sheet number & name update in transaction
-                                self.revit_service.update_sheet(item)
-                                item.commit_changes()
-                                success += 1
+                                # Apply sheet number & name update in transaction.
+                                # update_sheet returns False when Revit refuses
+                                # the number/name (e.g. a duplicate number).
+                                if self.revit_service.update_sheet(item):
+                                    item.commit_changes()
+                                    success += 1
+                                else:
+                                    failed += 1
+                                    failed_numbers.append(str(item._original_sheet_number))
                             except:
                                 failed += 1
+                                failed_numbers.append(str(item._original_sheet_number))
                                 
                     t.Commit()
                     _cancelled = self.is_cancelled
                     self.end_progress()
                     _pfx = "Excel Sync Cancelled" if _cancelled else "Excel Sync Completed"
-                    MessageBox.Show("{}.\nUpdated: {}\nFailed: {}".format(_pfx, success, failed), "Excel Import")
+                    _msg = "{}.\nUpdated: {}\nFailed: {}".format(_pfx, success, failed)
+                    if failed_numbers:
+                        _msg += "\n\nNot updated (sheet number before import): {}{}".format(
+                            ", ".join(failed_numbers[:10]),
+                            " ..." if len(failed_numbers) > 10 else "")
+                    MessageBox.Show(_msg, "Excel Import")
                     self._on_sheets_refresh(None, None)
                 except Exception as ex:
                     self.end_progress()

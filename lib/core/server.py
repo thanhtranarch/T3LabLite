@@ -98,7 +98,7 @@ def _record_mcp_telemetry(tool_name, arguments, result, t_start):
         pass
 
 
-from Snippets._compat import eid_value, make_eid, net_list
+from Snippets._compat import eid_value, make_eid, net_list, elem_name
 try:
     from http.server import HTTPServer, BaseHTTPRequestHandler
     from urllib.parse import urlparse, parse_qs

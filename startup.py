@@ -480,21 +480,7 @@ def main():
         else:
             _log("\n".join(problems))
 
-    # ─── 5. Register right-click context-menu entry (Revit 2025+) ──────────────
-    try:
-        _uictrld_cm = _revit_handle()
-        if _uictrld_cm is None:
-            try:
-                from pyrevit import HOST_APP
-                _uictrld_cm = getattr(HOST_APP, 'uicontrolledapp', None) or HOST_APP.uiapp
-            except Exception:
-                _uictrld_cm = None
 
-        if _uictrld_cm is not None:
-            from GUI.AssistantContextMenu import register as _register_ctx_menu
-            _register_ctx_menu(_uictrld_cm)
-    except Exception:
-        pass
 
     # ─── 6. Self-study idle loop (opt-in: agents.self_study) ───────────────────
     try:

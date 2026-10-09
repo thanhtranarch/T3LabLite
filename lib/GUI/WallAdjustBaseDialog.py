@@ -6,15 +6,12 @@ import sys
 
 from pyrevit import forms
 
-try:
-    from GUI import RevitTheme as _theme
-except Exception:
-    _theme = None
 
 import System
 
 from GUI.WPF_Base import T3WPFWindow, set_items_source
 from Snippets._compat import eid_value
+from Snippets._units import project_length_unit, MILLIMETERS
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'WallAdjustBase.xaml')
 
@@ -75,56 +72,30 @@ class ElementSelectionFilter(ISelectionFilter if DB else object):
 
 
 class LevelItem(object):
-    def __init__(self, level):
+    def __init__(self, level, unit=None):
         self.level = level
         self.name = level.Name
-        self.elevation_mm = round(level.Elevation * 304.8, 1)
-        self.display = "{} ({} mm)".format(self.name, self.elevation_mm)
+        # Elevation in the length unit the project displays.
+        self.elevation = level.Elevation
+        self.display = "{} ({})".format(
+            self.name, (unit or MILLIMETERS).show(self.elevation))
 
     def __str__(self):
         return self.display
 
 
 class WallAdjustBaseWindow(T3WPFWindow):
-    def __init__(self, doc, uidoc, state=None):
+    def __init__(self, doc, uidoc):
         T3WPFWindow.__init__(self, _XAML)
         self._doc = doc
         self._uidoc = uidoc
         self._elements = []
         self._levels = []
-        # Set by "Pick Elements": the window closes and show_wall_adjust_base
-        # picks inside the live command, then reopens it with `state`. Hiding a
-        # ShowDialog window ends ShowDialog, so Apply then ran outside the
-        # Revit API context and Transaction.Start threw.
-        self.pick_request = False
+        # Read per window: the module stays loaded across projects.
+        self._unit = project_length_unit(doc)
 
-        self._adopt_host_font()
-        self._apply_theme()
         self._load_levels()
-        if state is None:
-            self._check_initial_selection()
-        else:
-            self._restore_state(state)
-
-    def _adopt_host_font(self):
-        if _theme is None:
-            return
-        family, size = _theme.host_font()
-        if family:
-            try:
-                self.FontFamily = family
-                if size and size > 0:
-                    self.FontSize = size
-            except Exception:
-                pass
-
-    def _apply_theme(self, theme=None):
-        if _theme is None:
-            return
-        try:
-            _theme.apply(self, theme)
-        except Exception:
-            pass
+        self._check_initial_selection()
 
     def _load_levels(self):
         if not self._doc:
@@ -132,7 +103,7 @@ class WallAdjustBaseWindow(T3WPFWindow):
         collector = FilteredElementCollector(self._doc).OfClass(Level)
         levels = list(collector)
         levels.sort(key=lambda x: x.Elevation)
-        self._levels = [LevelItem(lvl) for lvl in levels]
+        self._levels = [LevelItem(lvl, self._unit) for lvl in levels]
 
         if hasattr(self, 'cmb_levels') and self.cmb_levels:
             set_items_source(self.cmb_levels, [item.display for item in self._levels])
@@ -161,33 +132,28 @@ class WallAdjustBaseWindow(T3WPFWindow):
             else:
                 self.txt_selection_status.Text = "{} element(s) selected ready to adjust".format(count)
 
-    def get_state(self):
-        """What the window must keep across the close–pick–reopen cycle."""
-        return {
-            'elements': list(self._elements),
-            'level_index': self.cmb_levels.SelectedIndex,
-            'adjust_top': bool(self.rb_top.IsChecked),
-        }
-
-    def _restore_state(self, state):
-        self._elements = list(state.get('elements') or [])
-        idx = state.get('level_index', -1)
-        if 0 <= idx < len(self._levels):
-            self.cmb_levels.SelectedIndex = idx
-        if state.get('adjust_top'):
-            self.rb_top.IsChecked = True
-        self._update_selection_ui()
-
     def btn_pick_clicked(self, sender, e):
         if not self._uidoc:
             return
-        # Close and let show_wall_adjust_base pick inside the live command
-        # context — never Hide() a ShowDialog window to pick.
-        self.pick_request = True
-        self.Close()
-
-    def btn_cancel_clicked(self, sender, e):
-        self.Close()
+        self.Hide()
+        try:
+            refs = self._uidoc.Selection.PickObjects(
+                ObjectType.Element,
+                ElementSelectionFilter(),
+                "Select elements (Walls, Floors, Columns, Beams), then click Finish"
+            )
+            elems = []
+            if refs:
+                for r in refs:
+                    el = self._doc.GetElement(r.ElementId)
+                    if el:
+                        elems.append(el)
+            self._elements = elems
+        except Exception:
+            pass
+        finally:
+            self.Show()
+            self._update_selection_ui()
 
     def win_minimize_clicked(self, sender, e):
         self.WindowState = System.Windows.WindowState.Minimized
@@ -286,33 +252,9 @@ class WallAdjustBaseWindow(T3WPFWindow):
             return False
 
 
-def _pick_elements_into(doc, uidoc, state):
-    """PickObjects with no window open; Esc keeps the previous selection."""
-    try:
-        refs = uidoc.Selection.PickObjects(
-            ObjectType.Element,
-            ElementSelectionFilter(),
-            "Select elements (Walls, Floors, Columns, Beams), then click Finish"
-        )
-    except Exception:
-        return
-    elems = []
-    for r in refs or []:
-        el = doc.GetElement(r.ElementId)
-        if el:
-            elems.append(el)
-    state['elements'] = elems
-
-
 def show_wall_adjust_base(doc, uidoc):
     if not doc or not uidoc:
         forms.alert("No active Revit document found.", title="Wall Adjust Base")
         return
-    state = None
-    while True:
-        win = WallAdjustBaseWindow(doc, uidoc, state)
-        win.ShowDialog()
-        if not win.pick_request:
-            break
-        state = win.get_state()
-        _pick_elements_into(doc, uidoc, state)
+    win = WallAdjustBaseWindow(doc, uidoc)
+    win.ShowDialog()

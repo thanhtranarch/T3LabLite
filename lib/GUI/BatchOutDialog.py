@@ -52,6 +52,7 @@ from System.Windows.Threading import DispatcherPriority
 
 from pyrevit import revit, DB, UI, forms, script, EXEC_PARAMS
 from GUI.WPF_Base import T3WPFWindow, to_items_source
+from GUI.InputLock import ThreadInputLock
 from Autodesk.Revit.DB import (
     Transaction, FilteredElementCollector, BuiltInCategory,
     ViewSheet, ViewSet, ViewSheetSet, DWGExportOptions, DWFExportOptions,
@@ -72,6 +73,7 @@ if lib_dir not in sys.path:
     sys.path.append(lib_dir)
 
 from Snippets._compat import eid_value, make_eid
+from core.paths import user_data_path
 
 try:
     from Intelligence.api_learner import SmartAPIAdapter, RevitAPILearner
@@ -106,6 +108,64 @@ try:
     output = safe_output()
 except Exception:
     output = script.get_output()
+
+
+# ── Machine state, not user files ─────────────────────────────────────────
+# Export profiles stay in Documents\T3Lab_BatchOut_Profiles: they are the
+# user's own, shareable files. The crash breadcrumbs do NOT belong there: the
+# in-flight marker is written + fsync'd before EVERY native export call and
+# removed after it, and in a OneDrive-synced Documents folder that is one sync
+# upload per sheet. They are per-machine state, so they live under
+# %APPDATA%\T3LabAI\batchout. The Bad Geometry check (checks/badgeometry_check.py)
+# writes its findings to %APPDATA%\T3LabAI\diagnostics for the same reason, and
+# safe mode reads them from there — dev/test_user_data_moves.py keeps both sides
+# on the same path.
+CRASH_MARKER_NAME = '_export_crash_marker.json'
+CRASH_HISTORY_NAME = '_export_crash_history.json'
+LEGACY_DIAG_FOLDER = os.path.join(os.path.expanduser('~'), 'Documents', 'T3Lab_Diagnostics')
+BAD_GEOMETRY_NAME = '_bad_geometry.json'
+
+
+def _adopt_legacy_file(old, new):
+    """Move a TRANSIENT state file an older build left behind to its new home.
+
+    Moved, not copied (unlike user_data_path's legacy copy): the file is
+    deleted as part of normal operation, and a copy would come back from the
+    old folder after every delete — reporting the same old crash each time
+    BatchOut opens. Never raises.
+    """
+    try:
+        if old and os.path.isfile(old) and not os.path.exists(new):
+            import shutil
+            shutil.move(old, new)
+    except Exception:
+        pass
+
+
+def crash_state_files(profiles_folder):
+    """(marker, history) paths of the native-crash breadcrumbs.
+
+    The history is durable (only ever rewritten), so an older one in the
+    profiles folder is copied over once. The marker is transient, so a leftover
+    one — a crash right before this build was installed — is moved.
+    """
+    history = user_data_path(
+        'batchout', CRASH_HISTORY_NAME,
+        legacy=[os.path.join(profiles_folder, CRASH_HISTORY_NAME)])
+    marker = user_data_path('batchout', CRASH_MARKER_NAME)
+    _adopt_legacy_file(os.path.join(profiles_folder, CRASH_MARKER_NAME), marker)
+    return marker, history
+
+
+def bad_geometry_file():
+    """Findings of the Bad Geometry check, read by safe mode.
+
+    Same path checks/badgeometry_check.py writes (FINDINGS_FILE). Findings are
+    durable (rewritten by each scan), so an older file is copied over once.
+    """
+    return user_data_path(
+        'diagnostics', BAD_GEOMETRY_NAME,
+        legacy=[os.path.join(LEGACY_DIAG_FOLDER, BAD_GEOMETRY_NAME)])
 
 
 def _build_view_type_labels():
@@ -263,7 +323,7 @@ if not HAS_API_LEARNER:
 # tool is launched from the Assistant pane or with no project open, and the
 # old `int(revit.doc.Application.VersionNumber)` raised at IMPORT time
 # ('NoneType' object has no attribute 'Application') so the window never opened.
-from Snippets._host import get_revit_version, resolve_doc
+from Snippets._host import get_revit_version
 REVIT_VERSION = get_revit_version()
 
 # CLASS/FUNCTIONS
@@ -457,6 +517,46 @@ class ViewItem(_Reactive):
 
     def __repr__(self):
         return "{} ({})".format(self.ViewName, self.ViewType)
+
+
+# Export queue row states. The PROGRESS cell in ExportManager.xaml colours each
+# one by matching this exact text — dev/test_batchout_live_progress.py keeps the
+# two sides in step.
+QUEUE_QUEUED = "Queued"
+QUEUE_EXPORTING = "Exporting..."
+QUEUE_EXPORTED = "Exported"
+QUEUE_FAILED = "Failed"
+QUEUE_SKIPPED = "Skipped"
+QUEUE_NOT_EXPORTED = "Not exported"
+
+
+def _clock(seconds):
+    """mm:ss, or h:mm:ss from one hour on."""
+    seconds = int(max(0, seconds))
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return "{}:{:02d}:{:02d}".format(hours, minutes, secs)
+    return "{:02d}:{:02d}".format(minutes, secs)
+
+
+def format_progress_summary(done, total, percent, elapsed=None, running=False):
+    """Right-hand label under the queue: '3 / 12 · 25% · 00:41 · ~02:03 left'.
+
+    The estimate assumes the items left take as long as the finished ones did
+    on average, so it only shows once one item is done and while the export is
+    still running.
+    """
+    parts = []
+    if total:
+        parts.append("{} / {}".format(done, total))
+    if total or percent > 0:
+        parts.append("{}%".format(percent))
+    if elapsed is not None:
+        parts.append(_clock(elapsed))
+        if running and total and 0 < done < total:
+            parts.append("~{} left".format(_clock(elapsed * (total - done) / float(done))))
+    return u" \u00b7 ".join(parts)
 
 
 class ExportPreviewItem(object):
@@ -677,14 +777,7 @@ class ExportManagerWindow(T3WPFWindow):
                 xaml_file_path = os.path.join(ext_dir, 'lib', 'GUI', 'Tools', 'ExportManager.xaml')
             T3WPFWindow.__init__(self, xaml_file_path)
 
-            # Not `revit.doc`: it is None when this window is opened from the
-            # docked T3Lab Assistant pane, and load_sheets then failed with
-            # "Error loading sheets". resolve_doc() falls back to the active
-            # document of the UIApplication; with none it says what to do.
-            self.doc, doc_err = resolve_doc()
-            if self.doc is None:
-                raise RuntimeError(doc_err or u"No Revit model is open. "
-                                              u"Open a project and try again.")
+            self.doc = revit.doc
 
             # Modeless is only safe when pyRevit keeps this engine alive.
             # __persistentengine__ is baked into the command metadata at
@@ -740,8 +833,10 @@ class ExportManagerWindow(T3WPFWindow):
             # call and removed after it returns, so a surviving marker == that
             # exact combination killed the process. Confirmed kills are promoted
             # into a durable history so we can skip them instead of re-crashing.
-            self._crash_marker_file = os.path.join(self.profiles_folder, '_export_crash_marker.json')
-            self._crash_history_file = os.path.join(self.profiles_folder, '_export_crash_history.json')
+            # Both live in %APPDATA%\T3LabAI\batchout, not in the (often
+            # OneDrive-synced) profiles folder — see crash_state_files().
+            self._crash_marker_file, self._crash_history_file = \
+                crash_state_files(self.profiles_folder)
             self._crash_history = self._read_crash_history()
             self._pending_crash = self._promote_crash_marker()
             self._skipped_fatal = []
@@ -851,8 +946,9 @@ class ExportManagerWindow(T3WPFWindow):
             self.profiles = []
             if os.path.exists(self.profiles_folder):
                 for filename in os.listdir(self.profiles_folder):
-                    # Internal bookkeeping files (latest setup, crash marker,
-                    # crash history) share this folder but are not profiles.
+                    # Internal bookkeeping files (latest setup; the crash
+                    # marker/history of older builds) share this folder but
+                    # are not profiles.
                     if filename.startswith('_'):
                         continue
                     if filename.endswith('.json'):
@@ -920,6 +1016,10 @@ class ExportManagerWindow(T3WPFWindow):
         stale handler/WPF proxy is destroyed mid-teardown — the 0xc0000005
         'Invalid WPFWndProxy' exit crash (journal.0090, 2026-07-15).
         """
+        # Safety net: Revit must never stay locked behind a closed window.
+        lock = getattr(self, '_input_lock', None)
+        if lock is not None:
+            lock.release()
         if getattr(self, '_api_handler', None) is not None:
             self._api_handler.clear()
         try:
@@ -1425,8 +1525,9 @@ class ExportManagerWindow(T3WPFWindow):
     def _write_crash_history(self):
         """Persist the confirmed-fatal list (last 50 entries)."""
         try:
-            if not os.path.exists(self.profiles_folder):
-                os.makedirs(self.profiles_folder)
+            folder = os.path.dirname(self._crash_history_file)
+            if not os.path.exists(folder):
+                os.makedirs(folder)
             with open(self._crash_history_file, 'w') as f:
                 json.dump(self._crash_history[-50:], f, indent=2)
         except Exception as ex:
@@ -1439,8 +1540,9 @@ class ExportManagerWindow(T3WPFWindow):
         `safe_level` is what lets the next session escalate instead of repeating
         a mitigation that has already been proven to still crash."""
         try:
-            if not os.path.exists(self.profiles_folder):
-                os.makedirs(self.profiles_folder)
+            folder = os.path.dirname(self._crash_marker_file)
+            if not os.path.exists(folder):
+                os.makedirs(folder)
             data = {
                 'sheet': sheet_number,
                 'format': fmt,
@@ -1500,17 +1602,15 @@ class ExportManagerWindow(T3WPFWindow):
     # exports, then rolls the change back so the model is byte-identical
     # afterwards. Preferred over skipping because it still produces the file.
 
-    BAD_GEOMETRY_FILE = os.path.join(
-        os.path.expanduser('~'), 'Documents', 'T3Lab_Diagnostics', '_bad_geometry.json')
-
     def _bad_geometry_ids(self):
         """ElementIds that the Bad Geometry check flagged for THIS model.
         Empty list if the check has not been run (safe mode then falls back to
         the blunt lever, Coarse detail level)."""
         try:
-            if not os.path.exists(self.BAD_GEOMETRY_FILE):
+            findings = bad_geometry_file()
+            if not os.path.exists(findings):
                 return []
-            with open(self.BAD_GEOMETRY_FILE, 'r') as f:
+            with open(findings, 'r') as f:
                 data = json.load(f)
             if data.get('doc') and data.get('doc') != self.doc.Title:
                 return []
@@ -1937,7 +2037,7 @@ class ExportManagerWindow(T3WPFWindow):
         self._update_progress(
             int(self._overall_counter * 100.0 / max(1, self._overall_total)), msg)
         try:
-            self.update_export_item_progress(sheet_number, fmt, 0, "Skipped (crashed before)")
+            self.update_export_item_progress(sheet_number, fmt, 0, QUEUE_SKIPPED)
         except Exception:
             pass
 
@@ -2079,7 +2179,7 @@ class ExportManagerWindow(T3WPFWindow):
             self._failed_items.append(entry)
         logger.error("NOT exported: {}".format(entry))
         try:
-            self.update_export_item_progress(label, fmt, 0, "Failed")
+            self.update_export_item_progress(label, fmt, 0, QUEUE_FAILED)
         except Exception:
             pass
 
@@ -2948,57 +3048,51 @@ class ExportManagerWindow(T3WPFWindow):
             self.status_text.Text = "Output folder: {}".format(dialog.SelectedPath)
 
     # ── Accordion toggle helpers ──────────────────────────────────────────
-    def _toggle_format_panel(self, body_name, arrow_name, border_name, accent_color, header_bg):
+    def _toggle_format_panel(self, body_name, arrow_name, border_name):
         """Expand or collapse a format settings panel."""
         try:
             body = getattr(self, body_name)
             arrow = getattr(self, arrow_name)
             border = getattr(self, border_name)
             from System.Windows import Visibility
-            from System.Windows.Media import SolidColorBrush, Color
-
             if body.Visibility == Visibility.Collapsed:
                 body.Visibility = Visibility.Visible
-                arrow.Text = "▴"
-                # Highlight border when expanded
-                r = int(accent_color[1:3], 16)
-                g = int(accent_color[3:5], 16)
-                b = int(accent_color[5:7], 16)
-                border.BorderBrush = SolidColorBrush(Color.FromRgb(r, g, b))
+                arrow.Text = "\uE70E"
+                border.BorderBrush = self.FindResource("T3.Ink")
             else:
                 body.Visibility = Visibility.Collapsed
-                arrow.Text = "▾"
-                border.BorderBrush = SolidColorBrush(Color.FromRgb(0xBD, 0xC3, 0xC7))
+                arrow.Text = "\uE70D"
+                border.BorderBrush = self.FindResource("T3.Border")
         except Exception as ex:
             logger.debug("Error toggling panel {}: {}".format(body_name, ex))
 
     def pdf_header_clicked(self, sender, e):
         self._toggle_format_panel("pdf_settings_body", "pdf_expand_arrow",
-                                  "pdf_panel_border", "#3498DB", "#E8F4F8")
+                                  "pdf_panel_border")
 
     def dwg_header_clicked(self, sender, e):
         self._toggle_format_panel("dwg_settings_body", "dwg_expand_arrow",
-                                  "dwg_panel_border", "#3498DB", "#F8F9FA")
+                                  "dwg_panel_border")
 
     def dgn_header_clicked(self, sender, e):
         self._toggle_format_panel("dgn_settings_body", "dgn_expand_arrow",
-                                  "dgn_panel_border", "#3498DB", "#F8F9FA")
+                                  "dgn_panel_border")
 
     def dwf_header_clicked(self, sender, e):
         self._toggle_format_panel("dwf_settings_body", "dwf_expand_arrow",
-                                  "dwf_panel_border", "#3498DB", "#F8F9FA")
+                                  "dwf_panel_border")
 
     def nwc_header_clicked(self, sender, e):
         self._toggle_format_panel("nwc_settings_body", "nwc_expand_arrow",
-                                  "nwc_panel_border", "#3498DB", "#F8F9FA")
+                                  "nwc_panel_border")
 
     def ifc_header_clicked(self, sender, e):
         self._toggle_format_panel("ifc_settings_body", "ifc_expand_arrow",
-                                  "ifc_panel_border", "#3498DB", "#F8F9FA")
+                                  "ifc_panel_border")
 
     def img_header_clicked(self, sender, e):
         self._toggle_format_panel("img_settings_body", "img_expand_arrow",
-                                  "img_panel_border", "#3498DB", "#F8F9FA")
+                                  "img_panel_border")
     # ─────────────────────────────────────────────────────────────────────
 
     def format_changed(self, sender, e):
@@ -3491,57 +3585,119 @@ class ExportManagerWindow(T3WPFWindow):
         return filename
 
     def update_export_item_progress(self, sheet_number, format_name, progress, status=""):
-        """Update progress for a specific export item and refresh the display."""
+        """Update one queue row; the row being exported is scrolled into view."""
         try:
             for item in self.export_items:
                 if item.SheetNumber == sheet_number and item.Format == format_name:
                     item.Progress = progress
                     if status:
                         item.Status = status
-                    elif progress == 100:
-                        item.Status = "Successfully Completed"
+                    elif progress >= 100:
+                        item.Status = QUEUE_EXPORTED
                     elif progress > 0:
-                        item.Status = ""
+                        item.Status = QUEUE_EXPORTING
                     self.export_preview_list.Items.Refresh()
+                    if item.Status == QUEUE_EXPORTING:
+                        self.export_preview_list.ScrollIntoView(item)
                     break
-        except:
+        except Exception:
             pass
         self._flush_ui()
 
-    def _flush_ui(self):
-        """Force WPF to process pending render operations so progress shows in realtime.
+    def _refresh_queue(self):
+        """Redraw every queue row from its Progress/Status, then repaint."""
+        try:
+            self.export_preview_list.Items.Refresh()
+        except Exception:
+            pass
+        self._flush_ui()
 
-        Modeless: start_export runs INSIDE ExternalEvent.Execute, and a nested
-        dispatcher frame here pumps Win32 messages for every window on Revit's
-        UI thread mid-API-call. Revit's native PDF exporter additionally pumps
-        its own message loop per sheet — the combined re-entrancy is the fatal
-        0xc0000005 class (see BatchOutEventHandler docstring). No pump there;
-        progress repaints when Execute returns. Modal fallback keeps the pump —
-        the command is still executing, the pre-modeless behavior is safe.
+    def _begin_live_progress(self):
+        """Mark the whole queue Queued and let the window repaint during the run.
+
+        Modeless: start_export runs inside ExternalEvent.Execute, so the window
+        only repaints if this thread pumps messages between two exports. A pump
+        with input live would hand Revit and BatchOut every click queued during
+        the native call, mid-API-call. ThreadInputLock first disables every
+        window of the thread — the state ShowDialog puts Revit in for the modal
+        path, where this pump has always run. No lock (no ctypes, no window):
+        nothing pumps and the queue shows its result when Execute returns.
+        """
+        self._export_started_at = time.time()
+        self._live_progress_running = True
+        lock = getattr(self, '_input_lock', None)
+        if lock is None:
+            lock = self._input_lock = ThreadInputLock()
+        if not lock.acquire() and self.modeless:
+            logger.debug("BatchOut: could not lock Revit input; the queue "
+                         "updates when the export finishes.")
+        for row in self.export_items:
+            row.Progress = 0
+            row.Status = QUEUE_QUEUED
+        self._refresh_queue()
+        self._update_progress(0, "Exporting {} item(s)...".format(len(self.export_items)))
+
+    def _end_live_progress(self):
+        """Close out the run: rows never reached say so, Revit gets input back.
+
+        Runs before the summary dialog and again from start_export's finally;
+        only the first call does anything.
+        """
+        if not getattr(self, '_live_progress_running', False):
+            return
+        self._live_progress_running = False
+        for row in self.export_items:
+            if row.Status in (QUEUE_QUEUED, QUEUE_EXPORTING):
+                row.Status = QUEUE_NOT_EXPORTED
+        self._refresh_queue()
+        lock = getattr(self, '_input_lock', None)
+        if lock is not None and lock.active:
+            lock.release()
+            try:
+                self.Activate()
+            except Exception:
+                pass
+
+    def _flush_ui(self):
+        """Let WPF render pending changes so the queue moves while exporting.
+
+        The pump is a nested dispatcher frame: it delivers every Win32 message
+        waiting on Revit's UI thread. Modal: ShowDialog has already disabled
+        Revit's windows, so only painting gets through. Modeless: start_export
+        runs inside ExternalEvent.Execute, and Revit's native PDF exporter pumps
+        its own loop per sheet — with input live that re-entrancy is the fatal
+        0xc0000005 class. Pump there only while _begin_live_progress holds the
+        input lock; otherwise the window repaints when Execute returns.
         """
         if self.modeless:
-            return
+            lock = getattr(self, '_input_lock', None)
+            if lock is None or not lock.active:
+                return
         try:
             self.Dispatcher.Invoke(DispatcherPriority.Render, Action(lambda: None))
         except Exception:
             pass
 
     def _update_progress(self, value, text):
-        """Update progress bar value, status label, and percentage label, then repaint."""
+        """Overall bar + status line; while exporting the right-hand label also
+        shows done/total, elapsed time and an estimate of the time left."""
         try:
-            self.overall_progress.Value = value
+            pct = max(0, min(100, int(value)))
+            self.overall_progress.Value = pct
             self.progress_text.Text = text
-            pct = int(value)
-            self.progress_percent.Text = "{}%".format(pct) if pct > 0 else ""
-            if pct >= 100:
-                from System.Windows.Media import SolidColorBrush, Color
-                self.progress_percent.Foreground = SolidColorBrush(Color.FromArgb(0xFF, 0x10, 0xB9, 0x81))
-            else:
-                from System.Windows.Media import SolidColorBrush, Color
-                self.progress_percent.Foreground = SolidColorBrush(Color.FromArgb(0xFF, 0xC2, 0x41, 0x0C))
-            self._flush_ui()
+            started = getattr(self, '_export_started_at', None)
+            self.progress_percent.Text = format_progress_summary(
+                getattr(self, '_overall_counter', 0), getattr(self, '_overall_total', 0), pct,
+                elapsed=None if started is None else time.time() - started,
+                running=getattr(self, '_live_progress_running', False))
+            try:
+                self.progress_percent.Foreground = self.FindResource(
+                    "T3.Success.Text" if pct >= 100 else "T3.Progress.Fill")
+            except Exception:
+                pass
         except Exception:
             pass
+        self._flush_ui()
 
     def start_export(self):
         """Start the export process."""
@@ -3613,6 +3769,10 @@ class ExportManagerWindow(T3WPFWindow):
             # Risky items last so a native crash cannot cost the rest of the batch
             selected_items = self._order_risky_last(selected_items)
 
+            # From here the queue repaints after every item (all dialogs that
+            # need the user come before this line or after _end_live_progress).
+            self._begin_live_progress()
+
             def confirmed_count(format_name, count, expected):
                 if count < expected:
                     self._failed_items.append(
@@ -3675,6 +3835,9 @@ class ExportManagerWindow(T3WPFWindow):
                 count = self.export_to_images(selected_items, folder)
                 total_exported += confirmed_count("Images", count, len(selected_items))
 
+            # Revit gets its input back before the summary dialog asks anything.
+            self._end_live_progress()
+
             if not total_exported:
                 outcome = "No exports confirmed"
             elif self._failed_items or self._skipped_fatal:
@@ -3736,6 +3899,7 @@ class ExportManagerWindow(T3WPFWindow):
 
         except Exception as ex:
             logger.error("Export failed: {}".format(ex))
+            self._end_live_progress()
             forms.alert("Export stopped: {}\n\n{} earlier output(s) were confirmed. "
                         "Existing output files were kept; review the output folder before retrying.".format(
                             ex, total_exported), title="Export Error")
@@ -3745,8 +3909,11 @@ class ExportManagerWindow(T3WPFWindow):
         finally:
             # Unfreeze the window (frozen in go_next) on every exit path,
             # including the early validation returns above
-            self._export_running = False
-            self.IsEnabled = True
+            try:
+                self._end_live_progress()
+            finally:
+                self._export_running = False
+                self.IsEnabled = True
 
     def export_to_dwg(self, items, output_folder):
         """Export items (sheets or views) to DWG format with version-aware API usage.

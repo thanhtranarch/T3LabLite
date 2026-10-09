@@ -9,8 +9,8 @@
         Width="1080" Height="720"
         MinWidth="880" MinHeight="580"
         WindowStartupLocation="CenterScreen"
-        WindowStyle="None" AllowsTransparency="False"
-        Background="{DynamicResource T3.Surface}"
+        WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent"
         FontFamily="Segoe UI"
         FontSize="13"
         UseLayoutRounding="True"
@@ -222,6 +222,12 @@
                Cách dùng — icon LUÔN là <TextBlock>, không bao giờ là Content của Button:
                  <TextBlock Text="&#xE721;" Style="{StaticResource T3.Icon.Field}"/>
 
+               Ô rail (T3.Rail.Tile) cũng vậy — glyph T3.Icon.Rail, KHÔNG tự vẽ <Path>:
+                 <RadioButton x:Name="nav_browse" Style="{StaticResource T3.Rail.Tile}"
+                              ToolTip="Browse Parameters" ...>
+                   <TextBlock Text="&#xE8FD;" Style="{StaticResource T3.Icon.Rail}"/>
+                 </RadioButton>
+
                Bảng glyph chuẩn (dùng đúng glyph này cho đúng khái niệm, toàn dự án):
                  E721 Search      E8BB Close      E921 Minimize   E922 Maximize
                  E768 Play        E769 Pause      E71A Stop       E72C Refresh
@@ -230,13 +236,30 @@
                  E70D ChevronDown E70E ChevronUp  E76B ChevronLeft E76C ChevronRight
                  E74E Save        E8E5 OpenFile   E774 Globe      E7A7 Undo
                  E8A3 Zoom        E7B3 Isolate    E7C9 Pick       E7C3 Document
-                 E896 Download    EA80 Insight
+                 E896 Download/Export  EA80 Insight  F140 Hide    E923 Restore
+                 E74A ArrowUp (move to top, north)  E74B ArrowDown (move to bottom)
+                 E9A6 Fit (zoom to fit)  EA3A Open (unresolved)  E707 Map  E753 PointCloud
+
+               Khái niệm trang — glyph của ô rail chọn theo VIỆC trang đó làm:
+                 E8FD List/inventory   E9D5 Audit/checklist  E945 Automation
+                 E8B5 Import/load      E8AB Swap/transfer    E71B Link
+                 E8C8 Duplicate        E8AC Rename/renumber  E9E9 Template/preset
+                 E70F Edit/override    E81C History/log      E8A1 Preview/mockup
+                 E8F1 Families         E81E Worksets         E90F Tools/bulk edit
+                 F158 3D view          E95E Model health     E8EF Aggregate
+                 E790 Colour           E943 Code/JSON        ED5E Dimension
+                 E8D2 Text             E727 Pattern          E8EC Classify/assign
+                 E80F Room             E809 Floor            E80A Ceiling
+                 ECA5 Wall             E825 Column           E933 Beam
+                 E7B7 Grid             EF90 Line             E95F MEP run
+                 (+ E713 Settings · E896 Export · E7BA Warning · E74D Delete/purge)
 
                Thêm glyph mới thì kiểm hai thứ (xem mục Icon của T3LAB_UI_STANDARD.md):
                  1. Không TRÔNG GIỐNG glyph đã có — E71E cũng là kính lúp y hệt E721
                     Search, nên Zoom phải là E8A3 (kính lúp có dấu +).
-                 2. Codepoint có thật trong font — glyph không tồn tại ra ô vuông tofu và
-                    audit_t3.py không bắt được, nó chỉ grep source.
+                 2. Codepoint có thật trong Segoe MDL2 Assets — glyph không tồn tại ra ô
+                    vuông tofu. audit_t3.py đối chiếu dev/icons/mdl2_codepoints.tsv
+                    (P1). ED1A Hide là glyph của Segoe Fluent Icons, KHÔNG có trong MDL2.
           -->
 
           <!-- Icon nền: cỡ Label (11), màu thừa kế từ control chứa nó. -->
@@ -271,6 +294,15 @@
             <Setter Property="FontSize"   Value="{StaticResource T3.Size.Caption}"/>
             <Setter Property="Margin"     Value="0,0,8,0"/>
             <Setter Property="VerticalAlignment" Value="Top"/>
+          </Style>
+
+          <!-- Icon của ô rail (T3.Rail.Tile, 42×42). Cỡ 16 = lưới thiết kế gốc của
+               Segoe MDL2 — nét rơi đúng pixel, sắc ở 100% lẫn 125%. Đây là cỡ ICON, không
+               thuộc thang 7 size chữ. KHÔNG set Foreground: glyph thừa kế màu từ tile
+               (T3.TextMuted → T3.Ink khi hover/checked) qua ContentPresenter. -->
+          <Style x:Key="T3.Icon.Rail" TargetType="TextBlock" BasedOn="{StaticResource T3.Icon}">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
           </Style>
 
           <!-- ══════════════════ 6 · BUTTONS ══════════════════
@@ -452,6 +484,9 @@
             <Setter Property="Padding" Value="{StaticResource T3.Pad.Field}"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <!-- No dotted WPF focus rectangle (Clone Drawing 2026-10-07): keyboard
+                 focus shows as the T3.Ink border instead, like T3.TextBox. -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="ItemContainerStyle" Value="{StaticResource T3.ComboBoxItem}"/>
             <Setter Property="Template">
               <Setter.Value>
@@ -499,7 +534,7 @@
                                     RelativeSource={RelativeSource TemplatedParent}}">
                       <Border Background="{StaticResource T3.Surface}"
                               BorderBrush="{StaticResource T3.Border}" BorderThickness="1"
-                              CornerRadius="{StaticResource T3.R.Control}"
+                              CornerRadius="{StaticResource T3.R.Control}" Padding="0,4"
                               MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                               MaxHeight="{TemplateBinding MaxDropDownHeight}">
                         <ScrollViewer>
@@ -513,6 +548,9 @@
                       <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
                     </Trigger>
                     <Trigger Property="IsDropDownOpen" Value="True">
+                      <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
+                    </Trigger>
+                    <Trigger Property="IsKeyboardFocusWithin" Value="True">
                       <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
                     </Trigger>
                     <Trigger Property="IsEnabled" Value="False">
@@ -743,7 +781,9 @@
 
           <!-- Background/BorderBrush/BorderThickness đi qua TemplateBinding để một cột
                có thể tô sáng riêng ô của nó (ví dụ ô vừa sửa, đang chờ Apply) bằng
-               <Column.CellStyle> + DataTrigger. Mặc định vẫn trong suốt, không đổi. -->
+               <Column.CellStyle>. Dòng là object Python thì dùng cell bridge
+               (AutomationProperties.ItemStatus + Trigger, xem GUI/GridPendingEdits.py),
+               không DataTrigger bind thẳng field. Mặc định vẫn trong suốt, không đổi. -->
           <Style x:Key="T3.DataGridCell" TargetType="DataGridCell">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
@@ -871,6 +911,15 @@
             </Setter>
           </Style>
 
+          <!-- Cột checkbox của ListView+GridView: bản GridView của
+               T3.DataGridColumnHeader.Check — bỏ Padding 8 và canh giữa để checkbox
+               header nằm đúng trên checkbox dòng (BatchOut 2026-10-02). -->
+          <Style x:Key="T3.GridViewColumnHeader.Check" TargetType="GridViewColumnHeader"
+                 BasedOn="{StaticResource T3.GridViewColumnHeader}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+          </Style>
+
           <Style x:Key="T3.ListViewItem" TargetType="ListViewItem">
             <Setter Property="FontFamily" Value="{StaticResource T3.Font}"/>
             <Setter Property="FontSize"   Value="{StaticResource T3.Size.Body}"/>
@@ -942,7 +991,9 @@
           <Style TargetType="ListViewItem" BasedOn="{StaticResource T3.ListViewItem}"/>
 
           <!-- Status pill: nền tint + dot + CHỮ. Không bao giờ chỉ dùng màu.
-               Row VM cần 2 property: StatusText (string) và Severity ("Success"/"Warning"/"Danger"). -->
+               Row VM cần 2 property: StatusText (string) và Severity ("Success"/"Warning"/"Danger").
+               Severity đi qua TextBlock ẩn "sev" (string bridge): dòng là object Python thì
+               DataTrigger bind thẳng {Binding Severity} không bao giờ khớp. -->
           <DataTemplate x:Key="T3.StatusPill">
             <Border x:Name="pill" CornerRadius="{StaticResource T3.R.Pill}" Padding="7,2"
                     HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -951,20 +1002,21 @@
                 <TextBlock x:Name="txt" Text="{Binding StatusText}"
                            FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"
                            VerticalAlignment="Center"/>
+                <TextBlock x:Name="sev" Text="{Binding Severity}" Visibility="Collapsed"/>
               </StackPanel>
             </Border>
             <DataTemplate.Triggers>
-              <DataTrigger Binding="{Binding Severity}" Value="Success">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Success">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Success.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Success.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Success.Text}"/>
               </DataTrigger>
-              <DataTrigger Binding="{Binding Severity}" Value="Warning">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Warning">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Warning.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Warning.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Warning.Text}"/>
               </DataTrigger>
-              <DataTrigger Binding="{Binding Severity}" Value="Danger">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Danger">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Danger.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Danger.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Danger.Text}"/>
@@ -1668,8 +1720,8 @@
     </Window.Resources>
 
     <!-- ═══ Outer Window Border ═══ -->
-    <Border BorderBrush="{StaticResource T3.BorderStrong}" BorderThickness="1.5"
-            CornerRadius="12" ClipToBounds="True" Background="{DynamicResource T3.Surface}">
+    <Border BorderBrush="{StaticResource T3.BorderStrong}" BorderThickness="1"
+            CornerRadius="{StaticResource T3.R.Window}" ClipToBounds="True" Background="{DynamicResource T3.Surface}">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="48"/>      <!-- Row 0: Full-width Title Bar -->
@@ -1736,8 +1788,9 @@
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
                                             <TextBox x:Name="txt_address" Style="{StaticResource T3.TextBox}" Height="28"
+                                                     ToolTip="Any address, place name or coordinates worldwide, e.g. 1.2903, 103.8519"
                                                      KeyDown="txt_address_KeyDown"/>
-                                            <Button x:Name="btn_search" Grid.Column="2" Content="Search Parcels"
+                                            <Button x:Name="btn_search" Grid.Column="2" Content="Search"
                                                     Style="{StaticResource T3.Button.Secondary}" Height="28" Padding="16,0"
                                                     Click="btn_search_Click"/>
                                         </Grid>
@@ -1747,22 +1800,11 @@
                                                    Style="{StaticResource T3.Caption}" Foreground="{StaticResource T3.Danger.Text}"
                                                    Margin="0,0,0,8"/>
 
-                                        <!-- Data source selector -->
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="8"/>
-                                                <ColumnDefinition Width="230"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="Data Source:" Style="{StaticResource T3.Caption}" VerticalAlignment="Center"/>
-                                            <ComboBox x:Name="cmb_source" Grid.Column="2" Style="{StaticResource T3.ComboBox}" Height="26" SelectedIndex="0">
-                                                <ComboBoxItem Content="Auto (US: LightBox, else OSM)"/>
-                                                <ComboBoxItem Content="VN-2000 (Vietnam Cadastral)"/>
-                                                <ComboBoxItem Content="OpenStreetMap (Worldwide)"/>
-                                                <ComboBoxItem Content="LightBox RE (US only)"/>
-                                            </ComboBox>
-                                        </Grid>
+                                        <!-- No source picker: the search geocodes worldwide and picks the
+                                             best parcel source for the location (Snippets/_parcel_search.py).
+                                             Each result shows the source it came from. -->
+                                        <TextBlock Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
+                                                   Text="Type any address, place name or coordinates (e.g. 1.2903, 103.8519). The best data source for the location is picked automatically."/>
                                     </StackPanel>
                                 </Border>
 
@@ -1778,22 +1820,68 @@
                                                 <ColumnDefinition Width="1.8*"/>
                                             </Grid.ColumnDefinitions>
 
-                                            <!-- Col 0: Map Container -->
+                                            <!-- Col 0: Boundary map. PropertyLineDialog._render_map_preview draws
+                                                 the boundary from the polygon itself (always), then lays OSM tiles
+                                                 under it when the network allows (Snippets/_parcel_map.py).
+                                                 Layers, back to front: tiles · boundary · map furniture · notes. -->
                                             <Border Grid.Column="0" Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
                                                     BorderThickness="1" CornerRadius="4" ClipToBounds="True">
-                                                <Grid>
-                                                    <!-- Dynamic Map Image -->
-                                                    <Image x:Name="img_map_preview" Stretch="UniformToFill"/>
+                                                <Grid x:Name="grid_map_host" ClipToBounds="True" SizeChanged="grid_map_host_SizeChanged">
+                                                    <!-- Basemap tiles (Image elements added by code) -->
+                                                    <Canvas x:Name="cnv_map_tiles" IsHitTestVisible="False"/>
 
-                                                    <!-- Location Pin -->
-                                                    <TextBlock Text="&#xE707;" Style="{StaticResource T3.Icon.Lg}" Foreground="{StaticResource T3.Ink}" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                                    <!-- Boundary: tinted fill, outline, vertex dots -->
+                                                    <Canvas IsHitTestVisible="False">
+                                                        <Path x:Name="path_map_fill" Fill="{StaticResource T3.Plot.4}" Opacity="0.16"/>
+                                                        <Path x:Name="path_map_boundary" Stroke="{StaticResource T3.Plot.4}"
+                                                              StrokeThickness="2" StrokeLineJoin="Round"/>
+                                                        <Path x:Name="path_map_vertices" Fill="{StaticResource T3.Surface}"
+                                                              Stroke="{StaticResource T3.Plot.4}" StrokeThickness="1.5"/>
+                                                    </Canvas>
 
-                                                    <!-- Map label badge -->
-                                                    <Border Background="{DynamicResource T3.Surface}" BorderBrush="{StaticResource T3.Border}"
-                                                            BorderThickness="1" CornerRadius="2" Padding="8,4" Margin="8"
-                                                            HorizontalAlignment="Left" VerticalAlignment="Bottom">
-                                                        <TextBlock Text="Map Preview" Style="{StaticResource T3.Caption}"/>
+                                                    <!-- Map furniture: scale bar (top-left), north arrow (top-right) -->
+                                                    <Grid x:Name="grid_map_overlay" Visibility="Collapsed" IsHitTestVisible="False">
+                                                        <Border Background="{DynamicResource T3.Surface}" BorderBrush="{StaticResource T3.Border}"
+                                                                BorderThickness="1" CornerRadius="2" Padding="8,4" Margin="8"
+                                                                HorizontalAlignment="Left" VerticalAlignment="Top">
+                                                            <StackPanel>
+                                                                <TextBlock x:Name="txt_map_scale" Style="{StaticResource T3.Caption}"/>
+                                                                <Border x:Name="bar_map_scale" Height="4" Width="48" HorizontalAlignment="Left"
+                                                                        BorderBrush="{StaticResource T3.Ink}" BorderThickness="1,0,1,1"/>
+                                                            </StackPanel>
+                                                        </Border>
+                                                        <Border Background="{DynamicResource T3.Surface}" BorderBrush="{StaticResource T3.Border}"
+                                                                BorderThickness="1" CornerRadius="2" Padding="4" Margin="8"
+                                                                HorizontalAlignment="Right" VerticalAlignment="Top">
+                                                            <StackPanel>
+                                                                <TextBlock Text="&#xE74A;" Style="{StaticResource T3.Icon}" HorizontalAlignment="Center"/>
+                                                                <TextBlock Text="N" Style="{StaticResource T3.Caption}" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </Grid>
+
+                                                    <!-- Basemap state (bottom-left, above the attribution line): loading /
+                                                         unavailable. Tooltip carries the reason. -->
+                                                    <Border x:Name="border_map_note" Background="{DynamicResource T3.Surface}" BorderBrush="{StaticResource T3.Border}"
+                                                            BorderThickness="1" CornerRadius="2" Padding="8,4" Margin="8,8,8,24"
+                                                            HorizontalAlignment="Left" VerticalAlignment="Bottom" Visibility="Collapsed">
+                                                        <TextBlock x:Name="txt_map_note" Style="{StaticResource T3.Caption}"/>
                                                     </Border>
+
+                                                    <!-- OSM attribution, required whenever its tiles are on screen (bottom-right) -->
+                                                    <Border x:Name="border_map_attrib" Background="{DynamicResource T3.Surface}"
+                                                            Padding="4,0" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                            Visibility="Collapsed" IsHitTestVisible="False">
+                                                        <TextBlock Text="© OpenStreetMap contributors" Style="{StaticResource T3.Caption}"/>
+                                                    </Border>
+
+                                                    <!-- Empty state until a boundary is selected -->
+                                                    <StackPanel x:Name="pnl_map_empty" Margin="16" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                        <TextBlock Text="&#xE707;" Style="{StaticResource T3.Icon.Lg}" Foreground="{StaticResource T3.TextDisabled}"
+                                                                   HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                                        <TextBlock x:Name="txt_map_empty" Text="Search, then pick a result to preview its boundary"
+                                                                   Style="{StaticResource T3.Empty}"/>
+                                                    </StackPanel>
                                                 </Grid>
                                             </Border>
 
@@ -1804,23 +1892,29 @@
                                                 <Border x:Name="border_no_results" Background="Transparent" Padding="16,0"
                                                         VerticalAlignment="Center" HorizontalAlignment="Center">
                                                     <TextBlock x:Name="txt_no_results"
-                                                               Text="Enter an address above and click Search to find parcels."
+                                                               Text="Enter any address or coordinates worldwide and press Search"
                                                                Style="{StaticResource T3.Empty}"/>
                                                 </Border>
 
-                                                <ListView x:Name="lv_parcels"
-                                                          Height="250"
-                                                          Style="{StaticResource T3.ListView}"
-                                                          VirtualizingPanel.IsVirtualizing="True"
-                                                          SelectionMode="Single"
-                                                          Visibility="Collapsed"
-                                                          SelectionChanged="lv_parcels_SelectionChanged">
-                                                    <ListView.ItemTemplate>
+                                                <!-- ListBox, not ListView: T3.ListViewItem draws a GridViewRowPresenter,
+                                                     which only renders GridView columns, so an ItemTemplate row came out
+                                                     blank. T3.ListBoxItem.Multiline presents the template and lets the
+                                                     two-line row grow past the 26px row height. -->
+                                                <ListBox x:Name="lv_parcels"
+                                                         Height="250"
+                                                         Style="{StaticResource T3.ListBox}"
+                                                         ItemContainerStyle="{StaticResource T3.ListBoxItem.Multiline}"
+                                                         VirtualizingPanel.IsVirtualizing="True"
+                                                         SelectionMode="Single"
+                                                         Visibility="Collapsed"
+                                                         SelectionChanged="lv_parcels_SelectionChanged">
+                                                    <ListBox.ItemTemplate>
                                                         <DataTemplate>
                                                             <Grid Margin="0,4">
                                                                 <Grid.ColumnDefinitions>
                                                                     <ColumnDefinition Width="Auto"/>
                                                                     <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
                                                                 </Grid.ColumnDefinitions>
                                                                 <Ellipse Grid.Column="0" Width="8" Height="8" Margin="0,0,8,0"
                                                                          Fill="{StaticResource T3.Ink}" VerticalAlignment="Center"/>
@@ -1828,10 +1922,17 @@
                                                                     <TextBlock Text="{Binding display_address}" Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
                                                                     <TextBlock Text="{Binding subtitle}" Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
                                                                 </StackPanel>
+                                                                <!-- Source pill: which provider supplied this boundary -->
+                                                                <Border Grid.Column="2" Margin="8,0,0,0" Padding="4,0" VerticalAlignment="Top"
+                                                                        CornerRadius="{StaticResource T3.R.Pill}" BorderThickness="1"
+                                                                        Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
+                                                                        ToolTip="Data source of this boundary">
+                                                                    <TextBlock Text="{Binding source_label}" Style="{StaticResource T3.Caption}"/>
+                                                                </Border>
                                                             </Grid>
                                                         </DataTemplate>
-                                                    </ListView.ItemTemplate>
-                                                </ListView>
+                                                    </ListBox.ItemTemplate>
+                                                </ListBox>
 
                                             </Grid>
                                         </Grid>
@@ -2089,7 +2190,7 @@
                         <!-- Right primary button -->
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button x:Name="btn_create" Content="Create Property Lines in Revit"
-                                    Style="{StaticResource T3.Button.Primary}" Height="28" Padding="16,0"
+                                    Style="{StaticResource T3.Button.Primary}"
                                     IsEnabled="False" Click="btn_create_Click" IsDefault="True"/>
                         </StackPanel>
                     </Grid>

@@ -1,17 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-T3Lab Assistant — Dockable Pane Provider
+T3Lab Assistant — Dockable Pane, phần CPython.
 
-Registers the T3Lab AI Assistant as a native Revit DockablePane so it can dock
-alongside the Properties panel and Project Browser. The pane hosts the FULL
-assistant window (SetupDockablePane loads T3LabAssistantWindow and re-parents
-its content), which is why there is no separate pane chat implementation here.
+startup.py (IronPython) đăng ký pane lúc Revit khởi động và cất một `Border`
+rỗng (host) vào AppDomain — xem lib/assistant_pane.py. Module này là nửa còn
+lại, chạy từ nút T3Lab Assistant (`#! python3`):
+
+  * show_docked(): dựng T3LabAssistantWindow MỘT lần, tách Content của nó gắn
+    vào host, rồi hiện / ẩn pane. Bấm nút lần sau chỉ hiện / ẩn — hội thoại
+    vẫn còn nguyên.
+  * Bơm GIL: pyRevit 6.5.5 không nhả GIL sau PythonEngine.Initialize(), nên
+    luồng chính của Revit giữ GIL suốt lúc rảnh và mọi thread nền CPython đứng
+    im (CLAUDE.md luật 8). Cửa sổ modal không bị vì ShowDialog là một lời gọi
+    .NET (pythonnet nhả GIL trong đó); pane thì modeless. Một DispatcherTimer
+    20ms gọi Thread.Sleep(0) — lời gọi .NET nên pythonnet nhả GIL, thread nền
+    đang chờ (stream LLM, chờ ExternalEvent) chạy tiếp. Không thread nào chờ
+    thì mỗi tick chỉ tốn vài micro giây.
+  * Engine CPython tắt (pyRevit Reload chưa vá, hoặc đóng Revit): tháo nội dung
+    ra, trả dòng hướng dẫn về, dừng mọi timer — để Revit không gọi vào một
+    interpreter đã chết.
 
 Removed 2026-07-27: AssistantPaneController (~350 lines) and its
-Tools/AssistantPane.xaml (~1370 lines). SetupDockablePane never constructed the
-controller, so get_pane_controller() always returned None and the entire class —
-along with two live bugs inside it — was unreachable. Recoverable from git
-history if a lightweight pane chat is ever wanted.
+Tools/AssistantPane.xaml (~1370 lines) — dead code, recoverable from git.
+Removed 2026-10-07: the CPython AssistantPaneProvider. Registration moved to
+startup.py, the only code that runs while Revit still accepts it.
 """
 
 from __future__ import unicode_literals
@@ -22,11 +34,12 @@ import sys
 import clr
 clr.AddReference('PresentationFramework')
 clr.AddReference('PresentationCore')
+clr.AddReference('WindowsBase')
 clr.AddReference('System')
 clr.AddReference('RevitAPIUI')
 
 from System import Guid
-from Autodesk.Revit.UI import IDockablePaneProvider, DockablePaneProviderData, DockablePaneState
+from System.Threading import Thread as _NetThread
 
 # ─── Path bootstrap ────────────────────────────────────────────────────────────
 _GUI_DIR  = os.path.dirname(__file__)                         # lib/GUI
@@ -36,146 +49,245 @@ for _p in (_LIB_DIR, _EXT_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import assistant_pane as _pane
 
-# ─── Shared pane GUID (must match startup.py) ──────────────────────────────────
-ASSISTANT_PANE_GUID = Guid('7F3A9B2E-C4D1-4E8F-A6B5-1234567890AB')
+# ─── Shared pane GUID (registered by startup.py via lib/assistant_pane.py) ─────
+ASSISTANT_PANE_GUID = Guid(_pane.PANE_GUID)
+
+# ─── Narrowest the pane content will lay itself out at (DIP) ───────────────────
+# Below this Revit simply clips the right edge. It used to be 380, which is
+# wider than a typical dock: a pane 400px wide at 125% display scaling is only
+# 320 DIP, so the greeting, the composer hint, the project/mode row and the
+# copyright were all cut off on the right. The layout now adapts down to this
+# floor (T3LabAssistantWindow._apply_narrow_layout / _apply_compact_layout).
+PANE_MIN_WIDTH = 240
+
+# ─── GIL pump cadence ──────────────────────────────────────────────────────────
+# 20ms = at most 20ms extra latency per streamed chunk; the tick costs a few
+# microseconds when no background thread is waiting for the GIL.
+GIL_PUMP_MS = 20
+
+# The mounted window, the pump timer and what the host showed before it live in
+# AppDomain data, not module globals: a pyRevit reload can re-import lib/ while
+# the engine (and the mounted content) stays alive, and fresh globals would
+# then mount a second assistant and start a second pump. unmount() clears them
+# when the engine shuts down, so a key that is set always belongs to the
+# running interpreter.
+_KEY_WINDOW      = 'T3Lab.AssistantPane.Window'
+_KEY_PUMP        = 'T3Lab.AssistantPane.Pump'
+_KEY_PLACEHOLDER = 'T3Lab.AssistantPane.Placeholder'
+_HOOKED = {'done': False}
 
 
-# ─── Initial dock position ─────────────────────────────────────────────────────
-
-def _apply_initial_dock_state(data):
-    """Dock the pane to the right, tabbed behind the Project Browser.
-
-    Revit only honours InitialState the FIRST time a pane is shown on a given
-    machine; after that the user's own docking is remembered, which is the
-    behaviour we want — this only decides where it lands out of the box.
-
-    Everything here is best-effort. TabBehind is the part most likely to be
-    refused (a host where the Project Browser has been closed or re-docked),
-    and it must not take the plain DockPosition down with it, so the two are
-    set in separate guarded steps rather than one.
-    """
+def _get(key):
     try:
-        from Autodesk.Revit.UI import DockPosition
-        state = DockablePaneState()
-        state.DockPosition = DockPosition.Left
-        try:
-            from Autodesk.Revit.UI import DockablePanes
-            state.TabBehind = DockablePanes.BuiltInDockablePanes.ProjectBrowser
-        except Exception:
-            try:
-                from Autodesk.Revit.UI import DockablePanes
-                state.TabBehind = DockablePanes.BuiltInDockablePanes.PropertiesPalette
-            except Exception:
-                pass
-        data.InitialState = state
-        return True
-    except Exception as ex:
-        import logging
-        logging.getLogger("T3LabAssistant").debug(
-            "InitialState not applied: %s", ex)
-        return False
+        from System import AppDomain
+        return AppDomain.CurrentDomain.GetData(key)
+    except Exception:
+        return None
 
-def _log_pane(msg):
+
+def _set(key, value):
     try:
-        import datetime
-        _dlog_path = os.path.join(os.path.expanduser("~"), "T3Lab_AI_Data", "dockable_pane_startup.log")
-        _d = os.path.dirname(_dlog_path)
-        if not os.path.isdir(_d):
-            os.makedirs(_d)
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(_dlog_path, "a", encoding="utf-8") as f:
-            f.write(u"[{}] [PaneProvider] {}\n".format(stamp, msg))
+        from System import AppDomain
+        AppDomain.CurrentDomain.SetData(key, value)
     except Exception:
         pass
 
 
-# ─── IDockablePaneProvider ─────────────────────────────────────────────────────
+def _same(a, b):
+    """Reference identity for .NET objects. pythonnet returns a fresh wrapper
+    for a plain WPF element on every property read, so `is` is always False."""
+    if a is None or b is None:
+        return False
+    try:
+        from System import Object
+        return bool(Object.ReferenceEquals(a, b))
+    except Exception:
+        return a is b
 
-class AssistantPaneProvider(IDockablePaneProvider):
-    """
-    Revit calls SetupDockablePane() the first time the pane is shown.
-    We load the UserControl XAML here and attach the controller.
-    """
-    __namespace__ = "T3Lab.GUI.AssistantPaneProvider"
 
-    def SetupDockablePane(self, data):
-        _log_pane(u"SetupDockablePane invoked by Revit")
+# ─── Debug log ─────────────────────────────────────────────────────────────────
+# OFF by default. This used to append to
+# ~/T3Lab_AI_Data/dockable_pane_startup.log on every Revit start, forever, and
+# nothing ever read it; failures already reach the pyRevit logger below. Set
+# T3LAB_PANE_DEBUG=1 only while diagnosing the pane.
+_LOG_ENABLED = bool(os.environ.get("T3LAB_PANE_DEBUG"))
+_LOG_MAX_BYTES = 256 * 1024
+_LOG_PATH = os.path.join(os.path.expanduser("~"), "T3Lab_AI_Data",
+                         "dockable_pane_startup.log")
+
+
+def _log_pane(msg):
+    """Append a timestamped line to the debug log. Never raises. No-op unless
+    debugging is explicitly enabled."""
+    if not _LOG_ENABLED:
+        return
+    try:
+        import datetime
+        import io
+        _d = os.path.dirname(_LOG_PATH)
+        if not os.path.isdir(_d):
+            os.makedirs(_d)
+        # Truncate rather than grow without bound.
         try:
-            if _LIB_DIR not in sys.path:
-                sys.path.insert(0, _LIB_DIR)
-            if _EXT_DIR not in sys.path:
-                sys.path.insert(0, _EXT_DIR)
+            if os.path.getsize(_LOG_PATH) > _LOG_MAX_BYTES:
+                os.remove(_LOG_PATH)
+        except Exception:
+            pass
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with io.open(_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(u"[{}] [Pane] {}\n".format(stamp, msg))
+    except Exception:
+        pass
 
-            win = None
-            try:
-                from GUI.T3LabAssistantDialog import T3LabAssistantWindow
-                win = T3LabAssistantWindow(is_docked=True)
-            except Exception as ex_import:
-                _log_pane(u"Direct import failed, attempting script fallback: {}".format(ex_import))
-                from core.extension_paths import bundle_path
-                script_path = bundle_path('T3LabAssistant.pushbutton', 'script.py')
-                if os.path.isfile(script_path):
-                    try:
-                        import importlib.util
-                        spec = importlib.util.spec_from_file_location('t3lab_assistant_full', script_path)
-                        mod = importlib.util.module_from_spec(spec)
-                        sys.modules['t3lab_assistant_full'] = mod
-                        spec.loader.exec_module(mod)
-                    except Exception:
-                        import imp
-                        mod = imp.load_source('t3lab_assistant_full', script_path)
-                    if hasattr(mod, 'T3LabAssistantWindow'):
-                        win = mod.T3LabAssistantWindow(is_docked=True)
 
-            if win is not None:
-                # Detach visual content
-                    content = win.Content
-                    win.Content = None
+# ─── GIL pump ──────────────────────────────────────────────────────────────────
 
-                    # Enforce minimum width on the hosted dockable pane root element
-                    try:
-                        content.MinWidth = 380
-                    except Exception:
-                        pass
+def _pump_tick(sender, e):
+    # Any .NET call makes pythonnet release the GIL for its duration; a thread
+    # that has been waiting for it is handed the GIL before this returns.
+    _NetThread.Sleep(0)
 
-                    # Keep the window class instance alive
-                    self._win_ref = win
 
-                    data.FrameworkElement = content
+def _start_gil_pump():
+    if _get(_KEY_PUMP) is not None:
+        return
+    try:
+        from System import TimeSpan
+        from System.Windows.Threading import DispatcherTimer
+        timer = DispatcherTimer()
+        timer.Interval = TimeSpan.FromMilliseconds(GIL_PUMP_MS)
+        timer.Tick += _pump_tick
+        timer.Start()
+        _set(_KEY_PUMP, timer)
+    except Exception as ex:
+        _log_pane(u"GIL pump unavailable: {}".format(ex))
 
-                    # Dock the pane where Revit's own panels live instead of
-                    # letting it come up floating in the middle of the screen.
-                    _apply_initial_dock_state(data)
 
-                    from Autodesk.Revit.UI import EditorInteraction, EditorInteractionType
-                    data.EditorInteraction = EditorInteraction(EditorInteractionType.KeepAlive)
-                    _log_pane(u"SetupDockablePane successfully initialized FrameworkElement and InitialState")
-                    return
-            
-            raise Exception("pushbutton script.py not found: " + script_path)
+def _stop_gil_pump():
+    timer = _get(_KEY_PUMP)
+    _set(_KEY_PUMP, None)
+    if timer is not None:
+        try:
+            timer.Stop()
+        except Exception:
+            pass
 
-        except Exception as ex:
-            import logging
-            logging.basicConfig()
-            logger = logging.getLogger("T3LabAssistant")
-            logger.error("Error setting up DockablePane: %s", ex, exc_info=True)
-            _log_pane(u"ERROR in SetupDockablePane: {}".format(ex))
 
-            from System.Windows.Controls import Border, TextBlock
-            from System.Windows import HorizontalAlignment, VerticalAlignment, Thickness, TextWrapping
-            from System.Windows.Media import Brushes
+# ─── Mount / unmount ───────────────────────────────────────────────────────────
 
-            border = Border()
-            border.Background = Brushes.Crimson
-            border.Padding = Thickness(20)
+def _mounted():
+    """(window, content) currently in the pane, or (None, None)."""
+    win = _get(_KEY_WINDOW)
+    if win is None:
+        return None, None
+    return win, getattr(win, '_pane_content', None)
 
-            lbl = TextBlock()
-            lbl.Text = u'T3Lab Assistant pane could not load:\n{}'.format(ex)
-            lbl.Foreground = Brushes.White
-            lbl.TextWrapping = TextWrapping.Wrap
-            lbl.HorizontalAlignment = HorizontalAlignment.Center
-            lbl.VerticalAlignment   = VerticalAlignment.Center
 
-            border.Child = lbl
-            data.FrameworkElement   = border
+def _stop_window(win):
+    if win is None:
+        return
+    try:
+        win._on_closing(None, None)     # stops the window's own timers
+    except Exception:
+        pass
+
+
+def _mount(host, win):
+    """Move the window's content into the pane host."""
+    content = win.Content
+    win.Content = None
+    # Floor for the hosted pane content. Kept low on purpose — see
+    # PANE_MIN_WIDTH; the layout itself adapts above it.
+    try:
+        content.MinWidth = PANE_MIN_WIDTH
+    except Exception:
+        pass
+    if _get(_KEY_PLACEHOLDER) is None:
+        _set(_KEY_PLACEHOLDER, host.Child)
+    host.Child = content
+    win._pane_content = content
+    _set(_KEY_WINDOW, win)              # keeps the window (and its handlers) alive
+    _start_gil_pump()
+    _hook_engine_shutdown()
+
+
+def unmount():
+    """Detach the assistant and stop everything that calls into Python.
+
+    Runs when the CPython engine shuts down. Never raises.
+    """
+    win = _get(_KEY_WINDOW)
+    _set(_KEY_WINDOW, None)
+    _stop_gil_pump()
+    _stop_window(win)
+    host = _pane.get_host()
+    placeholder = _get(_KEY_PLACEHOLDER)
+    if host is not None and placeholder is not None:
+        try:
+            host.Child = placeholder
+        except Exception:
+            pass
+
+
+def _hook_engine_shutdown():
+    """Unmount before the interpreter goes away. pythonnet runs its shutdown
+    handlers while Python is still alive; atexit covers a Py_Finalize."""
+    if _HOOKED['done']:
+        return
+    _HOOKED['done'] = True
+    try:
+        import atexit
+        atexit.register(unmount)
+    except Exception:
+        pass
+    try:
+        from Python.Runtime import PythonEngine, ShutdownHandler
+        PythonEngine.AddShutdownHandler(ShutdownHandler(unmount))
+    except Exception as ex:
+        _log_pane(u"shutdown handler not added: {}".format(ex))
+
+
+# ─── Entry point ───────────────────────────────────────────────────────────────
+
+def show_docked(make_window, uiapp):
+    """Show the assistant in Revit's dockable pane.
+
+    make_window: zero-argument callable returning a T3LabAssistantWindow built
+    with is_docked=True. Called only when nothing is mounted yet.
+
+    Returns (True, "shown" | "hidden" | "loaded") or (False, reason) when the
+    pane cannot be used — the caller then opens the window instead.
+    """
+    if uiapp is None:
+        return False, "no UIApplication"
+    if not _pane.pane_exists():
+        return False, ("the dock pane is not registered in this Revit session "
+                       "(see %APPDATA%\\T3LabAI\\engine_check.log)")
+    host = _pane.get_host()
+    if host is None:
+        return False, "the dock pane host is missing"
+    try:
+        from Autodesk.Revit.UI import DockablePaneId
+        pane = uiapp.GetDockablePane(DockablePaneId(ASSISTANT_PANE_GUID))
+    except Exception as ex:
+        return False, u"GetDockablePane failed: {}".format(ex)
+    if pane is None:
+        return False, "GetDockablePane returned nothing"
+
+    win, content = _mounted()
+    if content is None or not _same(host.Child, content):
+        _stop_window(win)               # an orphan from a replaced host
+        _mount(host, make_window())
+        pane.Show()
+        return True, "loaded"
+    _hook_engine_shutdown()             # this module may be a fresh import
+
+    # IsVisible, not pane.IsShown(): a pane tabbed behind another one is
+    # "shown" but not on screen, and the button should bring it forward.
+    if content.IsVisible:
+        pane.Hide()
+        return True, "hidden"
+    pane.Show()
+    return True, "shown"

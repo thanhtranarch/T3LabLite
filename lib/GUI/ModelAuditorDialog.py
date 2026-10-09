@@ -251,10 +251,9 @@ METRIC_THRESHOLDS = OrderedDict([
 _CONFIG_PATH = os.path.normpath(os.path.join(os.path.dirname(__file__), 'Resources', 'model_auditor_thresholds.json'))
 # Per-model score history is data about the user's projects, so it lives in
 # %APPDATA%\T3LabAI\model_auditor\history — never inside the extension. The
-# old Resources/ModelAuditorHistory/ sat in the clone: it is tracked in git, so
-# a run dirtied the clone (blocking `git pull --ff-only`) and the developer's
-# own runs shipped with Lite. It is now only read once per model to carry the
-# trend across (_history_file_for_doc), and never written.
+# old Resources/ModelAuditorHistory/ sat in the clone and was committed to the
+# public repo with client project names in its file names (2026-10-02); it is
+# now only read once per model to carry the trend across (_history_file_for_doc).
 _LEGACY_HISTORY_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), 'Resources', 'ModelAuditorHistory'))
 
 
@@ -354,6 +353,119 @@ def _status_for(value, thresholds):
     return _STATUS_ORDER[-1]
 
 
+# ----------------------------------------------------------------------------
+# THRESHOLD BANDS — cột THRESHOLDS của bảng Health
+# ----------------------------------------------------------------------------
+# Năm ngưỡng cắt ra sáu dải (Good … Severe) theo đúng luật của _status_for:
+# dải N chứa mọi giá trị <= thresholds[N] và > thresholds[N-1]. Trước đây cột
+# chỉ in "100 | 250 | 500 | 750 | 1000" — người dùng không biết số nào là ranh
+# giới của dải nào, cũng không biết giá trị hiện tại nằm đâu. Hàm dưới đây là
+# logic thuần (không Revit, không WPF) để dev/test_model_auditor.py kiểm được.
+
+def _fmt_number(value):
+    """Full-precision number for sentences: 1000 -> '1,000', 312.5 -> '312.5'."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if num.is_integer():
+        return "{:,}".format(int(num))
+    return "{:,g}".format(num)
+
+
+def _fmt_tick(value):
+    """Short cut-off label that fits a 32px tick slot (at most 5 characters):
+    1000 -> '1000', 25000 -> '25k', 12500 -> '12.5k', 312.5 -> '312.5'."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(num) >= 10000:
+        return "{:g}k".format(num / 1000.0)
+    if num.is_integer():
+        return str(int(num))
+    return "{:g}".format(num)
+
+
+def _threshold_bands(value, thresholds, unit=""):
+    """Describe where `value` sits among the six health bands.
+
+    Returns a dict:
+      index    -- band of the value, 0 (Good) .. 5 (Severe); same as _status_for
+      status   -- that band's name
+      ticks    -- the five cut-offs as short labels, for the tick slots
+      bands    -- [(name, range text)] for all six bands, best to worst
+      summary  -- one line: 'Good ≤ 100 · … · Severe > 1,000 MB'
+      tooltip  -- every band in words + which one the current value is in
+    """
+    status = _status_for(value, thresholds)
+    index = _STATUS_ORDER.index(status)
+    suffix = " " + unit if unit else ""
+    cuts = list(thresholds)
+
+    bands = []
+    short = []
+    for idx, name in enumerate(_STATUS_ORDER):
+        if idx == 0:
+            hi = cuts[0]
+            text = "0" if float(hi) <= 0 else "up to " + _fmt_number(hi)
+            short.append("{} ≤ {}".format(name, _fmt_number(hi)))
+        elif idx < len(cuts):
+            lo, hi = cuts[idx - 1], cuts[idx]
+            if float(hi) <= float(lo):
+                # A hand-edited config can repeat a limit; the band is then empty.
+                text = "not used (same limit as {})".format(_STATUS_ORDER[idx - 1])
+            else:
+                text = "over {} up to {}".format(_fmt_number(lo), _fmt_number(hi))
+            short.append("{} ≤ {}".format(name, _fmt_number(hi)))
+        else:
+            text = "over " + _fmt_number(cuts[-1])
+            short.append("{} > {}".format(name, _fmt_number(cuts[-1])))
+        if not text.startswith("not used"):
+            text += suffix
+        bands.append((name, text))
+
+    lines = ["Health bands, best to worst:"]
+    for idx, (name, text) in enumerate(bands):
+        lines.append("{}: {}{}".format(name, text, "   (current)" if idx == index else ""))
+    lines.append("")
+    lines.append("Current {}{} is in {} ({}).".format(
+        _fmt_number(value), suffix, status, bands[index][1]))
+
+    return {
+        "index": index,
+        "status": status,
+        "ticks": [_fmt_tick(cut) for cut in cuts],
+        "bands": bands,
+        "summary": " · ".join(short) + suffix,
+        "tooltip": "\n".join(lines),
+    }
+
+
+def _over_limit(value, thresholds, unit=""):
+    """OVER LIMIT cell: how far `value` is above the Acceptable limit.
+
+    The Acceptable band ends at thresholds[1]; anything above it is a
+    Warning or worse (_STATUS_ATTENTION). Returns (display, tooltip):
+    '+60' / '+62.5 MB' for a problem row, an em dash for a row within the
+    limit — the number tells the user how much to remove, not just that
+    something is wrong.
+    """
+    limit = thresholds[1]
+    suffix = " " + unit if unit else ""
+    if _status_for(value, thresholds) not in _STATUS_ATTENTION:
+        return "—", "Within the Acceptable limit ({}{} or less).".format(
+            _fmt_number(limit), suffix)
+    over = value - limit
+    if isinstance(over, float):
+        over = round(over, 2)
+    return ("+{}{}".format(_fmt_number(over), suffix),
+            "{}{} above the Acceptable limit of {}{} — reduce it to {}{} or "
+            "less to get back to Acceptable.".format(
+                _fmt_number(over), suffix, _fmt_number(limit), suffix,
+                _fmt_number(limit), suffix))
+
+
 def _rag_status(score):
     """Red/Amber/Green classification matching Autodesk Model Analytics'
     health-check indicators. Returns (label, fill token, text token)."""
@@ -376,10 +488,8 @@ def _history_file_for_doc(doc):
     path = os.path.join(hist_dir, safe + '.json')
     # One-time carry-over from the old in-extension folder, so "vs last run"
     # keeps working after the move. The legacy file is left untouched.
-    # Saved models only: an unsaved "Project1" / "Family1" would otherwise
-    # inherit the runs that shipped in the clone under those generic names.
     legacy = os.path.join(_LEGACY_HISTORY_DIR, safe + '.json')
-    if doc.PathName and not os.path.isfile(path) and os.path.isfile(legacy):
+    if not os.path.isfile(path) and os.path.isfile(legacy):
         try:
             import shutil
             shutil.copyfile(legacy, path)
@@ -698,11 +808,7 @@ class ModelHealthAnalyzer(object):
             except Exception:
                 continue
         self.metrics["duplicate_elements"] = len(dupe_ids)
-        # The set holds ints (ElementId has no reliable Python hash/equality
-        # for de-duplication); the detail window needs real ElementIds like
-        # every other metric: GetElement(int) and List[ElementId].Add(int)
-        # fail under pythonnet.
-        self.element_ids["duplicate_elements"] = [_make_eid(i) for i in dupe_ids]
+        self.element_ids["duplicate_elements"] = list(dupe_ids)
 
 
 # ============================================================================
@@ -776,8 +882,10 @@ class MetricDetailWindow(T3WPFWindow):
             "recommendation", "No recommendation recorded for this metric.")
         thresholds = info.get("thresholds")
         if thresholds:
+            # Same band wording as the THRESHOLDS tooltip in the Health table.
+            summary = _threshold_bands(0, thresholds, info.get("unit", ""))["summary"]
             self.txt_detail_thresholds.Text = (
-                "Thresholds: " + " | ".join(str(x) for x in thresholds) +
+                "Thresholds: " + summary +
                 "   ·   Weight: {}/5".format(info.get("weight", 1)))
 
         fill, text = brushes
@@ -1213,7 +1321,9 @@ class ModelAuditorWindow(T3WPFWindow):
 
             unit = m_info["unit"]
             value_display = "{}{}".format(value, " " + unit if unit else "")
-            stars = u"★" * m_info["weight"] + u"☆" * (5 - m_info["weight"])
+            band = _threshold_bands(value, thresholds, unit)
+            ticks = band["ticks"]
+            over_display, over_tooltip = _over_limit(value, thresholds, unit)
 
             # Element selectability
             has_elements = len(self.health_analyzer.element_ids.get(key, [])) > 0
@@ -1224,13 +1334,29 @@ class ModelAuditorWindow(T3WPFWindow):
             grid_data.append(GridRow(
                 key=key,
                 label=m_info["label"],
+                tooltip=m_info["tooltip"],
                 value_display=value_display,
                 status=status,
                 severity=_STATUS_SEVERITY[status],
                 # Bare values: the column headers already say WEIGHT and
-                # THRESHOLDS, and each cell is one 26px line high.
-                weight_stars="{} {}/5".format(stars, m_info["weight"]),
-                thresholds_text=" | ".join(str(x) for x in thresholds),
+                # THRESHOLDS, and each cell is one 26px line high. No star
+                # characters (T3 rule 22): "3/5" already states the weight.
+                weight_stars="{}/5".format(m_info["weight"]),
+                # THRESHOLDS band bar. Every value is a STRING: the XAML picks
+                # the raised segment with DataTrigger on band_index (PythonNet
+                # does not carry ints/Brushes through a binding reliably —
+                # strings do, same as `severity`).
+                band_index=str(band["index"]),
+                band_tick_0=ticks[0],
+                band_tick_1=ticks[1],
+                band_tick_2=ticks[2],
+                band_tick_3=ticks[3],
+                band_tick_4=ticks[4],
+                band_unit=unit,
+                thresholds_tooltip=band["tooltip"],
+                # OVER LIMIT column: distance past the Acceptable limit.
+                over_display=over_display,
+                over_tooltip=over_tooltip,
                 select_visibility="Visible" if selectable else "Collapsed",
                 recommendation=m_info["recommendation"],
             ))
@@ -1266,6 +1392,9 @@ class ModelAuditorWindow(T3WPFWindow):
         # Worst first: a list you read top-down and stop when you run out of
         # time is worth more than one in metric order.
         recs_data.sort(key=lambda row: row.impact, reverse=True)
+        # The table too — problems on top, Severe first. sort() is stable, so
+        # rows of equal status keep METRIC_THRESHOLDS order.
+        grid_data.sort(key=lambda row: _STATUS_ORDER.index(row.status), reverse=True)
 
         self._set_rows(self.dg_health_metrics, 'empty_health_metrics', grid_data)
         self._set_rows(self.lst_health_recommendations,

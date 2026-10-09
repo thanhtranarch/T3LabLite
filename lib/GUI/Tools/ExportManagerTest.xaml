@@ -7,10 +7,10 @@
         Width="1280" Height="780"
         MinWidth="1200" MinHeight="650"
         WindowStartupLocation="CenterScreen"
-        WindowStyle="None" AllowsTransparency="False"
-        ResizeMode="CanResizeWithGrip"
+        WindowStyle="None" AllowsTransparency="True"
+        ResizeMode="CanResize"
         ShowInTaskbar="True"
-        Background="{DynamicResource T3.Canvas}"
+        Background="Transparent"
         FontFamily="Segoe UI" FontSize="13"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display"
@@ -221,6 +221,12 @@
                Cách dùng — icon LUÔN là <TextBlock>, không bao giờ là Content của Button:
                  <TextBlock Text="&#xE721;" Style="{StaticResource T3.Icon.Field}"/>
 
+               Ô rail (T3.Rail.Tile) cũng vậy — glyph T3.Icon.Rail, KHÔNG tự vẽ <Path>:
+                 <RadioButton x:Name="nav_browse" Style="{StaticResource T3.Rail.Tile}"
+                              ToolTip="Browse Parameters" ...>
+                   <TextBlock Text="&#xE8FD;" Style="{StaticResource T3.Icon.Rail}"/>
+                 </RadioButton>
+
                Bảng glyph chuẩn (dùng đúng glyph này cho đúng khái niệm, toàn dự án):
                  E721 Search      E8BB Close      E921 Minimize   E922 Maximize
                  E768 Play        E769 Pause      E71A Stop       E72C Refresh
@@ -229,13 +235,30 @@
                  E70D ChevronDown E70E ChevronUp  E76B ChevronLeft E76C ChevronRight
                  E74E Save        E8E5 OpenFile   E774 Globe      E7A7 Undo
                  E8A3 Zoom        E7B3 Isolate    E7C9 Pick       E7C3 Document
-                 E896 Download    EA80 Insight
+                 E896 Download/Export  EA80 Insight  F140 Hide    E923 Restore
+                 E74A ArrowUp (move to top, north)  E74B ArrowDown (move to bottom)
+                 E9A6 Fit (zoom to fit)  EA3A Open (unresolved)  E707 Map  E753 PointCloud
+
+               Khái niệm trang — glyph của ô rail chọn theo VIỆC trang đó làm:
+                 E8FD List/inventory   E9D5 Audit/checklist  E945 Automation
+                 E8B5 Import/load      E8AB Swap/transfer    E71B Link
+                 E8C8 Duplicate        E8AC Rename/renumber  E9E9 Template/preset
+                 E70F Edit/override    E81C History/log      E8A1 Preview/mockup
+                 E8F1 Families         E81E Worksets         E90F Tools/bulk edit
+                 F158 3D view          E95E Model health     E8EF Aggregate
+                 E790 Colour           E943 Code/JSON        ED5E Dimension
+                 E8D2 Text             E727 Pattern          E8EC Classify/assign
+                 E80F Room             E809 Floor            E80A Ceiling
+                 ECA5 Wall             E825 Column           E933 Beam
+                 E7B7 Grid             EF90 Line             E95F MEP run
+                 (+ E713 Settings · E896 Export · E7BA Warning · E74D Delete/purge)
 
                Thêm glyph mới thì kiểm hai thứ (xem mục Icon của T3LAB_UI_STANDARD.md):
                  1. Không TRÔNG GIỐNG glyph đã có — E71E cũng là kính lúp y hệt E721
                     Search, nên Zoom phải là E8A3 (kính lúp có dấu +).
-                 2. Codepoint có thật trong font — glyph không tồn tại ra ô vuông tofu và
-                    audit_t3.py không bắt được, nó chỉ grep source.
+                 2. Codepoint có thật trong Segoe MDL2 Assets — glyph không tồn tại ra ô
+                    vuông tofu. audit_t3.py đối chiếu dev/icons/mdl2_codepoints.tsv
+                    (P1). ED1A Hide là glyph của Segoe Fluent Icons, KHÔNG có trong MDL2.
           -->
 
           <!-- Icon nền: cỡ Label (11), màu thừa kế từ control chứa nó. -->
@@ -270,6 +293,15 @@
             <Setter Property="FontSize"   Value="{StaticResource T3.Size.Caption}"/>
             <Setter Property="Margin"     Value="0,0,8,0"/>
             <Setter Property="VerticalAlignment" Value="Top"/>
+          </Style>
+
+          <!-- Icon của ô rail (T3.Rail.Tile, 42×42). Cỡ 16 = lưới thiết kế gốc của
+               Segoe MDL2 — nét rơi đúng pixel, sắc ở 100% lẫn 125%. Đây là cỡ ICON, không
+               thuộc thang 7 size chữ. KHÔNG set Foreground: glyph thừa kế màu từ tile
+               (T3.TextMuted → T3.Ink khi hover/checked) qua ContentPresenter. -->
+          <Style x:Key="T3.Icon.Rail" TargetType="TextBlock" BasedOn="{StaticResource T3.Icon}">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
           </Style>
 
           <!-- ══════════════════ 6 · BUTTONS ══════════════════
@@ -451,6 +483,9 @@
             <Setter Property="Padding" Value="{StaticResource T3.Pad.Field}"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <!-- No dotted WPF focus rectangle (Clone Drawing 2026-10-07): keyboard
+                 focus shows as the T3.Ink border instead, like T3.TextBox. -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="ItemContainerStyle" Value="{StaticResource T3.ComboBoxItem}"/>
             <Setter Property="Template">
               <Setter.Value>
@@ -498,7 +533,7 @@
                                     RelativeSource={RelativeSource TemplatedParent}}">
                       <Border Background="{StaticResource T3.Surface}"
                               BorderBrush="{StaticResource T3.Border}" BorderThickness="1"
-                              CornerRadius="{StaticResource T3.R.Control}"
+                              CornerRadius="{StaticResource T3.R.Control}" Padding="0,4"
                               MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                               MaxHeight="{TemplateBinding MaxDropDownHeight}">
                         <ScrollViewer>
@@ -512,6 +547,9 @@
                       <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
                     </Trigger>
                     <Trigger Property="IsDropDownOpen" Value="True">
+                      <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
+                    </Trigger>
+                    <Trigger Property="IsKeyboardFocusWithin" Value="True">
                       <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
                     </Trigger>
                     <Trigger Property="IsEnabled" Value="False">
@@ -742,7 +780,9 @@
 
           <!-- Background/BorderBrush/BorderThickness đi qua TemplateBinding để một cột
                có thể tô sáng riêng ô của nó (ví dụ ô vừa sửa, đang chờ Apply) bằng
-               <Column.CellStyle> + DataTrigger. Mặc định vẫn trong suốt, không đổi. -->
+               <Column.CellStyle>. Dòng là object Python thì dùng cell bridge
+               (AutomationProperties.ItemStatus + Trigger, xem GUI/GridPendingEdits.py),
+               không DataTrigger bind thẳng field. Mặc định vẫn trong suốt, không đổi. -->
           <Style x:Key="T3.DataGridCell" TargetType="DataGridCell">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
@@ -870,6 +910,15 @@
             </Setter>
           </Style>
 
+          <!-- Cột checkbox của ListView+GridView: bản GridView của
+               T3.DataGridColumnHeader.Check — bỏ Padding 8 và canh giữa để checkbox
+               header nằm đúng trên checkbox dòng (BatchOut 2026-10-02). -->
+          <Style x:Key="T3.GridViewColumnHeader.Check" TargetType="GridViewColumnHeader"
+                 BasedOn="{StaticResource T3.GridViewColumnHeader}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+          </Style>
+
           <Style x:Key="T3.ListViewItem" TargetType="ListViewItem">
             <Setter Property="FontFamily" Value="{StaticResource T3.Font}"/>
             <Setter Property="FontSize"   Value="{StaticResource T3.Size.Body}"/>
@@ -941,7 +990,9 @@
           <Style TargetType="ListViewItem" BasedOn="{StaticResource T3.ListViewItem}"/>
 
           <!-- Status pill: nền tint + dot + CHỮ. Không bao giờ chỉ dùng màu.
-               Row VM cần 2 property: StatusText (string) và Severity ("Success"/"Warning"/"Danger"). -->
+               Row VM cần 2 property: StatusText (string) và Severity ("Success"/"Warning"/"Danger").
+               Severity đi qua TextBlock ẩn "sev" (string bridge): dòng là object Python thì
+               DataTrigger bind thẳng {Binding Severity} không bao giờ khớp. -->
           <DataTemplate x:Key="T3.StatusPill">
             <Border x:Name="pill" CornerRadius="{StaticResource T3.R.Pill}" Padding="7,2"
                     HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -950,20 +1001,21 @@
                 <TextBlock x:Name="txt" Text="{Binding StatusText}"
                            FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"
                            VerticalAlignment="Center"/>
+                <TextBlock x:Name="sev" Text="{Binding Severity}" Visibility="Collapsed"/>
               </StackPanel>
             </Border>
             <DataTemplate.Triggers>
-              <DataTrigger Binding="{Binding Severity}" Value="Success">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Success">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Success.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Success.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Success.Text}"/>
               </DataTrigger>
-              <DataTrigger Binding="{Binding Severity}" Value="Warning">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Warning">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Warning.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Warning.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Warning.Text}"/>
               </DataTrigger>
-              <DataTrigger Binding="{Binding Severity}" Value="Danger">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Danger">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Danger.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Danger.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Danger.Text}"/>
@@ -1667,7 +1719,7 @@
     </Window.Resources>
 
     <!-- ═══ Outer Border: CornerRadius + ClipToBounds (T3 standard) ═══ -->
-    <Border BorderBrush="{StaticResource T3.BorderStrong}" BorderThickness="1.5" CornerRadius="12" ClipToBounds="True" Background="{StaticResource T3.Canvas}">
+    <Border BorderBrush="{StaticResource T3.BorderStrong}" BorderThickness="1" CornerRadius="{StaticResource T3.R.Window}" ClipToBounds="True" Background="{StaticResource T3.Canvas}">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="48"/>      <!-- Row 0: Full-width Title bar -->
@@ -1736,11 +1788,7 @@
                                       Style="{StaticResource T3.Rail.Tile}"
                                       Margin="0,0,0,8" IsChecked="True"
                                       ToolTip="Selection" Click="nav_toggle_clicked">
-                            <Path Data="M12 4 L20 8 L12 12 L4 8 Z M4 12 L12 16 L20 12 M4 16 L12 20 L20 16"
-                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"
-                                  StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                  Width="18" Height="18" Stretch="Uniform"
-                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE8FD;" Style="{StaticResource T3.Icon.Rail}"/>
                         </ToggleButton>
 
                         <!-- Tab: Format — document/file format -->
@@ -1748,11 +1796,7 @@
                                       Style="{StaticResource T3.Rail.Tile}"
                                       Margin="0,0,0,8"
                                       ToolTip="Format" Click="nav_toggle_clicked">
-                            <Path Data="M4 2 h10 l5 5 v14 H4 z M14 2 v5 h5 M7 12 h8 M7 16 h5"
-                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"
-                                  StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                  Width="18" Height="18" Stretch="Uniform"
-                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE713;" Style="{StaticResource T3.Icon.Rail}"/>
                         </ToggleButton>
 
                         <!-- Tab: Queue — list with send arrow -->
@@ -1760,11 +1804,7 @@
                                       Style="{StaticResource T3.Rail.Tile}"
                                       Margin="0,0,0,8"
                                       ToolTip="Queue &amp; Export" Click="nav_toggle_clicked">
-                            <Path Data="M2 4 h10 M2 9 h10 M2 14 h7 M15 9 h6 M18 6 l3 3 l-3 3"
-                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ToggleButton}}"
-                              StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                              Width="18" Height="18" Stretch="Uniform"
-                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <TextBlock Text="&#xE896;" Style="{StaticResource T3.Icon.Rail}"/>
                         </ToggleButton>
                     </Grid>
                 </Border>
@@ -1802,11 +1842,11 @@
 
                             <!-- Radio Buttons for Sheets/Views -->
                             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                <RadioButton x:Name="sheets_radio" Content="Sheets" GroupName="selectionMode"
-                                             IsChecked="True" Margin="0,0,16,0"
-                                             Checked="selection_mode_changed" FontWeight="Medium"/>
-                                <RadioButton x:Name="views_radio" Content="Views" GroupName="selectionMode"
-                                             Checked="selection_mode_changed" FontWeight="Medium"/>
+                                <RadioButton x:Name="sheets_radio" Style="{StaticResource T3.Chip}" Content="Sheets" GroupName="selectionMode"
+                                             IsChecked="True"
+                                             Checked="selection_mode_changed"/>
+                                <RadioButton x:Name="views_radio" Style="{StaticResource T3.Chip}" Content="Views" GroupName="selectionMode"
+                                             Checked="selection_mode_changed"/>
                             </StackPanel>
 
                             <!-- View Type Filter (for Views) - Hidden by default -->
@@ -1957,7 +1997,7 @@
                                                         <Grid>
                                                             <TextBlock x:Name="row_is_selected_text" Text="{Binding IsSelected}" Visibility="Collapsed"/>
                                                             <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text, Mode=OneWay}"
-                                                                      Style="{StaticResource T3.CheckBox}"
+                                                                      Style="{StaticResource T3.CheckBox.Cell}"
                                                                       HorizontalAlignment="Center"/>
                                                         </Grid>
                                                     </DataTemplate>
@@ -2083,7 +2123,7 @@
                                                    FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         <TextBlock x:Name="pdf_expand_arrow" Grid.Column="2"
-                                                   Text="▾" FontSize="13" Foreground="{StaticResource T3.Ink}"
+                                                   Text="&#xE70D;" Style="{StaticResource T3.Icon}" Foreground="{StaticResource T3.Ink}"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
@@ -2170,7 +2210,7 @@
                                                    FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         <TextBlock x:Name="dwg_expand_arrow" Grid.Column="2"
-                                                   Text="▾" FontSize="13" Foreground="{StaticResource T3.TextSecondary}"
+                                                   Text="&#xE70D;" Style="{StaticResource T3.Icon}" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
@@ -2235,7 +2275,7 @@
                                                    FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         <TextBlock x:Name="dgn_expand_arrow" Grid.Column="2"
-                                                   Text="▾" FontSize="13" Foreground="{StaticResource T3.TextSecondary}"
+                                                   Text="&#xE70D;" Style="{StaticResource T3.Icon}" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
@@ -2268,7 +2308,7 @@
                                                    FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         <TextBlock x:Name="dwf_expand_arrow" Grid.Column="2"
-                                                   Text="▾" FontSize="13" Foreground="{StaticResource T3.TextSecondary}"
+                                                   Text="&#xE70D;" Style="{StaticResource T3.Icon}" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
@@ -2302,7 +2342,7 @@
                                                    FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         <TextBlock x:Name="nwc_expand_arrow" Grid.Column="2"
-                                                   Text="▾" FontSize="13" Foreground="{StaticResource T3.TextSecondary}"
+                                                   Text="&#xE70D;" Style="{StaticResource T3.Icon}" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
@@ -2335,7 +2375,7 @@
                                                    FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         <TextBlock x:Name="ifc_expand_arrow" Grid.Column="2"
-                                                   Text="▾" FontSize="13" Foreground="{StaticResource T3.TextSecondary}"
+                                                   Text="&#xE70D;" Style="{StaticResource T3.Icon}" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
@@ -2381,7 +2421,7 @@
                                                    FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center" Margin="12,0,0,0"/>
                                         <TextBlock x:Name="img_expand_arrow" Grid.Column="2"
-                                                   Text="▾" FontSize="13" Foreground="{StaticResource T3.TextSecondary}"
+                                                   Text="&#xE70D;" Style="{StaticResource T3.Icon}" Foreground="{StaticResource T3.TextSecondary}"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
@@ -2585,14 +2625,17 @@
                                                             <RowDefinition Height="Auto"/>
                                                             <RowDefinition Height="Auto"/>
                                                         </Grid.RowDefinitions>
-                                                        <ProgressBar Grid.Row="0" Value="{Binding Progress}" Height="6" Minimum="0" Maximum="100" Margin="0,0,0,4" Style="{StaticResource T3.ProgressBar}"/>
-                                                        <TextBlock Grid.Row="1" Text="{Binding Status}" Style="{StaticResource T3.Caption}" Foreground="{StaticResource T3.Success.Accent}">
+                                                        <ProgressBar Grid.Row="0" Value="{Binding Progress}" Minimum="0" Maximum="100" Margin="0,0,0,4" Style="{StaticResource T3.ProgressBar}"/>
+                                                        <!-- Hidden while Status is empty. The trigger reads this TextBlock's own
+                                                             Text (a real string): a DataTrigger on {Binding Status} compares a
+                                                             PyObject with "" and never fires. -->
+                                                        <TextBlock Grid.Row="1" Text="{Binding Status}" Foreground="{StaticResource T3.Success.Accent}">
                                                             <TextBlock.Style>
                                                                 <Style TargetType="TextBlock" BasedOn="{StaticResource T3.Caption}">
                                                                     <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding Status}" Value="">
+                                                                        <Trigger Property="Text" Value="">
                                                                             <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        </DataTrigger>
+                                                                        </Trigger>
                                                                     </Style.Triggers>
                                                                 </Style>
                                                             </TextBlock.Style>

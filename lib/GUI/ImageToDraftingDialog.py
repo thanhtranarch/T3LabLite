@@ -88,6 +88,11 @@ if _lib_dir not in sys.path:
     sys.path.insert(0, _lib_dir)
 
 from GUI.ProgressPauseMixin import ProgressPauseMixin
+# Output width = model coordinates of the detail lines (the drafting view's
+# scale is not applied), so it is a project-unit length.
+from Snippets._units import project_length_unit
+
+DEFAULT_WIDTH_MM = 300.0
 
 # `revit.doc` / `revit.uidoc` RAISE AttributeError (not return None) when no
 # UIDocument is active. At module scope that kills the import outright, so the
@@ -481,38 +486,11 @@ def svg_to_revit_segments(svg_path, target_width_mm, line_thickness_px):
 # DYNAMIC C# VECTORIZER COMPILER & BITMAP HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
-# The vectorizer is C# compiled at runtime by CodeDom (csc.exe of .NET
-# Framework). .NET 8 (Revit 2025+) has no CodeDom compiler: it throws
-# PlatformNotSupportedException, and there is no pure-Python tracer.
-TRACING_UNAVAILABLE_MSG = (
-    "Image tracing is not available on Revit 2025 and later yet: it compiles "
-    "its tracer with the .NET Framework C# compiler, which .NET 8 does not "
-    "include.\n\nUse Image to Drafting in Revit 2022, 2023 or 2024.")
-
-
-def vectorizer_supported():
-    """True on .NET Framework (Revit 2022–2024), False on .NET 5+ (Revit 2025+)."""
-    import System
-    try:
-        return System.Environment.Version.Major < 5
-    except Exception:
-        return True
-
-
 def compile_csharp_vectorizer():
-    if not vectorizer_supported():
-        raise RuntimeError(TRACING_UNAVAILABLE_MSG)
-    # Compiled earlier in this Revit session: pythonnet still knows the namespace.
-    try:
-        from T3LabImageTrace import Vectorizer
-        return Vectorizer
-    except ImportError:
-        pass
     source_code = """
 using System;
 using System.Collections.Generic;
 
-namespace T3LabImageTrace {
 public class Vectorizer {
     public static int ComputeOtsuThreshold(byte[] pixelData, int w, int h, int stride) {
         int[] hist = new int[256];
@@ -1096,7 +1074,6 @@ public class Vectorizer {
         return output;
     }
 }
-}
 """
     from Microsoft.CSharp import CSharpCodeProvider
     from System.CodeDom.Compiler import CompilerParameters
@@ -1112,16 +1089,9 @@ public class Vectorizer {
         for err in results.Errors:
             errors.append(err.ErrorText)
         raise Exception("C# Compilation failed:\n" + "\n".join(errors))
-    asm = results.CompiledAssembly
-    # pythonnet 3: clr.AddReference() only takes a name/path string, so it
-    # cannot take this in-memory Assembly. It does not need to: CodeDom loaded
-    # it with Assembly.Load(bytes) and pythonnet registers the namespaces of
-    # every assembly that loads, so a plain import finds the class.
-    try:
-        from T3LabImageTrace import Vectorizer
-    except ImportError:
-        clr.AddReference(asm)       # IronPython only sees referenced assemblies
-        from T3LabImageTrace import Vectorizer
+    import clr
+    clr.AddReference(results.CompiledAssembly)
+    import Vectorizer
     return Vectorizer
 
 _VECTORIZER_CLASS = None
@@ -1184,10 +1154,14 @@ class ImageToDraftingWindow(T3WPFWindow):
     PP_STATUS     = "status_text"
     PP_STOP_MSG   = u"Stopping… finishing current line"
 
-    def __init__(self, xaml_file=None):
+    def __init__(self, xaml_file=None, doc_param=None):
         if xaml_file is None:
             xaml_file = os.path.join(os.path.dirname(__file__), 'Tools', 'ImageToDrafting.xaml')
         T3WPFWindow.__init__(self, xaml_file)
+        # Project length unit, read for the document this window works on.
+        self._unit = project_length_unit(doc_param or doc)
+        self.lbl_output_width.Text = self._unit.label("OUTPUT WIDTH")
+        self.WidthInput.Text = self._unit.default_text(DEFAULT_WIDTH_MM)
         self.image_path   = None   # path to BMP ready for potrace
         self.pdf_path     = None   # original PDF path (None for images)
         self.gs_path      = None   # cached Ghostscript path
@@ -1347,11 +1321,14 @@ class ImageToDraftingWindow(T3WPFWindow):
         if not view_name:
             forms.alert("Enter a Drafting View name."); return
 
+        width_text = (self.WidthInput.Text or "").strip() or \
+            self._unit.default_text(DEFAULT_WIDTH_MM)
         try:
-            width_mm = float(self.WidthInput.Text.strip() or '300')
-            if width_mm <= 0: raise ValueError
-        except ValueError:
-            forms.alert("Output Width must be a positive number."); return
+            width_mm = self._unit.parse_mm(width_text)
+        except ValueError as ex:
+            forms.alert("Output Width: {}".format(ex)); return
+        if width_mm <= 0:
+            forms.alert("Output Width must be greater than zero."); return
 
         try:
             thickness = max(1, int(float(self.ThicknessInput.Text.strip() or '2')))
@@ -1378,10 +1355,6 @@ class ImageToDraftingWindow(T3WPFWindow):
             forms.alert("Tolerance must be a non-negative number."); return
 
         invert_colors = bool(self.InvertInput.IsChecked)
-
-        # Both modes need the C# vectorizer; say so before the window closes.
-        if not vectorizer_supported():
-            forms.alert(TRACING_UNAVAILABLE_MSG, title="Image to Drafting"); return
 
         if tracing_mode == 1 and not os.path.exists(self.potrace_path):
             forms.alert("potrace.exe not found next to this button. Cannot run Outline Mode."); return
@@ -1595,7 +1568,7 @@ def show_image_to_drafting_dialog(doc=None):
         forms.alert("No active Revit document.", title="Image to Drafting")
         return
     xaml_file = os.path.join(os.path.dirname(__file__), 'Tools', 'ImageToDrafting.xaml')
-    win = ImageToDraftingWindow(xaml_file)
+    win = ImageToDraftingWindow(xaml_file, doc_param=d)
     try:
         win.ShowDialog()
     finally:

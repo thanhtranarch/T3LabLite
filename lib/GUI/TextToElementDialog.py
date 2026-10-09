@@ -15,6 +15,7 @@ clr.AddReference('RevitAPIUI')
 
 from pyrevit import forms
 from GUI.WPF_Base import T3WPFWindow, to_items_source
+from Snippets._units import project_length_unit
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, BuiltInCategory, BuiltInParameter,
@@ -49,8 +50,6 @@ TARGET_CATEGORIES = [
     ("Casework", BuiltInCategory.OST_Casework),
     ("Detail Items", BuiltInCategory.OST_DetailComponents),
 ]
-
-MM_TO_FEET = 1.0 / 304.8
 
 
 # =============================================================================
@@ -98,16 +97,14 @@ class TextToElementDialog(T3WPFWindow):
     AI_TOOL = "TextToElement"
 
 
-    def __init__(self, revit_obj, state=None):
+    def __init__(self, revit_obj):
         self._app = revit_obj
         self._doc = revit_obj.ActiveUIDocument.Document
         self._uidoc = revit_obj.ActiveUIDocument
         self._text_notes = []
         self._transfer_list = []  # list of (text_content, element, param_name)
-        # Set when "Pick items" needs PickObjects: it cannot run while this
-        # modal window is open, so the window closes, show_text_to_element
-        # picks, then reopens it with `state` (+ the picked notes).
-        self.pick_request = False
+        # Read per window: the module stays loaded across projects.
+        self._unit = project_length_unit(self._doc)
 
         xaml_path = os.path.join(
             os.path.dirname(__file__), 'Tools', 'TextToElement.xaml'
@@ -129,39 +126,10 @@ class TextToElementDialog(T3WPFWindow):
         if hasattr(self, "btn_ai_detect_target"):
             self.btn_ai_detect_target.Click += self._on_ai_detect_target
 
+        self._apply_units()
         self._populate_categories()
         self._update_source_info()
         self._init_ai_mode()
-        if state is not None:
-            self._restore_state(state)
-
-    def get_state(self):
-        """What the window must keep across the close–pick–reopen cycle."""
-        param = self.cmb_parameter.SelectedItem
-        return {
-            'category': self.cmb_category.SelectedIndex,
-            'parameter': str(param) if param is not None else None,
-            'tolerance': self.txt_tolerance.Text,
-        }
-
-    def _restore_state(self, state):
-        self.rb_pick_items.IsChecked = True
-        if state.get('tolerance') is not None:
-            self.txt_tolerance.Text = state['tolerance']
-        idx = state.get('category', -1)
-        if 0 <= idx < self.cmb_category.Items.Count:
-            self.cmb_category.SelectedIndex = idx   # loads the parameter list
-        name = state.get('parameter')
-        if name:
-            for i in range(self.cmb_parameter.Items.Count):
-                if str(self.cmb_parameter.Items[i]) == name:
-                    self.cmb_parameter.SelectedIndex = i
-                    break
-        notes = state.get('picked_notes')
-        if notes is None:
-            self._set_status("Pick cancelled — no text notes picked")
-        else:
-            self._find_intersections(notes)
 
     # -------------------------------------------------------------------------
     # Window chrome
@@ -182,6 +150,12 @@ class TextToElementDialog(T3WPFWindow):
     # -------------------------------------------------------------------------
     # Initialisation helpers
     # -------------------------------------------------------------------------
+
+    def _apply_units(self):
+        """Tolerance unit and default (150 mm) in the project's length unit.
+        It is a model distance: bounding boxes are compared in model space."""
+        self.lbl_tolerance_unit.Text = self._unit.tag
+        self.txt_tolerance.Text = self._unit.default_text(150)
 
     def _populate_categories(self):
         """Populate the category ComboBox from TARGET_CATEGORIES."""
@@ -338,11 +312,7 @@ class TextToElementDialog(T3WPFWindow):
             self.txt_status.Text = "Error: {}".format(str(ex))
 
     def _on_find_intersections(self, sender, args):
-        self._find_intersections()
-
-    def _find_intersections(self, picked_notes=None):
-        """Collect text notes, find intersecting elements, populate preview grid.
-        picked_notes: text notes picked while the window was closed (pick mode)."""
+        """Collect text notes, find intersecting elements, populate preview grid."""
         # Validate category and parameter selection
         cat_item = self.cmb_category.SelectedItem
         if cat_item is None:
@@ -354,18 +324,21 @@ class TextToElementDialog(T3WPFWindow):
             self._set_status("Select a target parameter first")
             return
 
-        # Get tolerance
-        tolerance_feet = self._get_tolerance_feet()
+        # Get tolerance — a bad value stops here, before any picking
+        try:
+            tolerance_feet = self._get_tolerance_feet()
+        except ValueError as ex:
+            msg = "Tolerance: {}".format(ex)
+            self._set_status(msg)
+            self.txt_content_status.Text = msg
+            return
 
         # Collect text notes
         if self.rb_pick_items.IsChecked:
-            if picked_notes is None:
-                # Close and let show_text_to_element pick with no modal
-                # window open, then reopen with the picked notes.
-                self.pick_request = True
-                self.Close()
+            text_notes = self._pick_text_notes()
+            if text_notes is None:
+                # User cancelled pick
                 return
-            text_notes = picked_notes
         else:
             text_notes = self._get_text_notes_from_view()
 
@@ -464,6 +437,24 @@ class TextToElementDialog(T3WPFWindow):
             return list(collector)
         except Exception:
             return []
+
+    def _pick_text_notes(self):
+        """Let user pick text notes interactively. Returns list or None on cancel."""
+        try:
+            refs = self._uidoc.Selection.PickObjects(
+                ObjectType.Element,
+                TextNoteSelectionFilter(),
+                "Select text notes — press Finish (green check) or Escape to cancel"
+            )
+            result = []
+            for ref in refs:
+                elem = self._doc.GetElement(ref.ElementId)
+                if elem is not None:
+                    result.append(elem)
+            return result
+        except Exception:
+            # User pressed Escape
+            return None
 
     def _get_elements_for_category(self, bic, view):
         """Collect non-type elements of a BuiltInCategory in the given view."""
@@ -592,12 +583,10 @@ class TextToElementDialog(T3WPFWindow):
         return False
 
     def _get_tolerance_feet(self):
-        """Parse tolerance from txt_tolerance (mm) and convert to feet."""
-        try:
-            val = float(self.txt_tolerance.Text.strip())
-        except Exception:
-            val = 150.0
-        return val * MM_TO_FEET
+        """Tolerance typed in txt_tolerance → internal feet. A bare number is
+        in the project unit; "150 mm" or "6\"" work in any project. Raises
+        ValueError with a message that says what is accepted."""
+        return self._unit.parse(self.txt_tolerance.Text)
 
     def _set_status(self, message):
         """Update the status bar label."""
@@ -608,36 +597,10 @@ class TextToElementDialog(T3WPFWindow):
 # PUBLIC API
 # =============================================================================
 
-def _pick_text_notes(uidoc, doc):
-    """Let user pick text notes interactively (no window open).
-    Returns list or None on cancel."""
-    try:
-        refs = uidoc.Selection.PickObjects(
-            ObjectType.Element,
-            TextNoteSelectionFilter(),
-            "Select text notes — press Finish (green check) or Escape to cancel"
-        )
-        result = []
-        for ref in refs:
-            elem = doc.GetElement(ref.ElementId)
-            if elem is not None:
-                result.append(elem)
-        return result
-    except Exception:
-        # User pressed Escape
-        return None
-
-
 def show_text_to_element(revit_obj):
-    """Create and show the TextToElement dialog; reopen it after a pick."""
-    state = None
-    while True:
-        dlg = TextToElementDialog(revit_obj, state)
-        dlg.ShowDialog()
-        if not dlg.pick_request:
-            break
-        state = dlg.get_state()
-        state['picked_notes'] = _pick_text_notes(dlg._uidoc, dlg._doc)
+    """Create and show the TextToElement dialog."""
+    dlg = TextToElementDialog(revit_obj)
+    dlg.ShowDialog()
 
 
 # Allow direct execution for quick testing (will fail without Revit context)

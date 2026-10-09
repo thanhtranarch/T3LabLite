@@ -5,7 +5,6 @@ import os
 import io
 import sys
 import json
-import re
 import codecs
 import datetime
 import traceback
@@ -176,7 +175,7 @@ def _get_group_type_id(pg_key):
     
     # Fallback to BuiltInParameterGroup (Revit 2024/2025)
     try:
-        return getattr(DB.BuiltInParameterGroup, pg_key, DB.BuiltInParameterGroup.PG_IFC)
+        return getattr(BuiltInParameterGroup, pg_key, BuiltInParameterGroup.PG_IFC)
     except:
         pass
     
@@ -1431,7 +1430,6 @@ class IFCSGSuiteWindow(T3WPFWindow):
             row["Status"] = r.Status
             dt.Rows.Add(row)
 
-        self._types_table = dt
         self.dgTypes.ItemsSource = dt.DefaultView
 
         # Count strip + empty-state wording (the overlay itself follows HasItems in XAML)
@@ -1697,15 +1695,10 @@ class IFCSGSuiteWindow(T3WPFWindow):
 
     def _on_apply_selected(self, sender, args):
         sel_indices = set()
-        table = getattr(self, '_types_table', None)
         for item in self.dgTypes.SelectedItems:
             try:
-                # The row's place in the DataTable, which follows current_rows.
-                # Items.IndexOf is the place in the SORTED view: after a click on
-                # a column header it pointed at other types.
-                idx = table.Rows.IndexOf(item.Row) if table is not None else -1
-                if idx >= 0:
-                    sel_indices.add(idx)
+                idx = self.dgTypes.Items.IndexOf(item)
+                sel_indices.add(idx)
             except:
                 pass
         if not sel_indices:

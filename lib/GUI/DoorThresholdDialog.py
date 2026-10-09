@@ -8,11 +8,8 @@ from pyrevit import revit, forms, script
 from GUI.WPF_Base import T3WPFWindow, to_items_source
 from Snippets._host import get_revit_version
 from Snippets._compat import eid_value, net_list
+from Snippets._units import project_length_unit
 
-try:
-    from GUI import RevitTheme as _theme
-except Exception:
-    _theme = None
 
 import clr
 clr.AddReference('PresentationFramework')
@@ -45,7 +42,6 @@ from Snippets._compat import disposing
 XAML_FILE = os.path.join(os.path.dirname(__file__), 'Tools', 'DoorThreshold.xaml')
 logger = script.get_logger()
 
-FT_TO_MM = 304.8
 MM_TO_FT = 1.0 / 304.8
 REVIT_VERSION = get_revit_version()
 
@@ -158,8 +154,10 @@ def _get_door_width_ft(door):
 
 
 class ThresholdGenerator(object):
-    def __init__(self, doc):
+    def __init__(self, doc, unit=None):
         self.doc = doc
+        # Unit the error list is written in (the project's length unit).
+        self.unit = unit or project_length_unit(doc)
 
     def generate_thresholds(self, doors, floor_type, offset_mm):
         offset_ft = offset_mm * MM_TO_FT
@@ -214,8 +212,9 @@ class ThresholdGenerator(object):
                     if half_w < 0.001 or half_d < 0.001:
                         error_count += 1
                         error_messages.append(
-                            "{}: invalid size (width={:.1f}mm, thickness={:.1f}mm)".format(
-                                door_label, w * FT_TO_MM, thickness * FT_TO_MM))
+                            "{}: invalid size (width {}, wall thickness {})".format(
+                                door_label, self.unit.show(w),
+                                self.unit.show(thickness)))
                         continue
 
                     p1 = p - v * half_w - u * half_d
@@ -279,35 +278,22 @@ class DoorThresholdWindow(T3WPFWindow):
             except Exception:
                 self._uidoc = None
 
-        self.generator = ThresholdGenerator(self._doc)
+        # Read per window: the module stays loaded while the user switches
+        # between a metric and an imperial project.
+        self._unit = project_length_unit(self._doc)
+        self.generator = ThresholdGenerator(self._doc, self._unit)
         self._all_doors = []
         self._floor_type_map = {}
 
-        self._adopt_host_font()
-        self._apply_theme()
+        self._apply_units()
         self._load_doors()
         self._load_floor_types()
         self._update_status()
 
-    def _adopt_host_font(self):
-        if _theme is None:
-            return
-        family, size = _theme.host_font()
-        if family:
-            try:
-                self.FontFamily = family
-                if size and size > 0:
-                    self.FontSize = size
-            except Exception:
-                pass
-
-    def _apply_theme(self, theme=None):
-        if _theme is None:
-            return
-        try:
-            _theme.apply(self, theme)
-        except Exception:
-            pass
+    def _apply_units(self):
+        """Offset label and default in the length unit the project displays."""
+        self.lbl_offset.Text = self._unit.label("Height Offset") + ":"
+        self.txt_offset.Text = self._unit.text(0.0)
 
     def _load_doors(self):
         pre_selected = set()
@@ -443,10 +429,14 @@ class DoorThresholdWindow(T3WPFWindow):
                             "The selected threshold type is no longer available.")
             return
 
+        # Bare number = project unit; "150 mm", "6\"" or "0'-6\"" work anywhere.
         try:
-            offset_mm = float(self.txt_offset.Text)
-        except Exception:
-            offset_mm = 0
+            offset_mm = self._unit.parse_mm(self.txt_offset.Text)
+        except ValueError as ex:
+            msg = "Height Offset: {}".format(ex)
+            self.status_text.Text = msg
+            TaskDialog.Show("Door Threshold", msg)
+            return
 
         new_floors, created, errors, error_messages = self.generator.generate_thresholds(
             [d.Element for d in selected_doors],

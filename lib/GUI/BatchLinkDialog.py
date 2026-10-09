@@ -2,13 +2,21 @@
 """
 BatchLinkDialog.py
 ==================
-WPF Dialog for working with Revit links (.rvt), in three tabs:
+WPF Dialog for working with Revit links (.rvt), in four tabs:
 
-* **Link Models**   — browse a folder, filter backups, batch link models.
+* **Manage Links**  — every link in this model with its status, reference
+                      type, path type and pin state; Reload (footer),
+                      Reload From, Unload, Pin / Unpin, Overlay / Attachment
+                      and Remove on the checked links.
+* **Link Models**   — browse a folder, filter backups, batch link models,
+                      optionally each onto its own (new) workset.
 * **Link Workset**  — move the link instances of THIS model onto a workset of
-                      this model (optionally their link types too). Nothing is
-                      reloaded and the worksets inside the linked files are
-                      left alone.
+                      this model (optionally their link types too). The
+                      WORKSET cell is edited inline (or staged for every
+                      checked link); changes stay pending (yellow) until Apply
+                      writes them all in one transaction. Nothing is reloaded
+                      and the worksets inside the linked files are left alone.
+                      Pending/applied/failed state: ``GUI/BatchLinkWorksets.py``.
 * **View Display**  — set how each link draws in the active view:
                       By Host View / By Linked View / Custom, plus visibility
                       and halftone.
@@ -31,7 +39,8 @@ clr.AddReference('PresentationFramework')
 clr.AddReference('WindowsBase')
 
 from System.Windows import WindowState, Visibility
-from System.Windows.Forms import FolderBrowserDialog, DialogResult, NativeWindow
+from System.Windows.Forms import (FolderBrowserDialog, OpenFileDialog,
+                                  DialogResult, NativeWindow)
 from System.Windows.Interop import WindowInteropHelper
 from System.Windows.Media.Imaging import BitmapImage, BitmapCacheOption
 from System import Uri, UriKind, IntPtr
@@ -62,16 +71,26 @@ from GUI.T3Dialog import confirm as t3_confirm
 from Snippets import _links
 from Snippets._compat import disposing
 
+from GUI.BatchLinkWorksets import _Row, LinkWorksetRow
+from GUI import BatchLinkWorksets as _wsstate
+
 GUI_DIR = os.path.dirname(__file__)
 XAML_FILE = os.path.join(GUI_DIR, 'Tools', 'BatchLink.xaml')
 
-TAB_LINK = 0
-TAB_WORKSETS = 1
-TAB_DISPLAY = 2
+TAB_MANAGE = 0
+TAB_LINK = 1
+TAB_WORKSETS = 2
+TAB_DISPLAY = 3
+
+# Link Models › "Workset for the new links": the two fixed entries come before
+# the model's own worksets.
+LINK_WS_ACTIVE = 0
+LINK_WS_PER_LINK = 1
 
 PRIMARY_LABELS = {
+    TAB_MANAGE: "Reload",
     TAB_LINK: "Link Selected Models",
-    TAB_WORKSETS: "Move to Workset",
+    TAB_WORKSETS: "Apply",
     TAB_DISPLAY: "Apply Display Settings",
 }
 
@@ -104,49 +123,6 @@ class WarningSwallower(IFailuresPreprocessor):
 
 # ── ROW ITEMS ────────────────────────────────────────────────────────────────
 
-class _Row(object):
-    """Common check/status plumbing for every grid row in this window."""
-
-    def __init__(self, status_text="Ready", severity="Success",
-                 is_selected=False, is_enabled=True):
-        self._status_text = status_text
-        self._severity = severity
-        self._is_selected = bool(is_selected)
-        self._is_enabled = bool(is_enabled)
-
-    @property
-    def StatusText(self):
-        return self._status_text
-
-    @StatusText.setter
-    def StatusText(self, value):
-        self._status_text = value
-
-    @property
-    def Severity(self):
-        return self._severity
-
-    @Severity.setter
-    def Severity(self, value):
-        self._severity = value
-
-    @property
-    def IsSelected(self):
-        return self._is_selected
-
-    @IsSelected.setter
-    def IsSelected(self, value):
-        self._is_selected = bool(value)
-
-    @property
-    def IsEnabled(self):
-        return self._is_enabled
-
-    @IsEnabled.setter
-    def IsEnabled(self, value):
-        self._is_enabled = bool(value)
-
-
 class RevitModelItem(_Row):
     """A discovered .rvt file on disk, waiting to be linked."""
 
@@ -175,39 +151,6 @@ class RevitModelItem(_Row):
             return dt.strftime("%Y-%m-%d %H:%M")
         except Exception:
             return ""
-
-
-class LinkWorksetRow(_Row):
-    """One Revit link, seen as an element sitting on a workset of THIS model."""
-
-    def __init__(self, record, current_label, current_id, can_move, note,
-                 severity="Success"):
-        _Row.__init__(self, note, severity,
-                      is_selected=False, is_enabled=can_move)
-        self.record = record
-        self.current_label = current_label
-        self.current_id = current_id
-        self._target = ""
-
-    @property
-    def LinkName(self):
-        return self.record.name
-
-    @property
-    def InstanceCount(self):
-        count = int(getattr(self.record, 'instance_count', 0) or 0)
-        return str(count) if count else "—"
-
-    @property
-    def CurrentWorkset(self):
-        return self.current_label or "—"
-
-    @property
-    def TargetWorkset(self):
-        return self._target or "—"
-
-    def set_target(self, name):
-        self._target = name or ""
 
 
 class LinkDisplayRow(_Row):
@@ -250,6 +193,51 @@ class LinkDisplayRow(_Row):
         return ", ".join(parts)
 
 
+class LinkManageRow(_Row):
+    """One Revit link on the Manage Links tab."""
+
+    def __init__(self, record, result=None):
+        text, severity = result or _links.status_label(record.status)
+        _Row.__init__(self, text, severity, is_selected=False, is_enabled=True)
+        self.record = record
+
+    @property
+    def LinkName(self):
+        return self.record.name
+
+    @property
+    def Attachment(self):
+        return self.record.attachment or u"\u2014"
+
+    @property
+    def PathType(self):
+        if self.record.is_cloud:
+            return "Cloud"
+        return self.record.path_type or u"\u2014"
+
+    @property
+    def PinnedText(self):
+        return _links.pinned_label(self.record.pinned_count, self.record.instance_count)
+
+    @property
+    def InstanceCount(self):
+        return self.record.instance_count
+
+
+def manage_tally(rows):
+    """Count strip of the Manage Links tab."""
+    total = len(rows)
+    loaded = sum(1 for r in rows if r.record.is_loaded)
+    text = "{} link{} · {} loaded".format(total, "" if total == 1 else "s", loaded)
+    attention = total - loaded
+    if attention:
+        text += " · {} not loaded".format(attention)
+    checked = sum(1 for r in rows if r.IsSelected)
+    if checked:
+        text += " · {} checked".format(checked)
+    return text
+
+
 def _show_dialog_owned(window, dlg):
     """Display a WinForms dialog properly parented to the WPF window."""
     try:
@@ -283,12 +271,15 @@ class BatchLinkDialog(T3WPFWindow):
         self._is_busy = False
         self._active_tab = TAB_LINK
 
+        # Manage Links tab state
+        self._mng_rows = []
+        self._mng_filtered = []
+
         # Worksets tab state — the workset each link sits on in THIS model
         self._ws_link_rows = []
         self._ws_filtered = []
         self._ws_worksets = []
         self._ws_workshared = False
-        self._suspend_ws_target = True
 
         # Display tab state
         self._disp_rows = []
@@ -299,10 +290,18 @@ class BatchLinkDialog(T3WPFWindow):
 
         self._load_logo()
         self._init_options()
+        self._init_link_worksets()
         self._init_display_options()
         self._init_initial_path()
         self._suspend_mode_event = False
-        self._suspend_ws_target = False
+
+        self._install_ws_cell_editor()
+        self.Closing += self._on_closing
+
+        # A model that already has links opens on Manage Links; an empty one
+        # on Link Models, where the first link is made.
+        if self.doc is not None and _links.collect_links(self.doc):
+            self.chip_tab_manage.IsChecked = True
 
     # ── SETUP ────────────────────────────────────────────────────────────────
 
@@ -338,6 +337,46 @@ class BatchLinkDialog(T3WPFWindow):
 
         self.cb_path_type.ItemsSource = to_items_source(["Absolute", "Relative"])
         self.cb_path_type.SelectedIndex = 0
+
+    def _init_link_worksets(self):
+        """Fill "Workset for the new links": active / one per link / existing."""
+        self._link_worksets = []
+        if not _links.is_workshared(self.doc):
+            choices = ["Not workshared (no worksets)"]
+            self.cb_link_workset.IsEnabled = False
+        else:
+            self._link_worksets = _links.get_host_worksets(self.doc)
+            active_id = _links.active_workset_id(self.doc)
+            active = next((w.name for w in self._link_worksets
+                           if w.workset_id == active_id), "")
+            choices = ["Active workset ({})".format(active) if active else "Active workset",
+                       "One workset per link"]
+            choices += [w.name for w in self._link_worksets]
+        self.cb_link_workset.ItemsSource = to_items_source(choices)
+        self.cb_link_workset.SelectedIndex = LINK_WS_ACTIVE
+        self._sync_link_ws_prefix()
+
+    def _sync_link_ws_prefix(self):
+        self.tb_link_ws_prefix.IsEnabled = (
+            bool(self._link_worksets or _links.is_workshared(self.doc))
+            and self.cb_link_workset.SelectedIndex == LINK_WS_PER_LINK)
+
+    def _link_workset_for(self, file_name):
+        """Host workset id a new link should sit on, or -1 to leave it where
+        Revit puts it (the active workset). Needs an OPEN transaction: the
+        per-link choice creates the workset when it is missing."""
+        index = self.cb_link_workset.SelectedIndex
+        if not self._link_worksets and not _links.is_workshared(self.doc):
+            return -1
+        if index is None or index <= LINK_WS_ACTIVE:
+            return -1
+        if index == LINK_WS_PER_LINK:
+            name = _links.link_workset_name(self.tb_link_ws_prefix.Text, file_name)
+            return _links.ensure_workset(self.doc, name)
+        pick = index - 2
+        if 0 <= pick < len(self._link_worksets):
+            return self._link_worksets[pick].workset_id
+        return -1
 
     def _init_display_options(self):
         """Fill the display-settings dropdowns and warn on pre-2025 Revit."""
@@ -395,7 +434,6 @@ class BatchLinkDialog(T3WPFWindow):
         self.progress_bar.Value = 0
         self.pnl_progress.Visibility = Visibility.Visible
         self.btn_primary.IsEnabled = False
-        self.btn_cancel.IsEnabled = False
         self._do_events()
 
     def _step_busy(self, phase, current, index, total):
@@ -407,10 +445,27 @@ class BatchLinkDialog(T3WPFWindow):
     def _end_busy(self, summary):
         self._is_busy = False
         self.progress_bar.Value = 100
+        self.pnl_progress.Visibility = Visibility.Collapsed
         self.btn_primary.IsEnabled = True
-        self.btn_cancel.IsEnabled = True
         self._set_status(summary)
+        self._sync_primary()
         self._do_events()
+
+    def _sync_primary(self):
+        """Footer primary button: per-tab label; on Link Workset it counts the
+        pending changes ("Apply (3)") and is disabled while nothing is pending."""
+        if self._active_tab == TAB_WORKSETS:
+            count = self._ws_pending_count()
+            self.btn_primary.Content = _wsstate.primary_label(count)
+            self.btn_primary.IsEnabled = bool(count) and not self._is_busy
+        elif self._active_tab == TAB_MANAGE:
+            count = len(self._mng_targets())
+            self.btn_primary.Content = ("Reload ({})".format(count) if count > 1
+                                        else PRIMARY_LABELS[TAB_MANAGE])
+            self.btn_primary.IsEnabled = bool(count) and not self._is_busy
+        else:
+            self.btn_primary.Content = PRIMARY_LABELS.get(self._active_tab, "Apply")
+            self.btn_primary.IsEnabled = not self._is_busy
 
     # ── TAB 1: FOLDER SCAN ───────────────────────────────────────────────────
 
@@ -514,6 +569,9 @@ class BatchLinkDialog(T3WPFWindow):
             self.lbl_file_count.Text = "Showing {} / {} models".format(showing, total_found)
         else:
             self.lbl_file_count.Text = "{} models found".format(total_found)
+        already = sum(1 for f in self._all_files if f.StatusText == "Already Linked")
+        self.lbl_file_hint.Text = ("{} already linked — skipped unless you check them".format(already)
+                                   if already else "")
 
         self._update_counts()
 
@@ -547,70 +605,96 @@ class BatchLinkDialog(T3WPFWindow):
     # ── TAB 2: LINK WORKSET IN THIS MODEL ────────────────────────────────────
     # Workset của chính link instance trong model đang mở — KHÔNG phải workset
     # nằm bên trong file link. Không reload link, chỉ đổi ELEM_PARTITION_PARAM.
+    # Sửa trực tiếp ở cột WORKSET (hoặc "Set for checked") chỉ TREO thay đổi
+    # (ô vàng); Apply ghi tất cả trong MỘT Transaction = một lần Ctrl+Z.
+    # Trạng thái treo/xong/lỗi nằm ở GUI/BatchLinkWorksets.py (Python thuần, có test).
 
     def _load_link_worksets(self):
-        """List every link in this model with the workset it currently sits on."""
+        """List every link in this model with the workset it currently sits on.
+
+        Drops every pending change: callers ask first (see reload_links_clicked).
+        """
         self._ws_link_rows = []
         self._ws_worksets = _links.get_host_worksets(self.doc)
         self._ws_workshared = _links.is_workshared(self.doc)
 
-        if self._ws_workshared:
-            for rec in _links.collect_links(self.doc):
-                label, ws_id = _links.link_host_workset(rec)
-                can_move = True
-                note = "Ready"
-                severity = "Success"
-                if not rec.instances:
-                    # The type exists but nothing is placed, so there is no
-                    # instance whose workset we could change.
-                    can_move = False
-                    note = "Not placed"
-                    severity = "Warning"
-                elif _links.owned_by_other(self.doc, rec.instance_id):
-                    owner = _links.element_owner(self.doc, rec.instance_id)
-                    can_move = False
-                    note = ("Owned by %s" % owner) if owner else "Owned by another user"
-                    severity = "Warning"
-                elif not rec.is_loaded:
-                    # An unloaded link still has an instance in this model, so
-                    # it can be moved - the user just needs to know it is not
-                    # currently drawing anything.
-                    note = "Unloaded"
-                    severity = "Warning"
-                self._ws_link_rows.append(
-                    LinkWorksetRow(rec, label, ws_id, can_move, note, severity))
+        for rec in _links.collect_links(self.doc):
+            label, ws_id = _links.link_host_workset(rec)
+            can_move = True
+            note = "Ready"
+            severity = "Success"
+            lock_reason = ""
+            if not self._ws_workshared:
+                can_move = False
+                note = "No worksets"
+                severity = "Warning"
+                lock_reason = ("This project is not workshared, so there is no "
+                               "workset to move this link to.")
+            elif not rec.instances:
+                # The type exists but nothing is placed, so there is no
+                # instance whose workset we could change.
+                can_move = False
+                note = "Not placed"
+                severity = "Warning"
+                lock_reason = ("This link is not placed in the model, so there is "
+                               "no instance to move. Place it first, then Refresh.")
+            elif _links.owned_by_other(self.doc, rec.instance_id):
+                owner = _links.element_owner(self.doc, rec.instance_id)
+                can_move = False
+                note = ("Owned by %s" % owner) if owner else "Owned by another user"
+                severity = "Warning"
+                lock_reason = ("{} has this link checked out. Ask them to "
+                               "relinquish it, then Refresh.").format(
+                                   owner or "Another user")
+            elif not rec.is_loaded:
+                # An unloaded link still has an instance in this model, so
+                # it can be moved - the user just needs to know it is not
+                # currently drawing anything.
+                note = "Unloaded"
+                severity = "Warning"
+            self._ws_link_rows.append(
+                LinkWorksetRow(rec, label, ws_id, can_move, note, severity,
+                               lock_reason=lock_reason))
 
         self._fill_workset_choices()
         self._apply_ws_filter()
 
     def _fill_workset_choices(self):
-        """Fill the target dropdown with this model's user worksets."""
-        self._suspend_ws_target = True
-        try:
-            names = [w.name for w in self._ws_worksets]
-            self.cb_ws_target.ItemsSource = to_items_source(names)
-            self.cb_ws_target.IsEnabled = bool(names)
-            if names:
-                active_id = _links.active_workset_id(self.doc)
-                index = 0
-                for i, ws in enumerate(self._ws_worksets):
-                    if ws.workset_id == active_id:
-                        index = i
-                        break
-                self.cb_ws_target.SelectedIndex = index
-        finally:
-            self._suspend_ws_target = False
+        """Fill the bulk-editor dropdown and the inline WORKSET combos.
 
-        active = _links.active_workset_id(self.doc)
-        name = next((w.name for w in self._ws_worksets if w.workset_id == active), "")
+        The inline combos read their items from the grid's Tag through a
+        RelativeSource binding: a real CLR collection, which a binding to a
+        Python row property could not hand over.
+        """
+        names = [w.name for w in self._ws_worksets]
+        self.grid_ws_links.Tag = to_items_source(names)
+        self.cb_ws_target.ItemsSource = to_items_source(names)
+        self.cb_ws_target.IsEnabled = bool(names)
+        self.btn_ws_stage_checked.IsEnabled = bool(names)
+        active_id = _links.active_workset_id(self.doc)
+        if names:
+            index = 0
+            for i, ws in enumerate(self._ws_worksets):
+                if ws.workset_id == active_id:
+                    index = i
+                    break
+            self.cb_ws_target.SelectedIndex = index
+
+        name = next((w.name for w in self._ws_worksets if w.workset_id == active_id), "")
         self.lbl_ws_active.Text = ("Active workset: {}".format(name)) if name else ""
 
     def _selected_workset(self):
-        """The HostWorkset picked in the dropdown, or None."""
+        """The HostWorkset picked in the bulk-editor dropdown, or None."""
         index = self.cb_ws_target.SelectedIndex
         if index is None or index < 0 or index >= len(self._ws_worksets):
             return None
         return self._ws_worksets[index]
+
+    def _workset_by_name(self, name):
+        return next((w for w in self._ws_worksets if w.name == name), None)
+
+    def _ws_pending_count(self):
+        return _wsstate.pending_count(self._ws_link_rows)
 
     def _apply_ws_filter(self):
         """Re-filter the link list and repaint every count that depends on it."""
@@ -621,77 +705,133 @@ class BatchLinkDialog(T3WPFWindow):
             self._ws_filtered = [r for r in self._ws_link_rows
                                  if query in r.LinkName.lower()]
 
-        self._refresh_ws_targets()
+        self.grid_ws_links.ItemsSource = to_items_source(self._ws_filtered)
 
         has_items = len(self._ws_filtered) > 0
         self.txt_ws_links_empty.Text = self._ws_empty_text(query)
         self.txt_ws_links_empty.Visibility = (
             Visibility.Collapsed if has_items else Visibility.Visible)
+        self._update_ws_tally()
 
-        movable = sum(1 for r in self._ws_link_rows if r.IsEnabled)
-        checked = sum(1 for r in self._ws_link_rows if r.IsSelected and r.IsEnabled)
-        self.lbl_ws_link_count.Text = "{} links · {} can move · {} checked".format(
-            len(self._ws_link_rows), movable, checked)
+    def _update_ws_tally(self):
+        """Tally strip, header checkbox, footer status and the Apply button."""
+        self.lbl_ws_link_count.Text = _wsstate.tally_text(self._ws_link_rows)
         self._sync_header_checkbox(self.chk_ws_links_header, self._ws_filtered)
-
         if self._active_tab == TAB_WORKSETS and not self._is_busy:
-            self._set_status(self._ws_status_text(checked))
+            self._set_status(self._ws_status_text())
+        self._sync_primary()
+
+    def _repaint_ws(self):
+        """Rows are plain Python objects (no INotifyPropertyChanged): refresh
+        the grid so the WORKSET cell colour and STATUS text follow the row."""
+        try:
+            self.grid_ws_links.Items.Refresh()
+        except Exception:
+            self.grid_ws_links.ItemsSource = to_items_source(self._ws_filtered)
+        self._update_ws_tally()
+
+    def _repaint_ws_later(self):
+        """Repaint after the inline combo has finished its own selection.
+
+        Refreshing inside SelectionChanged rebuilds the very combo that is
+        raising the event, so it is pushed onto the dispatcher instead.
+        """
+        try:
+            from System import Action
+            from System.Windows.Threading import DispatcherPriority
+            self.Dispatcher.BeginInvoke(DispatcherPriority.Background,
+                                        Action(self._repaint_ws))
+        except Exception:
+            self._repaint_ws()
 
     def _ws_empty_text(self, query):
-        """Say which of the three empty cases the user is looking at."""
-        if not self._ws_workshared:
-            return ("This project is not workshared.\n"
-                    "Worksets only exist in a workshared model, so no link can be moved.")
+        """Say which of the empty cases the user is looking at."""
         if not self._ws_link_rows:
+            if not self._ws_workshared:
+                return ("This project is not workshared.\n"
+                        "Worksets only exist in a workshared model, so no link can be moved.")
             return ("No Revit links in this project.\n"
                     "Link a model first on the Link Models tab.")
         if query:
-            return "No link matches \u201c{}\u201d.".format(query)
+            return "No link matches “{}”.".format(query)
         return ""
 
-    def _ws_status_text(self, checked):
+    def _ws_status_text(self):
         if not self._ws_workshared:
             return "This project is not workshared — there are no worksets to move links onto."
         if not self._ws_worksets:
             return "This model has no user workset to move links onto."
-        target = self._selected_workset()
-        if checked == 0:
-            return "Ready — check the links to move, then pick a workset."
-        return "Ready — {} link{} will move to {}".format(
-            checked, "" if checked == 1 else "s",
-            target.name if target is not None else "the selected workset")
+        pending = self._ws_pending_count()
+        if pending:
+            return ("{} pending change{} — press Apply to move {} in one step "
+                    "(one Ctrl+Z undoes it).").format(
+                        pending, "" if pending == 1 else "s",
+                        "it" if pending == 1 else "them")
+        checked = sum(1 for r in self._ws_link_rows if r.IsSelected and r.IsEnabled)
+        if checked:
+            return ("{} checked — pick a workset below and press Set for checked, "
+                    "or change the WORKSET cells directly.").format(checked)
+        return "Ready — change a link's WORKSET cell, or check links and use Set for checked."
 
-    def _refresh_ws_targets(self):
-        """Write the pending workset into every checked row, clear the rest."""
-        target = self._selected_workset()
-        name = target.name if target is not None else ""
-        for row in self._ws_link_rows:
-            row.set_target(name if (row.IsSelected and row.IsEnabled) else "")
-        self.grid_ws_links.ItemsSource = to_items_source(self._ws_filtered)
+    def _install_ws_cell_editor(self):
+        """Listen to the inline WORKSET combos.
+
+        `SelectionChanged=` inside a DataTemplate is never wired (template
+        namescope), so the grid listens to the bubbling routed event instead.
+        """
+        try:
+            from System.Windows.Controls import SelectionChangedEventHandler
+            from System.Windows.Controls.Primitives import Selector
+            # Keep the delegate: a collected delegate leaves the combos dead.
+            self._ws_cell_handler = SelectionChangedEventHandler(self._on_ws_cell_changed)
+            self.grid_ws_links.AddHandler(Selector.SelectionChangedEvent,
+                                          self._ws_cell_handler, True)
+        except Exception:
+            pass
+
+    def _on_ws_cell_changed(self, sender, e):
+        """A WORKSET combo changed: stage the move on that row (no Revit call)."""
+        try:
+            from System.Windows.Controls import ComboBox
+            source = e.OriginalSource
+            if not isinstance(source, ComboBox):
+                return              # the DataGrid's own row selection
+            e.Handled = True
+            if self._is_busy:
+                return
+            row = source.DataContext
+            if not hasattr(row, 'stage'):
+                return
+            picked = source.SelectedItem
+            if picked is None:
+                return
+            workset = self._workset_by_name(str(picked))
+            if workset is None:
+                return
+            # Rebuilding the grid re-selects every combo's shown value; stage()
+            # treats that as "no change", so only a real pick repaints.
+            if row.stage(workset.workset_id, workset.name):
+                _wsstate.clear_results(self._ws_link_rows)
+                self._repaint_ws_later()
+        except Exception as ex:
+            self._set_status("Could not stage the workset change: {}".format(
+                str(ex).split("\n")[0][:80]))
 
     def _apply_worksets(self):
-        """Move every checked link onto the chosen workset of the host model."""
+        """Write every pending workset change in ONE transaction."""
         if not self._ws_workshared:
             self._set_status("This project is not workshared — there are no worksets to move links onto.")
             return
 
-        target = self._selected_workset()
-        if target is None:
-            self._set_status("Pick the workset the links should move onto.")
-            return
-
-        rows = [r for r in self._ws_link_rows if r.IsSelected and r.IsEnabled]
+        rows = _wsstate.pending_rows(self._ws_link_rows)
         if not rows:
-            self._set_status("Check at least one link to move.")
+            self._set_status("Nothing to apply — change a WORKSET cell or use Set for checked first.")
             return
 
         include_type = bool(self.chk_ws_include_type.IsChecked)
-        total = len(rows)
-        moved = 0
-        already = 0
-        failed = 0
-
         doc = self.doc
+        _wsstate.clear_results(self._ws_link_rows)
+        _wsstate.snapshot_before(self._ws_link_rows)
 
         def move_one(row):
             # One SubTransaction per link: a link that fails half-way (second
@@ -700,73 +840,65 @@ class BatchLinkDialog(T3WPFWindow):
             with disposing(SubTransaction(doc)) as sub:
                 sub.Start()
                 ok, message = _links.set_link_workset(
-                    doc, row.record, target.workset_id, include_type)
+                    doc, row.record, row.pending_id, include_type)
                 if ok:
                     sub.Commit()
                 else:
                     sub.RollBack()
                 return ok, message
 
-        self._begin_busy("Moving links to {}".format(target.name))
-        transaction = Transaction(self.doc, "Batch Link — link workset")
-        done = []
+        def step(row, index, total):
+            self._step_busy("Moving links", row.LinkName, index, total)
+
+        self._begin_busy("Moving links")
         try:
-            transaction.Start()
-            for index, row in enumerate(rows, 1):
-                self._step_busy("Moving links", row.LinkName, index, total)
-                ok, message = move_one(row)
-                done.append(row)
-                if not ok:
-                    failed += 1
-                    row.StatusText = (message or "Failed")[:26]
-                    row.Severity = "Danger"
-                elif message == "Already there":
-                    already += 1
-                    row.StatusText = "Already there"
-                    row.Severity = "Success"
+            with disposing(Transaction(doc, "Batch Link — link workset")) as transaction:
+                transaction.Start()
+                moved, already, failed = _wsstate.apply_pending(
+                    self._ws_link_rows, move_one, step)
+                if moved == 0:
+                    # Nothing changed in the model: leave no empty undo step.
+                    transaction.RollBack()
                 else:
-                    moved += 1
-                    row.StatusText = "Moved"
-                    row.Severity = "Success"
-                self._do_events()
-            if moved == 0:
-                # Nothing changed in the model: leave no empty undo step.
-                transaction.RollBack()
-            else:
-                status = transaction.Commit()
-                if status != TransactionStatus.Committed:
-                    raise RuntimeError("Revit did not commit the change ({})".format(status))
+                    status = transaction.Commit()
+                    if status != TransactionStatus.Committed:
+                        raise RuntimeError("Revit did not commit the change ({})".format(status))
         except Exception as ex:
-            if transaction.HasStarted() and not transaction.HasEnded():
-                transaction.RollBack()
-            # Nothing was written: the pills must not still say "Moved".
-            for row in done:
-                if row.Severity == "Success":
-                    row.StatusText = "Rolled back"
-                    row.Severity = "Danger"
-            self.grid_ws_links.ItemsSource = to_items_source(self._ws_filtered)
-            self._end_busy("Nothing was moved — the change was rolled back: {}".format(
-                str(ex).split("\n")[0][:60]))
+            reason = str(ex).split("\n")[0][:80]
+            _wsstate.rollback_all(self._ws_link_rows, "Rolled back: " + reason)
+            self._end_busy("Nothing was moved — the change was rolled back: {}".format(reason))
+            self._repaint_ws()
+            self._set_status("Nothing was moved — the change was rolled back: {}".format(reason))
             return
 
-        self._refresh_ws_rows()
-        self._end_busy(
-            "{} link{} moved to {} · {} already there · {} failed".format(
-                moved, "" if moved == 1 else "s", target.name, already, failed))
-
-    def _refresh_ws_rows(self):
-        """Re-read the workset of every link, keeping the result pills as they are."""
+        # Re-read where every link really is now.
         for row in self._ws_link_rows:
             label, ws_id = _links.link_host_workset(row.record)
-            row.current_label = label
-            row.current_id = ws_id
-            row.set_target("")
-            row.IsSelected = False
-        self.grid_ws_links.ItemsSource = to_items_source(self._ws_filtered)
-        movable = sum(1 for r in self._ws_link_rows if r.IsEnabled)
-        self.lbl_ws_link_count.Text = "{} links · {} can move · 0 checked".format(
-            len(self._ws_link_rows), movable)
-        self._sync_header_checkbox(self.chk_ws_links_header, self._ws_filtered)
+            row.set_current(label, ws_id)
+
+        summary = _wsstate.summary_text(moved, already, failed)
+        if failed:
+            summary += " — hover a red cell for the reason; Apply retries it."
+        self._end_busy(summary)
+        self._repaint_ws()
+        # _repaint_ws writes the generic hint; the result matters more here.
+        self._set_status(summary)
+
+    def _confirm_discard_ws(self, action_text, ok_text):
+        """P5 confirm before throwing pending workset changes away."""
+        count = self._ws_pending_count()
+        if not count:
+            return True
+        return bool(t3_confirm(
+            "Discard {} unapplied workset change{} and {}?".format(
+                count, "" if count == 1 else "s", action_text),
+            title="Unapplied changes",
+            ok_text=ok_text,
+            cancel_text="Keep editing",
+            danger=True,
+            details="The yellow WORKSET cells have not been written to the model yet. "
+                    "Press Apply to keep them.",
+            owner=self))
 
     # ── TAB 3: VIEW DISPLAY ──────────────────────────────────────────────────
 
@@ -1025,6 +1157,131 @@ class BatchLinkDialog(T3WPFWindow):
                     row.linked_view_name = ""
         self.grid_disp_links.ItemsSource = to_items_source(self._disp_filtered)
 
+    # ── TAB 0: MANAGE LINKS ──────────────────────────────────────────────────
+    # Reload / Reload From / Unload chạy KHÔNG có transaction (luật của Revit,
+    # xoá lịch sử Undo như hộp thoại Manage Links gốc). Pin / Overlay-Attachment
+    # / Remove chạy trong MỘT Transaction = một lần Ctrl+Z.
+
+    def _load_manage_rows(self, results=None):
+        """Re-read every link; `results` maps type id → (text, severity) so the
+        STATUS pill shows what the last action did until the next Refresh."""
+        results = results or {}
+        self._mng_rows = [
+            LinkManageRow(rec, results.get(_links.eid_int(rec.type_id)))
+            for rec in _links.collect_links(self.doc)]
+        self._apply_mng_filter()
+
+    def _apply_mng_filter(self):
+        query = self.tb_mng_filter.Text.strip().lower()
+        if not query:
+            self._mng_filtered = list(self._mng_rows)
+        else:
+            self._mng_filtered = [r for r in self._mng_rows if query in r.LinkName.lower()]
+        self.grid_mng_links.ItemsSource = to_items_source(self._mng_filtered)
+
+        if not self._mng_rows:
+            empty = "No Revit links in this project.\nLink models on the Link Models tab."
+        elif query:
+            empty = "No link matches \u201c{}\u201d.".format(query)
+        else:
+            empty = ""
+        self.txt_mng_empty.Text = empty
+        self.txt_mng_empty.Visibility = (
+            Visibility.Collapsed if self._mng_filtered else Visibility.Visible)
+        self._update_mng_tally()
+
+    def _update_mng_tally(self):
+        self.lbl_mng_count.Text = manage_tally(self._mng_rows)
+        focus = self.grid_mng_links.SelectedItem
+        path = getattr(getattr(focus, 'record', None), 'path', "") if focus is not None else ""
+        self.lbl_mng_path.Text = u"Path: {}".format(path) if path else ""
+        self.lbl_mng_path.ToolTip = path or None
+        self._sync_header_checkbox(self.chk_mng_header, self._mng_filtered)
+        if self._active_tab == TAB_MANAGE and not self._is_busy:
+            self._set_status(self._mng_status_text())
+        self._sync_primary()
+
+    def _mng_status_text(self):
+        if not self._mng_rows:
+            return "No links yet — link models on the Link Models tab."
+        checked = sum(1 for r in self._mng_rows if r.IsSelected)
+        if checked:
+            return "{} link{} checked — Reload, or pick an action below.".format(
+                checked, "" if checked == 1 else "s")
+        if self.grid_mng_links.SelectedItem is not None:
+            return "Highlighted link ready — Reload, or pick an action below."
+        return "Check links (or highlight one), then Reload or pick an action below."
+
+    def _mng_targets(self):
+        """Checked links; with none checked, the highlighted row."""
+        checked = [r for r in self._mng_rows if r.IsSelected and r.IsEnabled]
+        if checked:
+            return checked
+        focus = self.grid_mng_links.SelectedItem
+        if focus is not None and getattr(focus, 'record', None) is not None:
+            return [focus]
+        return []
+
+    def _mng_run(self, label, rows, action, transaction_name=None):
+        """Run action(row) -> (ok, message) on each row, then re-read the links.
+
+        With `transaction_name` everything happens in ONE transaction (one
+        Ctrl+Z) and a failure rolls it all back; without it (reload / unload
+        must run outside any transaction) each link stands on its own.
+        """
+        results = {}
+        done = failed = 0
+        total = len(rows)
+
+        def run_rows():
+            count_ok = count_bad = 0
+            for index, row in enumerate(rows, 1):
+                self._step_busy(label, row.LinkName, index, total)
+                try:
+                    ok, message = action(row)
+                except Exception as ex:
+                    ok, message = False, str(ex).split("\n")[0]
+                key = _links.eid_int(row.record.type_id)
+                results[key] = (message[:24], "Success" if ok else "Danger")
+                if ok:
+                    count_ok += 1
+                else:
+                    count_bad += 1
+            return count_ok, count_bad
+
+        self._begin_busy(label)
+        try:
+            if transaction_name:
+                with disposing(Transaction(self.doc, transaction_name)) as transaction:
+                    transaction.Start()
+                    done, failed = run_rows()
+                    if done:
+                        status = transaction.Commit()
+                        if status != TransactionStatus.Committed:
+                            raise RuntimeError("Revit did not commit the change ({})".format(status))
+                    else:
+                        transaction.RollBack()
+            else:
+                done, failed = run_rows()
+        except Exception as ex:
+            reason = str(ex).split("\n")[0][:80]
+            self._load_manage_rows()
+            self._end_busy("{} stopped — {}".format(label, reason))
+            return
+        self._load_manage_rows(results)
+        summary = "{}: {} link{} done".format(label, done, "" if done == 1 else "s")
+        if failed:
+            summary += ", {} failed — the STATUS column says why".format(failed)
+        self._end_busy(summary + ".")
+
+    def _mng_reload(self):
+        rows = self._mng_targets()
+        if not rows:
+            self._set_status("Check the links to reload (or highlight one) first.")
+            return
+        self._mng_run("Reloading links", rows,
+                      lambda row: _links.reload_link(row.record.link_type))
+
     # ── TAB 1: LINKING ───────────────────────────────────────────────────────
 
     def _link_models(self):
@@ -1104,9 +1361,18 @@ class BatchLinkDialog(T3WPFWindow):
                                     instance.Pinned = True
                                 except Exception:
                                     pass
+                            ws_note = ""
+                            ws_id = self._link_workset_for(item.FileName)
+                            if instance and ws_id >= 0:
+                                for element in (instance, link_type):
+                                    ok, message = _links.set_element_workset(
+                                        self.doc, element, ws_id)
+                                    if not ok:
+                                        ws_note = message
+                                        break
                             t.Commit()
-                            item.StatusText = "Linked"
-                            item.Severity = "Success"
+                            item.StatusText = ("Linked · workset: " + ws_note)[:24] if ws_note else "Linked"
+                            item.Severity = "Warning" if ws_note else "Success"
                             success_count += 1
                             existing_paths.add(norm_path)
                             existing_names.add(clean_name)
@@ -1165,8 +1431,13 @@ class BatchLinkDialog(T3WPFWindow):
     def close_button_clicked(self, sender, e):
         self.Close()
 
-    def cancel_button_clicked(self, sender, e):
-        self.Close()
+    def _on_closing(self, sender, args):
+        """Never close mid-write, and never drop pending workset changes silently."""
+        if self._is_busy:
+            args.Cancel = True
+            return
+        if not self._confirm_discard_ws("close Batch Link", "Discard and close"):
+            args.Cancel = True
 
     # ── EVENT HANDLERS: TABS ─────────────────────────────────────────────────
 
@@ -1181,12 +1452,19 @@ class BatchLinkDialog(T3WPFWindow):
 
         self._active_tab = index
         self.tab_control.SelectedIndex = index
-        self.btn_primary.Content = PRIMARY_LABELS.get(index, "Apply")
+        self._sync_primary()
 
-        if index == TAB_LINK:
+        if index == TAB_MANAGE:
+            self._load_manage_rows()
+        elif index == TAB_LINK:
             self._update_counts()
         elif index == TAB_WORKSETS:
-            self._load_link_worksets()
+            # Coming back with staged changes keeps them; otherwise re-read so
+            # links added on the Link Models tab show up.
+            if self._ws_pending_count():
+                self._apply_ws_filter()
+            else:
+                self._load_link_worksets()
         elif index == TAB_DISPLAY:
             self._load_display_rows()
 
@@ -1196,12 +1474,150 @@ class BatchLinkDialog(T3WPFWindow):
         if not self.doc:
             self._set_status("No active Revit document found.")
             return
-        if self._active_tab == TAB_LINK:
+        if self._active_tab == TAB_MANAGE:
+            self._mng_reload()
+        elif self._active_tab == TAB_LINK:
             self._link_models()
         elif self._active_tab == TAB_WORKSETS:
             self._apply_worksets()
         elif self._active_tab == TAB_DISPLAY:
             self._apply_display()
+
+    # ── EVENT HANDLERS: TAB 0 ────────────────────────────────────────────────
+
+    def mng_filter_changed(self, sender, e):
+        self._apply_mng_filter()
+
+    def mng_refresh_clicked(self, sender, e):
+        if not self._is_busy:
+            self._load_manage_rows()
+
+    def mng_invert_clicked(self, sender, e):
+        for row in self._mng_filtered:
+            if row.IsEnabled:
+                row.IsSelected = not row.IsSelected
+        self.grid_mng_links.ItemsSource = to_items_source(self._mng_filtered)
+        self._update_mng_tally()
+
+    def mng_header_clicked(self, sender, e):
+        check_val = bool(self.chk_mng_header.IsChecked)
+        for row in self._mng_filtered:
+            if row.IsEnabled:
+                row.IsSelected = check_val
+        self.grid_mng_links.ItemsSource = to_items_source(self._mng_filtered)
+        self._update_mng_tally()
+
+    def mng_checkbox_clicked(self, sender, e):
+        self._update_mng_tally()
+
+    def mng_selection_changed(self, sender, e):
+        self._update_mng_tally()
+
+    def mng_reload_from_clicked(self, sender, e):
+        if self._is_busy:
+            return
+        rows = self._mng_targets()
+        if len(rows) != 1:
+            self._set_status("Reload From works on one link at a time — check or highlight just one.")
+            return
+        row = rows[0]
+        dlg = OpenFileDialog()
+        dlg.Title = "Reload \u201c{}\u201d from".format(row.LinkName)
+        dlg.Filter = "Revit project (*.rvt)|*.rvt"
+        folder = os.path.dirname(row.record.path or "")
+        if folder and os.path.isdir(folder):
+            dlg.InitialDirectory = folder
+        if _show_dialog_owned(self, dlg) != DialogResult.OK:
+            return
+        path = dlg.FileName
+        self._mng_run("Reloading from a new path", rows,
+                      lambda r: _links.reload_link_from(r.record.link_type, path))
+
+    def mng_unload_clicked(self, sender, e):
+        if self._is_busy:
+            return
+        rows = self._mng_targets()
+        if not rows:
+            self._set_status("Check the links to unload (or highlight one) first.")
+            return
+        n = len(rows)
+        noun = "link" if n == 1 else "links"
+        if not t3_confirm("Unload {} {} for everyone?".format(n, noun),
+                          title="Unload Links",
+                          ok_text="Unload {} {}".format(n, noun.capitalize()),
+                          details="The links stay in this model and come back with Reload. "
+                                  "Revit clears the undo history when links are unloaded.\n\n"
+                                  + "\n".join("  " + r.LinkName for r in rows[:12])
+                                  + ("\n  ..." if n > 12 else ""),
+                          owner=self):
+            return
+        self._mng_run("Unloading links", rows,
+                      lambda r: _links.unload_link(r.record.link_type))
+
+    def mng_pin_clicked(self, sender, e):
+        self._mng_pin(True)
+
+    def mng_unpin_clicked(self, sender, e):
+        self._mng_pin(False)
+
+    def _mng_pin(self, pinned):
+        if self._is_busy:
+            return
+        rows = self._mng_targets()
+        if not rows:
+            self._set_status("Check the links to {} (or highlight one) first.".format(
+                "pin" if pinned else "unpin"))
+            return
+        self._mng_run("Pinning links" if pinned else "Unpinning links", rows,
+                      lambda r: _links.set_link_pinned(r.record, pinned),
+                      transaction_name="Batch Link — {} links".format("pin" if pinned else "unpin"))
+
+    def mng_overlay_clicked(self, sender, e):
+        self._mng_attachment(True)
+
+    def mng_attachment_clicked(self, sender, e):
+        self._mng_attachment(False)
+
+    def _mng_attachment(self, overlay):
+        if self._is_busy:
+            return
+        rows = self._mng_targets()
+        label = "Overlay" if overlay else "Attachment"
+        if not rows:
+            self._set_status("Check the links to set to {} (or highlight one) first.".format(label))
+            return
+        self._mng_run("Setting " + label, rows,
+                      lambda r: _links.set_link_attachment(r.record.link_type, overlay),
+                      transaction_name="Batch Link — set links to " + label)
+
+    def mng_remove_clicked(self, sender, e):
+        if self._is_busy:
+            return
+        rows = self._mng_targets()
+        if not rows:
+            self._set_status("Check the links to remove (or highlight one) first.")
+            return
+        n = len(rows)
+        placed = sum(r.record.instance_count for r in rows)
+        noun = "link" if n == 1 else "links"
+        if not t3_confirm("Remove {} {} from this model?".format(n, noun),
+                          title="Remove Links",
+                          ok_text="Remove {} {}".format(n, noun.capitalize()),
+                          danger=True,
+                          details="Deletes the link types and their {} placed instance{}, with "
+                                  "their view overrides. One Ctrl+Z brings them back.\n\n".format(
+                                      placed, "" if placed == 1 else "s")
+                                  + "\n".join("  " + r.LinkName for r in rows[:12])
+                                  + ("\n  ..." if n > 12 else ""),
+                          owner=self):
+            return
+        if not self._confirm_discard_ws("remove links", "Discard and remove"):
+            return
+        self._mng_run("Removing links", rows,
+                      lambda r: _links.remove_link(self.doc, r.record),
+                      transaction_name="Batch Link — remove links")
+        if self._ws_link_rows:
+            self._load_link_worksets()
 
     # ── EVENT HANDLERS: TAB 1 ────────────────────────────────────────────────
 
@@ -1229,19 +1645,11 @@ class BatchLinkDialog(T3WPFWindow):
     def filter_text_changed(self, sender, e):
         self._apply_filter()
 
-    def select_all_clicked(self, sender, e):
-        for f in self._filtered_files:
-            if f.IsEnabled:
-                f.IsSelected = True
-        self._refresh_grid()
-        self._update_counts()
+    def rescan_clicked(self, sender, e):
+        self._scan_folder()
 
-    def select_none_clicked(self, sender, e):
-        for f in self._filtered_files:
-            if f.IsEnabled:
-                f.IsSelected = False
-        self._refresh_grid()
-        self._update_counts()
+    def link_workset_changed(self, sender, e):
+        self._sync_link_ws_prefix()
 
     def invert_selection_clicked(self, sender, e):
         for f in self._filtered_files:
@@ -1264,21 +1672,14 @@ class BatchLinkDialog(T3WPFWindow):
     # ── EVENT HANDLERS: TAB 2 ────────────────────────────────────────────────
 
     def reload_links_clicked(self, sender, e):
+        if self._is_busy:
+            return
+        if not self._confirm_discard_ws("reload the links from the model",
+                                        "Discard and refresh"):
+            return
         self._load_link_worksets()
 
     def ws_filter_changed(self, sender, e):
-        self._apply_ws_filter()
-
-    def ws_select_all_clicked(self, sender, e):
-        for row in self._ws_filtered:
-            if row.IsEnabled:
-                row.IsSelected = True
-        self._apply_ws_filter()
-
-    def ws_select_none_clicked(self, sender, e):
-        for row in self._ws_filtered:
-            if row.IsEnabled:
-                row.IsSelected = False
         self._apply_ws_filter()
 
     def ws_invert_clicked(self, sender, e):
@@ -1295,17 +1696,46 @@ class BatchLinkDialog(T3WPFWindow):
         self._apply_ws_filter()
 
     def ws_link_checkbox_clicked(self, sender, e):
-        self._apply_ws_filter()
+        self._update_ws_tally()
 
-    def ws_target_changed(self, sender, e):
-        if self._suspend_ws_target:
+    def ws_stage_checked_clicked(self, sender, e):
+        """Bulk editor: stage the picked workset on every checked link (no write)."""
+        if self._is_busy:
             return
-        self._apply_ws_filter()
+        target = self._selected_workset()
+        if target is None:
+            self._set_status("Pick the workset the checked links should move to.")
+            return
+        if not any(r.IsSelected and r.IsEnabled for r in self._ws_link_rows):
+            self._set_status("Check at least one link first, then press Set for checked.")
+            return
+        _wsstate.clear_results(self._ws_link_rows)
+        staged, unchanged = _wsstate.stage_checked(
+            self._ws_link_rows, target.workset_id, target.name)
+        self._repaint_ws()
+        message = "{} link{} staged for {} — press Apply to move {}.".format(
+            staged, "" if staged == 1 else "s", target.name,
+            "it" if staged == 1 else "them")
+        if unchanged:
+            message += " {} already on it.".format(unchanged)
+        self._set_status(message)
 
     # ── EVENT HANDLERS: TAB 3 ────────────────────────────────────────────────
 
     def disp_filter_changed(self, sender, e):
         self._apply_disp_filter()
+
+    def disp_invert_clicked(self, sender, e):
+        for row in self._disp_filtered:
+            if row.IsEnabled:
+                row.IsSelected = not row.IsSelected
+        self.grid_disp_links.ItemsSource = to_items_source(self._disp_filtered)
+        self._sync_header_checkbox(self.chk_disp_header, self._disp_filtered)
+        self._update_disp_status()
+
+    def disp_refresh_clicked(self, sender, e):
+        if not self._is_busy:
+            self._load_display_rows()
 
     def disp_link_selection_changed(self, sender, e):
         row = self.grid_disp_links.SelectedItem

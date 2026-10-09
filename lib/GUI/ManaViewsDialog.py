@@ -91,13 +91,6 @@ except Exception:
 GUI_DIR = os.path.dirname(__file__)
 XAML_FILE = os.path.join(GUI_DIR, 'Tools', 'ManaViews.xaml')
 
-try:
-    from GUI import RevitTheme as _theme
-except Exception:
-    try:
-        import RevitTheme as _theme
-    except Exception:
-        _theme = None
 
 from GUI.ProgressPauseMixin import ProgressPauseMixin
 from GUI.DataGridColumnFilter import ColumnFilterController
@@ -231,18 +224,11 @@ class ViewManagerWindow(T3WPFWindow):
     PP_STATUS     = "txt_status_bar"
     PP_STOP_MSG   = u"Stopping… finishing current view"
 
-    # Excel round trip: one column per VIEW_EDIT_FIELDS entry, after "Element ID".
-    _VIEW_EXCEL_COLUMNS = (("name", "View Name"), ("view_template", "View Template"),
-                           ("scale", "Scale"), ("detail_level", "Detail Level"),
-                           ("title_on_sheet", "Title on Sheet"))
-
     def __init__(self):
         T3WPFWindow.__init__(self, XAML_FILE)
         self.doc = revit.doc
         self.uidoc = revit.uidoc
 
-        self._adopt_host_font()
-        self._apply_theme()
         
         # Data collections
         self.all_views = []
@@ -279,7 +265,6 @@ class ViewManagerWindow(T3WPFWindow):
         self.views_rename_btn.Click += self._on_views_batch_rename
         self.views_dup_btn.Click += self._on_views_duplicate
         self.views_del_btn.Click += self._on_views_delete
-        self.views_close_btn.Click += self._on_close
         
         self.views_apply_btn.Click += self._on_views_apply
         self.views_grid.SelectionChanged += self._on_views_selection_changed
@@ -299,7 +284,6 @@ class ViewManagerWindow(T3WPFWindow):
         self.tmpl_batch_btn.Click += self._on_tmpl_batch_rename
         self.tmpl_dup_btn.Click += self._on_tmpl_duplicate
         self.tmpl_del_btn.Click += self._on_tmpl_delete
-        self.tmpl_close_btn.Click += self._on_close
         
         self.tmpl_apply_btn.Click += self._on_tmpl_apply
         self.tmpl_grid.SelectionChanged += self._on_tmpl_selection_changed
@@ -406,26 +390,6 @@ class ViewManagerWindow(T3WPFWindow):
         except Exception:
             pass
 
-    def _adopt_host_font(self):
-        if _theme is None:
-            return
-        family, size = _theme.host_font()
-        if family:
-            try:
-                self.FontFamily = family
-                if size and size > 0:
-                    self.FontSize = size
-            except Exception:
-                pass
-
-    def _apply_theme(self, theme=None):
-        if _theme is None:
-            return
-        try:
-            _theme.apply(self, theme)
-        except Exception:
-            pass
-
     # ── Chrome Event Handlers ────────────────────────────────────
     def _minimize(self, sender, e):
         self.WindowState = WindowState.Minimized
@@ -441,9 +405,6 @@ class ViewManagerWindow(T3WPFWindow):
     def _close_chrome(self, sender, e):
         self.Close()
         
-    def _on_close(self, sender, args):
-        self.Close()
-
     def _on_tab_changed(self, sender, e):
         """Toggle active Tab based on RadioButton selection"""
         if not hasattr(self, 'tab_control'):
@@ -668,59 +629,6 @@ class ViewManagerWindow(T3WPFWindow):
             except Exception:
                 pass
 
-    def _excel_view_updates(self, headers, rows):
-        """Turn read_xlsx's (headers, rows) into [(view id, {field: text})].
-
-        Columns are matched by header, case-insensitively, against the labels
-        the export writes or the field names themselves; unknown columns are
-        ignored. The id is None when a row's Element ID is not a number, so the
-        caller counts it as unmatched. Returns (updates, has_id_column).
-        """
-        def norm(text):
-            return " ".join(str(text or "").replace("_", " ").lower().split())
-
-        lookup = {}
-        for field, label in self._VIEW_EXCEL_COLUMNS:
-            lookup[norm(field)] = field
-            lookup[norm(label)] = field
-        id_col = None
-        columns = {}
-        for index, header in enumerate(headers or []):
-            key = norm(header)
-            if key in ("element id", "elementid", "view id", "id"):
-                if id_col is None:
-                    id_col = index
-            elif key in lookup and lookup[key] not in columns.values():
-                columns[index] = lookup[key]
-        if id_col is None:
-            return [], False
-
-        def text(value):
-            if value is None:
-                return u""
-            if isinstance(value, float) and value == int(value):
-                value = int(value)
-            return value if isinstance(value, str) else str(value)
-
-        updates = []
-        for row in rows or []:
-            raw_id = str(row[id_col] if id_col < len(row) else "").strip()
-            try:
-                view_id = int(raw_id)
-            except ValueError:
-                try:
-                    view_id = int(float(raw_id))
-                except (ValueError, OverflowError):
-                    view_id = None
-            data = {}
-            for index, field in columns.items():
-                value = text(row[index] if index < len(row) else None)
-                if field == "name" and not value.strip():
-                    continue            # an empty name can never be applied
-                data[field] = value
-            updates.append((view_id, data))
-        return updates, True
-
     def _on_views_excel(self, sender, args):
         if not self._flush_edits():
             return
@@ -739,14 +647,8 @@ class ViewManagerWindow(T3WPFWindow):
             if sfd.ShowDialog() == DialogResult.OK:
                 try:
                     views_list = list(self.filtered_views)
-                    headers = ["Element ID"] + [label for _, label in self._VIEW_EXCEL_COLUMNS]
-                    rows = [[_eid_int(item.id)] +
-                            [getattr(item, field, "") for field, _ in self._VIEW_EXCEL_COLUMNS]
-                            for item in views_list]
-                    write_xlsx(sfd.FileName, headers, rows)
-                    MessageBox.Show("Exported {} view{} to:\n{}".format(
-                        len(rows), "" if len(rows) == 1 else "s", sfd.FileName),
-                        "Export Successful")
+                    write_xlsx(sfd.FileName, views_list)
+                    MessageBox.Show("Successfully exported views data to Excel.", "Export Successful")
                 except Exception as ex:
                     MessageBox.Show("Error exporting: {}".format(str(ex)), "Error")
                     
@@ -756,22 +658,15 @@ class ViewManagerWindow(T3WPFWindow):
             ofd.Filter = "Excel Files (*.xlsx)|*.xlsx"
             if ofd.ShowDialog() == DialogResult.OK:
                 try:
-                    headers, rows = read_xlsx(ofd.FileName)
-                    updates, has_id = self._excel_view_updates(headers, rows)
-                    if not has_id:
-                        MessageBox.Show(
-                            "The workbook has no 'Element ID' column, so its rows cannot be "
-                            "matched to views.\nExport from View Manager first, edit that "
-                            "file and import it again.", "Import Excel")
-                        return
+                    updates = read_xlsx(ofd.FileName)
                     if not updates:
                         MessageBox.Show("No valid updates found in Excel file.", "Import Excel")
                         return
-
+                    
                     by_id = {_eid_int(item.id): item for item in self.all_views}
                     staged = missing = 0
-                    for view_id, data in updates:
-                        item = by_id.get(view_id)
+                    for view_id, data in updates.items():
+                        item = by_id.get(int(view_id))
                         if item is None:
                             missing += 1
                             continue

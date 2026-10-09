@@ -25,13 +25,6 @@ except Exception:
         except Exception:
             _WPFWindow = object
 
-try:
-    from GUI import RevitTheme as _theme
-except Exception:
-    try:
-        import RevitTheme as _theme
-    except Exception:
-        _theme = None
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'T3Dialog.xaml')
 
@@ -57,8 +50,6 @@ class T3Dialog(_WPFWindow):
             except Exception:
                 pass
 
-        self._adopt_host_font()
-        self._apply_theme()
 
         # Wire Title and Texts
         if hasattr(self, 'dlg_title') and self.dlg_title:
@@ -84,26 +75,6 @@ class T3Dialog(_WPFWindow):
         if hasattr(self, 'btn_close_chrome') and self.btn_close_chrome:
             self.btn_close_chrome.Click += self._on_cancel
 
-    def _adopt_host_font(self):
-        if _theme is None:
-            return
-        try:
-            family, size = _theme.host_font()
-            if family:
-                self.FontFamily = family
-                if size and size > 0:
-                    self.FontSize = size
-        except Exception:
-            pass
-
-    def _apply_theme(self, theme=None):
-        if _theme is None:
-            return
-        try:
-            _theme.apply(self, theme)
-        except Exception:
-            pass
-
     def _configure_appearance(self, mode, ok_text, cancel_text, danger):
         # Configure buttons
         if hasattr(self, 'btn_ok') and self.btn_ok:
@@ -121,24 +92,22 @@ class T3Dialog(_WPFWindow):
                 self.btn_cancel.Visibility = _Visibility.Collapsed
 
         # Configure Icon Glyph and Color
-        # Glyph codes from Segoe MDL2 Assets:
-        # Info:  (Info) or  (CheckMark)
-        # Warning:  (Warning)
-        # Danger/Error:  (ErrorBadge) or  (Cancel)
-        glyph = u""
+        # Segoe MDL2 glyphs from the T3 table (T3LAB_UI_STANDARD.md, section Icon):
+        # E946 Info · E7BA Warning · E783 Error
+        glyph = u"\uE946"
         fill_res = "T3.Success.Fill"
         fg_res = "T3.Success.Text"
 
         if mode == self.MODE_WARNING:
-            glyph = u""
+            glyph = u"\uE7BA"
             fill_res = "T3.Warning.Fill"
             fg_res = "T3.Warning.Text"
         elif mode == self.MODE_ERROR or danger:
-            glyph = u""
+            glyph = u"\uE783"
             fill_res = "T3.Danger.Fill"
             fg_res = "T3.Danger.Text"
         elif mode == self.MODE_CONFIRM:
-            glyph = u"" if danger else u""
+            glyph = u"\uE7BA" if danger else u"\uE946"
             fill_res = "T3.Warning.Fill" if danger else "T3.SurfaceSunken"
             fg_res = "T3.Warning.Text" if danger else "T3.Text"
 

@@ -89,9 +89,10 @@ class GroupRow(object):
         self.record = record
         self._new_name = record.name
         self._manual = False
-        # Plain attribute, not a property: the amber DataTrigger in the XAML
-        # binds straight to it, and GroupRow carries no INotifyPropertyChanged,
-        # so it is only re-read when the grid is refreshed.
+        # Plain attribute, not a property: the amber CellStyle in the XAML
+        # reads it through the cell string bridge (AutomationProperties.
+        # ItemStatus), and GroupRow carries no INotifyPropertyChanged, so it is
+        # only re-read when the grid is refreshed.
         self.dirty_NewName = False
         self._status_text = status_text
         self._severity = severity
@@ -489,7 +490,6 @@ class ManaGroupDialog(T3WPFWindow):
         self.progress_bar.Value = 0
         self.pnl_progress.Visibility = Visibility.Visible
         self.btn_primary.IsEnabled = False
-        self.btn_cancel.IsEnabled = False
         self._do_events()
 
     def _step_busy(self, phase, index, total, label):
@@ -502,7 +502,6 @@ class ManaGroupDialog(T3WPFWindow):
         self._is_busy = False
         self.progress_bar.Value = 100
         self.btn_primary.IsEnabled = True
-        self.btn_cancel.IsEnabled = True
         self._set_status(summary)
         self._do_events()
 
@@ -827,7 +826,9 @@ class ManaGroupDialog(T3WPFWindow):
 
     # ── EVENT HANDLERS: WINDOW & TABS ────────────────────────────────────────
 
-    def cancel_button_clicked(self, sender, e):
+    def close_button_clicked(self, sender=None, e=None):
+        # The title-bar X (and Esc) is the only close control: it must not
+        # close the window under a running rename / workset / purge / ungroup.
         if self._is_busy:
             return
         self.Close()
@@ -986,7 +987,7 @@ class ManaGroupDialog(T3WPFWindow):
     def _refresh_rename_later(self):
         """Repaint the Rename grid once the cell has finished committing.
 
-        GroupRow carries no INotifyPropertyChanged, so the amber DataTrigger
+        GroupRow carries no INotifyPropertyChanged, so the amber cell style
         only re-reads `dirty_NewName` on a refresh — and refreshing while the
         cell is still committing throws "not allowed during an EditItem
         transaction".

@@ -797,7 +797,7 @@ class EditBindingDialog(Window):
         info_panel.Children.Add(info1)
         if not self.item.is_shared:
             warn = TextBlock()
-            warn.Text = u"⚠ Project parameters cannot change binding via API"
+            warn.Text = u"Project parameters cannot change binding via API"
             warn.Foreground = _hex_brush("#EF4444")
             warn.Margin = Thickness(0, 6, 0, 0)
             warn.TextWrapping = System.Windows.TextWrapping.Wrap
@@ -1174,7 +1174,7 @@ class ParameterAdder(object):
         """Create temp shared param file using TEMP env var (not script dir)."""
         self._original_sp_path = self.app.SharedParametersFilename
         temp_dir = os.environ.get('TEMP', os.path.dirname(__file__))
-        self._temp_sp_path = os.path.join(temp_dir, 'DQT_IFC_SG_SharedParams.txt')
+        self._temp_sp_path = os.path.join(temp_dir, 'T3Lab_IFC_SG_SharedParams.txt')
 
         if not os.path.exists(self._temp_sp_path):
             with open(self._temp_sp_path, 'w') as f:
@@ -1696,6 +1696,12 @@ class ManaParaWindow(T3WPFWindow):
         self.btn_param_export.Click += self._on_param_export
         self.btn_param_delete.Click += self._on_param_delete
 
+        # Tick hàng loạt: Shift+click, kéo tô, bôi đen + Space, menu chuột phải
+        # (GUI/bulk_tick.py). Bôi đen dòng cũng đổi trạng thái các nút Edit/Delete.
+        self.enable_bulk_tick(self.dg_parameters, "is_selected",
+                              on_change=self._update_param_selection_count)
+        self.dg_parameters.SelectionChanged += self._on_param_highlight_changed
+
         # State
         self._all_param_items = []
         self._all_groups = []
@@ -1956,6 +1962,9 @@ class ManaParaWindow(T3WPFWindow):
         except Exception:
             return []
 
+    def _on_param_highlight_changed(self, sender, e):
+        self._update_param_selection_count()
+
     def _update_param_selection_count(self):
         visible = self._visible_param_rows()
         ticked = sum(1 for r in visible if r.is_selected)
@@ -1964,6 +1973,27 @@ class ManaParaWindow(T3WPFWindow):
         except Exception:
             pass
         self.sync_header_checkbox(self.chk_all_dg_parameters, self.dg_parameters, "is_selected")
+        self._update_param_action_buttons(ticked)
+
+    def _update_param_action_buttons(self, ticked):
+        """Edit* làm việc trên dòng đang bôi đen; Delete trên dòng tick, không tick
+        thì trên dòng bôi đen (_params_to_delete) — nút nào không có đối tượng thì tắt."""
+        try:
+            highlighted = [r for r in self.dg_parameters.SelectedItems
+                           if isinstance(r, ParameterItem)]
+        except Exception:
+            highlighted = []
+        has_current = isinstance(self._get_selected_param(), ParameterItem)
+        for btn in (self.btn_param_edit_group, self.btn_param_edit_cats,
+                    self.btn_param_edit_binding):
+            try:
+                btn.IsEnabled = has_current
+            except Exception:
+                pass
+        try:
+            self.btn_param_delete.IsEnabled = bool(ticked or highlighted)
+        except Exception:
+            pass
 
     def _params_to_delete(self):
         """Dòng đã tick và đang hiển thị; không tick dòng nào thì lấy các dòng đang bôi đen.
@@ -2583,6 +2613,7 @@ class ManaParaWindow(T3WPFWindow):
 
         # Set up DataGrid columns via code-behind
         self._setup_loader_grid_columns()
+        self.enable_bulk_tick(self.dg_loader_params, "is_selected")
 
         # State
         self._loader_requirements = []

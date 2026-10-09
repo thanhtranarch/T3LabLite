@@ -30,6 +30,7 @@ from Autodesk.Revit.DB import (
     OverrideGraphicSettings,
     Color as RevitColor,
     FillPatternTarget,
+    LinkElementId
 )
 
 from pyrevit import forms, revit
@@ -76,29 +77,6 @@ def _eid_int(element_id):
 
 def _get_invalid_element_id():
     return ElementId.InvalidElementId
-
-
-def _unique_copy_name(name, taken):
-    """'Copy of <name>', then 'Copy of <name> (2)', ... not in `taken`.
-
-    `taken` holds lower-case names and gets the new one added.
-    """
-    candidate = "Copy of " + name
-    n = 2
-    while candidate.lower() in taken:
-        candidate = "Copy of {} ({})".format(name, n)
-        n += 1
-    taken.add(candidate.lower())
-    return candidate
-
-
-def _duplicate_result_text(success, failed, noun):
-    text = "Duplicated {} {}{}.".format(success, noun, "" if success == 1 else "s")
-    if failed:
-        text += ("\n{} could not be duplicated (Revit refused the copy, "
-                 "e.g. a solid fill or a built-in pattern).".format(failed))
-    return text
-
 
 def _make_double_collection(values):
     """Safely create a System.Windows.Media.DoubleCollection from an iterable of numbers in PythonNet."""
@@ -1061,6 +1039,33 @@ def apply_overrides(elements_by_value, color_map):
     return count
 
 
+def apply_overrides_linked(elements_by_value, color_map, link_instance):
+    """Same as apply_overrides, but elems live in a linked document — overrides
+    on a linked element are set on the HOST view via a LinkElementId pairing
+    the host RevitLinkInstance with the element's id inside the linked doc."""
+    active_view = doc.ActiveView
+    t = Transaction(doc, "T3Lab - Color Splasher (Linked)")
+    t.Start()
+    count = 0
+    solid = get_solid_fill()
+    try:
+        for val, elems in elements_by_value.items():
+            ogs = _build_override(val, color_map, solid)
+            if ogs is None: continue
+            for elem in elems:
+                try:
+                    link_eid = LinkElementId(link_instance.Id, elem.Id)
+                    active_view.SetElementOverrides(link_eid, ogs)
+                    count += 1
+                except:
+                    continue
+        t.Commit()
+    except Exception as ex:
+        if t.HasStarted(): t.RollBack()
+        print("Error applying linked overrides: {}".format(ex))
+    return count
+
+
 def clear_overrides():
     active_view = doc.ActiveView
     t = Transaction(doc, "T3Lab - Clear Color Overrides")
@@ -1198,10 +1203,11 @@ class ManaStylesWindow(T3WPFWindow):
         self.btnReset.Click += self._on_reset_clicked
         self.btnApply.Click += self._on_apply_clicked
         
-        # Chrome actions: T3WPFWindow._wire_window_controls already wires
-        # btn_minimize / btn_maximize / btn_close_chrome. Wiring them here too
-        # made one maximize click toggle twice (no visible change).
-
+        # Chrome actions
+        self.btn_minimize.Click += self._minimize
+        self.btn_maximize.Click += self._maximize
+        self.btn_close_chrome.Click += self._close_chrome
+        
         # Load style data and initialize splasher
         self._load_style_manager_data()
         self._init_color_splasher()
@@ -1547,27 +1553,12 @@ class ManaStylesWindow(T3WPFWindow):
     # ========================================================================
     # ACTIONS HANDLERS (LINE STYLES)
     # ========================================================================
-    def _refresh_rows(self, grid):
-        """Redraw a grid after Python changed its rows.
-
-        The rows are plain Python objects: WPF never hears their
-        PropertyChanged, so ticks set from code only show once the rows are
-        regenerated.
-        """
-        try:
-            grid.Items.Refresh()
-        except Exception:
-            pass        # a cell is being edited; it redraws on commit
-
     def _on_style_select_all(self, s, e):
         for item in self.filtered_line_styles: item.is_selected = True
-        self._refresh_rows(self.grid_style)
     def _on_style_clear_all(self, s, e):
         for item in self.line_styles: item.is_selected = False
-        self._refresh_rows(self.grid_style)
     def _on_style_select_custom(self, s, e):
         for item in self.filtered_line_styles: item.is_selected = not item.is_system
-        self._refresh_rows(self.grid_style)
 
     def _on_style_refresh(self, s, e):
         self._load_line_styles()
@@ -1651,13 +1642,10 @@ class ManaStylesWindow(T3WPFWindow):
     # ========================================================================
     def _on_pattern_select_all(self, s, e):
         for item in self.filtered_line_patterns: item.is_selected = True
-        self._refresh_rows(self.grid_pattern)
     def _on_pattern_clear_all(self, s, e):
         for item in self.line_patterns: item.is_selected = False
-        self._refresh_rows(self.grid_pattern)
     def _on_pattern_select_custom(self, s, e):
         for item in self.filtered_line_patterns: item.is_selected = not item.is_system
-        self._refresh_rows(self.grid_pattern)
 
     def _on_pattern_refresh(self, s, e):
         self._load_line_patterns()
@@ -1671,25 +1659,20 @@ class ManaStylesWindow(T3WPFWindow):
             MessageBox.Show("Please select at least one item to duplicate!", "Warning", MessageBoxButton.OK, MessageBoxImage.Warning)
             return
             
-        # LinePatternElement has no Duplicate(): copy its LinePattern under a
-        # new unique name and create a new element from it.
-        taken = set(i.name.lower() for i in self.line_patterns)
         t = Transaction(doc, "Duplicate Line Patterns")
         t.Start()
         try:
             success = 0
-            failed = 0
             for item in selected:
                 try:
-                    pattern = item.element.GetLinePattern()
-                    pattern.Name = _unique_copy_name(item.name, taken)
-                    LinePatternElement.Create(doc, pattern)
+                    new_name = "Copy of " + item.name
+                    item.element.Duplicate(new_name)
                     success += 1
-                except Exception:
-                    failed += 1
+                except:
+                    pass
             t.Commit()
             self._load_line_patterns()
-            MessageBox.Show(_duplicate_result_text(success, failed, "line pattern"), "Result", MessageBoxButton.OK, MessageBoxImage.Information)
+            MessageBox.Show("Duplicated {} line patterns!".format(success), "Result", MessageBoxButton.OK, MessageBoxImage.Information)
         except Exception as ex:
             t.RollBack()
             MessageBox.Show("Error: {}".format(str(ex)), "Error", MessageBoxButton.OK, MessageBoxImage.Error)
@@ -1732,13 +1715,10 @@ class ManaStylesWindow(T3WPFWindow):
     # ========================================================================
     def _on_fill_select_all(self, s, e):
         for item in self.filtered_fill_patterns: item.is_selected = True
-        self._refresh_rows(self.grid_fill)
     def _on_fill_clear_all(self, s, e):
         for item in self.fill_patterns: item.is_selected = False
-        self._refresh_rows(self.grid_fill)
     def _on_fill_select_custom(self, s, e):
         for item in self.filtered_fill_patterns: item.is_selected = not item.is_system
-        self._refresh_rows(self.grid_fill)
 
     def _on_fill_refresh(self, s, e):
         self._load_fill_patterns()
@@ -1752,25 +1732,20 @@ class ManaStylesWindow(T3WPFWindow):
             MessageBox.Show("Please select at least one item to duplicate!", "Warning", MessageBoxButton.OK, MessageBoxImage.Warning)
             return
             
-        # FillPatternElement has no Duplicate(): copy its FillPattern under a
-        # new unique name and create a new element from it.
-        taken = set(i.name.lower() for i in self.fill_patterns)
         t = Transaction(doc, "Duplicate Fill Patterns")
         t.Start()
         try:
             success = 0
-            failed = 0
             for item in selected:
                 try:
-                    pattern = item.element.GetFillPattern()
-                    pattern.Name = _unique_copy_name(item.name, taken)
-                    FillPatternElement.Create(doc, pattern)
+                    new_name = "Copy of " + item.name
+                    item.element.Duplicate(new_name)
                     success += 1
-                except Exception:
-                    failed += 1
+                except:
+                    pass
             t.Commit()
             self._load_fill_patterns()
-            MessageBox.Show(_duplicate_result_text(success, failed, "fill pattern"), "Result", MessageBoxButton.OK, MessageBoxImage.Information)
+            MessageBox.Show("Duplicated {} patterns!", "Result", MessageBoxButton.OK, MessageBoxImage.Information)
         except Exception as ex:
             t.RollBack()
             MessageBox.Show("Error: {}".format(str(ex)), "Error", MessageBoxButton.OK, MessageBoxImage.Error)
@@ -2334,21 +2309,14 @@ class ManaStylesWindow(T3WPFWindow):
             return
 
         if self.selected_link:
-            # View.SetElementOverrides only takes host-model ElementIds; there
-            # is no overload for a LinkElementId, so every element failed and
-            # Apply reported 0 coloured.
-            forms.alert(
-                "Apply Colors cannot colour elements of a linked model: Revit "
-                "only overrides elements of the host model one by one.\n\n"
-                "Use View Filters instead. They colour linked elements too when "
-                "the link's display setting is 'By host view'.",
-                title="Color Splasher")
-            return
-
-        count = apply_overrides(self.elements_by_value, self.color_map)
-        src = "model"
-        note = ""
-
+            count = apply_overrides_linked(self.elements_by_value, self.color_map, self.selected_link)
+            src = "linked"
+            note = "\n(Applied via LinkElementId overrides on the host view)"
+        else:
+            count = apply_overrides(self.elements_by_value, self.color_map)
+            src = "model"
+            note = ""
+            
         sel = self.lbParams.SelectedItem
         pn = str(sel) if sel else ""
         msg = "Applied overrides to {} {} elements".format(count, src)

@@ -8,8 +8,8 @@
         Title="Batch Link Models"
         Width="1080" Height="720" MinWidth="1000" MinHeight="660"
         WindowStartupLocation="CenterScreen"
-        WindowStyle="None" AllowsTransparency="False"
-        Background="{DynamicResource T3.Surface}"
+        WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent"
         FontFamily="Segoe UI"
         FontSize="13"
         TextOptions.TextFormattingMode="Display"
@@ -221,6 +221,12 @@
                Cách dùng — icon LUÔN là <TextBlock>, không bao giờ là Content của Button:
                  <TextBlock Text="&#xE721;" Style="{StaticResource T3.Icon.Field}"/>
 
+               Ô rail (T3.Rail.Tile) cũng vậy — glyph T3.Icon.Rail, KHÔNG tự vẽ <Path>:
+                 <RadioButton x:Name="nav_browse" Style="{StaticResource T3.Rail.Tile}"
+                              ToolTip="Browse Parameters" ...>
+                   <TextBlock Text="&#xE8FD;" Style="{StaticResource T3.Icon.Rail}"/>
+                 </RadioButton>
+
                Bảng glyph chuẩn (dùng đúng glyph này cho đúng khái niệm, toàn dự án):
                  E721 Search      E8BB Close      E921 Minimize   E922 Maximize
                  E768 Play        E769 Pause      E71A Stop       E72C Refresh
@@ -229,13 +235,30 @@
                  E70D ChevronDown E70E ChevronUp  E76B ChevronLeft E76C ChevronRight
                  E74E Save        E8E5 OpenFile   E774 Globe      E7A7 Undo
                  E8A3 Zoom        E7B3 Isolate    E7C9 Pick       E7C3 Document
-                 E896 Download    EA80 Insight
+                 E896 Download/Export  EA80 Insight  F140 Hide    E923 Restore
+                 E74A ArrowUp (move to top, north)  E74B ArrowDown (move to bottom)
+                 E9A6 Fit (zoom to fit)  EA3A Open (unresolved)  E707 Map  E753 PointCloud
+
+               Khái niệm trang — glyph của ô rail chọn theo VIỆC trang đó làm:
+                 E8FD List/inventory   E9D5 Audit/checklist  E945 Automation
+                 E8B5 Import/load      E8AB Swap/transfer    E71B Link
+                 E8C8 Duplicate        E8AC Rename/renumber  E9E9 Template/preset
+                 E70F Edit/override    E81C History/log      E8A1 Preview/mockup
+                 E8F1 Families         E81E Worksets         E90F Tools/bulk edit
+                 F158 3D view          E95E Model health     E8EF Aggregate
+                 E790 Colour           E943 Code/JSON        ED5E Dimension
+                 E8D2 Text             E727 Pattern          E8EC Classify/assign
+                 E80F Room             E809 Floor            E80A Ceiling
+                 ECA5 Wall             E825 Column           E933 Beam
+                 E7B7 Grid             EF90 Line             E95F MEP run
+                 (+ E713 Settings · E896 Export · E7BA Warning · E74D Delete/purge)
 
                Thêm glyph mới thì kiểm hai thứ (xem mục Icon của T3LAB_UI_STANDARD.md):
                  1. Không TRÔNG GIỐNG glyph đã có — E71E cũng là kính lúp y hệt E721
                     Search, nên Zoom phải là E8A3 (kính lúp có dấu +).
-                 2. Codepoint có thật trong font — glyph không tồn tại ra ô vuông tofu và
-                    audit_t3.py không bắt được, nó chỉ grep source.
+                 2. Codepoint có thật trong Segoe MDL2 Assets — glyph không tồn tại ra ô
+                    vuông tofu. audit_t3.py đối chiếu dev/icons/mdl2_codepoints.tsv
+                    (P1). ED1A Hide là glyph của Segoe Fluent Icons, KHÔNG có trong MDL2.
           -->
 
           <!-- Icon nền: cỡ Label (11), màu thừa kế từ control chứa nó. -->
@@ -270,6 +293,15 @@
             <Setter Property="FontSize"   Value="{StaticResource T3.Size.Caption}"/>
             <Setter Property="Margin"     Value="0,0,8,0"/>
             <Setter Property="VerticalAlignment" Value="Top"/>
+          </Style>
+
+          <!-- Icon của ô rail (T3.Rail.Tile, 42×42). Cỡ 16 = lưới thiết kế gốc của
+               Segoe MDL2 — nét rơi đúng pixel, sắc ở 100% lẫn 125%. Đây là cỡ ICON, không
+               thuộc thang 7 size chữ. KHÔNG set Foreground: glyph thừa kế màu từ tile
+               (T3.TextMuted → T3.Ink khi hover/checked) qua ContentPresenter. -->
+          <Style x:Key="T3.Icon.Rail" TargetType="TextBlock" BasedOn="{StaticResource T3.Icon}">
+            <Setter Property="FontSize" Value="16"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
           </Style>
 
           <!-- ══════════════════ 6 · BUTTONS ══════════════════
@@ -451,6 +483,9 @@
             <Setter Property="Padding" Value="{StaticResource T3.Pad.Field}"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <!-- No dotted WPF focus rectangle (Clone Drawing 2026-10-07): keyboard
+                 focus shows as the T3.Ink border instead, like T3.TextBox. -->
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="ItemContainerStyle" Value="{StaticResource T3.ComboBoxItem}"/>
             <Setter Property="Template">
               <Setter.Value>
@@ -498,7 +533,7 @@
                                     RelativeSource={RelativeSource TemplatedParent}}">
                       <Border Background="{StaticResource T3.Surface}"
                               BorderBrush="{StaticResource T3.Border}" BorderThickness="1"
-                              CornerRadius="{StaticResource T3.R.Control}"
+                              CornerRadius="{StaticResource T3.R.Control}" Padding="0,4"
                               MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
                               MaxHeight="{TemplateBinding MaxDropDownHeight}">
                         <ScrollViewer>
@@ -512,6 +547,9 @@
                       <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
                     </Trigger>
                     <Trigger Property="IsDropDownOpen" Value="True">
+                      <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
+                    </Trigger>
+                    <Trigger Property="IsKeyboardFocusWithin" Value="True">
                       <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource T3.Ink}"/>
                     </Trigger>
                     <Trigger Property="IsEnabled" Value="False">
@@ -742,7 +780,9 @@
 
           <!-- Background/BorderBrush/BorderThickness đi qua TemplateBinding để một cột
                có thể tô sáng riêng ô của nó (ví dụ ô vừa sửa, đang chờ Apply) bằng
-               <Column.CellStyle> + DataTrigger. Mặc định vẫn trong suốt, không đổi. -->
+               <Column.CellStyle>. Dòng là object Python thì dùng cell bridge
+               (AutomationProperties.ItemStatus + Trigger, xem GUI/GridPendingEdits.py),
+               không DataTrigger bind thẳng field. Mặc định vẫn trong suốt, không đổi. -->
           <Style x:Key="T3.DataGridCell" TargetType="DataGridCell">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderBrush" Value="Transparent"/>
@@ -870,6 +910,15 @@
             </Setter>
           </Style>
 
+          <!-- Cột checkbox của ListView+GridView: bản GridView của
+               T3.DataGridColumnHeader.Check — bỏ Padding 8 và canh giữa để checkbox
+               header nằm đúng trên checkbox dòng (BatchOut 2026-10-02). -->
+          <Style x:Key="T3.GridViewColumnHeader.Check" TargetType="GridViewColumnHeader"
+                 BasedOn="{StaticResource T3.GridViewColumnHeader}">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+          </Style>
+
           <Style x:Key="T3.ListViewItem" TargetType="ListViewItem">
             <Setter Property="FontFamily" Value="{StaticResource T3.Font}"/>
             <Setter Property="FontSize"   Value="{StaticResource T3.Size.Body}"/>
@@ -941,7 +990,9 @@
           <Style TargetType="ListViewItem" BasedOn="{StaticResource T3.ListViewItem}"/>
 
           <!-- Status pill: nền tint + dot + CHỮ. Không bao giờ chỉ dùng màu.
-               Row VM cần 2 property: StatusText (string) và Severity ("Success"/"Warning"/"Danger"). -->
+               Row VM cần 2 property: StatusText (string) và Severity ("Success"/"Warning"/"Danger").
+               Severity đi qua TextBlock ẩn "sev" (string bridge): dòng là object Python thì
+               DataTrigger bind thẳng {Binding Severity} không bao giờ khớp. -->
           <DataTemplate x:Key="T3.StatusPill">
             <Border x:Name="pill" CornerRadius="{StaticResource T3.R.Pill}" Padding="7,2"
                     HorizontalAlignment="Left" VerticalAlignment="Center">
@@ -950,20 +1001,21 @@
                 <TextBlock x:Name="txt" Text="{Binding StatusText}"
                            FontFamily="Segoe UI" FontSize="12" FontWeight="SemiBold"
                            VerticalAlignment="Center"/>
+                <TextBlock x:Name="sev" Text="{Binding Severity}" Visibility="Collapsed"/>
               </StackPanel>
             </Border>
             <DataTemplate.Triggers>
-              <DataTrigger Binding="{Binding Severity}" Value="Success">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Success">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Success.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Success.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Success.Text}"/>
               </DataTrigger>
-              <DataTrigger Binding="{Binding Severity}" Value="Warning">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Warning">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Warning.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Warning.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Warning.Text}"/>
               </DataTrigger>
-              <DataTrigger Binding="{Binding Severity}" Value="Danger">
+              <DataTrigger Binding="{Binding Text, ElementName=sev}" Value="Danger">
                 <Setter TargetName="pill" Property="Background" Value="{StaticResource T3.Danger.Fill}"/>
                 <Setter TargetName="dot"  Property="Fill"       Value="{StaticResource T3.Danger.Accent}"/>
                 <Setter TargetName="txt"  Property="Foreground" Value="{StaticResource T3.Danger.Text}"/>
@@ -1667,7 +1719,7 @@
     </Window.Resources>
 
     <Border BorderBrush="{StaticResource T3.BorderStrong}" BorderThickness="1"
-            CornerRadius="12" ClipToBounds="True" Background="{DynamicResource T3.Surface}">
+            CornerRadius="{StaticResource T3.R.Window}" ClipToBounds="True" Background="{DynamicResource T3.Surface}">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="48"/>      <!-- Row 0: Title Bar -->
@@ -1691,7 +1743,7 @@
                                RenderOptions.BitmapScalingMode="HighQuality"/>
                         <StackPanel Orientation="Vertical" VerticalAlignment="Center">
                             <TextBlock Text="Batch Link Models" Style="{StaticResource T3.Title}"/>
-                            <TextBlock Text="Link models, set the workset each link sits on, and control per-view display"
+                            <TextBlock Text="Manage Revit links, link new models, set the workset each link sits on, and control per-view display"
                                        Style="{StaticResource T3.Subtitle}"/>
                         </StackPanel>
                     </StackPanel>
@@ -1714,41 +1766,225 @@
             </Border>
 
             <!-- ══════════════════ ROW 1: TAB NAVIGATION STRIP ══════════════════
-                 Same strip as BGTheme: full width, sunken surface, 1px rule under it. -->
+                 Same strip as BGTheme: full width, sunken surface, 1px rule under it.
+                 Order follows the daily flow: see what is linked → link more →
+                 put links on worksets → decide how they draw in a view. -->
             <Border Grid.Row="1" Background="{StaticResource T3.SurfaceSunken}"
                     BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
                     Padding="16,4">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <RadioButton x:Name="chip_tab_manage" Content="Manage Links" GroupName="bl_tabs"
+                                 Style="{StaticResource T3.Chip}"
+                                 Checked="tab_chip_checked" Tag="0"/>
                     <RadioButton x:Name="chip_tab_link" Content="Link Models" GroupName="bl_tabs"
                                  Style="{StaticResource T3.Chip}" IsChecked="True"
-                                 Checked="tab_chip_checked" Tag="0"/>
+                                 Checked="tab_chip_checked" Tag="1"/>
                     <RadioButton x:Name="chip_tab_worksets" Content="Link Workset" GroupName="bl_tabs"
                                  Style="{StaticResource T3.Chip}"
-                                 Checked="tab_chip_checked" Tag="1"/>
+                                 Checked="tab_chip_checked" Tag="2"/>
                     <RadioButton x:Name="chip_tab_display" Content="View Display" GroupName="bl_tabs"
                                  Style="{StaticResource T3.Chip}"
-                                 Checked="tab_chip_checked" Tag="2"/>
+                                 Checked="tab_chip_checked" Tag="3"/>
                 </StackPanel>
             </Border>
 
-            <!-- ══════════════════ ROW 2: MAIN BODY ══════════════════ -->
+            <!-- ══════════════════ ROW 2: MAIN BODY ══════════════════
+                 Every tab has the same four rows, so nothing jumps when you switch:
+                   0  tab-specific header (source folder / API banner) — may be empty
+                   1  toolbar: LABEL + search on the left, Invert + Refresh on the right
+                      (the header checkbox of the table selects all / none)
+                   2  ONE panel: table + count strip (left: counts, right: context)
+                   3  ONE card: the settings or actions for the checked rows -->
             <TabControl x:Name="tab_control" Grid.Row="2" Margin="0"
                         Background="Transparent" BorderThickness="0">
                 <TabControl.ItemContainerStyle>
                     <Style TargetType="TabItem" BasedOn="{StaticResource T3.TabItem.Hidden}"/>
                 </TabControl.ItemContainerStyle>
 
+                <!-- ────────────────── TAB 0: MANAGE LINKS ────────────────── -->
+                <TabItem x:Name="tab_item_manage">
+                    <Grid Margin="16,12,16,12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- TOOLBAR -->
+                        <Grid Grid.Row="1" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="LINKS IN THIS MODEL" Style="{StaticResource T3.Label}"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBox x:Name="tb_mng_filter" Width="240"
+                                         Style="{StaticResource T3.Search}"
+                                         Tag="Search links..."
+                                         TextChanged="mng_filter_changed"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <Button x:Name="btn_mng_invert" Content="Invert"
+                                        Style="{StaticResource T3.Button.Ghost}" Margin="0,0,4,0"
+                                        ToolTip="Check the unchecked links and uncheck the checked ones"
+                                        Click="mng_invert_clicked"/>
+                                <Button x:Name="btn_mng_refresh" Content="Refresh"
+                                        Style="{StaticResource T3.Button.Ghost}"
+                                        ToolTip="Read the links from the model again"
+                                        Click="mng_refresh_clicked"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- TABLE + COUNT STRIP -->
+                        <Border Grid.Row="2" Style="{StaticResource T3.Panel}" Padding="0" ClipToBounds="True">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <Grid Grid.Row="0">
+                                    <DataGrid x:Name="grid_mng_links"
+                                              Style="{StaticResource T3.DataGrid}"
+                                              BorderThickness="0"
+                                              AutoGenerateColumns="False"
+                                              EnableRowVirtualization="True"
+                                              HorizontalScrollBarVisibility="Disabled"
+                                              SelectionMode="Single"
+                                              SelectionUnit="FullRow"
+                                              SelectionChanged="mng_selection_changed">
+                                        <DataGrid.Columns>
+                                            <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
+                                                                    HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                                                    CellStyle="{StaticResource T3.DataGridCell.Check}">
+                                                <DataGridTemplateColumn.Header>
+                                                    <CheckBox x:Name="chk_mng_header"
+                                                              Style="{StaticResource T3.CheckBox.Cell}"
+                                                              ToolTip="Select all links"
+                                                              Click="mng_header_clicked"/>
+                                                </DataGridTemplateColumn.Header>
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <Grid>
+                                                            <TextBlock x:Name="row_is_selected_text_0" Text="{Binding IsSelected}" Visibility="Collapsed"/>
+                                                            <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text_0, Mode=OneWay}"
+                                                                      IsEnabled="{Binding IsEnabled}"
+                                                                      Style="{StaticResource T3.CheckBox.Cell}"
+                                                                      Click="mng_checkbox_clicked"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+
+                                            <DataGridTextColumn Header="LINK" Width="*" Binding="{Binding LinkName}"/>
+                                            <DataGridTextColumn Header="REFERENCE" Width="110" Binding="{Binding Attachment}"/>
+                                            <DataGridTextColumn Header="PATH" Width="90" Binding="{Binding PathType}"
+                                                                ElementStyle="{StaticResource T3.Cell.Muted}"/>
+                                            <DataGridTextColumn Header="PINNED" Width="80" Binding="{Binding PinnedText}"
+                                                                ElementStyle="{StaticResource T3.Cell.Mono}"/>
+                                            <DataGridTextColumn Header="PLACED" Width="80" Binding="{Binding InstanceCount}"
+                                                                ElementStyle="{StaticResource T3.Cell.Number}"/>
+                                            <DataGridTemplateColumn Header="STATUS" Width="150"
+                                                                    CellTemplate="{StaticResource T3.StatusPill}"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+
+                                    <TextBlock x:Name="txt_mng_empty" Style="{StaticResource T3.Empty}"
+                                               Visibility="Visible"
+                                               Text="No Revit links in this project.&#x0a;Link models on the Link Models tab."/>
+                                </Grid>
+
+                                <Border Grid.Row="1" BorderBrush="{StaticResource T3.Border}"
+                                        BorderThickness="0,1,0,0" Padding="12,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" x:Name="lbl_mng_count" Text="0 links"
+                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
+                                                   Margin="0,0,16,0"/>
+                                        <TextBlock Grid.Column="1" x:Name="lbl_mng_path" Text=""
+                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
+                                                   HorizontalAlignment="Right" TextTrimming="CharacterEllipsis"/>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                        </Border>
+
+                        <!-- ACTIONS CARD -->
+                        <Border Grid.Row="3" Style="{StaticResource T3.Panel}" Margin="0,12,0,0" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="ACTIONS FOR CHECKED LINKS" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="0,0,16,0">
+                                        <Button x:Name="btn_mng_reload_from" Content="Reload From..."
+                                                Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
+                                                ToolTip="Point ONE link at another .rvt file and load it"
+                                                Click="mng_reload_from_clicked"/>
+                                        <Button x:Name="btn_mng_unload" Content="Unload"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                ToolTip="Unload the checked links for everyone (Reload brings them back)"
+                                                Click="mng_unload_clicked"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,16,0">
+                                        <Button x:Name="btn_mng_pin" Content="Pin"
+                                                Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
+                                                ToolTip="Pin every placed instance of the checked links"
+                                                Click="mng_pin_clicked"/>
+                                        <Button x:Name="btn_mng_unpin" Content="Unpin"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                ToolTip="Unpin every placed instance of the checked links"
+                                                Click="mng_unpin_clicked"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                        <Button x:Name="btn_mng_overlay" Content="Set Overlay"
+                                                Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
+                                                ToolTip="Overlay: the link does not show when this model is linked into another one"
+                                                Click="mng_overlay_clicked"/>
+                                        <Button x:Name="btn_mng_attachment" Content="Set Attachment"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                ToolTip="Attachment: the link travels along when this model is linked into another one"
+                                                Click="mng_attachment_clicked"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="4" x:Name="btn_mng_remove"
+                                            Style="{StaticResource T3.Button.Danger}"
+                                            ToolTip="Delete the checked links and all their placed instances from this model"
+                                            Click="mng_remove_clicked">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE74D;" Style="{StaticResource T3.Icon.Lead}"/>
+                                            <TextBlock Text="Remove" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                                <TextBlock Style="{StaticResource T3.Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                           Text="No link checked = the highlighted row. Reload (footer), Reload From and Unload clear Revit's undo history, exactly like Revit's own Manage Links. Pin, reference type and Remove are one Ctrl+Z each."/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </TabItem>
+
                 <!-- ────────────────── TAB 1: LINK NEW MODELS ────────────────── -->
                 <TabItem x:Name="tab_item_link" IsSelected="True">
                     <Grid Margin="16,12,16,12">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/> <!-- Folder Picker -->
-                            <RowDefinition Height="Auto"/> <!-- Toolbar -->
-                            <RowDefinition Height="*"/>    <!-- DataGrid -->
-                            <RowDefinition Height="Auto"/> <!-- Link Options -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- SECTION: SOURCE FOLDER -->
+                        <!-- HEADER: SOURCE FOLDER -->
                         <StackPanel Grid.Row="0" Margin="0,0,0,12">
                             <TextBlock Text="SOURCE FOLDER" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
                             <Grid>
@@ -1761,7 +1997,7 @@
                                          TextChanged="folder_path_changed"/>
                                 <Button x:Name="btn_browse" Grid.Column="1" Content="Browse..."
                                         Style="{StaticResource T3.Button.Secondary}"
-                                        Margin="8,0,0,0" Padding="16,0" Height="28"
+                                        Margin="8,0,0,0"
                                         Click="browse_folder_clicked"/>
                             </Grid>
                             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
@@ -1774,123 +2010,160 @@
                             </StackPanel>
                         </StackPanel>
 
-                        <!-- SECTION: TOOLBAR -->
+                        <!-- TOOLBAR -->
                         <Grid Grid.Row="1" Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="MODELS TO LINK" Style="{StaticResource T3.Label}" Margin="0,0,12,0"/>
-                                <TextBox x:Name="tb_filter" Width="200" Height="26"
+                                <TextBlock Text="MODELS TO LINK" Style="{StaticResource T3.Label}"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBox x:Name="tb_filter" Width="240"
                                          Style="{StaticResource T3.Search}"
                                          Tag="Search files..."
                                          TextChanged="filter_text_changed"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <Button x:Name="btn_select_all" Content="Select All"
-                                        Style="{StaticResource T3.Button.Ghost}"
-                                        Margin="0,0,4,0" Padding="8,0" Height="24"
-                                        Click="select_all_clicked"/>
-                                <Button x:Name="btn_select_none" Content="Select None"
-                                        Style="{StaticResource T3.Button.Ghost}"
-                                        Margin="0,0,4,0" Padding="8,0" Height="24"
-                                        Click="select_none_clicked"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center">
                                 <Button x:Name="btn_invert" Content="Invert"
-                                        Style="{StaticResource T3.Button.Ghost}"
-                                        Margin="0,0,12,0" Padding="8,0" Height="24"
+                                        Style="{StaticResource T3.Button.Ghost}" Margin="0,0,4,0"
+                                        ToolTip="Check the unchecked models and uncheck the checked ones"
                                         Click="invert_selection_clicked"/>
-                                <TextBlock x:Name="lbl_file_count" Text="0 models found"
-                                           Style="{StaticResource T3.Caption}"/>
+                                <Button x:Name="btn_rescan" Content="Refresh"
+                                        Style="{StaticResource T3.Button.Ghost}"
+                                        ToolTip="Scan the folder again"
+                                        Click="rescan_clicked"/>
                             </StackPanel>
                         </Grid>
 
-                        <!-- SECTION: DATAGRID -->
+                        <!-- TABLE + COUNT STRIP -->
                         <Border Grid.Row="2" Style="{StaticResource T3.Panel}" Padding="0" ClipToBounds="True">
                             <Grid>
-                                <DataGrid x:Name="grid_files"
-                                          Style="{StaticResource T3.DataGrid}"
-                                          BorderThickness="0"
-                                          AutoGenerateColumns="False"
-                                          EnableRowVirtualization="True"
-                                          HorizontalScrollBarVisibility="Disabled"
-                                          SelectionMode="Extended"
-                                          SelectionUnit="FullRow">
-                                    <DataGrid.Columns>
-                                        <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
-                                                                HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
-                                                                CellStyle="{StaticResource T3.DataGridCell.Check}">
-                                            <DataGridTemplateColumn.Header>
-                                                <CheckBox x:Name="chk_header"
-                                                          Style="{StaticResource T3.CheckBox.Cell}"
-                                                          ToolTip="Select All / Deselect All"
-                                                          Click="header_checkbox_clicked"/>
-                                            </DataGridTemplateColumn.Header>
-                                            <DataGridTemplateColumn.CellTemplate>
-                                                <DataTemplate>
-                                                    <Grid>
-                                                        <TextBlock x:Name="row_is_selected_text" Text="{Binding IsSelected}" Visibility="Collapsed"/>
-                                                        <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text, Mode=OneWay}"
-                                                                  IsEnabled="{Binding IsEnabled}"
-                                                                  Style="{StaticResource T3.CheckBox.Cell}"
-                                                                  Click="row_checkbox_clicked"/>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </DataGridTemplateColumn.CellTemplate>
-                                        </DataGridTemplateColumn>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
 
-                                        <DataGridTextColumn Header="FILE NAME" Width="*" Binding="{Binding FileName}"/>
-                                        <DataGridTextColumn Header="SIZE" Width="90" Binding="{Binding FileSize}"
-                                                            ElementStyle="{StaticResource T3.Cell.Mono}"/>
-                                        <DataGridTextColumn Header="DATE MODIFIED" Width="140" Binding="{Binding ModifiedFormatted}"
-                                                            ElementStyle="{StaticResource T3.Cell.Mono}"/>
-                                        <DataGridTemplateColumn Header="STATUS" Width="140"
-                                                                CellTemplate="{StaticResource T3.StatusPill}"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
+                                <Grid Grid.Row="0">
+                                    <DataGrid x:Name="grid_files"
+                                              Style="{StaticResource T3.DataGrid}"
+                                              BorderThickness="0"
+                                              AutoGenerateColumns="False"
+                                              EnableRowVirtualization="True"
+                                              HorizontalScrollBarVisibility="Disabled"
+                                              SelectionMode="Extended"
+                                              SelectionUnit="FullRow">
+                                        <DataGrid.Columns>
+                                            <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
+                                                                    HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                                                    CellStyle="{StaticResource T3.DataGridCell.Check}">
+                                                <DataGridTemplateColumn.Header>
+                                                    <CheckBox x:Name="chk_header"
+                                                              Style="{StaticResource T3.CheckBox.Cell}"
+                                                              ToolTip="Select all models"
+                                                              Click="header_checkbox_clicked"/>
+                                                </DataGridTemplateColumn.Header>
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <Grid>
+                                                            <TextBlock x:Name="row_is_selected_text" Text="{Binding IsSelected}" Visibility="Collapsed"/>
+                                                            <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text, Mode=OneWay}"
+                                                                      IsEnabled="{Binding IsEnabled}"
+                                                                      Style="{StaticResource T3.CheckBox.Cell}"
+                                                                      Click="row_checkbox_clicked"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
 
-                                <TextBlock x:Name="txt_empty" Style="{StaticResource T3.Empty}"
-                                           Visibility="Visible"
-                                           Text="No Revit (.rvt) files found.&#x0a;Select a folder containing Revit projects to begin."/>
+                                            <DataGridTextColumn Header="FILE NAME" Width="*" Binding="{Binding FileName}"/>
+                                            <DataGridTextColumn Header="SIZE" Width="90" Binding="{Binding FileSize}"
+                                                                ElementStyle="{StaticResource T3.Cell.Number}"/>
+                                            <DataGridTextColumn Header="DATE MODIFIED" Width="140" Binding="{Binding ModifiedFormatted}"
+                                                                ElementStyle="{StaticResource T3.Cell.Mono}"/>
+                                            <DataGridTemplateColumn Header="STATUS" Width="150"
+                                                                    CellTemplate="{StaticResource T3.StatusPill}"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+
+                                    <TextBlock x:Name="txt_empty" Style="{StaticResource T3.Empty}"
+                                               Visibility="Visible"
+                                               Text="No Revit (.rvt) files found.&#x0a;Select a folder containing Revit projects to begin."/>
+                                </Grid>
+
+                                <Border Grid.Row="1" BorderBrush="{StaticResource T3.Border}"
+                                        BorderThickness="0,1,0,0" Padding="12,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" x:Name="lbl_file_count" Text="0 models found"
+                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
+                                                   Margin="0,0,16,0"/>
+                                        <TextBlock Grid.Column="1" x:Name="lbl_file_hint" Text=""
+                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
+                                                   HorizontalAlignment="Right" TextTrimming="CharacterEllipsis"/>
+                                    </Grid>
+                                </Border>
                             </Grid>
                         </Border>
 
-                        <!-- SECTION: LINK OPTIONS -->
-                        <StackPanel Grid.Row="3" Margin="0,12,0,0">
-                            <TextBlock Text="LINK OPTIONS" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="12"/>
-                                    <ColumnDefinition Width="160"/>
-                                    <ColumnDefinition Width="12"/>
-                                    <ColumnDefinition Width="140"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0">
-                                    <TextBlock Text="Positioning" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
-                                    <ComboBox x:Name="cb_positioning" Style="{StaticResource T3.ComboBox}"
-                                              ItemContainerStyle="{StaticResource T3.ComboBoxItem}"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="2">
-                                    <TextBlock Text="Attachment Type" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
-                                    <ComboBox x:Name="cb_attachment" Style="{StaticResource T3.ComboBox}"
-                                              ItemContainerStyle="{StaticResource T3.ComboBoxItem}"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="4">
-                                    <TextBlock Text="Path Type" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
-                                    <ComboBox x:Name="cb_path_type" Style="{StaticResource T3.ComboBox}"
-                                              ItemContainerStyle="{StaticResource T3.ComboBoxItem}"/>
-                                </StackPanel>
-                            </Grid>
+                        <!-- OPTIONS CARD -->
+                        <Border Grid.Row="3" Style="{StaticResource T3.Panel}" Margin="0,12,0,0" Padding="16">
+                            <StackPanel>
+                                <TextBlock Text="LINK OPTIONS" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="140"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="120"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="120"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Positioning" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="cb_positioning" Style="{StaticResource T3.ComboBox}"
+                                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Reference type" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="cb_attachment" Style="{StaticResource T3.ComboBox}"
+                                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Path type" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="cb_path_type" Style="{StaticResource T3.ComboBox}"
+                                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="6">
+                                        <TextBlock Text="Workset for the new links" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="cb_link_workset" Style="{StaticResource T3.ComboBox}"
+                                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}"
+                                                  SelectionChanged="link_workset_changed"
+                                                  ToolTip="Where each new link lands. One workset per link creates it when missing."/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="8">
+                                        <TextBlock Text="Workset prefix" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="tb_link_ws_prefix" Text="Link_" Style="{StaticResource T3.TextBox}"
+                                                 ToolTip="New workset name = prefix + file name without .rvt"/>
+                                    </StackPanel>
+                                </Grid>
 
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                <CheckBox x:Name="chk_pin" Content="Pin linked models"
-                                          Style="{StaticResource T3.CheckBox}" IsChecked="True"
-                                          Margin="0,0,24,0"/>
-                                <CheckBox x:Name="chk_skip_existing" Content="Skip already linked models"
-                                          Style="{StaticResource T3.CheckBox}" IsChecked="True"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <CheckBox x:Name="chk_pin" Content="Pin linked models"
+                                              Style="{StaticResource T3.CheckBox}" IsChecked="True"
+                                              Margin="0,0,24,0"/>
+                                    <CheckBox x:Name="chk_skip_existing" Content="Skip already linked models"
+                                              Style="{StaticResource T3.CheckBox}" IsChecked="True"/>
+                                </StackPanel>
                             </StackPanel>
-                        </StackPanel>
+                        </Border>
                     </Grid>
                 </TabItem>
 
@@ -1898,13 +2171,14 @@
                 <TabItem x:Name="tab_item_worksets">
                     <Grid Margin="16,12,16,12">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>   <!-- Toolbar -->
-                            <RowDefinition Height="*"/>      <!-- Link table -->
-                            <RowDefinition Height="Auto"/>   <!-- Assign strip -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <!-- TOOLBAR -->
-                        <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid Grid.Row="1" Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
@@ -1912,34 +2186,26 @@
                             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                                 <TextBlock Text="LINKS IN THIS MODEL" Style="{StaticResource T3.Label}"
                                            VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                <TextBox x:Name="tb_ws_filter" Width="220"
+                                <TextBox x:Name="tb_ws_filter" Width="240"
                                          Style="{StaticResource T3.Search}"
                                          Tag="Search links..."
                                          TextChanged="ws_filter_changed"/>
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal"
                                         HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <Button x:Name="btn_ws_invert" Content="Invert"
+                                        Style="{StaticResource T3.Button.Ghost}" Margin="0,0,4,0"
+                                        ToolTip="Check the unchecked links and uncheck the checked ones"
+                                        Click="ws_invert_clicked"/>
                                 <Button x:Name="btn_ws_reload_links" Content="Refresh"
                                         Style="{StaticResource T3.Button.Ghost}"
-                                        Padding="12,0" Margin="0,0,16,0"
+                                        ToolTip="Read the links from the model again"
                                         Click="reload_links_clicked"/>
-                                <Button x:Name="btn_ws_select_all" Content="Select All"
-                                        Style="{StaticResource T3.Button.Ghost}"
-                                        Padding="12,0" Margin="0,0,4,0"
-                                        Click="ws_select_all_clicked"/>
-                                <Button x:Name="btn_ws_select_none" Content="Select None"
-                                        Style="{StaticResource T3.Button.Ghost}"
-                                        Padding="12,0" Margin="0,0,4,0"
-                                        Click="ws_select_none_clicked"/>
-                                <Button x:Name="btn_ws_invert" Content="Invert"
-                                        Style="{StaticResource T3.Button.Ghost}"
-                                        Padding="12,0"
-                                        Click="ws_invert_clicked"/>
                             </StackPanel>
                         </Grid>
 
-                        <!-- LINK TABLE + COUNT STRIP (one panel, no floating gap) -->
-                        <Border Grid.Row="1" Style="{StaticResource T3.Panel}" Padding="0" ClipToBounds="True">
+                        <!-- TABLE + COUNT STRIP -->
+                        <Border Grid.Row="2" Style="{StaticResource T3.Panel}" Padding="0" ClipToBounds="True">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="*"/>
@@ -1949,6 +2215,7 @@
                                 <Grid Grid.Row="0">
                                     <DataGrid x:Name="grid_ws_links"
                                               Style="{StaticResource T3.DataGrid}"
+                                              RowHeight="{StaticResource T3.H.Control}"
                                               BorderThickness="0"
                                               AutoGenerateColumns="False"
                                               EnableRowVirtualization="True"
@@ -1972,7 +2239,7 @@
                                                             <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text_2, Mode=OneWay}"
                                                                       IsEnabled="{Binding IsEnabled}"
                                                                       Style="{StaticResource T3.CheckBox.Cell}"
-                                                                      ToolTip="Checked = this link moves to the workset chosen below"
+                                                                      ToolTip="Checked = Set for checked (below) stages this link"
                                                                       Click="ws_link_checkbox_clicked"/>
                                                         </Grid>
                                                     </DataTemplate>
@@ -1982,14 +2249,92 @@
                                             <DataGridTextColumn Header="LINK" Width="*" Binding="{Binding LinkName}"/>
                                             <DataGridTextColumn Header="PLACED" Width="80" Binding="{Binding InstanceCount}"
                                                                 ElementStyle="{StaticResource T3.Cell.Number}"/>
-                                            <DataGridTextColumn Header="CURRENT WORKSET" Width="200" Binding="{Binding CurrentWorkset}"/>
-                                            <DataGridTextColumn Header="NEW WORKSET" Width="200" Binding="{Binding TargetWorkset}"
-                                                                ElementStyle="{StaticResource T3.Cell.Muted}"/>
+                                            <!-- WORKSET: sửa trực tiếp. Đổi = TREO (ô vàng), Apply mới ghi.
+                                                 row_state "pending"/"applied"/"failed" tô ô; chữ ở cột STATUS.
+                                                 Dòng không đổi được (WorksetEditable="no") chỉ hiện chữ + tooltip lý do.
+                                                 STRING BRIDGE: dòng là object Python nên giá trị tới WPF là PyObject —
+                                                 DataTrigger bind thẳng {Binding row_state} không bao giờ khớp "pending".
+                                                 Ô (CellStyle) đọc row_state qua AutomationProperties.ItemStatus (thuộc
+                                                 tính string của chính ô); trong template đọc qua TextBlock ẩn *_text. -->
+                                            <DataGridTemplateColumn Header="WORKSET" Width="240" SortMemberPath="WorksetName">
+                                                <DataGridTemplateColumn.CellStyle>
+                                                    <Style TargetType="DataGridCell" BasedOn="{StaticResource T3.DataGridCell}">
+                                                        <Setter Property="Padding" Value="4,0"/>
+                                                        <Setter Property="AutomationProperties.ItemStatus" Value="{Binding row_state}"/>
+                                                        <Style.Triggers>
+                                                            <Trigger Property="AutomationProperties.ItemStatus" Value="pending">
+                                                                <Setter Property="Background" Value="{StaticResource T3.Warning.Fill}"/>
+                                                                <Setter Property="BorderBrush" Value="{StaticResource T3.Warning.Accent}"/>
+                                                                <Setter Property="BorderThickness" Value="3,0,0,0"/>
+                                                            </Trigger>
+                                                            <Trigger Property="AutomationProperties.ItemStatus" Value="applied">
+                                                                <Setter Property="Background" Value="{StaticResource T3.Success.Fill}"/>
+                                                                <Setter Property="BorderBrush" Value="{StaticResource T3.Success.Accent}"/>
+                                                                <Setter Property="BorderThickness" Value="3,0,0,0"/>
+                                                            </Trigger>
+                                                            <Trigger Property="AutomationProperties.ItemStatus" Value="failed">
+                                                                <Setter Property="Background" Value="{StaticResource T3.Danger.Fill}"/>
+                                                                <Setter Property="BorderBrush" Value="{StaticResource T3.Danger.Accent}"/>
+                                                                <Setter Property="BorderThickness" Value="3,0,0,0"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </DataGridTemplateColumn.CellStyle>
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <Grid ToolTip="{Binding WorksetTip}">
+                                                            <TextBlock x:Name="row_ws_name_text" Text="{Binding WorksetName}" Visibility="Collapsed"/>
+                                                            <TextBlock x:Name="row_ws_editable_text" Text="{Binding WorksetEditable}" Visibility="Collapsed"/>
+                                                            <TextBlock x:Name="row_ws_state_text" Text="{Binding row_state}" Visibility="Collapsed"/>
+                                                            <TextBlock Text="{Binding WorksetName}" Padding="4,0" VerticalAlignment="Center">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource T3.Cell.Muted}">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding Text, ElementName=row_ws_editable_text}" Value="no">
+                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                            <ComboBox ItemsSource="{Binding Tag, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                      SelectedValue="{Binding Text, ElementName=row_ws_name_text, Mode=OneWay}"
+                                                                      Height="{StaticResource T3.H.Row}"
+                                                                      VerticalAlignment="Center">
+                                                                <ComboBox.Style>
+                                                                    <Style TargetType="ComboBox" BasedOn="{StaticResource T3.ComboBox}">
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding Text, ElementName=row_ws_editable_text}" Value="no">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Text, ElementName=row_ws_state_text}" Value="pending">
+                                                                                <Setter Property="Background" Value="{StaticResource T3.Warning.Fill}"/>
+                                                                                <Setter Property="BorderBrush" Value="{StaticResource T3.Warning.Accent}"/>
+                                                                                <Setter Property="Foreground" Value="{StaticResource T3.Warning.Text}"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Text, ElementName=row_ws_state_text}" Value="applied">
+                                                                                <Setter Property="Background" Value="{StaticResource T3.Success.Fill}"/>
+                                                                                <Setter Property="BorderBrush" Value="{StaticResource T3.Success.Accent}"/>
+                                                                                <Setter Property="Foreground" Value="{StaticResource T3.Success.Text}"/>
+                                                                            </DataTrigger>
+                                                                            <DataTrigger Binding="{Binding Text, ElementName=row_ws_state_text}" Value="failed">
+                                                                                <Setter Property="Background" Value="{StaticResource T3.Danger.Fill}"/>
+                                                                                <Setter Property="BorderBrush" Value="{StaticResource T3.Danger.Accent}"/>
+                                                                                <Setter Property="Foreground" Value="{StaticResource T3.Danger.Text}"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </ComboBox.Style>
+                                                            </ComboBox>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
                                             <DataGridTemplateColumn Header="STATUS" Width="120"
                                                                     CellTemplate="{StaticResource T3.StatusPill}"/>
                                         </DataGrid.Columns>
                                     </DataGrid>
-
                                     <TextBlock x:Name="txt_ws_links_empty" Style="{StaticResource T3.Empty}"
                                                Visibility="Visible"
                                                Text="No Revit links in this project.&#x0a;Link a model first on the Link Models tab."/>
@@ -1999,41 +2344,50 @@
                                         BorderThickness="0,1,0,0" Padding="12,8">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" x:Name="lbl_ws_link_count" Text="0 links"
-                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"/>
+                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
+                                                   Margin="0,0,16,0"/>
                                         <TextBlock Grid.Column="1" x:Name="lbl_ws_active" Text=""
-                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"/>
+                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
+                                                   HorizontalAlignment="Right" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
                                 </Border>
                             </Grid>
                         </Border>
 
-                        <!-- ASSIGN STRIP -->
-                        <Border Grid.Row="2" Style="{StaticResource T3.Callout}" Margin="0,12,0,0">
+                        <!-- SETTINGS CARD -->
+                        <Border Grid.Row="3" Style="{StaticResource T3.Panel}" Margin="0,12,0,0" Padding="16">
                             <StackPanel>
+                                <TextBlock Text="SET WORKSET FOR CHECKED LINKS" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="280"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="16"/>
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Move checked links to workset"
-                                               Style="{StaticResource T3.Body}"
-                                               VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                    <ComboBox Grid.Column="1" x:Name="cb_ws_target"
-                                              Style="{StaticResource T3.ComboBox}"
-                                              ItemContainerStyle="{StaticResource T3.ComboBoxItem}"
-                                              SelectionChanged="ws_target_changed"/>
-                                    <CheckBox Grid.Column="2" x:Name="chk_ws_include_type"
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Workset" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="cb_ws_target"
+                                                  Style="{StaticResource T3.ComboBox}"
+                                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="2" x:Name="btn_ws_stage_checked" Content="Set for checked"
+                                            Style="{StaticResource T3.Button.Secondary}"
+                                            VerticalAlignment="Bottom"
+                                            ToolTip="Stage this workset on every checked link. Nothing is written until Apply."
+                                            Click="ws_stage_checked_clicked"/>
+                                    <CheckBox Grid.Column="4" x:Name="chk_ws_include_type"
                                               Content="Move the link type onto the same workset"
                                               Style="{StaticResource T3.CheckBox}"
-                                              IsChecked="True" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                                              IsChecked="True" VerticalAlignment="Bottom" Margin="0,0,0,4"/>
                                 </Grid>
                                 <TextBlock Style="{StaticResource T3.Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
-                                           Text="This changes the workset the link sits on in the CURRENT model. Worksets inside the linked files are not touched, and no link is reloaded."/>
+                                           Text="Change a link's WORKSET cell, or use Set for checked: the change is staged (yellow) and nothing is written until you press Apply, which moves every staged link in one step (one Ctrl+Z). This changes the workset the link sits on in the CURRENT model only. Worksets inside the linked files are not touched, and no link is reloaded."/>
                             </StackPanel>
                         </Border>
                     </Grid>
@@ -2043,12 +2397,13 @@
                 <TabItem x:Name="tab_item_display">
                     <Grid Margin="16,12,16,12">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/> <!-- API banner -->
-                            <RowDefinition Height="Auto"/> <!-- toolbar -->
-                            <RowDefinition Height="*"/>    <!-- grid -->
-                            <RowDefinition Height="Auto"/> <!-- apply panel -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
+                        <!-- HEADER: API BANNER (Revit 2024 and older) -->
                         <Border Grid.Row="0" x:Name="banner_no_api" Visibility="Collapsed"
                                 Style="{StaticResource T3.Callout.Warning}" Margin="0,0,0,12">
                             <TextBlock x:Name="lbl_no_api" TextWrapping="Wrap"
@@ -2056,109 +2411,133 @@
                                        Text="Link display settings need Revit 2025 or newer. Visibility and halftone still work here."/>
                         </Border>
 
+                        <!-- TOOLBAR -->
                         <Grid Grid.Row="1" Margin="0,0,0,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="LINKS IN VIEW" Style="{StaticResource T3.Label}" Margin="0,0,12,0"/>
-                                <TextBox x:Name="tb_disp_filter" Width="200" Height="26"
+                                <TextBlock Text="LINKS IN VIEW" Style="{StaticResource T3.Label}"
+                                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                <TextBox x:Name="tb_disp_filter" Width="240"
                                          Style="{StaticResource T3.Search}"
                                          Tag="Search links..."
                                          TextChanged="disp_filter_changed"/>
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal"
                                         HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <TextBlock x:Name="lbl_disp_scope" Text="Active view: —"
-                                           Style="{StaticResource T3.Caption}" Margin="0,0,12,0"
-                                           TextTrimming="CharacterEllipsis" MaxWidth="320"/>
-                                <TextBlock x:Name="lbl_disp_count" Text="0 links"
-                                           Style="{StaticResource T3.Caption}"/>
+                                <Button x:Name="btn_disp_invert" Content="Invert"
+                                        Style="{StaticResource T3.Button.Ghost}" Margin="0,0,4,0"
+                                        ToolTip="Check the unchecked links and uncheck the checked ones"
+                                        Click="disp_invert_clicked"/>
+                                <Button x:Name="btn_disp_refresh" Content="Refresh"
+                                        Style="{StaticResource T3.Button.Ghost}"
+                                        ToolTip="Read the links and the active view again"
+                                        Click="disp_refresh_clicked"/>
                             </StackPanel>
                         </Grid>
 
+                        <!-- TABLE + COUNT STRIP -->
                         <Border Grid.Row="2" Style="{StaticResource T3.Panel}" Padding="0" ClipToBounds="True">
                             <Grid>
-                                <DataGrid x:Name="grid_disp_links"
-                                          Style="{StaticResource T3.DataGrid}"
-                                          BorderThickness="0"
-                                          AutoGenerateColumns="False"
-                                          EnableRowVirtualization="True"
-                                          HorizontalScrollBarVisibility="Disabled"
-                                          SelectionMode="Single"
-                                          SelectionUnit="FullRow"
-                                          SelectionChanged="disp_link_selection_changed">
-                                    <DataGrid.Columns>
-                                        <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
-                                                                HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
-                                                                CellStyle="{StaticResource T3.DataGridCell.Check}">
-                                            <DataGridTemplateColumn.Header>
-                                                <CheckBox x:Name="chk_disp_header"
-                                                          Style="{StaticResource T3.CheckBox.Cell}"
-                                                          ToolTip="Select All / Deselect All"
-                                                          Click="disp_header_clicked"/>
-                                            </DataGridTemplateColumn.Header>
-                                            <DataGridTemplateColumn.CellTemplate>
-                                                <DataTemplate>
-                                                    <Grid>
-                                                        <TextBlock x:Name="row_is_selected_text_3" Text="{Binding IsSelected}" Visibility="Collapsed"/>
-                                                        <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text_3, Mode=OneWay}"
-                                                                  IsEnabled="{Binding IsEnabled}"
-                                                                  Style="{StaticResource T3.CheckBox.Cell}"
-                                                                  Click="disp_checkbox_clicked"/>
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </DataGridTemplateColumn.CellTemplate>
-                                        </DataGridTemplateColumn>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
 
-                                        <DataGridTextColumn Header="LINK" Width="*" Binding="{Binding LinkName}"/>
-                                        <DataGridTextColumn Header="DISPLAY SETTINGS" Width="150" Binding="{Binding DisplayMode}"/>
-                                        <DataGridTextColumn Header="LINKED VIEW" Width="180" Binding="{Binding LinkedViewName}"
-                                                            ElementStyle="{StaticResource T3.Cell.Muted}"/>
-                                        <DataGridTextColumn Header="IN VIEW" Width="110" Binding="{Binding GraphicsSummary}"
-                                                            ElementStyle="{StaticResource T3.Cell.Mono}"/>
-                                        <DataGridTemplateColumn Header="STATUS" Width="110"
-                                                                CellTemplate="{StaticResource T3.StatusPill}"/>
-                                    </DataGrid.Columns>
-                                </DataGrid>
+                                <Grid Grid.Row="0">
+                                    <DataGrid x:Name="grid_disp_links"
+                                              Style="{StaticResource T3.DataGrid}"
+                                              BorderThickness="0"
+                                              AutoGenerateColumns="False"
+                                              EnableRowVirtualization="True"
+                                              HorizontalScrollBarVisibility="Disabled"
+                                              SelectionMode="Single"
+                                              SelectionUnit="FullRow"
+                                              SelectionChanged="disp_link_selection_changed">
+                                        <DataGrid.Columns>
+                                            <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
+                                                                    HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                                                    CellStyle="{StaticResource T3.DataGridCell.Check}">
+                                                <DataGridTemplateColumn.Header>
+                                                    <CheckBox x:Name="chk_disp_header"
+                                                              Style="{StaticResource T3.CheckBox.Cell}"
+                                                              ToolTip="Select All / Deselect All"
+                                                              Click="disp_header_clicked"/>
+                                                </DataGridTemplateColumn.Header>
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <Grid>
+                                                            <TextBlock x:Name="row_is_selected_text_3" Text="{Binding IsSelected}" Visibility="Collapsed"/>
+                                                            <CheckBox IsChecked="{Binding Text, ElementName=row_is_selected_text_3, Mode=OneWay}"
+                                                                      IsEnabled="{Binding IsEnabled}"
+                                                                      Style="{StaticResource T3.CheckBox.Cell}"
+                                                                      Click="disp_checkbox_clicked"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
 
-                                <TextBlock x:Name="txt_disp_empty" Style="{StaticResource T3.Empty}"
-                                           Visibility="Visible"
-                                           Text="No Revit links in this project.&#x0a;Link a model first to control how it draws in this view."/>
+                                            <DataGridTextColumn Header="LINK" Width="*" Binding="{Binding LinkName}"/>
+                                            <DataGridTextColumn Header="DISPLAY SETTINGS" Width="150" Binding="{Binding DisplayMode}"/>
+                                            <DataGridTextColumn Header="LINKED VIEW" Width="180" Binding="{Binding LinkedViewName}"
+                                                                ElementStyle="{StaticResource T3.Cell.Muted}"/>
+                                            <DataGridTextColumn Header="IN VIEW" Width="110" Binding="{Binding GraphicsSummary}"
+                                                                ElementStyle="{StaticResource T3.Cell.Mono}"/>
+                                            <DataGridTemplateColumn Header="STATUS" Width="110"
+                                                                    CellTemplate="{StaticResource T3.StatusPill}"/>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+
+                                    <TextBlock x:Name="txt_disp_empty" Style="{StaticResource T3.Empty}"
+                                               Visibility="Visible"
+                                               Text="No Revit links in this project.&#x0a;Link a model first to control how it draws in this view."/>
+                                </Grid>
+
+                                <Border Grid.Row="1" BorderBrush="{StaticResource T3.Border}"
+                                        BorderThickness="0,1,0,0" Padding="12,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" x:Name="lbl_disp_count" Text="0 links"
+                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
+                                                   Margin="0,0,16,0"/>
+                                        <TextBlock Grid.Column="1" x:Name="lbl_disp_scope" Text="Active view: —"
+                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
+                                                   HorizontalAlignment="Right" TextTrimming="CharacterEllipsis"/>
+                                    </Grid>
+                                </Border>
                             </Grid>
                         </Border>
 
-                        <!-- APPLY PANEL -->
+                        <!-- SETTINGS CARD -->
                         <Border Grid.Row="3" Style="{StaticResource T3.Panel}" Margin="0,12,0,0" Padding="16">
                             <StackPanel>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="QUICK PRESETS" Style="{StaticResource T3.Label}"
-                                               VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Grid Margin="0,0,0,8">
+                                    <TextBlock Text="DISPLAY FOR CHECKED LINKS" Style="{StaticResource T3.Label}"
+                                               VerticalAlignment="Center"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <TextBlock Text="Presets" Style="{StaticResource T3.Caption}"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
                                         <Button x:Name="btn_preset_model" Content="Model only"
-                                                Style="{StaticResource T3.Button.Secondary}"
-                                                Height="28" Padding="12,0" Margin="0,0,8,0"
+                                                Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
                                                 ToolTip="By Host View — the link draws with this view's model categories, its annotations stay hidden"
                                                 Click="preset_model_clicked"/>
                                         <Button x:Name="btn_preset_annotation" Content="Model + Annotation"
-                                                Style="{StaticResource T3.Button.Secondary}"
-                                                Height="28" Padding="12,0" Margin="0,0,8,0"
+                                                Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
                                                 ToolTip="By Linked View — the link draws its own model and annotation categories from the chosen view"
                                                 Click="preset_annotation_clicked"/>
                                         <Button x:Name="btn_preset_custom" Content="Custom"
                                                 Style="{StaticResource T3.Button.Secondary}"
-                                                Height="28" Padding="12,0" Margin="0,0,8,0"
                                                 ToolTip="Custom — decide aspect by aspect what follows the host view and what follows the link"
                                                 Click="preset_custom_clicked"/>
                                     </StackPanel>
                                 </Grid>
 
-                                <Grid Margin="0,12,0,0">
+                                <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="220"/>
                                         <ColumnDefinition Width="12"/>
@@ -2267,29 +2646,36 @@
                                    HorizontalAlignment="Right"/>
                     </Grid>
                     <ProgressBar x:Name="progress_bar" Style="{StaticResource T3.ProgressBar}"
-                                 Height="4" Minimum="0" Maximum="100" Value="0"/>
+                                 Minimum="0" Maximum="100" Value="0"/>
                 </StackPanel>
             </Border>
 
-            <!-- ══════════════════ ROW 4: FOOTER BAR ══════════════════ -->
+            <!-- ══════════════════ ROW 4: FOOTER BAR ══════════════════
+                 One primary that names the active tab's action. No Close button:
+                 the title-bar X already closes the window. -->
             <Border Grid.Row="4" Style="{StaticResource T3.FooterBar}">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Style="{StaticResource T3.Copyright}"/>
-                        <Border Width="1" Height="16" Margin="12,0"
+                    <Grid Grid.Column="0" VerticalAlignment="Center" Margin="0,0,12,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Style="{StaticResource T3.Copyright}"/>
+                        <Border Grid.Column="1" Width="1" Height="16" Margin="12,0"
                                 Background="{StaticResource T3.Border}" VerticalAlignment="Center"/>
-                        <Ellipse x:Name="status_dot" Style="{StaticResource T3.Dot}"
+                        <Ellipse Grid.Column="2" x:Name="status_dot" Style="{StaticResource T3.Dot}"
                                  Fill="{StaticResource T3.Success.Accent}"/>
-                        <TextBlock x:Name="status_text" Text="Ready"
-                                   Style="{StaticResource T3.Body.Secondary}"/>
-                    </StackPanel>
+                        <TextBlock Grid.Column="3" x:Name="status_text" Text="Ready"
+                                   Style="{StaticResource T3.Body.Secondary}" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </Grid>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button x:Name="btn_cancel" Content="Close" Style="{StaticResource T3.Button.Ghost}"
-                                Margin="0,0,8,0" Click="cancel_button_clicked"/>
                         <Button x:Name="btn_primary" Content="Link Selected Models" IsDefault="True"
                                 Style="{StaticResource T3.Button.Primary}" Click="primary_button_clicked"/>
                     </StackPanel>

@@ -781,25 +781,9 @@ def _set_param_value(elem, change, doc):
         if st == DB.StorageType.String:
             param.Set(str(value) if value else "")
         elif st == DB.StorageType.Integer:
-            if not value:
-                param.Set(0)
-            else:
-                try:
-                    param.Set(int(float(value)))
-                except ValueError:
-                    # Exported as display text ("Yes", an enum name ...).
-                    if not param.SetValueString(str(value)):
-                        return False, "'{}' is not a valid value for '{}'".format(
-                            value, field_name)
+            param.Set(int(float(value)) if value else 0)
         elif st == DB.StorageType.Double:
-            # Export writes AsValueString() -- project display units (2400 for
-            # 2400 mm). Set(float) would store that number in Revit's internal
-            # feet, so read it back the same way it was written.
-            if not value:
-                param.Set(0.0)
-            elif not param.SetValueString(str(value)):
-                return False, "'{}' is not a valid value for '{}'".format(
-                    value, field_name)
+            param.Set(float(value) if value else 0.0)
         else:
             return False, "Unsupported StorageType"
 

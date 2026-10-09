@@ -113,10 +113,6 @@ class ViewItem(_Reactive):
     a virtualized row is realized during scrolling. That is what lets the grid
     stay virtualized (fast open, no crash on large models) while still keeping
     live page-numbering and single-select behaviour.
-
-    Under CPython `forms.Reactive` is unavailable and this class falls back to
-    `object`, so WPF never subscribes to PropertyChanged: the dialog redraws
-    the grid itself after renumbering (PDFImportDialog._refresh_grid_later).
     """
 
     def __init__(self, name, type_label, view_id, on_toggle=None):
@@ -183,7 +179,6 @@ class PDFImportDialog(T3WPFWindow):
         self._loading   = False
         self._oc        = None   # ObservableCollection bound once, updated in-place
         self._mode      = _MODE_SEQUENTIAL
-        self._grid_refresh_pending = False
 
         # Resolve the target document and the Revit release ONCE, here — every
         # later step reuses them.
@@ -358,7 +353,6 @@ class PDFImportDialog(T3WPFWindow):
         else:
             self._assign_pages()
             self._update_status()
-        self._refresh_grid_later()
 
     def _assign_pages(self):
         """Assign sequential page numbers to selected views.
@@ -375,32 +369,6 @@ class PDFImportDialog(T3WPFWindow):
             else:
                 # Deselected: always clear display; keep PageNumber for restore
                 item.PageDisplay = u"–"
-
-    def _refresh_grid_later(self):
-        """Redraw the grid so PAGE numbers and checkboxes match the rows.
-
-        The rows raise no PropertyChanged WPF listens to under CPython (see
-        ViewItem), so a renumbered PAGE cell or a cleared checkbox only shows
-        after Items.Refresh(). Deferred through the dispatcher: Refresh() while
-        a toggle or cell edit is still committing throws "not allowed during an
-        EditItem transaction". A bulk change queues a single redraw.
-        """
-        if self._grid_refresh_pending:
-            return
-        self._grid_refresh_pending = True
-
-        def _refresh():
-            self._grid_refresh_pending = False
-            try:
-                self.grid_views.Items.Refresh()
-            except Exception:
-                pass
-        try:
-            from System.Windows.Threading import DispatcherPriority
-            from System import Action
-            self.Dispatcher.BeginInvoke(DispatcherPriority.Background, Action(_refresh))
-        except Exception:
-            _refresh()
 
     def _update_status(self):
         total    = len(self._items)
@@ -436,7 +404,6 @@ class PDFImportDialog(T3WPFWindow):
         self.txt_search.IsEnabled        = enabled
         self.btn_select_all.IsEnabled    = enabled and self._mode == _MODE_SEQUENTIAL
         self.btn_select_none.IsEnabled   = enabled
-        self.btn_cancel.IsEnabled        = not busy
         if enabled:
             self.btn_import.IsEnabled = bool(
                 self._pdf_path and any(i.IsSelected for i in self._items))
@@ -477,17 +444,14 @@ class PDFImportDialog(T3WPFWindow):
 
         if self._mode == _MODE_ALL_IN_ONE:
             # Enforce single-select: keep only the first currently-selected view.
+            # Per-item PropertyChanged notifications update the checkboxes; no
+            # Items.Refresh() (which would fight the virtualized grid).
             first = next((i for i in self._items if i.IsSelected), None)
             self._loading = True
             for item in self._items:
                 item.IsSelected = (item is first)
             self._loading = False
 
-        # Renumber for the current selection (rows cleared above must not keep
-        # their old page once sequential mode shows the PAGE column again) and
-        # redraw: the rows cannot notify WPF themselves (see ViewItem).
-        self._assign_pages()
-        self._refresh_grid_later()
         self._update_status()
 
     def browse_pdf_clicked(self, sender, args):
@@ -532,7 +496,6 @@ class PDFImportDialog(T3WPFWindow):
             item.IsSelected = True
         self._loading = False
         self._assign_pages()
-        self._refresh_grid_later()
         self._update_status()
         # Giu checkbox select-all o header khop voi nut nay.
         self.sync_header_checkbox(
@@ -544,7 +507,6 @@ class PDFImportDialog(T3WPFWindow):
             item.IsSelected = False
         self._loading = False
         self._assign_pages()
-        self._refresh_grid_later()
         self._update_status()
         # Giu checkbox select-all o header khop voi nut nay.
         self.sync_header_checkbox(

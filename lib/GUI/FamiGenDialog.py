@@ -2241,21 +2241,18 @@ class FamilyCreatorDialog(T3WPFWindow):
         if not block_item._placements:
             return 0
         family = None
-        # clr.Reference[Family]() (the IronPython out-param box) does not exist
-        # under pythonnet, so LoadFamily was never called and nothing was
-        # placed. Load with the plain overload (unambiguous, returns bool) and
-        # take the family by name: a family loaded from an .rfa is named after
-        # the file, and False means one with that name is already loaded.
         try:
-            self._doc.LoadFamily(rfa_path)
+            loaded_ref = clr.Reference[Family]()
+            if self._doc.LoadFamily(rfa_path, loaded_ref):
+                family = loaded_ref.Value
         except Exception:
-            logger.warning("LoadFamily failed for {}:\n{}".format(
-                rfa_path, traceback.format_exc()))
-        stem = os.path.splitext(os.path.basename(rfa_path))[0]
-        for f in FilteredElementCollector(self._doc).OfClass(Family):
-            if f.Name == stem:
-                family = f
-                break
+            pass
+        if not family:
+            stem = os.path.splitext(os.path.basename(rfa_path))[0]
+            for f in FilteredElementCollector(self._doc).OfClass(Family):
+                if f.Name == stem:
+                    family = f
+                    break
         if not family:
             logger.warning("Could not load family: {}".format(rfa_path))
             return 0

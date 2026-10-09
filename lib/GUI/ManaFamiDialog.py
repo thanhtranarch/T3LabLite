@@ -81,10 +81,6 @@ THUMBNAIL_CACHE_MAX_FILES = 500
 THUMBNAIL_CACHE_MAX_BYTES = 200 * 1024 * 1024
 # A scan of a big library prunes every this many new thumbnails, and at its end.
 THUMBNAIL_PRUNE_EVERY = 50
-# FamilyItem raises no PropertyChanged WPF can hear, so a thumbnail set after
-# its card was drawn only shows once the cards are regenerated: redraw them
-# every this many thumbnails, and once when the worker ends.
-THUMBNAIL_REDRAW_EVERY = 50
 SCAN_BATCH_SIZE = 20
 
 # Rail modes -> TabControl index. Batch Operations (Family Management) is used
@@ -227,18 +223,18 @@ def _extract_rfa_preview(rfa_path):
         # JPEG scan
         pos = 0
         while True:
-            idx = data.find(b'\xff\xd8\xff', pos)
+            idx = data.find('\xff\xd8\xff', pos)
             if idx < 0:
                 break
-            end = data.find(b'\xff\xd9', idx + 3)
+            end = data.find('\xff\xd9', idx + 3)
             if end > 0:
                 chunk = data[idx:end + 2]
                 if len(chunk) > 1024:
                     candidates.append(chunk)
             pos = idx + 3
         # PNG scan
-        PNG_SIG = b'\x89PNG\r\n\x1a\n'
-        PNG_IEND = b'IEND\xae\x42\x60\x82'
+        PNG_SIG = '\x89PNG\r\n\x1a\n'
+        PNG_IEND = 'IEND\xae\x42\x60\x82'
         pos = 0
         while True:
             idx = data.find(PNG_SIG, pos)
@@ -259,9 +255,9 @@ def _extract_rfa_preview(rfa_path):
 def _bytes_to_bitmap(raw_bytes):
     try:
         from System.IO import MemoryStream
-        # raw_bytes is Python 3 `bytes`: copy it into a .NET byte[] (the old
-        # latin-1 GetBytes round trip was for IronPython str).
-        stream = MemoryStream(System.Array[System.Byte](bytearray(raw_bytes)))
+        from System.Text import Encoding
+        net_bytes = Encoding.GetEncoding('iso-8859-1').GetBytes(raw_bytes)
+        stream = MemoryStream(net_bytes)
         bitmap = BitmapImage()
         bitmap.BeginInit()
         bitmap.StreamSource = stream
@@ -377,11 +373,15 @@ class FamilyRow(object):
                 self.TypeName != self.OriginalTypeName)
 
 
-# IFamilyLoadOptions for the Loader: FamilyGen.builder._OverwriteLoadOptions
-# (overwrite the loaded family and its parameter values). It cannot live here:
-# a .NET interface class needs a static __namespace__ under pythonnet 3, and the
-# button reloads this module on every click ("Duplicate type name"), while
-# FamilyGen.builder is imported once per session.
+class FamilyLoadOptions(DB.IFamilyLoadOptions):
+    def OnFamilyFound(self, familyInUse, overwriteParameterValues):
+        overwriteParameterValues = True
+        return True
+
+    def OnSharedFamilyFound(self, sharedFamily, familyInUse, source, overwriteParameterValues):
+        overwriteParameterValues = True
+        source = DB.FamilySource.Family
+        return True
 
 
 # MAIN CENTRAL WINDOW
@@ -579,9 +579,10 @@ class ManaFamiWindow(T3WPFWindow):
         self.btn_undo.Click += self.undo_click
         self.btn_apply.Click += self.apply_click
 
-        # Chrome: T3WPFWindow._wire_window_controls already wires btn_minimize,
-        # btn_maximize and btn_close_chrome (-> close_button_clicked below).
-        # Wiring them here too made one maximize click toggle twice.
+        # Chrome Event Handlers
+        self.btn_minimize.Click += self._minimize
+        self.btn_maximize.Click += self._maximize
+        self.btn_close_chrome.Click += self._close_chrome
         self.PreviewKeyDown += self._on_key_down
         self.Loaded += self.window_loaded
 
@@ -688,6 +689,10 @@ class ManaFamiWindow(T3WPFWindow):
     def _clear_families_ui(self):
         try:
             for old_family in list(self.all_families):
+                try:
+                    old_family.PropertyChanged -= self.on_family_property_changed
+                except Exception:
+                    pass
                 if hasattr(old_family, 'Dispose'):
                     old_family.Dispose()
             self.all_families = []
@@ -779,11 +784,7 @@ class ManaFamiWindow(T3WPFWindow):
         try:
             for family in batch:
                 self.all_families.append(family)
-                # Plain Python subscription: `family.PropertyChanged += ...`
-                # raised AttributeError (FamilyItem is not a .NET object) and
-                # emptied the Loader. The bridge sets IsChecked on a card click,
-                # which must refresh the selection count and the Load button.
-                family.add_PropertyChanged(self.on_family_property_changed)
+                family.PropertyChanged += self.on_family_property_changed
                 self.filtered_families.Add(family)
             count = len(self.filtered_families)
             self.txt_result_count.Text = "{} families found...".format(count)
@@ -923,10 +924,14 @@ class ManaFamiWindow(T3WPFWindow):
         try:
             if families is None:
                 families = self.all_families
-            # Items were subscribed once in _push_family_batch_ui (a .NET-style
-            # `PropertyChanged +=` here raised before Add: empty Loader).
+            for old_family in self.filtered_families:
+                try:
+                    old_family.PropertyChanged -= self.on_family_property_changed
+                except Exception:
+                    pass
             self.filtered_families.Clear()
             for family in families:
+                family.PropertyChanged += self.on_family_property_changed
                 self.filtered_families.Add(family)
             self.update_result_count()
             # A search / category filter can empty the cards: say so.
@@ -1109,15 +1114,6 @@ class ManaFamiWindow(T3WPFWindow):
                 if not result:
                     return
 
-            try:
-                from FamilyGen.builder import _OverwriteLoadOptions
-                load_options = _OverwriteLoadOptions()
-            except Exception as opt_ex:
-                forms.alert("Cannot load families: the family load options could "
-                            "not be created ({}). Restart Revit and try again."
-                            .format(opt_ex), exitscript=False)
-                return
-
             start_time = time.time()
             self.btn_load.IsEnabled = False
             self.btn_cancel_loader.IsEnabled = False
@@ -1125,6 +1121,7 @@ class ManaFamiWindow(T3WPFWindow):
             success_count = 0
             fail_count = 0
             failed_families = []
+            load_options = FamilyLoadOptions()
 
             for i, family in enumerate(selected_families):
                 try:
@@ -1218,20 +1215,10 @@ class ManaFamiWindow(T3WPFWindow):
                         batch += 1
                         if batch % 10 == 0:
                             time.sleep(0.05)
-                        if batch % THUMBNAIL_REDRAW_EVERY == 0:
-                            self._redraw_cards_from_worker()
             except Exception:
                 pass
-        if batch and batch % THUMBNAIL_REDRAW_EVERY and not self._thumb_cancel:
-            self._redraw_cards_from_worker()
         if written:
             prune_thumbnail_cache()
-
-    def _redraw_cards_from_worker(self):
-        try:
-            self.Dispatcher.Invoke(Action(self._refresh_family_cards))
-        except Exception:
-            pass
 
     def _apply_thumbnail(self, family, bitmap):
         try:
@@ -1629,10 +1616,7 @@ class ManaFamiWindow(T3WPFWindow):
             forms.alert("Transaction failed: {}".format(ex))
 
     def export_list_click(self, sender, e):
-        dest_file = forms.save_file(file_ext='csv',
-                                    files_filter="Comma-Separated Values (*.csv)|*.csv",
-                                    default_name="Family List.csv",
-                                    title="Export Family List")
+        dest_file = forms.save_file(filesfilter="Comma-Separated Values (*.csv)|*.csv", title="Export Family List")
         if not dest_file:
             return
         try:
@@ -1653,6 +1637,11 @@ class ManaFamiWindow(T3WPFWindow):
     def _cleanup(self):
         try:
             self._thumb_cancel = True
+            for family in self.filtered_families:
+                try:
+                    family.PropertyChanged -= self.on_family_property_changed
+                except Exception:
+                    pass
             for family in self.all_families:
                 if hasattr(family, 'Dispose'):
                     family.Dispose()

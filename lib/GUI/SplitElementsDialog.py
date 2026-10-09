@@ -6,13 +6,6 @@ import builtins as __builtin__
 
 from pyrevit import forms
 
-try:
-    from GUI import RevitTheme as _theme
-except Exception:
-    try:
-        import RevitTheme as _theme
-    except Exception:
-        _theme = None
 
 from GUI.WPF_Base import T3WPFWindow
 
@@ -25,8 +18,6 @@ class SplitElementsWindow(T3WPFWindow):
         self._script_dir = script_dir
         self._revit = revit
 
-        self._adopt_host_font()
-        self._apply_theme()
 
         if hasattr(self, 'btn_split_walls') and self.btn_split_walls:
             self.btn_split_walls.Click += self._on_split_walls
@@ -37,8 +28,6 @@ class SplitElementsWindow(T3WPFWindow):
 
         if hasattr(self, 'btn_execute') and self.btn_execute:
             self.btn_execute.Click += self._on_execute
-        if hasattr(self, 'btn_cancel') and self.btn_cancel:
-            self.btn_cancel.Click += self._close_chrome
 
         if hasattr(self, 'btn_minimize') and self.btn_minimize:
             self.btn_minimize.Click += self._minimize
@@ -46,26 +35,6 @@ class SplitElementsWindow(T3WPFWindow):
             self.btn_maximize.Click += self._maximize
         if hasattr(self, 'btn_close_chrome') and self.btn_close_chrome:
             self.btn_close_chrome.Click += self._close_chrome
-
-    def _adopt_host_font(self):
-        if _theme is None:
-            return
-        family, size = _theme.host_font()
-        if family:
-            try:
-                self.FontFamily = family
-                if size and size > 0:
-                    self.FontSize = size
-            except Exception:
-                pass
-
-    def _apply_theme(self, theme=None):
-        if _theme is None:
-            return
-        try:
-            _theme.apply(self, theme)
-        except Exception:
-            pass
 
     def tab_chip_checked(self, sender, e):
         """Tab strip (T3.Chip, same as BGTheme): show the tab named by Tag."""
@@ -85,13 +54,8 @@ class SplitElementsWindow(T3WPFWindow):
         elif idx == 2:
             self._on_split_floors(sender, e)
 
-    def _launch(self, rel_path, label):
+    def _launch(self, rel_path):
         script_path = os.path.normpath(os.path.join(self._script_dir, rel_path))
-        if not os.path.isfile(script_path):
-            # The Split.pulldown tools are not shipped with this build.
-            forms.alert("{} is not available in this version of T3Lab Lite.".format(label),
-                        title="Split Elements")
-            return
         self.Close()
         g = {'__name__': '__main__', '__file__': script_path,
              '__builtins__': __builtin__, '__revit__': self._revit}
@@ -102,13 +66,13 @@ class SplitElementsWindow(T3WPFWindow):
             forms.alert("Error launching tool:\n{}".format(ex))
 
     def _on_split_walls(self, sender, e):
-        self._launch("../Split.pulldown/Wall_Split.pushbutton/script.py", "Split Walls")
+        self._launch("../Split.pulldown/Wall_Split.pushbutton/script.py")
 
     def _on_split_columns(self, sender, e):
-        self._launch("../Split.pulldown/Column_Split.pushbutton/script.py", "Split Columns")
+        self._launch("../Split.pulldown/Column_Split.pushbutton/script.py")
 
     def _on_split_floors(self, sender, e):
-        self._launch("../Split.pulldown/Floor_Split.pushbutton/script.py", "Split Floors")
+        self._launch("../Split.pulldown/Floor_Split.pushbutton/script.py")
 
     def _minimize(self, sender, e):
         import System.Windows

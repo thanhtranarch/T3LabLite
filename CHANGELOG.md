@@ -17,8 +17,29 @@ Releasing a new version:
 
 ## [Unreleased]
 
-The T3Lab ribbon now has exactly the layout of t3lab-revit-api: six panels
-instead of seven, the same buttons in the same places.
+## [1.6.0] - 2026-10-09
+
+Major UI modernization and ribbon regrouping matching t3lab-revit-api:
+unified design system styles across all dialogs, six-panel ribbon layout,
+new batch workset features, dynamic assistant greetings, and comprehensive stability fixes.
+
+### Added
+- **UI Design System Modernization**:
+  - Full alignment with T3Lab modern UI standards across all WPF dialogs (`T3Standard`).
+  - Standardized footer bar layout (`T3.FooterBar`): status text and copyright on the left, progress monitor and single clear primary action on the right.
+  - Callout banners (`T3.Callout`) with context hints and shortcut tips across tools.
+  - Status pills (`T3.StatusPill`) with string-bridged severity bindings for clean visual state transitions.
+  - Segoe Fluent / MDL2 icons across navigation rails and buttons.
+- **Dynamic Assistant Greetings** (`lib/GUI/AssistantGreetings.py`):
+  - T3Lab Assistant welcome header now selects dynamic, non-repeating greetings based on time of day.
+  - Dedicated English and Vietnamese greeting pools.
+- **Batch Link Workset Management** (`lib/GUI/BatchLinkWorksets.py`):
+  - Added Link Workset tab allowing per-link workset assignment in the grid.
+  - Staged pending (amber), applied (green), and failed (red) status flow with bulk editor tools.
+- **Thread Input Lock** (`lib/GUI/InputLock.py`):
+  - Added `ThreadInputLock` utility to disable thread windows during modeless external event pumps, preventing errant clicks during long-running BatchOut operations.
+- **Modular Point Cloud Analysis Service** (`lib/Services/point_cloud_analysis.py`):
+  - Extracted point cloud geometry extraction and analysis pipeline to shared service for both UI and MCP tool workflows.
 
 ### Changed
 - **Ribbon regrouped** -- restart Revit after updating (a pyRevit Reload cannot
@@ -45,6 +66,12 @@ instead of seven, the same buttons in the same places.
   next to its script. Writing them inside the extension folder left a git
   install with local changes that blocked the next automatic update. Your
   existing names are carried over once.
+- **Modernized Dialog Interfaces** -- Refactored layout, inputs, and controls across 40+ dialogs
+  including AdvancedViewManager, AutoDimension, AutoJoin, BatchLink, BatchOut, CADToElements,
+  DoorThreshold, FamiGen, ManaContains, ManaDWG, ManaFami, ManaGroup, ManaPara, ManaSched,
+  ManaSelect, ManaSheets, ManaStyles, ManaViews, ModelAuditor, PDFImport, PointCloud, PropertyLine,
+  RoomToFloor, SheetGen, SplitElements, T3LabAssistant, TextToElement, TileLayout, WallAdjustBase,
+  and WallCutProfile.
 
 ### Fixed
 - After a download-and-copy update (no git on the machine, or "Download latest
@@ -120,6 +147,10 @@ instead of seven, the same buttons in the same places.
   the wrong folder. Image to Drafting (`potrace.exe`), the Assistant and the
   Assistant dock pane now find a button by its folder name, wherever it sits
   on the ribbon.
+
+### Removed
+- Redundant Cancel/Close buttons in dialog footer bars where the window title-bar close (X) is already standard.
+- Obsolete local audit history JSON files from Model Auditor source tree.
 
 ## [1.5.0] - 2026-10-07
 

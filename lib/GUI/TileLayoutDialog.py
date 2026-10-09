@@ -56,7 +56,7 @@ clr.AddReference("WindowsBase")
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, BuiltInCategory, ElementId,
-    XYZ, Line, CurveLoop, GeometryObject,
+    XYZ, Line, CurveLoop,
     GeometryCreationUtilities,
     DirectShape,
     View3D, ViewFamilyType, ViewFamily,
@@ -82,7 +82,7 @@ for _p in (lib_dir, gui_dir):
     if _p not in sys.path:
         sys.path.append(_p)
 
-from Snippets._compat import eid_value, elem_name, net_list
+from Snippets._compat import eid_value, elem_name
 
 # pyRevit caches lib modules between runs while pushbutton scripts are always
 # re-read — after an extension update this script can end up calling engine
@@ -100,11 +100,15 @@ except Exception:
         pass
 
 from GUI.TileLayoutCore import (
-    MM_TO_FT, FT_TO_MM, FT2_TO_M2, MIN_CUT_WIDTH_MM,
+    MM_TO_FT, FT2_TO_M2, MIN_CUT_WIDTH_FT,
     PATTERNS, PATTERN_LABELS,
     V2, poly_area, poly_bbox, ensure_ccw,
     OptionGenerator,
+    length_text, shift_text, size_text, signed,
 )
+# Lengths are shown and typed in the project's unit (Manage › Project Units);
+# read per window, never at import — this module outlives the project.
+from Snippets._units import project_length_unit, MILLIMETERS
 
 XAML_FILE  = os.path.join(os.path.dirname(__file__), 'Tools', 'TileLayout.xaml')
 
@@ -265,10 +269,6 @@ class RevitVisualizer(object):
 
     def __init__(self, view):
         self.view = view
-        # Tile shapes drawn / that could not be built — the caller reports
-        # both, so a run that draws nothing is not announced as a success.
-        self.drawn = 0
-        self.failed = 0
         self._resolve_solid_fill()
 
     def draw_piece(self, piece, z_base):
@@ -279,20 +279,16 @@ class RevitVisualizer(object):
             if not frag or len(frag) < 3: continue
             loop = self._make_curve_loop(frag, z_base)
             if loop is None: continue
-            # pythonnet 3 does not turn a Python list into IList<T>:
-            # pass real .NET lists (a [loop] raised TypeError on every tile).
             try:
                 solid = GeometryCreationUtilities.CreateExtrusionGeometry(
-                    net_list(CurveLoop, [loop]), XYZ(0,0,1), EXTRUDE_H)
+                    [loop], XYZ(0,0,1), EXTRUDE_H)
             except Exception as ex:
                 logger.debug("Extrude failed for {}: {}".format(piece.label, ex))
-                self.failed += 1
                 continue
 
             ds = DirectShape.CreateElement(
                 doc, ElementId(BuiltInCategory.OST_GenericModel))
-            ds.SetShape(net_list(GeometryObject, [solid]))
-            self.drawn += 1
+            ds.SetShape([solid])
             try:
                 ds.SetName(PREVIEW_DS_NAME)
             except Exception:
@@ -622,14 +618,22 @@ def render_option_preview(option, floor_pts, canvas_w=190, canvas_h=130):
 # SECTION 10 — REPORTING
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _dims_text(fi, unit):
+    """Floor bounding size 'W × H mm' in the project unit."""
+    return size_text(fi.width_ft, fi.height_ft, unit)
+
+
 class ReportGenerator(object):
 
-    def __init__(self, chosen_per_floor, params, all_floors=None):
+    def __init__(self, chosen_per_floor, params, all_floors=None, unit=None):
         """chosen_per_floor: list of (FloorInfo, LayoutOption, pattern).
+        params: tile_w_ft / tile_h_ft / joint_ft / optimize_nesting.
         all_floors: full list of FloorInfo (for PDF report showing every
-        option, not just the chosen one)."""
+        option, not just the chosen one). unit: project length unit the
+        report is written in (None = mm)."""
         self.chosen = chosen_per_floor
         self.params = params
+        self.unit = unit or MILLIMETERS
         self.all_floors = all_floors or [fi for fi, _o, _p in chosen_per_floor]
 
 
@@ -684,14 +688,16 @@ class ReportGenerator(object):
         title.Margin = Thickness(0, 0, 0, 4)
         fdoc.Blocks.Add(title)
 
-        tw_mm = self.params.get('tile_w_mm', 0)
-        th_mm = self.params.get('tile_h_mm', 0)
-        jw_mm = self.params.get('joint_mm', 0)
+        unit = self.unit
+        tw = self.params.get('tile_w_ft', 0.0)
+        th = self.params.get('tile_h_ft', 0.0)
+        jw = self.params.get('joint_ft', 0.0)
         nest  = "ON" if self.params.get('optimize_nesting') else "OFF"
         meta  = Paragraph(Run(
-            u"Tile {:.0f} × {:.0f} mm  \u00b7  Joint {:.1f} mm  \u00b7  "
+            u"Tile {}  \u00b7  Joint {}  \u00b7  "
             u"Nesting {}  \u00b7  {} floor(s)".format(
-                tw_mm, th_mm, jw_mm, nest, len(self.all_floors))))
+                size_text(tw, th, unit), length_text(jw, unit, extra=1),
+                nest, len(self.all_floors))))
         meta.FontSize = 11; meta.Foreground = sub
         meta.Margin = Thickness(0, 0, 0, 16)
         fdoc.Blocks.Add(meta)
@@ -705,10 +711,10 @@ class ReportGenerator(object):
             hdr = Paragraph()
             hdr.Inlines.Add(Run(u"Floor #{}  ".format(fi_idx + 1)))
             hdr.Inlines.Add(Run(u"(id {})  \u2014  {:.1f} m\u00b2  \u00b7  "
-                                u"{:.0f} \u00d7 {:.0f} mm  \u00b7  {}".format(
+                                u"{}  \u00b7  {}".format(
                 eid_value(fi.floor.Id),
                 fi.area_ft2 * FT2_TO_M2,
-                fi.width_ft * FT_TO_MM, fi.height_ft * FT_TO_MM,
+                _dims_text(fi, unit),
                 PATTERN_LABELS.get(chosen_pat, chosen_pat))))
             hdr.FontSize = 15; hdr.FontWeight = FontWeights.SemiBold
             hdr.Foreground = dark
@@ -732,7 +738,7 @@ class ReportGenerator(object):
             for opt in fi.options:
                 is_chosen = (opt.option_id == chosen_id)
                 grid.Children.Add(
-                    self._build_report_card(opt, fi, is_chosen))
+                    self._build_report_card(opt, fi, is_chosen, unit))
 
             container = BlockUIContainer(grid)
             container.Margin = Thickness(0, 0, 0, 10)
@@ -762,7 +768,7 @@ class ReportGenerator(object):
         return fdoc
 
     @staticmethod
-    def _build_report_card(opt, fi, is_chosen):
+    def _build_report_card(opt, fi, is_chosen, unit=MILLIMETERS):
         import System.Windows.Controls as WC
         import System.Windows as SW
         from System.Windows.Media import SolidColorBrush, Color as WColor
@@ -786,7 +792,7 @@ class ReportGenerator(object):
         name = WC.TextBlock()
         name.Text = u"Option {}".format(opt.option_id)
         if is_chosen:
-            name.Text += u"   \u2605 chosen"
+            name.Text += u"   chosen"
         name.FontSize = 13; name.FontWeight = SW.FontWeights.SemiBold
         name.Foreground = brush_chosen if is_chosen else brush_text
         stack.Children.Add(name)
@@ -834,7 +840,7 @@ class ReportGenerator(object):
                                 waste_col))
         thin_col = warn_col if opt.n_thin_cuts else ok_col
         stack.Children.Add(_row(
-            u"Cuts < {:.0f}mm:".format(MIN_CUT_WIDTH_MM),
+            u"Cuts < {}:".format(unit.show(MIN_CUT_WIDTH_FT)),
             "{}".format(opt.n_thin_cuts), thin_col))
 
         outer.Child = stack
@@ -889,14 +895,18 @@ class _FloorFilter(ISelectionFilter):
 class FloorRowVM(object):
     """Row data for the Step 1 ListView (read-only display)."""
 
-    def __init__(self, floor_info, display_index):
+    def __init__(self, floor_info, display_index, unit=None):
         self._fi = floor_info
         self.Name        = "Floor #{}  (id {})".format(
             display_index, eid_value(floor_info.floor.Id))
         self.LevelName   = get_floor_level_name(floor_info.floor)
-        w_mm = floor_info.width_ft  * FT_TO_MM
-        h_mm = floor_info.height_ft * FT_TO_MM
-        self.Dimensions  = "{:.0f} × {:.0f}".format(w_mm, h_mm)
+        # Column header carries the unit (DIMENSIONS (MM)); sub-titles
+        # elsewhere use DimensionsText, which carries it after the numbers.
+        unit = unit or MILLIMETERS
+        self.Dimensions  = u"{} × {}".format(
+            unit.text(floor_info.width_ft), unit.text(floor_info.height_ft))
+        self.DimensionsText = size_text(floor_info.width_ft,
+                                        floor_info.height_ft, unit)
         self.AreaM2      = "{:.1f}".format(floor_info.area_ft2 * FT2_TO_M2)
         self.VertexCount = str(len(floor_info.pts))
 
@@ -924,6 +934,9 @@ class TileLayoutWindow(T3WPFWindow):
 
     def __init__(self, preselected_floors=None):
         T3WPFWindow.__init__(self, XAML_FILE)
+        # Project length unit — every length on screen and in the boxes.
+        self._unit = project_length_unit(doc)
+        self._apply_units()
 
         # ── wizard state ──
         self._floors = []        # [FloorInfo]
@@ -941,6 +954,20 @@ class TileLayoutWindow(T3WPFWindow):
             self._extract_boundaries(preselected_floors)
 
         self._refresh_step_ui()
+
+    def _apply_units(self):
+        """Labels + default tile size in the project unit (defaults are
+        600 × 600 mm tiles with a 3 mm joint, shown in that unit)."""
+        u = self._unit
+        self.lbl_tile_w.Text = u.label("Width") + ":"
+        self.lbl_tile_h.Text = u.label("Height") + ":"
+        self.lbl_joint.Text = u.label("Joint / Grout") + ":"
+        col = getattr(self, 'col_dimensions', None)   # GridViewColumn
+        if col is not None:
+            col.Header = u.label("DIMENSIONS")
+        self.txt_tile_w.Text = u.default_text(600)
+        self.txt_tile_h.Text = u.default_text(600)
+        self.txt_joint.Text = u.default_text(3)
 
     # ── logo ──────────────────────────────────────────────────────────────────
     # ── chrome ────────────────────────────────────────────────────────────────
@@ -988,7 +1015,7 @@ class TileLayoutWindow(T3WPFWindow):
             self.btn_next.Content = "Generate Concepts →"
             self.btn_next.IsEnabled = bool(self._floors)
         else:
-            self.btn_next.Content = "Apply to Model ✓"
+            self.btn_next.Content = "Apply to Model"
             self.btn_next.IsEnabled = self._every_floor_has_choice()
 
     def _every_floor_has_choice(self):
@@ -1017,7 +1044,7 @@ class TileLayoutWindow(T3WPFWindow):
                 continue
             fi = FloorInfo(f, ensure_ccw(pts), z)
             self._floors.append(fi)
-            self._rows.append(FloorRowVM(fi, len(self._rows) + 1))
+            self._rows.append(FloorRowVM(fi, len(self._rows) + 1, self._unit))
             total_area += fi.area_ft2
 
         from System.Collections.ObjectModel import ObservableCollection
@@ -1068,8 +1095,8 @@ class TileLayoutWindow(T3WPFWindow):
             name_tb.FontWeight = SW.FontWeights.SemiBold
             name_tb.Foreground = SolidColorBrush(WColor.FromRgb(44, 62, 80))
             sub_tb = WC.TextBlock()
-            sub_tb.Text = "{}  ·  {} m²  ·  {} mm".format(
-                row.LevelName, row.AreaM2, row.Dimensions)
+            sub_tb.Text = u"{}  ·  {} m²  ·  {}".format(
+                row.LevelName, row.AreaM2, row.DimensionsText)
             sub_tb.FontSize = 11
             sub_tb.Foreground = SolidColorBrush(WColor.FromRgb(127, 140, 141))
             sub_tb.Margin = SW.Thickness(0, 2, 0, 0)
@@ -1132,7 +1159,7 @@ class TileLayoutWindow(T3WPFWindow):
 
         gen = OptionGenerator(params['tile_w_ft'], params['tile_h_ft'],
                               params['joint_ft'], params['optimize_nesting'],
-                              top_n=4)
+                              top_n=4, unit=self._unit)
 
         n_kept = 0
         bw_gap = False
@@ -1214,7 +1241,7 @@ class TileLayoutWindow(T3WPFWindow):
         if n_kept:
             msg += "  Previous choice kept on {} floor(s).".format(n_kept)
         if bw_gap:
-            msg += (u"  ⚠ Basket Weave needs tile length = k × width "
+            msg += (u"  Basket Weave needs tile length = k × width "
                     u"(e.g. 600×300) — current size leaves gaps.")
         self.status_text.Text = msg
         return True
@@ -1233,10 +1260,10 @@ class TileLayoutWindow(T3WPFWindow):
         for fi_idx, fi in enumerate(self._floors):
             # Section header
             hdr = WC.TextBlock()
-            hdr.Text = "{}  —  {} · {} mm".format(
+            hdr.Text = u"{}  —  {} · {}".format(
                 self._rows[fi_idx].Name,
-                self._rows[fi_idx].AreaM2 + " m²",
-                self._rows[fi_idx].Dimensions)
+                self._rows[fi_idx].AreaM2 + u" m²",
+                self._rows[fi_idx].DimensionsText)
             hdr.FontSize = 14
             hdr.FontWeight = SW.FontWeights.SemiBold
             hdr.Foreground = SolidColorBrush(WColor.FromRgb(44, 62, 80))
@@ -1281,7 +1308,7 @@ class TileLayoutWindow(T3WPFWindow):
 
         stack = WC.StackPanel()
 
-        # Header: "● Option A                              [↗ Expand]"
+        # Header: "Option A                                [↗ Expand]"
         header = WC.Grid()
         cdef0 = WC.ColumnDefinition(); cdef0.Width = SW.GridLength(1, SW.GridUnitType.Star)
         cdef1 = WC.ColumnDefinition(); cdef1.Width = SW.GridLength.Auto
@@ -1289,14 +1316,13 @@ class TileLayoutWindow(T3WPFWindow):
         header.ColumnDefinitions.Add(cdef1)
 
         header_left = WC.StackPanel(); header_left.Orientation = WC.Orientation.Horizontal
-        dot = WC.TextBlock()
-        dot.Text = "●"; dot.FontSize = 16; dot.Foreground = brush_sub
-        dot.Margin = SW.Thickness(0, 0, 6, 0)
+        # No decorative bullet before the name (T3 rule 22: no Unicode
+        # characters as icons) — "Option A" stands on its own.
         name = WC.TextBlock()
         name.Text = "Option {}".format(opt.option_id)
         name.FontSize = 13; name.FontWeight = SW.FontWeights.SemiBold
         name.Foreground = brush_text
-        header_left.Children.Add(dot); header_left.Children.Add(name)
+        header_left.Children.Add(name)
         WC.Grid.SetColumn(header_left, 0)
         header.Children.Add(header_left)
 
@@ -1357,7 +1383,7 @@ class TileLayoutWindow(T3WPFWindow):
 
         thin_col = warn_col if opt.n_thin_cuts else ok_col
         stack.Children.Add(_stat_row(
-            u"Cuts < {:.0f}mm:".format(MIN_CUT_WIDTH_MM),
+            u"Cuts < {}:".format(self._unit.show(MIN_CUT_WIDTH_FT)),
             "{}".format(opt.n_thin_cuts),
             thin_col))
 
@@ -1448,11 +1474,11 @@ class TileLayoutWindow(T3WPFWindow):
         stack.Children.Add(shift_row)
 
         # Shift readout
-        cur_dx_mm = (opt.gen_params.get('dx', 0.0) or 0.0) * FT_TO_MM
-        cur_dy_mm = (opt.gen_params.get('dy', 0.0) or 0.0) * FT_TO_MM
+        cur_dx = opt.gen_params.get('dx', 0.0) or 0.0
+        cur_dy = opt.gen_params.get('dy', 0.0) or 0.0
         shift_readout = WC.TextBlock()
-        shift_readout.Text = "dx {:+.0f} · dy {:+.0f} mm".format(
-            cur_dx_mm, cur_dy_mm)
+        shift_readout.Text = u"dx {} · dy {}".format(
+            signed(self._unit.text(cur_dx)), signed(self._unit.show(cur_dy)))
         shift_readout.FontSize = 10; shift_readout.Foreground = brush_sub
         shift_readout.HorizontalAlignment = SW.HorizontalAlignment.Center
         shift_readout.Margin = SW.Thickness(0, 2, 0, 0)
@@ -1536,11 +1562,11 @@ class TileLayoutWindow(T3WPFWindow):
         import System.Windows.Controls as WC
         from System.Windows.Media import SolidColorBrush, Color as WColor, FontFamily
 
-        brush_dark = SolidColorBrush(WColor.FromRgb(44, 62, 80))
-        brush_sub  = SolidColorBrush(WColor.FromRgb(127, 140, 141))
-        brush_ok   = SolidColorBrush(WColor.FromRgb(39, 174, 96))
-        brush_warn = SolidColorBrush(WColor.FromRgb(231, 76, 60))
-        brush_line = SolidColorBrush(WColor.FromRgb(236, 240, 241))
+        brush_dark = self.FindResource("T3.Text")
+        brush_sub = self.FindResource("T3.TextSecondary")
+        brush_ok = self.FindResource("T3.Success.Text")
+        brush_warn = self.FindResource("T3.Danger.Text")
+        brush_line = self.FindResource("T3.Border")
 
         win = SW.Window()
         win.Title = u"Option {}  \u2014  Floor #{}".format(
@@ -1548,8 +1574,13 @@ class TileLayoutWindow(T3WPFWindow):
         win.Width = 1180
         win.Height = 760
         win.WindowStartupLocation = SW.WindowStartupLocation.CenterOwner
-        win.Background = SolidColorBrush(WColor.FromRgb(255, 255, 255))
-        win.FontFamily = FontFamily("Segoe UI")
+        win.Resources.MergedDictionaries.Add(self.Resources)
+        win.MinWidth = 1000
+        win.MinHeight = 620
+        win.UseLayoutRounding = True
+        win.SnapsToDevicePixels = True
+        win.Background = self.FindResource("T3.Surface")
+        win.FontFamily = self.FindResource("T3.Font")
         try:
             win.Owner = self
         except Exception:
@@ -1564,10 +1595,10 @@ class TileLayoutWindow(T3WPFWindow):
 
         # ── Left: large preview host ──
         preview_host = WC.Border()
-        preview_host.Background = SolidColorBrush(WColor.FromRgb(250, 250, 250))
+        preview_host.Background = self.FindResource("T3.SurfaceSunken")
         preview_host.BorderBrush = brush_line
         preview_host.BorderThickness = SW.Thickness(1)
-        preview_host.CornerRadius = SW.CornerRadius(4)
+        preview_host.CornerRadius = self.FindResource("T3.R.Control")
         preview_host.Margin = SW.Thickness(0, 0, 16, 0)
         WC.Grid.SetColumn(preview_host, 0)
         root.Children.Add(preview_host)
@@ -1579,20 +1610,19 @@ class TileLayoutWindow(T3WPFWindow):
 
         title = WC.TextBlock()
         title.Text = u"Option {}".format(opt.option_id)
-        title.FontSize = 22; title.FontWeight = SW.FontWeights.Bold
+        title.FontSize = self.FindResource("T3.Size.Display"); title.FontWeight = SW.FontWeights.SemiBold
         title.Foreground = brush_dark
         panel.Children.Add(title)
 
         floor_info = WC.TextBlock()
-        floor_info.Text = u"Floor #{}  \u00b7  {:.1f} m\u00b2  \u00b7  {:.0f} \u00d7 {:.0f} mm".format(
-            fi_idx + 1, fi.area_ft2 * FT2_TO_M2,
-            fi.width_ft * FT_TO_MM, fi.height_ft * FT_TO_MM)
-        floor_info.FontSize = 11; floor_info.Foreground = brush_sub
+        floor_info.Text = u"Floor #{}  \u00b7  {:.1f} m\u00b2  \u00b7  {}".format(
+            fi_idx + 1, fi.area_ft2 * FT2_TO_M2, _dims_text(fi, self._unit))
+        floor_info.FontSize = self.FindResource("T3.Size.Caption"); floor_info.Foreground = brush_sub
         floor_info.Margin = SW.Thickness(0, 0, 0, 12)
         panel.Children.Add(floor_info)
 
         variant_lbl = WC.TextBlock()
-        variant_lbl.FontSize = 11; variant_lbl.Foreground = brush_sub
+        variant_lbl.FontSize = self.FindResource("T3.Size.Caption"); variant_lbl.Foreground = brush_sub
         variant_lbl.TextWrapping = SW.TextWrapping.Wrap
         variant_lbl.Margin = SW.Thickness(0, 0, 0, 12)
         panel.Children.Add(variant_lbl)
@@ -1604,7 +1634,7 @@ class TileLayoutWindow(T3WPFWindow):
         # Angle row
         def _row_label(t):
             b = WC.TextBlock()
-            b.Text = t; b.FontSize = 12; b.FontWeight = SW.FontWeights.SemiBold
+            b.Text = t; b.Style = self.FindResource("T3.Label")
             b.Foreground = brush_dark
             b.Margin = SW.Thickness(0, 8, 0, 4)
             return b
@@ -1612,19 +1642,19 @@ class TileLayoutWindow(T3WPFWindow):
         panel.Children.Add(_row_label("Angle"))
         angle_row = WC.StackPanel(); angle_row.Orientation = WC.Orientation.Horizontal
         btn_a_minus = WC.Button(); btn_a_minus.Content = u"\u2212"
-        btn_a_minus.Width = 28; btn_a_minus.Height = 26
-        btn_a_minus.Margin = SW.Thickness(0, 0, 3, 0)
+        btn_a_minus.Width = 28; btn_a_minus.Height = self.FindResource("T3.H.Control")
+        btn_a_minus.Margin = SW.Thickness(0, 0, 4, 0)
         btn_a_plus = WC.Button(); btn_a_plus.Content = "+"
-        btn_a_plus.Width = 28; btn_a_plus.Height = 26
-        btn_a_plus.Margin = SW.Thickness(3, 0, 6, 0)
+        btn_a_plus.Width = 28; btn_a_plus.Height = self.FindResource("T3.H.Control")
+        btn_a_plus.Margin = SW.Thickness(4, 0, 8, 0)
         txt_a = WC.TextBox()
-        txt_a.Width = 70; txt_a.Height = 26
+        txt_a.Width = 70; txt_a.Height = self.FindResource("T3.H.Control")
         txt_a.TextAlignment = SW.TextAlignment.Center
         txt_a.VerticalContentAlignment = SW.VerticalAlignment.Center
         btn_a_apply = WC.Button(); btn_a_apply.Content = "Apply"
-        btn_a_apply.Height = 26
+        btn_a_apply.Height = self.FindResource("T3.H.Control")
         btn_a_apply.Padding = SW.Thickness(10, 0, 10, 0)
-        btn_a_apply.Margin = SW.Thickness(6, 0, 0, 0)
+        btn_a_apply.Margin = SW.Thickness(8, 0, 0, 0)
         angle_row.Children.Add(btn_a_minus)
         angle_row.Children.Add(btn_a_plus)
         angle_row.Children.Add(txt_a)
@@ -1635,26 +1665,30 @@ class TileLayoutWindow(T3WPFWindow):
         panel.Children.Add(_row_label("Shift"))
         shift_row = WC.StackPanel(); shift_row.Orientation = WC.Orientation.Horizontal
         def _nav(content, tt):
-            b = WC.Button(); b.Content = content
+            b = WC.Button()
+            icon = WC.TextBlock()
+            icon.Text = content
+            icon.Style = self.FindResource("T3.Icon")
+            b.Content = icon
             b.Width = 32; b.Height = 28
-            b.Margin = SW.Thickness(0, 0, 3, 0); b.FontSize = 12
+            b.Margin = SW.Thickness(0, 0, 4, 0)
             b.ToolTip = tt
             return b
-        btn_s_left  = _nav(u"\u2190", "Shift left  (10% of tile width)")
-        btn_s_up    = _nav(u"\u2191", "Shift up    (10% of tile height)")
-        btn_s_down  = _nav(u"\u2193", "Shift down  (10% of tile height)")
-        btn_s_right = _nav(u"\u2192", "Shift right (10% of tile width)")
+        btn_s_left  = _nav(u"\uE76B", "Shift left  (10% of tile width)")
+        btn_s_up    = _nav(u"\uE70E", "Shift up    (10% of tile height)")
+        btn_s_down  = _nav(u"\uE70D", "Shift down  (10% of tile height)")
+        btn_s_right = _nav(u"\uE76C", "Shift right (10% of tile width)")
         btn_s_reset = WC.Button()
         btn_s_reset.Content = "Reset"; btn_s_reset.Height = 28
         btn_s_reset.Padding = SW.Thickness(10, 0, 10, 0)
-        btn_s_reset.Margin = SW.Thickness(6, 0, 0, 0)
+        btn_s_reset.Margin = SW.Thickness(8, 0, 0, 0)
         for b in (btn_s_left, btn_s_up, btn_s_down, btn_s_right, btn_s_reset):
             shift_row.Children.Add(b)
         panel.Children.Add(shift_row)
 
         shift_readout = WC.TextBlock()
-        shift_readout.FontSize = 11; shift_readout.Foreground = brush_sub
-        shift_readout.Margin = SW.Thickness(0, 6, 0, 0)
+        shift_readout.FontSize = self.FindResource("T3.Size.Caption"); shift_readout.Foreground = brush_sub
+        shift_readout.Margin = SW.Thickness(0, 8, 0, 0)
         panel.Children.Add(shift_readout)
 
         # Close button at bottom
@@ -1679,9 +1713,9 @@ class TileLayoutWindow(T3WPFWindow):
             def _stat(k, v, color=None):
                 r = WC.StackPanel(); r.Orientation = WC.Orientation.Horizontal
                 r.Margin = SW.Thickness(0, 2, 0, 2)
-                kt = WC.TextBlock(); kt.Text = k; kt.FontSize = 12
+                kt = WC.TextBlock(); kt.Text = k; kt.FontSize = self.FindResource("T3.Size.Caption")
                 kt.Foreground = brush_sub; kt.Width = 140
-                vt = WC.TextBlock(); vt.Text = v; vt.FontSize = 12
+                vt = WC.TextBlock(); vt.Text = v; vt.FontSize = self.FindResource("T3.Size.Caption")
                 vt.FontWeight = SW.FontWeights.SemiBold
                 vt.Foreground = color or brush_dark
                 r.Children.Add(kt); r.Children.Add(vt)
@@ -1695,14 +1729,14 @@ class TileLayoutWindow(T3WPFWindow):
                   brush_ok if opt.n_reuse else brush_dark)
             _stat("Tiles to buy:",   "{}".format(opt.tiles_to_buy))
             _stat("Waste:",          "{:.1f} %".format(opt.waste_pct), waste_col)
-            _stat(u"Cuts < {:.0f}mm:".format(MIN_CUT_WIDTH_MM),
+            _stat(u"Cuts < {}:".format(self._unit.show(MIN_CUT_WIDTH_FT)),
                   "{}".format(opt.n_thin_cuts), thin_col)
 
             gp = opt.gen_params or {}
             txt_a.Text = "{:.1f}".format(gp.get('angle', 0.0) or 0.0)
-            shift_readout.Text = u"dx {:+.0f} mm  \u00b7  dy {:+.0f} mm".format(
-                (gp.get('dx', 0.0) or 0.0) * FT_TO_MM,
-                (gp.get('dy', 0.0) or 0.0) * FT_TO_MM)
+            shift_readout.Text = u"dx {}  \u00b7  dy {}".format(
+                signed(self._unit.show(gp.get('dx', 0.0) or 0.0)),
+                signed(self._unit.show(gp.get('dy', 0.0) or 0.0)))
 
         # ── Handlers ──
         step_x = (opt.gen_params.get('tile_w', 0.0) or 0.0) * 0.1
@@ -1744,6 +1778,16 @@ class TileLayoutWindow(T3WPFWindow):
         btn_s_reset.Click += _on_s_reset
         btn_close.Click   += _on_close
 
+        for control in (btn_a_minus, btn_a_plus, btn_a_apply, btn_s_left,
+                        btn_s_right, btn_s_up, btn_s_down, btn_s_reset, btn_close):
+            control.Style = self.FindResource("T3.Button.Secondary")
+        # Arrow buttons keep their compact width inside the fixed control panel.
+        for control in (btn_a_minus, btn_a_plus, btn_s_left, btn_s_right,
+                        btn_s_up, btn_s_down):
+            control.MinWidth = 0
+            control.Padding = SW.Thickness(4, 0, 4, 0)
+        btn_close.IsCancel = True
+        txt_a.Style = self.FindResource("T3.TextBox")
         win.Content = root
         _redraw()
         win.ShowDialog()
@@ -1764,11 +1808,10 @@ class TileLayoutWindow(T3WPFWindow):
         gp = opt.gen_params or {}
         self.status_text.Text = (
             u"Option {}  \u00b7  angle {:+.1f}\u00b0  \u00b7  "
-            u"shift {:+.0f}/{:+.0f} mm  \u00b7  waste {:.1f}%".format(
+            u"shift {}  \u00b7  waste {:.1f}%".format(
                 opt.option_id,
                 gp.get('angle', 0.0),
-                gp.get('dx', 0.0) * FT_TO_MM,
-                gp.get('dy', 0.0) * FT_TO_MM,
+                shift_text(gp.get('dx', 0.0), gp.get('dy', 0.0), self._unit),
                 opt.waste_pct))
 
     def _refresh_selection_highlights(self, fi_idx):
@@ -1802,7 +1845,6 @@ class TileLayoutWindow(T3WPFWindow):
             TaskDialog.Show("Tile Layout", "No selections to apply.")
             return
 
-        drawn = failed = 0
         self.begin_progress(len(chosen))
         try:
             with revit.Transaction("Tile Layout — apply selected concepts"):
@@ -1827,8 +1869,6 @@ class TileLayoutWindow(T3WPFWindow):
                         if piece.piece_type == 'waste':
                             continue
                         vis.draw_piece(piece, fi.z)
-                    drawn += vis.drawn
-                    failed += vis.failed
             uidoc.ActiveView = view
         except Exception as exc:
             self.end_progress()
@@ -1846,20 +1886,11 @@ class TileLayoutWindow(T3WPFWindow):
         self.btn_export_report.IsEnabled = True
         if cancelled:
             self.status_text.Text = (
-                "Cancelled. {} tile shape(s) created in 'Tile Layout Preview' "
-                "for the applied floors.".format(drawn))
+                "Cancelled. DirectShapes created in 'Tile Layout Preview' for the applied floors.")
         else:
             self.status_text.Text = (
-                "Applied {} option(s): {} tile shape(s) created in 'Tile Layout Preview'."
-                .format(len(chosen), drawn))
-        if failed:
-            self.status_text.Text += " {} tile shape(s) could not be created.".format(failed)
-            if not drawn:
-                TaskDialog.Show(
-                    "Tile Layout",
-                    "No tiles were drawn: Revit could not build any of the {} "
-                    "tile shape(s) in 'Tile Layout Preview'.\n\nCheck the floor "
-                    "boundary and tile size, then apply again.".format(failed))
+                "Applied {} option(s). DirectShapes created in 'Tile Layout Preview'."
+                .format(len(chosen)))
 
     # ═════════════════════════════════════════════════════════════════════════
     # Action-bar buttons
@@ -1899,12 +1930,8 @@ class TileLayoutWindow(T3WPFWindow):
         if not chosen:
             TaskDialog.Show("Export", "No selections to export.")
             return None
-        params_mm = dict(
-            tile_w_mm=self._params['tile_w_ft'] * FT_TO_MM,
-            tile_h_mm=self._params['tile_h_ft'] * FT_TO_MM,
-            joint_mm =self._params['joint_ft']  * FT_TO_MM,
-            optimize_nesting=self._params['optimize_nesting'])
-        return ReportGenerator(chosen, params_mm, self._floors)
+        return ReportGenerator(chosen, dict(self._params), self._floors,
+                               unit=self._unit)
 
     def export_csv_clicked(self, sender, args):
         rpt = self._build_report()
@@ -1952,17 +1979,21 @@ class TileLayoutWindow(T3WPFWindow):
     # ═════════════════════════════════════════════════════════════════════════
 
     def _read_params(self):
-        def _mm(ctrl, name):
-            try: v = float(ctrl.Text.strip())
-            except (ValueError, AttributeError):
-                raise ValueError("'{}' is not a valid number.".format(name))
+        """Tile size and joint, typed in the project unit (or with an
+        explicit unit: 600 mm, 2', 1/8\") → internal feet."""
+        unit = self._unit
+        def _length(ctrl, name):
+            try:
+                v = unit.parse(ctrl.Text)
+            except (ValueError, AttributeError) as exc:
+                raise ValueError("{}: {}".format(name, exc))
             if v <= 0:
-                raise ValueError("'{}' must be greater than zero.".format(name))
-            return v * MM_TO_FT
+                raise ValueError("{} must be greater than zero.".format(name))
+            return v
         return dict(
-            tile_w_ft = _mm(self.txt_tile_w, "Tile Width"),
-            tile_h_ft = _mm(self.txt_tile_h, "Tile Height"),
-            joint_ft  = _mm(self.txt_joint,  "Joint Width"),
+            tile_w_ft = _length(self.txt_tile_w, "Tile Width"),
+            tile_h_ft = _length(self.txt_tile_h, "Tile Height"),
+            joint_ft  = _length(self.txt_joint,  "Joint Width"),
             optimize_nesting = bool(self.chk_nesting.IsChecked),
         )
 

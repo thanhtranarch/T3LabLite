@@ -52,13 +52,6 @@ except Exception as e:
     # Print error in case imports fail
     print("Error importing services: {}".format(e))
 
-try:
-    from GUI import RevitTheme as _theme
-except Exception:
-    try:
-        import RevitTheme as _theme
-    except Exception:
-        _theme = None
 
 # `revit.doc` / `revit.uidoc` RAISE AttributeError (not return None) when no
 # UIDocument is active. At module scope that kills the import outright, so the
@@ -165,8 +158,6 @@ class SheetManagerWindow(T3WPFWindow):
         T3WPFWindow.__init__(self, XAML_FILE)
         self.doc = revit.doc
 
-        self._adopt_host_font()
-        self._apply_theme()
         
         # Initialize Core Services
         self.revit_service = RevitService(self.doc)
@@ -226,7 +217,6 @@ class SheetManagerWindow(T3WPFWindow):
         self.sheets_excel_btn.Click += self._on_sheets_excel
         self.sheets_refresh_btn.Click += self._on_sheets_refresh
         self.sheets_apply_btn.Click += self._on_sheets_apply
-        self.sheets_close_btn.Click += self._on_close
         
         self.sheets_grid.SelectionChanged += self._on_sheets_selection_changed
         self.sheets_grid.CellEditEnding += self._on_sheets_cell_edit
@@ -236,7 +226,6 @@ class SheetManagerWindow(T3WPFWindow):
         self.renum_refresh_btn.Click += self._on_renum_refresh
         self.renum_preview_btn.Click += self._on_renum_preview
         self.renum_run_btn.Click += self._on_renum_run
-        self.renum_close_btn.Click += self._on_close
         self.renum_grid.ItemsSource = self.renumber_items
         for box in (self.renum_prefix_box, self.renum_start_box,
                     self.renum_step_box, self.renum_suffix_box):
@@ -326,26 +315,6 @@ class SheetManagerWindow(T3WPFWindow):
         except Exception:
             pass
 
-    def _adopt_host_font(self):
-        if _theme is None:
-            return
-        family, size = _theme.host_font()
-        if family:
-            try:
-                self.FontFamily = family
-                if size and size > 0:
-                    self.FontSize = size
-            except Exception:
-                pass
-
-    def _apply_theme(self, theme=None):
-        if _theme is None:
-            return
-        try:
-            _theme.apply(self, theme)
-        except Exception:
-            pass
-
     # ── Chrome Event Handlers ────────────────────────────────────
     def _minimize(self, sender, e):
         self.WindowState = WindowState.Minimized
@@ -361,9 +330,6 @@ class SheetManagerWindow(T3WPFWindow):
     def _close_chrome(self, sender, e):
         self.Close()
         
-    def _on_close(self, sender, args):
-        self.Close()
-
     def _on_tab_changed(self, sender, e):
         if not hasattr(self, 'tab_control'):
             return
@@ -635,24 +601,8 @@ class SheetManagerWindow(T3WPFWindow):
                             "approved_by": s.approved_by,
                             "id": eid_value(s.id)
                         })
-                    if not self.excel_service.export_sheets(sfd.FileName, data_to_export):
-                        MessageBox.Show(
-                            "Export failed: {} could not be written.\n"
-                            "Close the file if it is open in Excel, check the folder is "
-                            "writable and try again.".format(sfd.FileName), "Export Failed")
-                        return
-                    written = getattr(self.excel_service, "last_export_path", None) or sfd.FileName
-                    count = "{} sheet{}".format(len(data_to_export),
-                                                "" if len(data_to_export) == 1 else "s")
-                    if written.lower().endswith(".csv"):
-                        MessageBox.Show(
-                            "Excel output needs the openpyxl package, which is not available "
-                            "in this Revit session, so {} were saved as CSV instead:\n{}\n\n"
-                            "To import edits back, open it in Excel and save it as .xlsx.".format(
-                                count, written), "Exported as CSV")
-                    else:
-                        MessageBox.Show("Exported {} to:\n{}".format(count, written),
-                                        "Export Successful")
+                    self.excel_service.export_sheets(sfd.FileName, data_to_export)
+                    MessageBox.Show("Successfully exported sheets to Excel.", "Export Successful")
                 except Exception as ex:
                     MessageBox.Show("Error exporting Excel: {}".format(str(ex)), "Error")
                     
@@ -663,12 +613,6 @@ class SheetManagerWindow(T3WPFWindow):
             if ofd.ShowDialog() == DialogResult.OK:
                 try:
                     imported_data = self.excel_service.import_sheets(ofd.FileName)
-                    if imported_data is None:
-                        MessageBox.Show(
-                            "Could not read {}.\nMake sure it is a valid .xlsx workbook and "
-                            "is not open in Excel, then try again. No sheets were "
-                            "changed.".format(ofd.FileName), "Excel Import")
-                        return
                     if not imported_data:
                         MessageBox.Show("No valid sheet updates found in Excel file.", "Excel Import")
                         return
@@ -682,7 +626,6 @@ class SheetManagerWindow(T3WPFWindow):
                         sheets_by_number.setdefault(str(s.sheet_number), s)
                     success = 0
                     failed = 0
-                    failed_numbers = []
 
                     self.begin_progress(len(imported_data))
                     for _idx, row in enumerate(imported_data):
@@ -719,29 +662,18 @@ class SheetManagerWindow(T3WPFWindow):
                                         if param and not param.IsReadOnly:
                                             param.Set(str(val))
                                             
-                                # Apply sheet number & name update in transaction.
-                                # update_sheet returns False when Revit refuses
-                                # the number/name (e.g. a duplicate number).
-                                if self.revit_service.update_sheet(item):
-                                    item.commit_changes()
-                                    success += 1
-                                else:
-                                    failed += 1
-                                    failed_numbers.append(str(item._original_sheet_number))
+                                # Apply sheet number & name update in transaction
+                                self.revit_service.update_sheet(item)
+                                item.commit_changes()
+                                success += 1
                             except:
                                 failed += 1
-                                failed_numbers.append(str(item._original_sheet_number))
                                 
                     t.Commit()
                     _cancelled = self.is_cancelled
                     self.end_progress()
                     _pfx = "Excel Sync Cancelled" if _cancelled else "Excel Sync Completed"
-                    _msg = "{}.\nUpdated: {}\nFailed: {}".format(_pfx, success, failed)
-                    if failed_numbers:
-                        _msg += "\n\nNot updated (sheet number before import): {}{}".format(
-                            ", ".join(failed_numbers[:10]),
-                            " ..." if len(failed_numbers) > 10 else "")
-                    MessageBox.Show(_msg, "Excel Import")
+                    MessageBox.Show("{}.\nUpdated: {}\nFailed: {}".format(_pfx, success, failed), "Excel Import")
                     self._on_sheets_refresh(None, None)
                 except Exception as ex:
                     self.end_progress()

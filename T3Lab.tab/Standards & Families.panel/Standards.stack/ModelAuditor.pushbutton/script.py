@@ -26,6 +26,7 @@ except Exception:
     pass
 # ──────────────────────────────────────────────────────────────────────────────
 
+# script -> pushbutton -> Standards.stack -> panel -> tab -> extension
 _ext_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 _lib = os.path.join(_ext_dir, 'lib')
 if _lib not in sys.path:

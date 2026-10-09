@@ -40,7 +40,9 @@ except Exception:
     pass
 # ──────────────────────────────────────────────────────────────────────────────
 
-extension_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+extension_dir = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+)
 lib_dir = os.path.join(extension_dir, 'lib')
 if lib_dir not in sys.path:
     sys.path.insert(0, lib_dir)

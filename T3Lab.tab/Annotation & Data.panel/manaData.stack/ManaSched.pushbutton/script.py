@@ -26,7 +26,7 @@ except Exception:
     pass
 # ──────────────────────────────────────────────────────────────────────────────
 
-_ext_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+_ext_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 _lib = os.path.join(_ext_dir, 'lib')
 if _lib not in sys.path:
     sys.path.insert(0, _lib)

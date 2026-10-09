@@ -149,6 +149,7 @@ new batch workset features, dynamic assistant greetings, and comprehensive stabi
   on the ribbon.
 
 ### Removed
+- Unused 40 MB binary `mutool.exe` from Image to Drafting folder.
 - Redundant Cancel/Close buttons in dialog footer bars where the window title-bar close (X) is already standard.
 - Obsolete local audit history JSON files from Model Auditor source tree.
 

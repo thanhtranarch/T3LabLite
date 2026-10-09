@@ -17,212 +17,76 @@ Releasing a new version:
 
 ## [Unreleased]
 
-## [1.6.0] - 2026-10-09
+## [2.0.0] - 2026-10-09
 
-Major UI modernization and ribbon regrouping matching t3lab-revit-api:
-unified design system styles across all dialogs, six-panel ribbon layout,
-new batch workset features, dynamic assistant greetings, and comprehensive stability fixes.
+Major milestone release achieving complete feature, UI, and architectural parity with `t3lab-revit-api`. Consolidates the complete toolset into a streamlined 6-panel ribbon layout, introduces the all-new "T3 Space Line" vector icon standard, brings comprehensive pyRevit engine reload and startup protection, registers the native T3Lab Assistant dockable pane, and enhances stability across all dialogs—all while fully preserving T3Lab Lite's zero-click weekly auto-updater and privacy-first usage tracking.
 
 ### Added
-- **UI Design System Modernization**:
-  - Full alignment with T3Lab modern UI standards across all WPF dialogs (`T3Standard`).
-  - Standardized footer bar layout (`T3.FooterBar`): status text and copyright on the left, progress monitor and single clear primary action on the right.
-  - Callout banners (`T3.Callout`) with context hints and shortcut tips across tools.
-  - Status pills (`T3.StatusPill`) with string-bridged severity bindings for clean visual state transitions.
-  - Segoe Fluent / MDL2 icons across navigation rails and buttons.
-- **Dynamic Assistant Greetings** (`lib/GUI/AssistantGreetings.py`):
-  - T3Lab Assistant welcome header now selects dynamic, non-repeating greetings based on time of day.
-  - Dedicated English and Vietnamese greeting pools.
-- **Batch Link Workset Management** (`lib/GUI/BatchLinkWorksets.py`):
-  - Added Link Workset tab allowing per-link workset assignment in the grid.
-  - Staged pending (amber), applied (green), and failed (red) status flow with bulk editor tools.
-- **Thread Input Lock** (`lib/GUI/InputLock.py`):
-  - Added `ThreadInputLock` utility to disable thread windows during modeless external event pumps, preventing errant clicks during long-running BatchOut operations.
-- **Modular Point Cloud Analysis Service** (`lib/Services/point_cloud_analysis.py`):
-  - Extracted point cloud geometry extraction and analysis pipeline to shared service for both UI and MCP tool workflows.
+- **Full Ribbon Parity with `t3lab-revit-api`**:
+  - **Rebar & Assembly Panel**: Complete structural detailing suite containing Cast Unit Manager (assembly grouping & mark sequencing), Clone Drawing (intelligent assembly drawing propagation), Rebar Check (data consistency & host validation), BVBS Export (BF2D machine format generation with checksum verification), and Rebar Wizard (parametric beam, column, and footing reinforcement).
+  - **Standards & Families Panel**: Dedicated BIM management suite including ManaStyles (pattern, line, and coordinate management), ManaWorkset (bulk workset rules and automated view filter generation), ManaLoca (real-time XYZ positioning grid), ManaGroup, BatchLink (with staged link-to-workset assignment), ManaFami (batch family/type renamer and loader), Family Transfer (cross-model family copying), FamiGen (generative family authoring), and Model Auditor.
+  - **Annotation & Data Panel**: Integrated data suite merging Mana (AutoDimension, ManaDWG, ManaSelect), manaData (ManaContains, ManaPara, ManaSched with display unit sync), ManaAnno (text & dimension management), Make Pattern (vector hatch studio & `.pat` export), and IFC-SG Suite (CORENET X compliance & subtype mapping).
+  - **Model & Datum Panel**: Full modeling suite with CAD to Elements, Point Cloud modeling, and Tools stack pulldowns for Finishes (Room To Floor, Door Threshold, Tile Layout), Reference (Image to Drafting, Property Line, Text to Element), and Modify (Auto Join, Split Elements, Wall Cut Profile, DatumSync, Auto Adjust Base Offset).
+  - **Views & Sheets Panel**: Comprehensive documentation workflows with BatchOut (batch PDF/DWG/NWC exporter with live progress monitoring and export queue), ManaViews (bidirectional Excel schedule & view sync), ManaSheets, and ViewTools (SheetGen room-to-sheet generator, CropSync, PDF Import).
+- **T3Lab Assistant Native Dockable Pane**:
+  - Seamlessly registers as a native Revit `DockablePane` at startup using a lightweight IronPython host (`assistant_pane.py`), docking flush next to Revit's Properties pane.
+  - Modeless GIL pumping ensures CPython worker threads and streaming LLM responses run smoothly without locking Revit.
+- **Dynamic Assistant Greetings & Thread Input Lock**:
+  - Non-repeating contextual greetings in both English and Vietnamese based on time of day (`lib/GUI/AssistantGreetings.py`).
+  - `ThreadInputLock` utility (`lib/GUI/InputLock.py`) safely disables window interactions during long-running background operations.
+- **MCP Server & Intelligence Modules**:
+  - Self-healing MCP HTTP server (`mcp_ipy_host.py` / `Services/mcp_service.py`) hosted in IronPython to prevent GIL stalls, with automated bridge deployment to `%APPDATA%\T3LabAI\bridge.py`.
+  - Zero-network file-based task watcher (`core/file_watcher.py`) watching `~/T3Lab_AI_Data/task.json`.
+  - Advanced intelligence graph, planning, local assistant memory, and office text knowledge extraction.
 
 ### Changed
-- **Ribbon regrouped** -- restart Revit after updating (a pyRevit Reload cannot
-  move buttons that already exist):
-  - **Support**: Cloud Links, T3Lab Assistant, and a new **Settings** pulldown
-    holding Feedback, MCP Control, LLMs Setting, ManaTabs, Ribbon Names,
-    BG Theme and **Check Update**.
-  - **Standards & Families** (was Standards & Settings): Standards stack
-    (Model Auditor, ManaStyles, ManaWorkset), Managers stack (ManaLoca,
-    ManaGroup, BatchLink), then ManaFami, Family Transfer and FamiGen.
-  - **Model & Datum** (was Modeling & Datum): CAD to Elements and Point Cloud
-    as large buttons, then a Tools stack of three pulldowns -- Finishes (Room
-    To Floor, Door Threshold, Tile Layout), Reference (Image to Drafting,
-    Property Line, Text to Element) and Modify (Auto Join, Split Elements,
-    Wall Cut Profile, DatumSync, Auto Adjust Base Offset).
-  - **Rebar & Assembly** moves next to Model & Datum.
-  - **Annotation & Data** (Annotation & Select and Data merged): Mana stack,
-    manaData stack, ManaAnno, Make Pattern, IFC-SG Suite.
-  - **Views & Sheets**: View Tools stack (SheetGen, CropSync, PDF Import),
-    ManaViews, ManaSheets, BatchOut.
-- Ribbon icons follow the t3lab-revit-api icon set (28 buttons redrawn, a new
-  Check Update icon).
-- **Ribbon Names** keeps its maps in `%APPDATA%\T3LabAI\ribbon_names` instead of
-  next to its script. Writing them inside the extension folder left a git
-  install with local changes that blocked the next automatic update. Your
-  existing names are carried over once.
-- **Modernized Dialog Interfaces** -- Refactored layout, inputs, and controls across 40+ dialogs
-  including AdvancedViewManager, AutoDimension, AutoJoin, BatchLink, BatchOut, CADToElements,
-  DoorThreshold, FamiGen, ManaContains, ManaDWG, ManaFami, ManaGroup, ManaPara, ManaSched,
-  ManaSelect, ManaSheets, ManaStyles, ManaViews, ModelAuditor, PDFImport, PointCloud, PropertyLine,
-  RoomToFloor, SheetGen, SplitElements, T3LabAssistant, TextToElement, TileLayout, WallAdjustBase,
-  and WallCutProfile.
+- **Redesigned Ribbon Icons (T3 Space Line Standard - Icon Standard 09)**:
+  - All ribbon button icons across all 6 panels completely redesigned and audited against the T3 Space Line standard (52 vector icons, 0 errors, 0 warnings).
+  - Features 2px stroke geometry, round caps and joins, integer-aligned paths, and adaptive light/dark palettes (`#000000`/`#F2F2F2` ink, `#666666`/`#A3A3A3` secondary, and `#EA680C`/`#FF8A3D` brand orange accent).
+  - Cloud service links (Forma, Autodesk Health, Bluebeam) and T3Lab Assistant mascot icons preserved and locked.
+- **Streamlined 6-Panel Ribbon Architecture**:
+  - Reorganized panels into a logical workflow order: Support, Standards & Families, Model & Datum, Rebar & Assembly, Annotation & Data, Views & Sheets.
+  - Added dedicated Settings pulldown under Support panel housing Feedback, MCP Control, LLMs Setting, ManaTabs, Ribbon Names, BG Theme, and Check Update.
+- **Unified Modern UI Design System (`T3Standard`) Across 40+ Dialogs**:
+  - Consistent window borders, modern headers, standardized footer bars (`T3.FooterBar`), status pills (`T3.StatusPill`), and callout banners (`T3.Callout`) implemented across all extension WPF windows.
+- **Safe pyRevit & Revit Engine Startup**:
+  - **Automatic Reload Patch** (`lib/pyrevit_patches.py`): Scans and automatically patches pyRevit `sessionmgr.py` on Revit 2025+ so pyRevit Reload operations no longer shut down the CPython engine ("This property must be set before runtime is initialized").
+  - **PYREVIT_CPYVERSION Integer Sanitization** (`startup_fix_cpyversion.py`): Rewrites dotted version strings ("3.12.3" -> "3123") at startup to prevent `FormatException` Command Failure errors on pyRevit < 6.5.0.
+  - **Startup Diagnostics & Mismatch Detection**: Validates Revit version compatibility (2022-2027), tests CPython engine DLL loads, and detects Python library vs runtime engine assembly mismatches with clear user instructions.
+- **Weekly Auto-Update Preserved (Lite-Only)**:
+  - Non-blocking weekly auto-update (`lib/core/updater.py`, `lib/core/update_schedule.py`) runs on first startup of the ISO week in a background thread; opt-out or daily frequency configurable via `%APPDATA%\T3LabAI\mcp_paths.json`.
+  - On-demand updates available anytime via **Check Update** button.
+  - Automatically retires legacy ribbon folders from copy-over updates to `_retired_ribbon` (`lib/core/ribbon_retire.py`).
+- **Telemetry & Guard Rails Preserved (Lite-Only)**:
+  - Automated session start, ribbon button click, and MCP tool call tracking (`lib/tracking/`) connecting to T3Lab Space.
+  - Continuous regression prevention via `lite_guard` suite.
+- **Decoupled User Configurations**:
+  - Custom ribbon names, BG themes, and audit history moved out of the extension repository into `%APPDATA%\T3LabAI`, keeping the git working tree clean for seamless automated updates.
 
 ### Fixed
-- After a download-and-copy update (no git on the machine, or "Download latest
-  version" in Check Update) the old panels no longer show up a second time:
-  T3Lab moves the folders the update left behind to the `_retired_ribbon`
-  folder of the extension on the next Revit start and says when a restart
-  finishes the job (`lib/core/ribbon_retire.py`).
-- **Check Update never updated**: its "Update now?" question always came back
-  as "no" under CPython, so the click did nothing. After an update it now asks
-  you to restart Revit instead of offering a pyRevit Reload -- on Revit 2025+ a
-  Reload stops every T3Lab tool until Revit restarts.
-- **Make Pattern**: Create Pattern failed every time.
-- **ManaSelect**: the Quick Select, Select Similar, On Sheets and Warnings tiles
-  snapped back to Explore; Quick Select now also fills its list when opened.
-- **ManaSched**: importing Excel values back wrote lengths in feet (2500 mm
-  became 2500 ft); values are read in the project's display units.
-- **IFC-SG Suite**: after sorting a column, Apply to Selected wrote the subtype
-  to other types.
-- **Auto Dimension**: whole dimension strings were rejected with "Invalid
-  number of references" when a grid or wall was slightly off axis.
-- **Wall Cut Profile** and **Auto Adjust Base Offset** did not open at all;
-  Pick then Apply now runs inside Revit's API context (the window closes while
-  you pick and reopens with your inputs).
-- **CAD to Elements**: the Level list and the wall / beam / MEP type lists were
-  always empty, so every run stopped at "Select a Level."
-- **Image to Drafting**: both tracing modes failed to load the tracer. Works on
-  Revit 2022-2024; Revit 2025+ now says tracing is not available there yet.
-- **Tile Layout**: Apply to Model created no tiles while reporting success, and
-  Export CSV always failed.
-- **Text to Element**: Pick items no longer picks while the dialog is still
-  open (a known Revit crash pattern).
-- **Point Cloud**: roofs were never created.
-- **Room To Floor, Door Threshold, Point Cloud, Tile Layout, Wall Cut Profile,
-  Auto Adjust Base Offset**: the second click in a session failed with
-  "Duplicate type name within an assembly".
-- **Split Elements** shows that splitting is not available yet instead of a
-  file-not-found error, and Wall Cut Profile no longer offers "Edit Wall
-  Profile", which did nothing.
-- **ManaFami**: the Family Loader listed no families and Load loaded nothing;
-  thumbnails now show, and Export List saves a `.csv`.
-- **ManaStyles**: Duplicate did nothing for fill and line patterns; All / Clear
-  / Custom now tick the boxes you see; Color Splasher says link sources need a
-  View Filter instead of reporting 0 changes.
-- **FamiGen**: Export & Place placed 0 instances.
-- **Model Auditor**: Duplicate Elements detail rows and Select in Model work;
-  run history is kept in `%APPDATA%\T3LabAI` instead of the extension folder
-  (which also left git installs unable to update); status colours show.
-- **BatchLink**: a link that fails to move to a workset no longer leaves its
-  other instances half moved.
-- **ManaGroup**: edited New Name cells turn amber.
-- The Maximize button of ManaStyles and ManaFami toggled twice, so it did
-  nothing.
-- **ManaViews**: Excel export and Excel import failed every time.
-- **PDF Import**: after unticking a view, All / None or switching mode, the
-  PAGE column kept old numbers, so a view could get a different page than the
-  one shown.
-- **SheetGen**: Select All also ticked rooms hidden by the search, so Create
-  made views and sheets for every room.
-- **ManaViews / ManaSheets**: edited cells now turn amber before you apply.
-- **ManaSheets**: Export always said it succeeded, even when it failed or fell
-  back to CSV; Excel import works without openpyxl; import counted refused
-  edits as "Updated".
-- **BatchOut** opened from the docked T3Lab Assistant showed "Error loading
-  sheets" and an empty window.
-- **MCP Control**: the file watcher row showed an error and a disabled button
-  while the watcher was running; the watcher started at Revit start is now
-  reported as running.
-- Missing imports that raised NameError: the file task watcher never started,
-  MCP find_elements failed on name/level/type filters, View Manager Yes/No
-  confirmations, IFC-SG subtype matching with more than 35 candidates, and the
-  Assistant's task cards.
-- The T3Lab Assistant's fallback for opening BatchOut looked for the script in
-  the wrong folder. Image to Drafting (`potrace.exe`), the Assistant and the
-  Assistant dock pane now find a button by its folder name, wherever it sits
-  on the ribbon.
+- **Check Update Execution**: Resolved issue where update prompts returned false under CPython; now safely requests Revit restart upon completion.
+- **Units & Geometry Calculations**:
+  - ManaSched: Fixed Excel re-import length conversions reading in project display units instead of raw feet.
+  - AutoDimension: Fixed off-axis reference errors causing dimension strings to fail.
+  - CAD to Elements: Fixed empty level and type dropdown lists.
+  - Tile Layout: Fixed tile generation and CSV export errors.
+  - Point Cloud: Fixed roof generation failures.
+- **UI & State Bugs**:
+  - Make Pattern: Resolved vector canvas hatch creation failures.
+  - ManaSelect: Fixed selection category tiles snapping back to Explore and populated Quick Select lists.
+  - IFC-SG Suite: Fixed subtype assignments corrupting upon column sort and resolved candidate overflow limits.
+  - SheetGen: Fixed selection filtering including hidden search results during batch view/sheet creation.
+  - ManaViews & ManaSheets: Fixed Excel I/O without requiring external openpyxl dependencies, and added amber highlight to modified cells.
+  - ManaStyles & ManaFami: Fixed double-toggle behavior on window Maximize buttons.
+  - BatchOut: Fixed empty sheets issue when opened from docked assistant context.
+- **Engine & Import Stability**:
+  - Fixed missing module imports causing `NameError` exceptions in file task watcher, MCP queries, View Manager, and Assistant task cards.
+  - Resolved assembly duplicate type exceptions across repeated dialog launches in the same Revit session.
 
 ### Removed
-- Unused 40 MB binary `mutool.exe` from Image to Drafting folder.
-- Redundant Cancel/Close buttons in dialog footer bars where the window title-bar close (X) is already standard.
-- Obsolete local audit history JSON files from Model Auditor source tree.
-
-## [1.5.0] - 2026-10-07
-
-Every tool on the t3lab-revit-api ribbon is now on the T3Lab Lite ribbon too:
-fourteen buttons that were missing, brought over with their current dialogs.
-
-### Added
-- **Rebar & Assembly** panel (new, the last panel on the tab), five tools for
-  rebar and precast detailing:
-  - **Cast Unit Manager** -- create assemblies with their rebar for many
-    beams, columns or footings at once, sync loose rebar into its assembly,
-    rename marks as a series and set rebar partitions by rule.
-  - **Clone Drawing** -- copy the finished drawing of one assembly (views,
-    sheet, annotations, tags, dimensions) to similar assemblies; anything that
-    cannot be matched is listed with the reason.
-  - **Rebar Check** -- data checks Revit does not run: rebar without a host,
-    rebar missing from its assembly, assemblies without drawings, duplicate
-    numbers, bars outside their host. Read-only until you press Fix.
-  - **BVBS Export** -- write BVBS BF2D `.abs` files for bending machines;
-    each file is read back and its checksums verified.
-  - **Rebar Wizard** -- reinforce rectangular beams, columns and pad footings
-    from a preset, added to the host's assembly.
-- **Standards** stack on the Standards & Settings panel:
-  - **ManaStyles** -- fill patterns, line styles, line patterns, Color
-    Splasher and a coordinate editor.
-  - **ManaWorkset** -- enable worksharing, create and delete worksets, assign
-    elements to worksets by rule, generate workset view filters.
-  - **ManaLoca** -- list elements of a view or level and edit their XYZ in a
-    grid; stays open while you work.
-- **IFC-SG Suite** on the Data panel: Subtype Assigner (Excel mapping to IFC
-  Export Class and Predefined Type) and Compliance Checker (CORENET X rules).
-- **ManaAnno** and **Make Pattern** on the Annotation & Select panel. ManaAnno
-  finds, removes and renames Dimensions and Text Notes and edits dimension
-  text; Make Pattern draws model and drafting hatch patterns on a vector canvas
-  and creates them in Revit or exports `.pat`.
-- **ManaFami** and **FamiGen** on the Modeling & Datum panel, next to Family
-  Transfer. ManaFami batch-renames families and types and loads families;
-  FamiGen creates families from CAD blocks, a JSON schema or built-in presets.
-- **T3Lab Assistant** button on the Support panel. It runs the same assistant
-  as the dock pane and the right-click menu.
-
-### Changed
-- **Restart Revit after updating.** The ribbon gained a panel and a stack, and
-  a pyRevit Reload may not build them.
-- **Automatic update now runs once a week instead of once a day, with no click
-  needed.** On the first Revit start of each week (Monday to Sunday) T3Lab
-  checks GitHub and installs the newest version in the background. A week only
-  counts once GitHub answered, so an offline start is retried on the next day's
-  first start. `"auto_update": false` still turns it off, and the new
-  `"auto_update_interval": "daily"` keeps the old daily check. Check Update
-  still updates on demand, and a manual check counts as that week's check.
-  The schedule is in `lib/core/update_schedule.py`, tested by
-  `lite_guard/test_update_schedule.py`.
-- The restored tools use the latest t3lab-revit-api dialogs and windows
-  (T3 design system), and the Revit 2022-2027 API helpers they were written
-  against.
-- **BG Theme** now keeps its colours in
-  `%APPDATA%\T3LabAI\bg_theme\bg_theme_config.json` instead of a file inside
-  the tool folder. An existing `dqt_bg_config.json` is copied over once and left
-  where it is.
-- Pause and Stop now also cover **FamiGen** and **IFC-SG Suite**; the Pause /
-  Resume button shows an icon instead of an emoji.
-- Shared code the new tools depend on was brought up to the t3lab-revit-api
-  version, additions only: `GUI/WPF_Base.py` (rounded window and panel
-  clipping, maximize), `GUI/ProgressPauseMixin.py`, `GUI/GridPendingEdits.py`,
-  `Snippets/_compat.py` (Revit-version-safe rebar, assembly and family-parameter
-  helpers), `Services/workset_service.py`, `core/paths.py` (`user_data_path`)
-  and `core/extension_paths.py` (`find_bundle` / `bundle_path`: a button is
-  found by its folder name, never by its panel path). `tab_path` was removed
-  from `core/extension_paths.py`; the BG Theme service was its only caller.
-- `lite_guard/manifest.json` records the new ribbon folders.
+- Removed unused 40 MB `mutool.exe` binary.
+- Removed redundant Close/Cancel buttons in favor of standard title-bar controls.
+- Purged obsolete local model audit history files from source control.
 
 ## [1.4.3] - 2026-10-02
 

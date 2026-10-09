@@ -1,7 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- tier B - sheet + huy hieu dau cong = tao moi (goc duoi-phai) -->
-  <rect x="2.5" y="4.5" width="17" height="23" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <path d="M6 9h9v2H6zM6 14h9v2H6z" fill="#858585"/>
-  <path d="M20 24h10v2H20z" fill="#E07B00"/>
-  <path d="M24 20h2v10h-2z" fill="#E07B00"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- sheet ho goc + dong chu (ink-2); dau cong tao moi la signal -->
+  <path d="M21 15V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v20a2 2 0 0 0 2 2h8" stroke="#000000"/>
+  <path d="M9 10h8M9 15h5" stroke="#666666"/>
+  <path d="M24 20v8M20 24h8" stroke="#EA680C"/>
 </svg>

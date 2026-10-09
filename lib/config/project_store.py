@@ -52,6 +52,29 @@ def _read_json(path, default=None):
 # to itself. context_digest already excludes its own output dir the same way.
 _GENERATED_DOCS = frozenset(['PROJECT_CONTEXT.md'])
 
+# Project description (Claude Projects' "What are you trying to achieve?"):
+# a short line for the user, shown under the name. Old project.json files have
+# no such key and read as ''.
+MAX_DESCRIPTION_CHARS = 500
+
+# Cap of the Settings > Projects file list (one row per file).
+MAX_LISTED_FILES = 500
+
+
+def _clean_description(text):
+    """One-paragraph description: str, whitespace collapsed, capped."""
+    if text is None:
+        return u''
+    if not isinstance(text, type(u'')):
+        try:
+            text = text.decode('utf-8')
+        except Exception:
+            text = u'{}'.format(text)
+    text = u' '.join(text.split())
+    if len(text) > MAX_DESCRIPTION_CHARS:
+        text = text[:MAX_DESCRIPTION_CHARS].rstrip()
+    return text
+
 
 class ProjectStore(object):
     """Singleton project registry."""
@@ -137,7 +160,7 @@ class ProjectStore(object):
                 self._meta_cache.pop(pid, None)
 
     def list_projects(self):
-        """[{'id','name','created'}] sorted by name."""
+        """[{'id','name','created','description'}] sorted by name."""
         out = []
         try:
             for entry in os.listdir(self._root()):
@@ -145,19 +168,22 @@ class ProjectStore(object):
                 if meta and meta.get('id'):
                     out.append({'id': meta['id'],
                                 'name': meta.get('name', entry),
-                                'created': meta.get('created', '')})
+                                'created': meta.get('created', ''),
+                                'description': _clean_description(
+                                    meta.get('description'))})
         except Exception:
             pass
         out.sort(key=lambda p: (p['name'] or '').lower())
         return out
 
-    def create_project(self, name):
+    def create_project(self, name, description=u''):
         """Create a project; returns its meta dict."""
         seed = (name or 'project') + str(time.time())
         pid = 'p_' + hashlib.md5(seed.encode('utf-8')).hexdigest()[:8]
         meta = {
             'id': pid,
             'name': name or 'Project',
+            'description': _clean_description(description),
             'created': time.strftime('%Y-%m-%dT%H:%M:%S'),
             'instructions': '',
             'knowledge_dirs': [],
@@ -188,14 +214,22 @@ class ProjectStore(object):
         if not pid:
             return None
         meta = self._read_meta_cached(pid)
-        return copy.deepcopy(meta) if meta is not None else None
+        if meta is None:
+            return None
+        meta = copy.deepcopy(meta)
+        # Backward compatible: projects created before descriptions existed.
+        meta['description'] = _clean_description(meta.get('description'))
+        return meta
 
     def update_project(self, pid, patch):
         """Merge `patch` into project.json. Returns the new meta or None."""
         meta = self.get_project(pid)
         if not meta:
             return None
-        meta.update(patch or {})
+        patch = dict(patch or {})
+        if 'description' in patch:
+            patch['description'] = _clean_description(patch['description'])
+        meta.update(patch)
         try:
             _write_json(self._project_json(pid), meta)
         except Exception:
@@ -245,19 +279,155 @@ class ProjectStore(object):
         self._store_cache.pop(pid, None)
         return dirs
 
+    def delete_summary(self, pid):
+        """What delete_project(pid) would remove — counts for the confirm.
+
+        {'name', 'files', 'chats', 'sessions', 'memory', 'linked_dirs'}.
+        `linked_dirs` are only UNLINKED (the folders themselves are never
+        touched). Never raises; unknown pieces count as 0.
+        """
+        meta = self.get_project(pid) or {}
+        out = {'name': meta.get('name') or pid or u'', 'files': 0,
+               'chats': 0, 'sessions': 0, 'memory': 0,
+               'linked_dirs': len([d for d in (meta.get('knowledge_dirs')
+                                               or []) if d])}
+        if not pid:
+            return out
+        out['files'] = len(self.list_project_files(pid))
+        try:
+            out['chats'] = len([f for f in os.listdir(
+                os.path.join(self.project_dir(pid), 'chats'))
+                if f.lower().endswith('.json')])
+        except OSError:
+            pass
+        try:
+            from config import chat_sessions
+            out['sessions'] = chat_sessions.count_project_sessions(pid)
+        except Exception:
+            pass
+        try:
+            from Intelligence import assistant_memory
+            out['memory'] = len(assistant_memory.list_scope_facts(
+                assistant_memory.PROJECT_SCOPE, pid))
+        except Exception:
+            pass
+        return out
+
     def delete_project(self, pid):
-        """Remove the project folder; clears active_project if it was it."""
+        """Remove the project and everything that belongs only to it.
+
+        The project folder (files, chats, skills, index, attachments, logs,
+        sessions), its remembered facts in assistant_memory.json, and any
+        archived session in the GLOBAL archive that is tagged with this
+        project id. Clears active_project if it was this one. Linked folders
+        are only unlinked — they are the user's, never deleted. Global memory
+        is never touched.
+        """
         if not pid:
             return False
         try:
             if self.get_active_project_id() == pid:
                 self.set_active_project(None)
+            # Memory + tagged sessions first: they live OUTSIDE the project
+            # folder, so the rmtree below would leave them orphaned (the
+            # facts kept being injected for a pid nobody can select again).
+            try:
+                from Intelligence import assistant_memory
+                assistant_memory.clear_scope(assistant_memory.PROJECT_SCOPE,
+                                             pid)
+            except Exception:
+                pass
+            try:
+                from config import chat_sessions
+                chat_sessions.delete_project_sessions(pid)
+            except Exception:
+                pass
             self._store_cache.pop(pid, None)
             self.invalidate_meta(pid)
+            self._forget_counts(pid)
             shutil.rmtree(self.project_dir(pid), ignore_errors=True)
             return True
         except Exception:
             return False
+
+    # ── project knowledge files (projects/<pid>/files) ────────────────────
+
+    def files_dir(self, pid):
+        """projects/<pid>/files — the project's own knowledge folder."""
+        return os.path.join(self.project_dir(pid), 'files')
+
+    def list_project_files(self, pid, limit=MAX_LISTED_FILES):
+        """User documents in the project's files/ folder, sorted by name.
+
+        [{'name', 'rel', 'path', 'size', 'modified', 'indexable'}]. Walks
+        sub-folders (people drop whole folders in via Explorer); skips the
+        generated PROJECT_CONTEXT.md. `indexable` says whether the knowledge
+        index can read the type, so the UI can flag the rest instead of
+        letting them look searchable.
+        """
+        root = self.files_dir(pid) if pid else None
+        if not root or not os.path.isdir(root):
+            return []
+        try:
+            from Intelligence.knowledge.knowledge_store import INDEXABLE_EXTS
+        except Exception:
+            INDEXABLE_EXTS = ('.txt', '.md', '.pdf', '.docx', '.xlsx')
+        out = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith('.'))
+            for fname in filenames:
+                if fname in _GENERATED_DOCS or fname.startswith('~$'):
+                    continue      # generated summary / Office lock file
+                path = os.path.join(dirpath, fname)
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                out.append({
+                    'name': fname,
+                    'rel': os.path.relpath(path, root),
+                    'path': path,
+                    'size': st.st_size,
+                    'modified': time.strftime(
+                        '%Y-%m-%d %H:%M', time.localtime(st.st_mtime)),
+                    'indexable': (os.path.splitext(fname)[1].lower()
+                                  in INDEXABLE_EXTS),
+                })
+        out.sort(key=lambda f: f['rel'].lower())
+        return out[:limit] if limit else out
+
+    def remove_project_file(self, pid, rel_or_path):
+        """Delete one file from the project's files/ folder. Returns bool.
+
+        Refuses anything that does not resolve INSIDE files/ (an absolute
+        path elsewhere, `..` segments) — this deletes user data, so it must
+        never be pointed at a linked folder or an arbitrary path.
+        """
+        if not pid or not rel_or_path:
+            return False
+        root = os.path.normcase(os.path.abspath(self.files_dir(pid)))
+        path = rel_or_path
+        if not os.path.isabs(path):
+            path = os.path.join(self.files_dir(pid), path)
+        target = os.path.normcase(os.path.abspath(path))
+        if not target.startswith(root + os.sep) or not os.path.isfile(target):
+            return False
+        try:
+            os.remove(os.path.abspath(path))
+        except OSError:
+            return False
+        self._forget_counts(pid)
+        return True
+
+    def _forget_counts(self, pid):
+        """Drop the cached document counts of one project.
+
+        count_documents() keys on files/'s own mtime, which does not change
+        when a file inside a SUB-folder is removed.
+        """
+        with self._meta_lock:
+            for key in [k for k in self._count_cache if k[0] == pid]:
+                self._count_cache.pop(key, None)
 
     # ── document counts (one implementation, cached) ──────────────────────
 
@@ -452,6 +622,64 @@ class ProjectStore(object):
             return False
 
     # ── attachments archive + daily activity log ──────────────────────────
+    #
+    # Retention. Attachments are COPIES (the original stays where the user
+    # had it) plus pasted screenshots and downloaded links of up to 20 MB
+    # each; the activity log is a journal, one file per day. Both only ever
+    # grew. prune_storage() trims every scope (the T3LabAI root and each
+    # project), at most once per Revit session, from the worker threads that
+    # archive and journal — never on the UI thread.
+    ATTACHMENTS_MAX_AGE_DAYS = 30
+    ATTACHMENTS_MAX_TOTAL_BYTES = 500 * 1024 * 1024    # across every scope
+    ACTIVITY_LOG_MAX_AGE_DAYS = 90
+
+    def _scope_dirs(self):
+        """The T3LabAI root scope plus every project folder."""
+        scopes = [self._scope_dir(None)]
+        root = self._root()
+        try:
+            for name in sorted(os.listdir(root)):
+                d = os.path.join(root, name)
+                if os.path.isdir(d):
+                    scopes.append(d)
+        except OSError:
+            pass
+        return scopes
+
+    def prune_storage(self, now=None):
+        """Apply the retention rules. Returns {'attachments': n, 'logs': n}.
+
+        Attachments: older than ATTACHMENTS_MAX_AGE_DAYS go, then the oldest
+        until all scopes together fit ATTACHMENTS_MAX_TOTAL_BYTES. Activity
+        logs: older than ACTIVITY_LOG_MAX_AGE_DAYS. Files from the last hour
+        are never touched (a pasted image may still be waiting to be sent).
+        Never raises.
+        """
+        out = {'attachments': 0, 'logs': 0}
+        try:
+            from core import housekeeping
+            scopes = self._scope_dirs()
+            out['attachments'] = housekeeping.prune_files(
+                [os.path.join(sc, 'attachments') for sc in scopes],
+                max_age_days=self.ATTACHMENTS_MAX_AGE_DAYS,
+                max_total_bytes=self.ATTACHMENTS_MAX_TOTAL_BYTES,
+                recursive=True, now=now)
+            out['logs'] = housekeeping.prune_files(
+                [os.path.join(sc, 'logs') for sc in scopes],
+                max_age_days=self.ACTIVITY_LOG_MAX_AGE_DAYS,
+                suffixes=('.md',), now=now)
+        except Exception:
+            pass
+        return out
+
+    def prune_storage_once(self):
+        """prune_storage() the first time this is called in the session."""
+        try:
+            from core import housekeeping
+            housekeeping.run_once('project_store.prune_storage',
+                                  self.prune_storage)
+        except Exception:
+            pass
 
     def _scope_dir(self, pid):
         """projects/<pid> when a project is given, else the T3LabAI root
@@ -479,6 +707,7 @@ class ProjectStore(object):
         original path). Existing names get a _N suffix, never overwritten.
         """
         out = []
+        self.prune_storage_once()          # before today's folder is made
         dest_dir = self.attachments_dir(pid)
         for src in (paths or []):
             try:
@@ -512,6 +741,7 @@ class ProjectStore(object):
 
     def append_activity(self, text, pid=None):
         """Append one timestamped markdown bullet to today's log. Never raises."""
+        self.prune_storage_once()
         try:
             path = self.activity_log_path(pid)
             is_new = not os.path.exists(path)

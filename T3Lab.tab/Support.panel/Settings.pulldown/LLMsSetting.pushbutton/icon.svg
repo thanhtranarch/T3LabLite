@@ -1,7 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- tier B - hai thanh truot cau hinh, mot nut dang chinh -->
-  <rect x="4" y="8" width="24" height="2" fill="#858585"/>
-  <rect x="18" y="5" width="4" height="8" fill="#E07B00"/>
-  <rect x="4" y="20" width="24" height="2" fill="#858585"/>
-  <rect x="9.5" y="16.5" width="3" height="9" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- chip AI: than chip + chan; loi chip la signal -->
+  <path d="M13 4v5M19 4v5M13 23v5M19 23v5M4 13h5M4 19h5M23 13h5M23 19h5" stroke="#666666"/>
+  <rect x="9" y="9" width="14" height="14" rx="2" stroke="#000000"/>
+  <rect x="13" y="13" width="6" height="6" fill="#EA680C"/>
 </svg>

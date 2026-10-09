@@ -1,7 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- tier B - nhom: khay + anh -->
-  <rect x="3.5" y="12.5" width="25" height="15" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <rect x="6" y="15" width="20" height="2" fill="#858585"/>
-  <rect x="9.5" y="3.5" width="13" height="7" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <polygon points="12,9 16,5 20,9" fill="#E07B00"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- bia kep ho so: nguon 2D dua vao; cai kep la signal -->
+  <rect x="6" y="6" width="20" height="22" rx="2" stroke="#000000"/>
+  <path d="M11 15h10M11 20h7" stroke="#666666"/>
+  <rect x="12" y="4" width="8" height="4" fill="#EA680C"/>
 </svg>

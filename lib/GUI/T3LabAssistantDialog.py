@@ -9070,6 +9070,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             from System.Windows.Controls import (Border, TextBlock, StackPanel,
                                                   Orientation, Button)
             from System.Windows import Thickness, CornerRadius, TextWrapping
+            from System.Windows.Input import Cursors
             from System.Windows.Media import FontFamily
 
             outer = Border()

@@ -1,11 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- sheet phu -->
-  <rect x="2.5" y="7.5" width="8" height="21" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <!-- sheet chinh -->
-  <rect x="14.5" y="3.5" width="15" height="25" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <rect x="17" y="7" width="10" height="1" fill="#858585"/>
-  <rect x="17" y="10" width="7" height="1" fill="#858585"/>
-  <rect x="17" y="13" width="9" height="1" fill="#858585"/>
-  <!-- title block -->
-  <rect x="20" y="21" width="7" height="5" fill="#E07B00"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- sheet ngang + viewport (ink-2); khung ten la signal -->
+  <rect x="4" y="6" width="24" height="20" rx="2" stroke="#000000"/>
+  <rect x="8" y="10" width="8" height="12" stroke="#666666"/>
+  <rect x="21" y="9" width="4" height="14" fill="#EA680C"/>
 </svg>

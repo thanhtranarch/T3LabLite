@@ -1,8 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- family (hổ phách) chuyển từ project nguồn sang project đích -->
-  <rect x="2.5" y="3.5" width="12" height="16" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <rect x="5" y="6" width="7" height="7" fill="#E07B00"/>
-  <rect x="17.5" y="9.5" width="12" height="16" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <rect x="20" y="12" width="7" height="7" fill="#858585"/>
-  <polygon points="3,24 11,24 11,21 15,25 11,29 11,26 3,26" fill="#3C3C3C"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- family nguon (ink-2) -> family dich (ink); mui ten cong la signal -->
+  <path d="M10 4l6 3v6l-6 3-6-3v-6zM4 7l6 3 6-3M10 10v6" stroke="#666666"/>
+  <path d="M22 16l6 3v6l-6 3-6-3v-6zM16 19l6 3 6-3M22 22v6" stroke="#000000"/>
+  <path d="M19 6h2a4 4 0 0 1 4 4v2M22 9l3 3 3-3" stroke="#EA680C"/>
 </svg>

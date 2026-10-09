@@ -1,7 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- view + vung crop + tam dong bo -->
-  <rect x="3.5" y="3.5" width="25" height="25" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <rect x="8" y="8" width="16" height="16" fill="#858585"/>
-  <rect x="10" y="10" width="12" height="12" fill="#F3F3F3"/>
-  <rect x="13" y="13" width="6" height="6" fill="#E07B00"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- 4 goc vung crop; mui ten dong bo hai dau la signal -->
+  <path d="M4 10V6a2 2 0 0 1 2-2h4M22 4h4a2 2 0 0 1 2 2v4M28 22v4a2 2 0 0 1-2 2h-4M10 28H6a2 2 0 0 1-2-2v-4" stroke="#000000"/>
+  <path d="M10 16h12M13 13l-3 3 3 3M19 13l3 3-3 3" stroke="#EA680C"/>
 </svg>

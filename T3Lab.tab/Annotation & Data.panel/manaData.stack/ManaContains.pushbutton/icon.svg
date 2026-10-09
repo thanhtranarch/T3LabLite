@@ -1,6 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- tier B - contains = khung long khung -->
-  <rect x="3.5" y="3.5" width="25" height="25" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <rect x="9.5" y="9.5" width="13" height="13" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <rect x="13" y="13" width="6" height="6" fill="#E07B00"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- khung chua (room/area); phan tu ben trong la signal -->
+  <rect x="4" y="4" width="24" height="24" rx="2" stroke="#000000"/>
+  <rect x="12" y="12" width="8" height="8" fill="#EA680C"/>
 </svg>

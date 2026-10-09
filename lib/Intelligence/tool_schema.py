@@ -213,11 +213,34 @@ READ_ONLY_TOOL_NAMES = frozenset([
     "list_worksets", "query_stored_data", "revit_get_active_view",
     "revit_get_element_info", "revit_get_project_info",
     "revit_get_selected_elements", "revit_list_sheets", "revit_list_views",
+    # Point cloud (Scan-to-BIM): sampling and detection return proposals only.
+    "list_point_clouds", "analyze_point_cloud", "detect_point_cloud_elements",
     # Navigation / highlighting — changes the view, never the file
     "select_elements", "set_active_view", "switch_active_document",
     # Diagnostics and the assistant's own UI
     "file_watcher_status", "say_hello", "show_assistant_pane",
+    # FamiGen: the contract, and a proposal shown in the review window - the
+    # model is untouched until famigen_create_family (not listed: it saves an
+    # .rfa and can load it into the project).
+    "famigen_get_schema", "famigen_propose_family",
 ])
+
+
+# Tools whose only side effect is a NEW FILE (PDF, DWG, image, IFC/NWC, CSV):
+# the model itself is untouched. They stay "modifying" above — a bare "/skill"
+# must still not spray files into a folder nobody chose — but "Ask before
+# edits" in the assistant means edits to the MODEL, so the gate lets these run
+# (owner's decision, 2026-10-02). Saving / syncing the model is not here: those
+# are destructive in core.server and always confirm.
+FILE_OUTPUT_TOOL_NAMES = frozenset([
+    "export_dwg", "export_image", "export_model", "export_room_data",
+    "export_sheets_pdf",
+])
+
+
+def is_file_output_only(name):
+    """True when `name` only writes a new file and never edits the model."""
+    return name in FILE_OUTPUT_TOOL_NAMES
 
 
 def is_model_modifying(name):

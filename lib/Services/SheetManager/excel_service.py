@@ -2,7 +2,7 @@
 """
 Sheet Manager - Excel Import/Export Service
 
-Copyright © Dang Quoc Truong (DQT)
+Copyright © T3Lab
 """
 
 import os
@@ -57,9 +57,6 @@ class ExcelService(object):
 
     def __init__(self):
         self.excel_available = self._check_excel()
-        # Path export_sheets actually wrote: the chosen .xlsx, or the .csv
-        # beside it when openpyxl is missing. None until an export succeeds.
-        self.last_export_path = None
     
     def _check_excel(self):
         """Check if Excel libraries are available"""
@@ -213,10 +210,8 @@ class ExcelService(object):
 
         `sheet_dicts` items carry the keys in ``_EXPORT_COLUMNS`` (including a
         numeric ``id``). Returns True on success, False otherwise; falls back
-        to CSV when openpyxl is unavailable. The file really written is left in
-        ``self.last_export_path`` so the caller can name it to the user.
+        to CSV when openpyxl is unavailable.
         """
-        self.last_export_path = None
         try:
             import openpyxl
             from openpyxl.styles import Font, Alignment, PatternFill
@@ -242,15 +237,10 @@ class ExcelService(object):
                 ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 20
 
             wb.save(filepath)
-            self.last_export_path = filepath
             return True
 
         except ImportError:
-            csv_path = os.path.splitext(filepath)[0] + '.csv'
-            if self._export_dicts_to_csv(sheet_dicts, csv_path):
-                self.last_export_path = csv_path
-                return True
-            return False
+            return self._export_dicts_to_csv(sheet_dicts, filepath.replace('.xlsx', '.csv'))
         except Exception as e:
             print("Error exporting sheets to Excel: {}".format(str(e)))
             import traceback
@@ -285,30 +275,18 @@ class ExcelService(object):
         column reordering are tolerated) and returns a list of dicts keyed by
         the dialog's field names, with an integer ``id`` when present. Returns
         None on failure, [] when the file has no recognisable sheet columns.
-        Without openpyxl (not shipped with pyRevit's CPython) the first sheet is
-        read with the pure-Python zip reader that View Manager already uses.
         """
         try:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(filepath)
+            ws = wb.active
+            rows = ws.iter_rows(values_only=True)
+
             try:
-                import openpyxl
-            except ImportError:
-                openpyxl = None
-
-            if openpyxl is not None:
-                wb = openpyxl.load_workbook(filepath)
-                ws = wb.active
-                rows = ws.iter_rows(values_only=True)
-
-                try:
-                    header = next(rows)
-                except StopIteration:
-                    return []
-            else:
-                from core.advanced_view_manager import read_xlsx
-                header, data_rows = read_xlsx(filepath)
-                if not header:
-                    return []
-                rows = iter(data_rows)
+                header = next(rows)
+            except StopIteration:
+                return []
 
             col_of = {}
             for idx, label in enumerate(header):

@@ -1,8 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- text note + duong dan (leader) toi diem duoc tag -->
-  <rect x="3.5" y="4.5" width="17" height="14" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
-  <rect x="6" y="9" width="12" height="1" fill="#858585"/>
-  <rect x="6" y="13" width="9" height="1" fill="#858585"/>
-  <rect x="21" y="17" width="2" height="9" fill="#E07B00"/>
-  <rect x="21" y="24" width="9" height="2" fill="#E07B00"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- text note + dong chu (ink-2); leader + dau mui ten la signal -->
+  <rect x="4" y="4" width="24" height="13" rx="2" stroke="#000000"/>
+  <path d="M8 9h16M8 13h10" stroke="#666666"/>
+  <path d="M12 17v5l-5 5M7 23v4h4" stroke="#EA680C"/>
 </svg>

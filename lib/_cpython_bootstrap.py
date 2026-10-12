@@ -58,6 +58,7 @@ ENGINE_DIAGNOSIS = {
     'engines_found': [],
     'engines_used': [],
     'stdlib_missing': [],
+    'pyrevit_revit': 'not checked',     # set by heal_pyrevit_imports()
     'status': 'not attempted',
 }
 
@@ -219,6 +220,48 @@ def verify_stdlib():
     return missing
 
 
+def heal_pyrevit_imports():
+    """Make `from pyrevit import revit` findable again when only the import
+    caches lost it.
+
+    "cannot import name 'revit' from 'pyrevit' (...pyrevit\\__init__.py)"
+    means Python could not FIND pyrevit/revit/ — not that its code failed.
+    The persistent CPython engine keeps sys.path_importer_cache and each
+    folder's cached file list for the whole Revit session (and across a
+    pyRevit Reload, see pyrevit_patches.py), so one bad lookup used to break
+    every tool until Revit restarted. When the package is on disk but cannot
+    be found, the caches are dropped; Python rebuilds them on the next import.
+
+    Returns 'loaded', 'ok', 'healed', 'missing' (not on disk: pyRevit itself
+    needs a repair), 'unresolved' (on disk, still not importable) or
+    'skipped'.
+    """
+    status = 'skipped'
+    if 'pyrevit.revit' in sys.modules:
+        status = 'loaded'
+    else:
+        pkg_dirs = list(getattr(sys.modules.get('pyrevit'), '__path__', None) or [])
+        if pkg_dirs:
+            try:
+                import importlib
+                import importlib.util
+                if importlib.util.find_spec('pyrevit.revit') is not None:
+                    status = 'ok'
+                elif not any(os.path.isfile(os.path.join(d, 'revit', '__init__.py'))
+                             for d in pkg_dirs):
+                    status = 'missing'
+                else:
+                    importlib.invalidate_caches()
+                    for d in pkg_dirs:
+                        sys.path_importer_cache.pop(d, None)
+                    found = importlib.util.find_spec('pyrevit.revit') is not None
+                    status = 'healed' if found else 'unresolved'
+            except Exception:
+                status = 'skipped'
+    ENGINE_DIAGNOSIS['pyrevit_revit'] = status
+    return status
+
+
 def describe_environment():
     """Human-readable bootstrap report — English, safe to show in a dialog."""
     d = ENGINE_DIAGNOSIS
@@ -235,6 +278,13 @@ def describe_environment():
         lines.append('  MISSING stdlib   : %s' % ', '.join(missing))
         lines.append('  Fix: install or repair the pyRevit CPython engine, then '
                      'pyRevit > Reload. See INSTALL.md.')
+    revit_pkg = d.get('pyrevit_revit')
+    if revit_pkg == 'missing':
+        lines.append('  BROKEN pyRevit   : pyrevitlib\\pyrevit\\revit is missing - '
+                     'repair or reinstall pyRevit.')
+    elif revit_pkg == 'unresolved':
+        lines.append('  BROKEN pyRevit   : pyrevit.revit is on disk but cannot be '
+                     'imported - restart Revit.')
     return '\n'.join(lines)
 
 
@@ -252,7 +302,8 @@ def _log_diagnosis():
     already written in this session) is skipped; past the size cap the log
     is rotated to bootstrap.log.1.
     """
-    if not ENGINE_DIAGNOSIS.get('stdlib_missing'):
+    if not (ENGINE_DIAGNOSIS.get('stdlib_missing')
+            or ENGINE_DIAGNOSIS.get('pyrevit_revit') in ('missing', 'unresolved')):
         return
     report = describe_environment()
     if report in _LOGGED_REPORTS:
@@ -388,7 +439,6 @@ def init_cpython_paths():
             sys.path.insert(0, c)
 
     verify_stdlib()
-    _log_diagnosis()
 
     # Pick up edited base modules, and monkeypatch forms.WPFWindow
     try:
@@ -409,6 +459,11 @@ def init_cpython_paths():
             pass
     except Exception:
         pass
+
+    # pyrevit is imported by now (block above): recover a pyrevit.revit that
+    # only the import caches lost, then log whatever is still broken.
+    heal_pyrevit_imports()
+    _log_diagnosis()
 
     # Scripts call init_cpython_paths() directly, so install the CPython API
     # shims here too rather than only at module import.

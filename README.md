@@ -73,7 +73,7 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
   - **Restart prompt** — tells you to restart Revit so the updated tools load.
 
 #### Cloud Links
-Quick links to Autodesk Forma, Autodesk Health dashboard, and Bluebeam Status.
+Quick links to Autodesk Forma and the Autodesk Health dashboard, plus **PDF Markup** — a split button with **Bluebeam Status** and **T3Lab PDF Markup** (opens [T3Lab PDF](https://pdf.t3lab.space/), offline PDF markup for drawings). The one you used last stays on top, also after Revit restarts.
 
 ---
 
@@ -208,7 +208,7 @@ which can be switched off (see [Staying up to date](#staying-up-to-date)).
 | MCP Server | `localhost:8080` (host/port configurable) | Only while the MCP server is running |
 | ManaFami (Cloud) | User-configured Vercel URL in `~/.t3lab/family_loader_config.json` | User opens the cloud family catalogue |
 | Feedback | None — opens a `mailto:` link in the default email client | User sends feedback |
-| Cloud Links | `acc.autodesk.com` / `health.autodesk.com` / `status.bluebeam.com` | Opens in the default browser on click |
+| Cloud Links | `acc.autodesk.com` / `health.autodesk.com` / `status.bluebeam.com` / `pdf.t3lab.space` | Opens in the default browser on click |
 
 API keys, chat history, projects, attachments and the knowledge index stay on
 the machine under `%APPDATA%\T3LabAI`.

@@ -1,0 +1,10 @@
+title: "T3Lab PDF Markup"
+tooltip: "Open T3Lab PDF - offline PDF markup for construction drawings"
+description: |
+  Opens T3Lab PDF (pdf.t3lab.space) in your default browser: clouds,
+  callouts, stamps and scaled measurements, saved as standard PDF annotations.
+  Files stay on your computer.
+author: "T3Lab"
+version: "1.0.0"
+context: "zero-doc"
+hyperlink: "https://pdf.t3lab.space/"

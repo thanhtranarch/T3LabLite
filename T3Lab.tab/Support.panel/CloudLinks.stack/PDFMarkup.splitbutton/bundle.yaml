@@ -1,0 +1,10 @@
+title: "PDF Markup"
+tooltip: "Bluebeam Status or T3Lab PDF Markup - the one you used last stays on top"
+description: |
+  Click the top button to open the PDF tool you used last, or the arrow
+  to pick the other one. The last one used stays on top, also after
+  Revit restarts.
+author: "T3Lab"
+layout:
+  - Bluebeam Status
+  - T3Lab PDF Markup

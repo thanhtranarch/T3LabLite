@@ -46,6 +46,8 @@ RETIRED = (
     'T3Lab.tab/Support.panel/CheckUpdate.pushbutton',
     'T3Lab.tab/Views & Sheets.panel/SheetGen.pushbutton',
     'T3Lab.tab/Views & Sheets.panel/CropSync.pushbutton',
+    # 2.x: Bluebeam Status moved into the PDF Markup split button.
+    'T3Lab.tab/Support.panel/CloudLinks.stack/Bluebeam Status.urlbutton',
 )
 
 # All present = the new layout is on disk. A half-applied update leaves the
@@ -56,6 +58,7 @@ NEW_LAYOUT = (
     'T3Lab.tab/Model & Datum.panel/bundle.yaml',
     'T3Lab.tab/Annotation & Data.panel/bundle.yaml',
     'T3Lab.tab/Views & Sheets.panel/ViewTools.stack/bundle.yaml',
+    'T3Lab.tab/Support.panel/CloudLinks.stack/PDFMarkup.splitbutton/Bluebeam Status.urlbutton/bundle.yaml',
 )
 
 # Where the leftovers go, inside the extension folder (never a `*.tab`).

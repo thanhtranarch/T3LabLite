@@ -16,6 +16,9 @@ Responsibilities:
      tools can start at all (startup_fix_cpyversion.py).
   1. Register the T3Lab Assistant as a native Revit DockablePane (IronPython host
      in assistant_pane.py; CPython content mounts on button click).
+ 1b. Split buttons (e.g. PDFMarkup.splitbutton: Bluebeam Status / T3Lab PDF
+     Markup) keep their last-used button across Revit restarts
+     (lib/ribbon_memory.py: Idling + ApplicationClosing, IronPython).
   2. Auto-patch pyRevit `sessionmgr.py` via `lib/pyrevit_patches.py` so pyRevit
      Reload does not disable CPython engine ("This property must be set before
      runtime is initialized").
@@ -422,6 +425,22 @@ def register_assistant_pane():
         return "failed", str(exc)
 
 
+def install_ribbon_memory():
+    """Split buttons keep their last-used button across Revit sessions.
+
+    Returns (state, detail). The ribbon is built after this file runs, so
+    lib/ribbon_memory.py restores the choice on the next Idling and saves it
+    when Revit closes.
+    """
+    memory = _load_lib_module("ribbon_memory")
+    if memory is None:
+        return "failed", "lib/ribbon_memory.py not found"
+    try:
+        return memory.install(_revit_handle())
+    except Exception as exc:
+        return "failed", str(exc)
+
+
 def main():
     # ─── 0. FIX: "The input string '3.12.3' was not in a correct format" ───────
     try:
@@ -449,6 +468,12 @@ def main():
     if state == "failed":
         _log("T3Lab Assistant dock pane not registered - the Assistant opens "
              "as a window instead: %s" % detail)
+
+    # ─── 2b. Split buttons remember the last-used button across sessions ─────
+    state, detail = install_ribbon_memory()
+    if state == "failed":
+        _log("Split buttons will not remember the last-used button across "
+             "Revit sessions: %s" % detail)
 
     # ─── 3. Keep pyRevit patched (Reload protection) ──────────────────────────
     state, detail = auto_patch_pyrevit()

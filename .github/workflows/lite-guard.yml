@@ -1,7 +1,8 @@
 # Fails a push or pull request that loses a ribbon tool or the usage tracking,
 # e.g. after copying folders over from t3lab_dev. See lite_guard/guard.py.
 # Also runs the weekly auto-update tests (lite_guard/test_update_schedule.py)
-# and the old-ribbon-folder cleanup tests (lite_guard/test_ribbon_retire.py).
+# and the old-ribbon-folder cleanup tests (lite_guard/test_ribbon_retire.py)
+# and the split-button memory tests (lite_guard/test_ribbon_memory.py).
 name: Lite guard
 
 on:
@@ -20,3 +21,5 @@ jobs:
         run: python3 lite_guard/test_update_schedule.py
       - name: Test the old ribbon folder cleanup
         run: python3 lite_guard/test_ribbon_retire.py
+      - name: Test the split button memory
+        run: python3 lite_guard/test_ribbon_memory.py

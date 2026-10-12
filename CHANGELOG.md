@@ -17,6 +17,12 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Added
+- **PDF Markup split button** (Support › Cloud Links): **Bluebeam Status** now shares a split button with the new **T3Lab PDF Markup**, which opens [T3Lab PDF](https://pdf.t3lab.space/) (offline PDF markup for drawings) in the default browser. The button used last stays on top, also after Revit restarts (saved when Revit closes, in `%APPDATA%\T3LabAI\ribbon_state.json`).
+
+### Changed
+- `Bluebeam Status` moved into `CloudLinks.stack/PDFMarkup.splitbutton`. A copy-over update moves the old `CloudLinks.stack/Bluebeam Status.urlbutton` folder to `_retired_ribbon` on the next Revit start.
+
 ## [2.0.0] - 2026-10-09
 
 Major milestone release achieving complete feature, UI, and architectural parity with `t3lab-revit-api`. Consolidates the complete toolset into a streamlined 6-panel ribbon layout, introduces the all-new "T3 Space Line" vector icon standard, brings comprehensive pyRevit engine reload and startup protection, registers the native T3Lab Assistant dockable pane, and enhances stability across all dialogs—all while fully preserving T3Lab Lite's zero-click weekly auto-updater and privacy-first usage tracking.

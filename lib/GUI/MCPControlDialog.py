@@ -33,7 +33,6 @@ try:
 except Exception:
     WindowState = None
 
-from pyrevit import forms, script
 from GUI.WPF_Base import T3WPFWindow
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'MCPControl.xaml')
@@ -60,7 +59,18 @@ CLIENT_KEYS = [key for key, _label in CLIENTS]
 
 DEFAULT_PORT = 48884
 
-logger = script.get_logger()
+def _get_logger():
+    # pyrevit.script imports pyrevit.revit at module level. When the CPython
+    # engine cannot import that package ("cannot import name 'revit' from
+    # 'pyrevit'") MCP Control must still open: it needs nothing from it.
+    try:
+        from pyrevit import script
+        return script.get_logger()
+    except Exception:
+        import logging
+        return logging.getLogger("T3Lab.MCPControl")
+
+logger = _get_logger()
 
 
 def _brush(key, target=None, resources=None):

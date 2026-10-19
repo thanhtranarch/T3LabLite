@@ -1,8 +1,9 @@
 title: "Mana\nSched"
-tooltip: "Schedule Manager - Export/Import Excel and duplicate schedules."
+tooltip: "Schedule Manager - Excel / Google Sheets tables in Revit, kept in sync, and schedule values edited in Excel."
 description: |
-  Export schedule data to Excel with column formatting preserved
-  Import updated values from Excel back into schedule rows
-  Duplicate existing schedules with a new name and optional scope change
+  Import an Excel or Google Sheets range as a schedule, drafting view or legend with its formatting
+  (fonts, colours, borders, merged cells, sizes) and keep it linked to the file
+  See which linked tables are out of date; update, reload from another file or unlink
+  Export schedule values to Excel, edit them, import and review every change, apply in one undo step
 author: "T3Lab"
-version: "1.0.0"
+version: "2.1.0"

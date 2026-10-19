@@ -153,6 +153,7 @@ class LLMSettingWindow(T3WPFWindow):
         self._action_guard  = False  # guards action_mode_toggled re-entry
         self._think_guard   = False  # guards extended_thinking_toggled re-entry
         self._quality_guard = False  # guards quality_mode_toggled re-entry
+        self._auto_model_guard = False  # guards auto_model_toggled re-entry
         self._verbosity_guard = False  # guards the two chat-detail toggles
         self._embed_guard   = False  # guards knowledge_embed_toggled re-entry
         self._prov_guard    = False  # guards provider_changed re-entry
@@ -271,6 +272,7 @@ class LLMSettingWindow(T3WPFWindow):
                 'projects':  self.panel_projects,
                 'knowledge': self.panel_knowledge,
                 'skills':    self.panel_skills,
+                'toolhub':   self.panel_toolhub,
             }
             for key in panels:
                 panels[key].Visibility = (
@@ -288,6 +290,7 @@ class LLMSettingWindow(T3WPFWindow):
             'projects':  self._load_projects_tab,
             'knowledge': self._load_knowledge_tab,
             'skills':    self._load_skills_tab,
+            'toolhub':   self._load_toolhub_tab,
         }.get(tag)
         if loader is None:
             return
@@ -1086,6 +1089,15 @@ class LLMSettingWindow(T3WPFWindow):
             self._think_guard = False
         try:
             from config.settings import get_settings
+            self._auto_model_guard = True
+            self.auto_model_toggle.IsChecked = bool(
+                get_settings().is_auto_model_enabled())
+        except Exception:
+            pass
+        finally:
+            self._auto_model_guard = False
+        try:
+            from config.settings import get_settings
             self._quality_guard = True
             self.quality_mode_toggle.IsChecked = bool(
                 get_settings().is_quality_mode_enabled())
@@ -1238,6 +1250,10 @@ class LLMSettingWindow(T3WPFWindow):
                      else u"this project's chats")
             if not facts:
                 count_lbl.Text = u"No facts yet. The assistant applies these in {}.".format(where)
+            elif not cap:
+                # No limit (assistant_memory.MAX_FACTS_PER_SCOPE = None).
+                count_lbl.Text = u"{} fact{}, applied in {}.".format(
+                    len(facts), u"" if len(facts) == 1 else u"s", where)
             elif len(facts) >= cap:
                 count_lbl.Text = (u"{} of {} facts, the limit: adding one drops "
                                   u"the oldest.".format(len(facts), cap))
@@ -1510,6 +1526,17 @@ class LLMSettingWindow(T3WPFWindow):
                 bool(self.extended_thinking_toggle.IsChecked))
         except Exception as ex:
             logger.debug("extended_thinking_toggled error: {}".format(ex))
+
+    def auto_model_toggled(self, sender, e):
+        """Persist the auto model switch (Haiku triage -> Haiku/Sonnet/Opus)."""
+        if getattr(self, '_auto_model_guard', False):
+            return
+        try:
+            from config.settings import get_settings
+            get_settings().set_agent_option(
+                'auto_model', bool(self.auto_model_toggle.IsChecked))
+        except Exception as ex:
+            logger.debug("auto_model_toggled error: {}".format(ex))
 
     def quality_mode_toggled(self, sender, e):
         """Persist the Opus-parity (maximum quality) switch.
@@ -2813,6 +2840,248 @@ class LLMSettingWindow(T3WPFWindow):
             logger.debug("knowledge_embed_toggled error: {}".format(ex))
 
     # ─── TAB: Skills ────────────────────────────────────────────────────────
+
+    # ─── Tool Hub ───────────────────────────────────────────────────────────
+    # Sign-in, sync and "my tools" used to exist only as typed /toolhub
+    # commands in the chat. The data layer is Intelligence.toolhub.panel;
+    # every network call runs on a worker and comes back via _ui_invoke.
+
+    def _load_toolhub_tab(self):
+        """Cached state at once, then an online refresh. UI THREAD."""
+        from Intelligence.toolhub import panel
+        self._toolhub_email = u""
+        self._render_toolhub(panel.local_state())
+        self._toolhub_run(panel.refresh, u"Checking the Tool Hub…",
+                          self._render_toolhub)
+
+    def _toolhub_hint_set(self, text, kind=None):
+        """kind: None (neutral) · 'ok' · 'error'."""
+        try:
+            key = {'ok': "T3.Success.Text",
+                   'error': "T3.Danger.Text"}.get(kind, "T3.TextSecondary")
+            brush = self._res(key)
+            if brush is not None:
+                self.toolhub_hint.Foreground = brush
+            self.toolhub_hint.Text = text or u""
+        except Exception:
+            pass
+
+    def _toolhub_enable(self, on):
+        for name in ('toolhub_send_btn', 'toolhub_verify_btn',
+                     'toolhub_sync_btn', 'toolhub_signout_btn',
+                     'toolhub_search_btn'):
+            try:
+                getattr(self, name).IsEnabled = bool(on)
+            except Exception:
+                pass
+
+    def _toolhub_run(self, work, busy_text, done=None):
+        """Run work() on a worker; done(result) back on the UI thread.
+
+        Errors the hub phrases for people (AuthError / ToolHubError) are
+        shown as they are; anything else gets a plain sentence.
+        """
+        if getattr(self, '_toolhub_busy', False):
+            return
+        from Intelligence.toolhub import panel
+        self._toolhub_busy = True
+        self._toolhub_enable(False)
+        self._toolhub_hint_set(busy_text)
+
+        def _bg():
+            result, error = None, None
+            try:
+                result = work()
+            except panel.UserError as ex:
+                error = u"{}".format(ex)
+            except Exception as ex:
+                logger.debug("toolhub worker error: {}".format(ex))
+                error = (u"The Tool Hub did not answer ({}). Check the network "
+                         u"and try again.".format(ex))
+
+            def _ui():
+                self._toolhub_busy = False
+                self._toolhub_enable(True)
+                if error:
+                    self._toolhub_hint_set(error, 'error')
+                    return
+                self._toolhub_hint_set(u"")
+                if done is not None:
+                    try:
+                        done(result)
+                    except Exception as ex:
+                        logger.debug("toolhub done error: {}".format(ex))
+            self._ui_invoke(_ui)
+
+        if not self._start_worker(_bg):
+            self._toolhub_busy = False
+            self._toolhub_enable(True)
+            self._toolhub_hint_set(u"Could not start the request.", 'error')
+
+    def _render_toolhub(self, state):
+        """Paint account + my tools from a panel state dict. UI THREAD."""
+        from System.Windows.Controls import TextBlock, StackPanel
+        from Intelligence.toolhub import panel
+        state = state or {}
+        signed = bool(state.get('signed_in'))
+        self.toolhub_status_text.Text = panel.status_line(state)
+        self.toolhub_signin_panel.Visibility = (
+            Visibility.Collapsed if signed else Visibility.Visible)
+        self.toolhub_account_panel.Visibility = (
+            Visibility.Visible if signed else Visibility.Collapsed)
+        if state.get('note'):
+            self._toolhub_hint_set(state['note'], 'error')
+
+        box = self.toolhub_mine_panel
+        box.Children.Clear()
+        if not signed:
+            box.Children.Add(self._empty_text(u"Sign in to see your tools."))
+            return
+        mine = state.get('mine') or []
+        if not mine:
+            box.Children.Add(self._empty_text(
+                u"No tools yet. Do a task in the Assistant, then type "
+                u"/save-tool <name> to save it as a draft."))
+            return
+        for item in mine:
+            row = self._row_border()
+            stack = StackPanel()
+            head = TextBlock()
+            self._apply_style(head, "T3.Body")
+            head.Text = u"{} — {}".format(item['slug'], item['status'])
+            head.TextWrapping = System.Windows.TextWrapping.Wrap
+            stack.Children.Add(head)
+            if item.get('title'):
+                sub = TextBlock()
+                self._apply_style(sub, "T3.Caption")
+                sub.Text = item['title']
+                sub.TextWrapping = System.Windows.TextWrapping.Wrap
+                stack.Children.Add(sub)
+            if item.get('note'):
+                note = TextBlock()
+                self._apply_style(note, "T3.Caption")
+                note.Text = u"Owner's note: {}".format(item['note'])
+                note.TextWrapping = System.Windows.TextWrapping.Wrap
+                stack.Children.Add(note)
+            row.Child = stack
+            box.Children.Add(row)
+
+    def toolhub_send_clicked(self, sender, e):
+        from Intelligence.toolhub import panel
+        email = (self.toolhub_email_box.Text or u"").strip()
+        if u"@" not in email:
+            self._toolhub_hint_set(u"Type your work e-mail first, e.g. "
+                                   u"you@company.com.", 'error')
+            return
+
+        def _done(sent_to):
+            self._toolhub_email = sent_to
+            self._toolhub_hint_set(
+                u"Sign-in e-mail sent to {}. Check the inbox (and spam), then "
+                u"paste the code or link in step 2.".format(sent_to), 'ok')
+            try:
+                self.toolhub_code_box.Focus()
+            except Exception:
+                pass
+        self._toolhub_run(lambda: panel.send_code(email),
+                          u"Sending the sign-in e-mail…", _done)
+
+    def toolhub_verify_clicked(self, sender, e):
+        from Intelligence.toolhub import panel
+        email = (getattr(self, '_toolhub_email', u"")
+                 or (self.toolhub_email_box.Text or u"").strip())
+        code = (self.toolhub_code_box.Text or u"").strip()
+        if u"@" not in email:
+            self._toolhub_hint_set(u"Step 1 first: type your e-mail and press "
+                                   u"Send code.", 'error')
+            return
+
+        def _done(state):
+            self.toolhub_code_box.Text = u""
+            self._render_toolhub(state)
+            self._toolhub_hint_set(u"Signed in. The catalog is synced: {} "
+                                   u"tools.".format(state.get('tools', 0)), 'ok')
+        self._toolhub_run(lambda: panel.verify(email, code),
+                          u"Signing in…", _done)
+
+    def toolhub_sync_clicked(self, sender, e):
+        from Intelligence.toolhub import panel
+
+        def _done(state):
+            self._render_toolhub(state)
+            if not state.get('offline') and not state.get('note'):
+                self._toolhub_hint_set(u"Synced: {} tools in the catalog."
+                                       .format(state.get('tools', 0)), 'ok')
+        self._toolhub_run(panel.refresh, u"Syncing the catalog…", _done)
+
+    def toolhub_signout_clicked(self, sender, e):
+        from Intelligence.toolhub import panel
+
+        def _done(state):
+            self._render_toolhub(state)
+            self._toolhub_hint_set(u"Signed out. The local catalog stays for "
+                                   u"offline search.", 'ok')
+        self._toolhub_run(panel.sign_out, u"Signing out…", _done)
+
+    def toolhub_search_clicked(self, sender, e):
+        from System.Windows.Controls import TextBlock, StackPanel
+        from Intelligence.toolhub import panel
+        query = (self.toolhub_search_box.Text or u"").strip()
+        box = self.toolhub_results_panel
+        if not query:
+            box.Children.Clear()
+            box.Children.Add(self._empty_text(
+                u"Type what you want to do, e.g. \"tag doors in the view\"."))
+            return
+
+        def _done(hits):
+            box.Children.Clear()
+            if not hits:
+                box.Children.Add(self._empty_text(
+                    u"No tool matches \"{}\".".format(query)))
+                return
+            for h in hits:
+                row = self._row_border()
+                stack = StackPanel()
+                head = TextBlock()
+                self._apply_style(head, "T3.Body")
+                head.Text = u"{} ({})".format(h['slug'], h['kind']) \
+                    if h.get('kind') else h['slug']
+                stack.Children.Add(head)
+                detail = h.get('title') or h.get('why')
+                if detail:
+                    sub = TextBlock()
+                    self._apply_style(sub, "T3.Caption")
+                    sub.Text = detail
+                    sub.TextWrapping = System.Windows.TextWrapping.Wrap
+                    stack.Children.Add(sub)
+                row.Child = stack
+                box.Children.Add(row)
+        self._toolhub_run(lambda: panel.search(query), u"Searching…", _done)
+
+    def _enter_pressed(self, e):
+        try:
+            from System.Windows.Input import Key
+            if e.Key in (Key.Enter, Key.Return):
+                # Handled here so the window's default button (Save Key on
+                # the Models tab) does not fire as well.
+                e.Handled = True
+                return True
+        except Exception:
+            pass
+        return False
+
+    def toolhub_email_keydown(self, sender, e):
+        if self._enter_pressed(e):
+            self.toolhub_send_clicked(sender, e)
+
+    def toolhub_code_keydown(self, sender, e):
+        if self._enter_pressed(e):
+            self.toolhub_verify_clicked(sender, e)
+
+    def toolhub_search_keydown(self, sender, e):
+        if self._enter_pressed(e):
+            self.toolhub_search_clicked(sender, e)
 
     def _load_skills_tab(self):
         """Rebuild the skills rows (name + enable toggle). UI THREAD."""

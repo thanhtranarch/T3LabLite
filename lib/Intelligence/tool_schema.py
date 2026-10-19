@@ -36,6 +36,44 @@ LAUNCHER_TOOL_NAME = "open_t3lab_tool"
 MEMORY_TOOL_NAME = "remember_fact"
 
 
+# Synthetic tool: search / open the user's archived conversations
+# (Intelligence.session_context). Executed locally by the dialog's _exec_tool,
+# read-only — like remember_fact it never reaches the Revit server.
+PAST_CHATS_TOOL_NAME = "search_past_chats"
+
+
+# Synthetic tool: search the tool catalog (Tool Hub, lib/Intelligence/toolhub).
+# Executed locally by the dialog's _exec_tool. On Claude it answers with
+# `tool_reference` blocks (the deferred schemas load on demand); on the other
+# providers it returns compact descriptions and AgentLoop.add_tools() puts the
+# matching tools in front of the model for the next round.
+FIND_TOOLS_NAME = "find_tools"
+
+
+def make_find_tools_tool():
+    """Build the find_tools schema in server-registry shape."""
+    return {
+        "name": FIND_TOOLS_NAME,
+        "description": (
+            "Find the right T3Lab tools for a task when the one you need is "
+            "not in front of you. Understands Vietnamese with or without "
+            "diacritics ('t\u00f4 \u0111\u1ecf t\u01b0\u1eddng', 'to do tuong') "
+            "and English, and also searches the team's saved recipes. "
+            "Returns the best matching tools, which then become callable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "What you want to do, in the user's words."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10,
+                          "description": "How many tools to return (default 5)."},
+            },
+            "required": ["query"],
+        },
+    }
+
+
 def make_memory_tool():
     """Build the remember_fact schema in server-registry shape."""
     return {
@@ -62,10 +100,14 @@ def make_memory_tool():
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["project", "global"],
+                    "enum": ["project", "global", "session"],
                     "description": ("project = a convention of THIS Revit "
                                     "project; global = a user preference "
-                                    "that applies to every project."),
+                                    "that applies to every project; session "
+                                    "= holds only for THIS conversation (the "
+                                    "current task's scope, a temporary "
+                                    "assumption) and is forgotten when the "
+                                    "user starts a new chat."),
                 },
                 "action": {
                     "type": "string",
@@ -81,6 +123,35 @@ def make_memory_tool():
                 },
             },
             "required": ["fact"],
+        },
+    }
+
+
+def make_past_chats_tool():
+    """Build the search_past_chats schema in server-registry shape."""
+    return {
+        "name": PAST_CHATS_TOOL_NAME,
+        "description": (
+            "Search and open the user's EARLIER conversations with you (the "
+            "archived chats of the active project, or of 'No project' when "
+            "none is active). Use it when the user refers to something from "
+            "a previous chat ('like last time', 'the sheet list we made "
+            "yesterday', 'what did we decide about worksets?') and it is not "
+            "in this conversation or its notes. `query` finds chats by words "
+            "(Vietnamese with or without diacritics); `session_id` (from a "
+            "result or the 'Earlier conversations' list) returns that chat's "
+            "transcript; neither lists the most recent chats. Read-only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "Words to look for in past chats."},
+                "session_id": {"type": "string",
+                               "description": "Open this archived chat."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 10,
+                          "description": "How many chats to return (default 5)."},
+            },
         },
     }
 
@@ -166,6 +237,43 @@ ESSENTIAL_TOOL_NAMES = frozenset([
 ])
 
 
+# ─── Cloud: deferred loading + server-side tool search ───────────────────────
+# Claude API tool search (tool_search_tool_bm25_20251119, supported on every
+# current model incl. Haiku/Sonnet/Opus 5.5): every tool definition is still
+# sent, but the ones marked `defer_loading: true` stay out of the context
+# window until the model searches for them. Only these few stay loaded —
+# the calls almost every Revit turn starts with. Everything else (≈90
+# schemas) is found on demand, which keeps the prompt small and tool
+# selection accurate. `send_code_to_revit` is deliberately deferred: a
+# search away, never the first thing in front of the model.
+CLOUD_ESSENTIAL_TOOL_NAMES = frozenset([
+    "ai_element_filter", "get_current_view_elements",
+    "revit_get_selected_elements", "list_levels", "bulk_set_parameter",
+])
+
+# The server-side search tool entry. Never deferred, never cache-marked
+# (a deferred tool may not carry cache_control — the API answers 400).
+TOOL_SEARCH_BLOCK = {"type": "tool_search_tool_bm25_20251119",
+                     "name": "tool_search_tool_bm25"}
+
+# One STATIC sentence appended to the system prompt when deferral is on, so
+# the model knows what the catalog covers and searches instead of guessing.
+TOOL_CATEGORIES_LINE = (
+    u"## Finding tools\n"
+    u"Only a few tools are loaded up front. Search with tool_search_tool_bm25 "
+    u"(natural-language query) for the rest: views, sheets, schedules and view "
+    u"templates; parameters and project parameters; families, materials and "
+    u"styles; links, worksets and documents; grids, levels, rooms, walls, "
+    u"framing and other geometry; tags, dimensions and annotations; exports "
+    u"(PDF, DWG, IFC/NWC, images); QA checks, warnings and point clouds; "
+    u"running IronPython code in Revit. Search once per task, then call the "
+    u"tools it returns.")
+
+# Fewer tools than this (a restricted specialist) are sent plain: searching
+# a dozen schemas costs more turns than it saves.
+DEFER_MIN_TOOLS = 20
+
+
 # The other side of the same decision: tools deliberately kept OUT of every
 # local catalog. Declared explicitly so the split is a choice rather than an
 # oversight — dev/test_assistant_routing.py fails when a registry tool is
@@ -219,6 +327,8 @@ READ_ONLY_TOOL_NAMES = frozenset([
     "select_elements", "set_active_view", "switch_active_document",
     # Diagnostics and the assistant's own UI
     "file_watcher_status", "say_hello", "show_assistant_pane",
+    # Catalog search (server: text for MCP clients; assistant: its own copy)
+    "find_tools",
     # FamiGen: the contract, and a proposal shown in the review window - the
     # model is untouched until famigen_create_family (not listed: it saves an
     # .rfa and can load it into the project).
@@ -254,7 +364,7 @@ def is_model_modifying(name):
 
 # ─── Registry access ───────────────────────────────────────────────────────────
 
-_cache = {}   # keys: "raw", "anthropic[_ess]", "openai[_ess]"
+_cache = {}   # keys: "raw", "anthropic[_ess]", "openai[_ess]", ("anthropic_defer", extras)
 
 
 def get_server_tools():
@@ -292,6 +402,10 @@ _EXTERNAL_ONLY_TOOLS = frozenset([
     't3lab_set_teaching_mode', 't3lab_mark_sandbox',
     't3lab_training_status', 't3lab_train_model',
     't3lab_build_exemplars',
+    # The server's find_tools answers MCP clients in text; the assistant
+    # brings its own (tool_reference on Claude), so the name must not appear
+    # twice in tools[].
+    'find_tools',
 ])
 
 
@@ -347,9 +461,115 @@ def to_openai_tools(extra_tools=None, essential_only=False):
     return out
 
 
-def get_tools_for_provider(provider_name, extra_tools=None, essential_only=False):
-    """Return the tool list in the right wire format for a provider name."""
+def _anthropic_entry(t):
+    return {
+        "name":         t["name"],
+        "description":  t.get("description", "") or t["name"],
+        "input_schema": copy.deepcopy(t["inputSchema"]),
+    }
+
+
+def _extras_key(extra_tools):
+    """Cache key for an extras list — by tool NAME, so the launcher/memory
+    extras the agent path always passes no longer defeat the cache (the
+    Anthropic list used to be rebuilt on every turn)."""
+    try:
+        return tuple(sorted(t["name"] for t in (extra_tools or [])))
+    except Exception:
+        return None
+
+
+def with_deferred_loading(tools, keep=CLOUD_ESSENTIAL_TOOL_NAMES,
+                          min_tools=DEFER_MIN_TOOLS):
+    """Anthropic-format `tools` with server-side tool search + defer_loading.
+
+    Order is fixed and deterministic (it is the start of the cached prefix):
+      [search tool] + deferred (sorted by name) + non-deferred (sorted) +
+      extras in their own order.
+    Deferred entries come FIRST so the single cache breakpoint the provider
+    puts on the last non-deferred tool covers the whole list — a deferred
+    tool cannot carry cache_control, and nothing after the breakpoint is
+    cached. Server tool entries (those with a `type`) and the `keep` names
+    stay loaded; `extras` (launcher, memory) are never deferred — they are
+    short and the model must see them without searching.
+
+    Below `min_tools` the list is returned unchanged (no search tool).
+    """
+    tools = list(tools or [])
+    if len(tools) < min_tools:
+        return tools
+    keep = frozenset(keep or ())
+    deferred, loaded = [], []
+    for t in tools:
+        if not isinstance(t, dict) or t.get("type"):
+            continue                      # server tools are re-added below
+        name = t.get("name", "")
+        entry = dict(t)
+        entry.pop("cache_control", None)
+        if name in keep or name in _EXTRA_TOOL_NAMES:
+            entry.pop("defer_loading", None)
+            loaded.append(entry)
+        else:
+            entry["defer_loading"] = True
+            deferred.append(entry)
+    if not loaded:
+        return tools                      # the API needs one loaded tool
+    deferred.sort(key=lambda t: t.get("name", ""))
+    extras = [t for t in loaded if t.get("name") in _EXTRA_TOOL_NAMES]
+    core = sorted((t for t in loaded if t.get("name") not in _EXTRA_TOOL_NAMES),
+                  key=lambda t: t.get("name", ""))
+    return [dict(TOOL_SEARCH_BLOCK)] + deferred + core + extras
+
+
+def strip_deferred_loading(tools):
+    """Undo with_deferred_loading: drop server search entries and the
+    defer_loading flags. The fallback when the API rejects the feature."""
+    out = []
+    for t in tools or []:
+        if not isinstance(t, dict) or t.get("type"):
+            continue
+        entry = dict(t)
+        entry.pop("defer_loading", None)
+        out.append(entry)
+    return out
+
+
+# Synthetic tools the dialog always appends (never deferred).
+_EXTRA_TOOL_NAMES = frozenset([LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME, FIND_TOOLS_NAME])
+
+
+def tools_named(provider_name, names):
+    """Registry tools whose name is in `names`, in the provider's wire format.
+
+    Unlike get_tools_by_names there is NO fallback to the full list: an
+    unknown name simply yields nothing (find_tools adds what exists).
+    """
+    wanted = frozenset(names or [])
+    subset = [t for t in get_server_tools() if t["name"] in wanted]
+    return _convert(subset, provider_name) if subset else []
+
+
+def to_anthropic_tools_deferred(extra_tools=None, keep=CLOUD_ESSENTIAL_TOOL_NAMES):
+    """Full registry (+ extras) in Anthropic format with deferral applied.
+    Cached per extras-name tuple."""
+    key = ("anthropic_defer", _extras_key(extra_tools))
+    if key[1] is not None and key in _cache:
+        return _cache[key]
+    out = with_deferred_loading(to_anthropic_tools(extra_tools), keep=keep)
+    if key[1] is not None:
+        _cache[key] = out
+    return out
+
+
+def get_tools_for_provider(provider_name, extra_tools=None, essential_only=False,
+                           defer=False):
+    """Return the tool list in the right wire format for a provider name.
+
+    defer=True (Claude only): server-side tool search + defer_loading, see
+    with_deferred_loading. Ignored for every other provider."""
     if provider_name == "claude":
+        if defer and not essential_only:
+            return to_anthropic_tools_deferred(extra_tools)
         return to_anthropic_tools(extra_tools, essential_only=essential_only)
     # openai / deepseek / ollama / lmstudio all use the OpenAI function shape
     return to_openai_tools(extra_tools, essential_only=essential_only)
@@ -377,18 +597,23 @@ def _convert(tools, provider_name):
     return out
 
 
-def get_tools_by_names(provider_name, names, extra_tools=None):
+def get_tools_by_names(provider_name, names, extra_tools=None, defer=False):
     """Registry filtered to `names`, in the provider's wire format.
 
     An empty filter result (name drift after a registry rebuild) falls back
     to the full provider list — same defensive rule as _registry_tools.
+    defer=True applies with_deferred_loading (Claude only); a subset smaller
+    than DEFER_MIN_TOOLS comes back plain.
     """
     wanted = frozenset(names or [])
     if not wanted:
-        return get_tools_for_provider(provider_name, extra_tools)
+        return get_tools_for_provider(provider_name, extra_tools, defer=defer)
     subset = [t for t in get_server_tools() if t["name"] in wanted]
     if not subset:
-        return get_tools_for_provider(provider_name, extra_tools)
-    return _convert(subset + list(extra_tools or []), provider_name)
+        return get_tools_for_provider(provider_name, extra_tools, defer=defer)
+    out = _convert(subset + list(extra_tools or []), provider_name)
+    if defer and provider_name == "claude":
+        out = with_deferred_loading(out)
+    return out
 
 

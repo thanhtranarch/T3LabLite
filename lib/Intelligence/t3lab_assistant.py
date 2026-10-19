@@ -470,13 +470,19 @@ def parse_command(user_input, history=None, attached_files=None, rag_context=Non
     if attached_files or rag_context:
         system_prompt = _RAG_SYSTEM_PREFIX + system_prompt
 
-    # Keep up to 16 history turns for context
-    messages = list(history[-16:]) if history else []
-
     # ── Delegate to router ─────────────────────────────────────────────────────
     try:
         from Intelligence.llm_router import LLMRouter
         router = LLMRouter()
+        # As much history as the active model's window has left after this
+        # request's system prompt and user turn (was a fixed 16).
+        try:
+            from Intelligence.context_budget import fit_history
+            messages = fit_history(history, router.get_active_provider(),
+                                   system_prompt=system_prompt,
+                                   user=user_content, reply_tokens=max_tokens)
+        except Exception:
+            messages = list(history[-16:]) if history else []
         raw_text = router.chat(messages, system_prompt, user_content, max_tokens)
     except Exception:
         raw_text = None

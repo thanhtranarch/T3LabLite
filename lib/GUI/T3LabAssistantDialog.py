@@ -9,13 +9,10 @@ __author__  = "Tran Tien Thanh"
 __title__   = "T3Lab Assistant Dialog"
 
 # IMPORT LIBRARIES
-# ==================================================
 import io
 import os
 import sys
-# ─── CPython 3 & lib bootstrap ────────────────────────────────────────────────
-# CPython engine paths are injected by lib/_cpython_bootstrap.py below;
-# it discovers the engine whatever the pyRevit clone is called.
+# ─── CPython 3 & lib bootstrap (engine paths: lib/_cpython_bootstrap.py) ───
 
 _cur = os.path.dirname(os.path.abspath(__file__))
 while _cur and not os.path.exists(os.path.join(_cur, 'lib')):
@@ -52,15 +49,10 @@ from GUI.WPF_Base import T3WPFWindow
 from Autodesk.Revit import DB
 
 # DEFINE VARIABLES
-# ==================================================
 logger = script.get_logger()
-# NO script.get_output() here. It was assigned and never used (one reference in
-# the whole file, and that one is the word "output" inside a comment), but the
-# call itself materialises a pyRevit output window. This script runs in a
-# PERSISTENT engine and logs from background worker threads, and pyRevit's
-# Reload closes every output window from the UI thread — closing a WPF window
-# owned by another thread throws InvalidOperationException and aborts Reload.
-# One unused window is not worth that risk.
+# NO script.get_output(): it materialises an output window; from this persistent
+# engine's worker threads, pyRevit Reload closing it throws
+# InvalidOperationException (cross-thread WPF window) and aborts Reload.
 
 try:
     REVIT_VERSION = int(revit.doc.Application.VersionNumber)
@@ -72,8 +64,6 @@ except Exception:
         REVIT_VERSION = 2023  # safe fallback
 
 # ─── Lib path setup ───────────────────────────────────────────────────────────
-# __file__ → .../T3LabAssistant.pushbutton/script.py
-# extension_dir → .../T3Lab_Lite.extension
 _gui_dir = os.path.dirname(__file__)
 _lib_dir = os.path.dirname(_gui_dir)
 extension_dir = os.path.dirname(_lib_dir)
@@ -82,9 +72,8 @@ if lib_dir not in sys.path:
     sys.path.insert(0, lib_dir)
 
 # ─── Theme: follow Revit's own UI theme ───────────────────────────────────────
-# Every colour the chat surface paints comes from here rather than from a hex
-# literal typed at the call site, so the window can re-skin itself when Revit
-# flips between Light and Dark (Revit 2024+). See GUI/RevitTheme.py.
+# All chat-surface colours come from here (no hex at call sites) so the window
+# re-skins on Revit Light/Dark (2024+). See GUI/RevitTheme.py.
 try:
     from GUI import RevitTheme as _theme
 
@@ -103,21 +92,11 @@ try:
     def _bind_theme(element, prop_name, token):
         """Make `element.<prop_name>` FOLLOW a theme token instead of copying it.
 
-        _tb() hands back a frozen brush, so anything painted with it keeps the
-        colours it was born with. That is why a transcript already on screen
-        stayed light after Revit switched to dark: RevitTheme.apply() rewrites
-        the token resources and every XAML {DynamicResource} re-evaluates, but
-        a brush that was assigned once is just a value and nothing re-runs.
-
-        SetResourceReference is the code-behind equivalent of DynamicResource:
-        the element registers against the resource key and repaints when the
-        key's value changes. No re-render, so a message that is mid-stream is
-        never touched — which is the reason the old code gave for not fixing
-        this by rebuilding the transcript.
-
-        Falls back to the plain assignment (today's exact behaviour) when the
-        property cannot be resolved to a DependencyProperty, so the worst case
-        is the colour it would have had anyway.
+        _tb() returns a frozen brush, so painted elements kept their colours
+        after a Light/Dark switch. SetResourceReference is code-behind
+        DynamicResource: repaints on key change, no re-render (mid-stream
+        messages untouched). Falls back to plain assignment when prop_name is
+        not a DependencyProperty.
         """
         try:
             from System.Windows import DependencyProperty
@@ -152,9 +131,7 @@ except Exception as _theme_ex:                       # pragma: no cover
     logger.warning("RevitTheme unavailable, using light defaults: {}".format(
         _theme_ex))
     _theme = None
-    # Revit's light-theme greys — same values as RevitTheme._LIGHT, as RGB.
-    # Keep the two in step: this table is what paints the window when the theme
-    # module cannot be imported at all.
+    # Keep in step with RevitTheme._LIGHT (paints the window when it can't import).
     _LIGHT_FALLBACK = {
         'AppBg': (245, 245, 245), 'ChatBg': (255, 255, 255),
         'ComposerBg': (255, 255, 255), 'CardBg': (255, 255, 255),
@@ -184,9 +161,7 @@ except Exception as _theme_ex:                       # pragma: no cover
         r, g, b = _trgb(token)
         return Color.FromRgb(r, g, b)
 
-    # Same surface as the themed branch above, so call sites never have to ask
-    # which one is live. With no RevitTheme there is nothing to follow, so
-    # these just assign the light-fallback colour once.
+    # Same surface as the themed branch; nothing to follow, so assign once.
     def _bind_theme(element, prop_name, token):
         try:
             setattr(element, prop_name, _tb(token))
@@ -208,9 +183,8 @@ except Exception as _theme_ex:                       # pragma: no cover
 
 
 # ─── Shared with the LLMs Setting dialog ──────────────────────────────────────
-# Provider brand colours and the shell folder/file openers live in one place;
-# the chat window's private copies of the openers lacked the .NET 8
-# UseShellExecute fallback, so those buttons died silently under Revit 2025+.
+# One copy of the openers: private ones lacked the .NET 8 UseShellExecute
+# fallback and died silently on Revit 2025+.
 try:
     from GUI.AssistantShared import (PROVIDER_COLORS as _SHARED_PROVIDER_COLORS,
                                      PROVIDER_GRAY as _SHARED_PROVIDER_GRAY,
@@ -234,8 +208,7 @@ except Exception:
     def _project_scope_lines(meta, doc_counts=None):
         return []
 
-# Welcome-headline phrases (time-of-day pools, no repeat in a row). Pure
-# Python, so a failure here can only be a broken install — let it surface.
+# Pure Python: a failure here is a broken install, so let it surface.
 from GUI import AssistantGreetings as _greetings
 
 # ─── NLP module ───────────────────────────────────────────────────────────────
@@ -285,9 +258,8 @@ except Exception as e:
     def make_launcher_for(entry): return lambda: False
 
 # ─── Revit API context runner ─────────────────────────────────────────────────
-# Tool scripts are written to run as Revit commands (ExternalEvent.Create,
-# Transaction, ...). The assistant's WPF callbacks run while Revit is IDLE,
-# which is NOT an API context — see Services/revit_context.py.
+# WPF callbacks run while Revit is idle = NOT an API context; tool scripts need
+# one (Services/revit_context.py).
 try:
     from Services.revit_context import (ensure_api_context, run_in_api_context)
     HAS_API_CONTEXT = True
@@ -375,8 +347,7 @@ except Exception as e:
     logger.warning("Could not import routing: {}".format(e))
 
     class routing(object):
-        """Degradation stub: keep the previous turn's behaviour, never carry
-        over, and let learned patterns act as they did before."""
+        """Degradation stub: never carry over; learned patterns win."""
         @staticmethod
         def is_continuation(*a, **kw): return False
 
@@ -387,8 +358,7 @@ except Exception as e:
         def wants_spellcheck_fix(args): return False
 
 # ─── Bilingual language analysis (VI/EN) ──────────────────────────────────────
-# Feeds routing, the prompt hint and the reply-language decision. Degrading to
-# the old diacritic check is always safe: every consumer takes a `default`.
+# Degrading to the diacritic check is safe: every consumer takes a `default`.
 try:
     from Intelligence.language import analyzer as _lang_analyzer
     from Intelligence.language import lang_detect as _lang_detect
@@ -421,8 +391,6 @@ except Exception as e:
                     'source': 'default', 'confidence': 0.0}
 
 # ─── "Narrated instead of acted" guard (shared with the native AgentLoop) ─────
-# Both prompt paths need the same rule, so the detector lives in agent_loop
-# and the legacy JSON-intent loop below borrows it.
 try:
     from Intelligence.agent_loop import (_announces_work,
                                          _ANNOUNCE_FIXUP)
@@ -476,18 +444,9 @@ except Exception as e:
             return (raw or u"").strip()
 
 # ─── Tool launchers ───────────────────────────────────────────────────────────
-# Each function opens the corresponding T3Lab tool.
 
 def _get_tool_script_dir(*parts):
-    """Return the path to a pushbutton's script.py. Only the LAST part counts:
-    the button is found by its folder name in whichever tab and panel it sits.
-
-    Usage:
-        _get_tool_script_dir('BatchOut.pushbutton')
-    """
-    # It used to climb three folders from __file__, which was right while this
-    # code lived in the pushbutton script; from lib/GUI/ it landed on
-    # T3Lab.extension/ and the BatchOut fallback pointed at a missing file.
+    """Path to a pushbutton's script.py, found by folder name (only the LAST part counts)."""
     from core.extension_paths import bundle_path
     return bundle_path(parts[-1], 'script.py')
 
@@ -525,10 +484,7 @@ def _load_batchout_mod():
 
 
 def launch_batchout():
-    """Open the BatchOut export dialog (no pre-configuration).
-
-    Zero-arg launchers return (ok, error_text) — see TOOL_LAUNCHERS.
-    """
+    """Open the BatchOut export dialog. Returns (ok, error_text) like TOOL_LAUNCHERS."""
     try:
         mod = _load_batchout_mod()
         window = mod.ExportManagerWindow()
@@ -540,13 +496,9 @@ def launch_batchout():
 
 
 def launch_batchout_configured(config, progress_cb=None):
-    """Open BatchOut pre-configured: sheets selected, format set, tab = Create.
+    """Open BatchOut pre-configured (sheets, format, Create tab). Returns bool.
 
-    Args:
-        config: dict with keys format, filter (from batchout_executor / NLP).
-        progress_cb: optional callable(str) for status messages.
-    Returns:
-        bool success
+    config: dict with format, filter; progress_cb: optional callable(str).
     """
     try:
         mod = _load_batchout_mod()
@@ -581,18 +533,10 @@ def launch_loadfamily():
         return False, _exc_text(ex)
 
 
-# NOTE — 2026-07-28. Seven hardcoded launchers (ParaSync, ProjectName,
-# Workset, DimText, UpperAll, Reset Overrides, Beam) were removed here: every
-# one pointed at a pushbutton directory that no longer exists, so they always
-# failed, while still being advertised to the model. `open_grids` and
-# `open_loadfamily_cloud` went with them — Grids.pushbutton never existed, and
-# the "cloud" launcher was a byte-for-byte duplicate of launch_loadfamily
-# (show_family_manager only has two modes, Management and Loader — no cloud
-# tab). Everything except BatchOut and the Family Manager now comes from the
-# tool_discovery registry, validated against disk. See _build_tool_launchers.
+# Other launchers come from the tool_discovery registry, validated against disk
+# (2026-07-28: hardcoded ones pointed at missing folders). See _build_tool_launchers.
 
 
-# Map intent → launcher function
 _THINK_BLOCK_RE = re.compile(
     r'<(think|thinking|reasoning|reflection)>[\s\S]*?</\1\s*>', re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(
@@ -602,10 +546,8 @@ _THINK_OPEN_RE = re.compile(
 def _hide_reasoning(text):
     """Hide model chain-of-thought from anything user-visible.
 
-    Closed <think>...</think> blocks are removed; an unterminated opening
-    tag (mid-stream) hides everything after it so reasoning never flashes
-    in the live bubble. Providers strip the final text themselves — this
-    guards the LIVE stream and any path that bypasses a provider strip.
+    An unterminated opening tag (mid-stream) hides everything after it.
+    Guards the LIVE stream; providers strip the final text themselves.
     """
     if not text:
         return text
@@ -617,10 +559,8 @@ def _hide_reasoning(text):
 def _exc_text(exc):
     """Exception message as unicode. Never raises.
 
-    `str(exc)` is unsafe under IronPython 2.7: a Revit error carrying a
-    non-ASCII message (a Vietnamese family name, a localised Windows string)
-    makes it throw UnicodeEncodeError from INSIDE an error handler, which then
-    killed the whole chat turn and left the user staring at nothing.
+    `str(exc)` under IronPython 2.7 throws UnicodeEncodeError on non-ASCII
+    messages, from inside the error handler, killing the chat turn.
     """
     try:
         return u"{}".format(exc)
@@ -636,9 +576,7 @@ def _exc_text(exc):
 def _json_safe(obj):
     """Recursively coerce byte strings inside `obj` to unicode. Never raises.
 
-    Byte strings reach the tool loop from anywhere the .NET/OS side hands
-    back a legacy code page — a localised Revit message, a Windows path, an
-    exception text — and they are NOT UTF-8. That is the one input json's
+    Legacy code-page bytes from .NET/OS (non-UTF-8) are the one input json's
     encoder cannot survive; see _json_text.
     """
     if isinstance(obj, bytes):
@@ -659,13 +597,9 @@ def _json_safe(obj):
 def _json_text(obj, sort_keys=False):
     """`json.dumps` as unicode that can never kill a chat turn.
 
-    IronPython 2.7's encoder decodes byte strings as UTF-8 (json/encoder.py
-    line 47, reached whenever ensure_ascii is on). A byte string carrying
-    Windows code-page bytes raises there — and on the tool-loop display path
-    that exception escaped every handler up to _route_input, so the user got
-    "'unknown' codec can't decode byte 0xe0 …" instead of an answer, mid-way
-    through a turn that had already run tools. Sanitising first removes the
-    only input the encoder cannot handle; the fallbacks cover the rest.
+    IronPython 2.7's encoder decodes byte strings as UTF-8; code-page bytes
+    raised past every handler up to _route_input ("'unknown' codec can't
+    decode byte 0xe0"). Sanitising first removes that input.
     """
     try:
         out = json.dumps(_json_safe(obj), ensure_ascii=False,
@@ -675,10 +609,8 @@ def _json_text(obj, sort_keys=False):
     except Exception:
         pass
     try:
-        # Second rung: ASCII-escaped. Must be jsonsafe — `ensure_ascii=True`
-        # here would raise on exactly the non-ASCII input that pushed us past
-        # rung one, so the fallback could only ever fall through to the
-        # "<unserializable>" string it is supposed to prevent.
+        # ASCII-escaped via jsonsafe: plain `ensure_ascii=True` would raise on
+        # the same non-ASCII input that failed rung one.
         from core import jsonsafe
         return jsonsafe.dumps(_json_safe(obj), sort_keys=sort_keys,
                               default=_exc_text)
@@ -689,9 +621,8 @@ def _json_text(obj, sort_keys=False):
 def _provider_usable(provider):
     """True when `provider` is worth calling for a real chat turn.
 
-    Prefers is_configured() — a pure credential check — over check_health(),
-    which hits the vendor's /models endpoint on every call. Falls back to
-    check_health() for any provider object that predates is_configured().
+    Prefers is_configured() (credential check) over check_health(), which
+    hits the vendor's /models endpoint.
     """
     if provider is None:
         return False
@@ -705,13 +636,8 @@ def _provider_usable(provider):
 def _get_uiapp():
     """The live UIApplication, or None.
 
-    `HOST_APP.uiapp` is None on this pyRevit build: pyRevit only keeps a
-    UIApplication when the `__revit__` builtin *is* one, and here `__revit__`
-    is a DB.Application — so `HOST_APP.uiapp` (and `HOST_APP.uidoc`) stay None
-    and every `HOST_APP.uiapp.X` call died with
-    `AttributeError: 'NoneType' object has no attribute 'X'`.
-    UIApplication has a public constructor taking a DB.Application, which is
-    the supported way back to the UI layer from there.
+    `HOST_APP.uiapp`/`uidoc` are None on this pyRevit build (`__revit__` is a
+    DB.Application), so wrap it with UIApplication's public constructor.
     """
     try:
         from pyrevit import HOST_APP
@@ -750,13 +676,8 @@ def _reply_language():
 def _is_viet_text(text):
     """True when the assistant should answer this turn in Vietnamese.
 
-    Between 2026-07-18 and 2026-07-28 this was hard-wired to `return False`
-    with the detection left unreachable below it. That did not make the UI
-    English: the ~57 `if viet:` branches all took their English arm, but the
-    Vietnamese strings that were written WITHOUT a branch (the /memory
-    replies, the local-model download notices, the spell-check confirmation,
-    every label in AssistantCards) still rendered — so the window mixed both
-    languages. The setting now decides, and 'auto' detects from the text.
+    The setting decides; 'auto' detects from the text (2026-07-28: hard-wired
+    False mixed languages, unbranched VI strings still rendered).
     """
     lang = _reply_language()
     if lang == 'vi':
@@ -767,9 +688,7 @@ def _is_viet_text(text):
         return _ui_viet()
     viet = _detect_viet(text, default=_ui_viet())
     if viet:
-        # Remember it: messages that belong to no particular turn (startup
-        # notices, card labels) should follow the language the user is
-        # actually typing in.
+        # Turn-less messages (startup notices, card labels) follow the user.
         global _LAST_USER_VIET
         _LAST_USER_VIET = True
     return viet
@@ -778,14 +697,9 @@ def _is_viet_text(text):
 def _detect_viet(text, default=True):
     """Language verdict for one message, with a fallback for the undecidable.
 
-    The old test was `any(c in _VIET_CHARS for c in text)` — a single-line
-    diacritic check that got the three commonest cases in a Vietnamese BIM
-    office wrong: diacritic-less typing ("xuat pdf sheet A") read as English,
-    code-switched sentences ("export cái sheet này") read by whichever half
-    won, and a bare tool name ("BatchOut") flipped the whole session to
-    English. `Intelligence.language` weighs evidence instead and returns
-    `default` when there is none either way, so a bare tool name no longer
-    changes anything.
+    `Intelligence.language` weighs evidence (diacritic-less typing,
+    code-switching) and returns `default` when there is none, so a bare tool
+    name ("BatchOut") changes nothing.
     """
     if HAS_LANGUAGE:
         try:
@@ -795,17 +709,14 @@ def _detect_viet(text, default=True):
     return any(c in _VIET_CHARS for c in (text or u'').lower())
 
 
-# Language of the most recent user message, for strings that are not tied to
-# one turn. None until the user has typed something.
+# Language of the latest user message, for turn-less strings; None until typed.
 _LAST_USER_VIET = None
 
 
 def _note_user_language(text):
     """Record the language of a user message. Call once per submitted turn.
 
-    An undecidable message (a bare tool name, a number, "ok") leaves the
-    session language ALONE rather than resetting it — that is the whole point
-    of the `default` argument.
+    An undecidable message ("ok", a tool name) leaves the session language alone.
     """
     global _LAST_USER_VIET
     if text:
@@ -817,9 +728,7 @@ def _note_user_language(text):
 def _relative_time(ts_text, viet=True):
     """'hôm nay 16:09' / '3 ngày trước' from a stored 'Y-m-d H:M:S' stamp.
 
-    Returns u'' for anything unparseable — a history file written before
-    timestamps existed, or one hand-edited — so callers can concatenate it
-    without guarding. Never raises.
+    Returns u'' for anything unparseable (old/hand-edited history). Never raises.
     """
     if not ts_text:
         return u""
@@ -847,11 +756,8 @@ def _relative_time(ts_text, viet=True):
 def _time_greeting(hour=None, viet=None):
     """Time-of-day greeting phrase (no name). Never raises.
 
-    Six buckets: Vietnamese distinguishes sáng sớm / sáng / trưa / chiều /
-    tối / khuya. The buckets and phrases live in GUI/AssistantGreetings.py;
-    this plain phrase is what the onboarding card shows ("Good morning!").
-    The welcome headline draws from the richer pool there instead — see
-    _render_greeting.
+    Buckets/phrases: GUI/AssistantGreetings.py. Used by the onboarding card;
+    the welcome headline uses the richer pool (_render_greeting).
     """
     try:
         if viet is None:
@@ -871,11 +777,8 @@ def _ui_viet():
     return bool(_LAST_USER_VIET)
 
 
-# Tools whose launcher needs arguments or a non-script entry point. Every
-# OTHER intent is generated from the tool_discovery registry — see
-# _register_discovered_launchers. Keeping this list to what genuinely cannot
-# be auto-derived is the point: the previous hardcoded map drifted until 8 of
-# its 10 intents pointed at pushbuttons that had been deleted or renamed.
+# Only launchers that cannot be auto-derived; every other intent comes from the
+# registry (_register_discovered_launchers) — a hardcoded map drifted stale.
 _SPECIAL_LAUNCHERS = {
     "open_batchout":   launch_batchout,
     "open_loadfamily": launch_loadfamily,
@@ -889,20 +792,15 @@ TOOL_TITLES = {
     "open_loadfamily": u"Family Loader",
 }
 
-# Registry entries dropped because their script.py is not on disk. Surfaced in
-# the activity log instead of silently shipping a broken intent to the model.
+# Registry entries whose script.py is missing; shown in the activity log.
 DROPPED_TOOLS = []
 
 
 def _register_discovered_launchers(tools):
     """Rebuild TOOL_LAUNCHERS from the registry, validating each against disk.
 
-    An intent only survives when its script.py actually exists — an intent the
-    assistant cannot honour must never reach the model, because the model will
-    happily promise to open it.
-
-    Args:
-        tools: list of tool dicts from discover_new_tools() / get_registered_tools()
+    An intent whose script.py is missing never reaches the model (it would
+    promise to open it).
     """
     del DROPPED_TOOLS[:]
     for tool in tools:
@@ -911,8 +809,7 @@ def _register_discovered_launchers(tools):
         url    = tool.get('url')
         if not intent or intent in _SPECIAL_LAUNCHERS:
             continue
-        # A urlbutton (Autodesk Forma / Health, Bluebeam Status) has no
-        # script.py — its hyperlink IS its target.
+        # A urlbutton has no script.py; its hyperlink is the target.
         if not url and not (path and os.path.exists(path)):
             DROPPED_TOOLS.append((intent, path or u"<no path>"))
             TOOL_LAUNCHERS.pop(intent, None)
@@ -922,7 +819,6 @@ def _register_discovered_launchers(tools):
         TOOL_LAUNCHERS[intent] = make_launcher_for(tool)
         TOOL_TITLES[intent] = title
 
-    # Inject all registered tools (new + old) into the NLP system prompt
     if HAS_NLP:
         try:
             inject_discovered_tools(get_registered_tools())
@@ -941,14 +837,11 @@ def get_tool_title(intent):
 
 LEGACY_DOC_KEY = "default"
 
-# Transcripts are personal (what the user asked about which model), so they
-# live per user in %APPDATA%\T3LabAI\chat_history — never in the extension,
-# which is a shared, public git clone. The old lib/config/chat_history/ is
-# read ONCE: its files are copied over on first use and then left alone.
+# Transcripts are personal: per user in %APPDATA%\T3LabAI\chat_history, never in
+# the shared git clone. The old lib/config/chat_history/ is imported once.
 _LEGACY_CHAT_HISTORY_DIR = os.path.join(lib_dir, 'config', 'chat_history')
 
-# Archived conversations (History tab) kept on disk, newest first. Each "new
-# chat" archives one file; nothing ever removed them before.
+# Archived conversations (History tab) kept on disk, newest first.
 MAX_ARCHIVED_SESSIONS = 100
 
 
@@ -985,8 +878,7 @@ def _prune_archived_sessions(sessions_dir, keep=MAX_ARCHIVED_SESSIONS):
 def _active_doc():
     """The document Revit has active right now, or None. Never raises.
 
-    Snippets._host.resolve_doc(), because `revit.doc` is None in the docked
-    pane (see _get_doc_key).
+    Uses Snippets._host.resolve_doc(): `revit.doc` is None in the docked pane.
     """
     try:
         from Snippets._host import resolve_doc
@@ -999,11 +891,8 @@ def _active_doc():
 def _get_doc_key():
     """Return a filesystem-safe key for the current Revit document.
 
-    Resolved through Snippets._host.resolve_doc(), NOT `revit.doc`. In this
-    modeless pane's engine `revit.doc` is a getattr chain that silently yields
-    None, so the old code fell into `except` on every call and returned
-    "default" — which is why every model on this machine shared ONE history
-    file and switching projects never switched the conversation.
+    Via Snippets._host.resolve_doc(), NOT `revit.doc` (None in this modeless
+    pane, which made every model share one "default" history).
     """
     title = None
     try:
@@ -1015,18 +904,13 @@ def _get_doc_key():
         pass
     if not title:
         return LEGACY_DOC_KEY
-    # Strip chars that are invalid in filenames
     safe = re.sub(r'[\\/:*?"<>|]', '_', title)
     return safe[:80] or LEGACY_DOC_KEY   # cap at 80 chars
 
 
 def _history_file(doc_key):
-    """Return path to the JSON history file for doc_key.
-
-    With an active project the history lives inside that project's
-    workspace (projects/<pid>/chats/); otherwise the legacy per-document
-    location is unchanged.
-    """
+    """Path to doc_key's JSON history: projects/<pid>/chats/ when a project is
+    active, else the per-document chat_history folder."""
     try:
         from config.project_store import ProjectStore
         _ps = ProjectStore()
@@ -1038,31 +922,27 @@ def _history_file(doc_key):
     return os.path.join(_chat_history_dir(), '{}.json'.format(doc_key))
 
 
-def save_chat_history(doc_key, messages, summary=u""):
-    """Persist the last N messages to disk for this document.
+def save_chat_history(doc_key, messages, summary=u"", session=None):
+    """Persist the whole conversation to disk for this document.
 
-    Args:
-        doc_key  : identifier returned by _get_doc_key()
-        messages : list of {role, content, ts} dicts
-        summary  : rolling summary of turns that fell out of the window
+    messages: [{role, content, ts}]; summary: rolling summary of turns out of
+    the window; session: {'session_id', 'session_notes', 'session_path'}
+    (Intelligence.session_context). Every message is kept; only what reaches
+    the model is bounded (context budget).
     """
     try:
         from core import jsonsafe
         path = _history_file(doc_key)
-        # Keep only the last 60 messages
-        to_save = messages[-60:]
-        # Serialize to an ASCII string FIRST, then write in one shot, so a
-        # mid-write encode error can never truncate the file.
-        #
-        # This MUST go through jsonsafe, not json.dumps(ensure_ascii=True).
-        # The old code used the latter and its comment claimed it was the fix
-        # for Vietnamese chats — it was the cause. IronPython 2.7's ASCII
-        # escaper raises on non-ASCII, the `except` below swallowed it, and so
-        # the history file was never written at all the moment a conversation
-        # contained Vietnamese. Every history on disk was English-only and
-        # nobody saw an error. See core/jsonsafe.py.
-        data = jsonsafe.dumps({"doc_key": doc_key, "messages": to_save,
-                               "summary": summary or u""}, indent=2)
+        to_save = list(messages or [])
+        # Serialize FIRST, then write in one shot (no truncated file). MUST be
+        # jsonsafe, not json.dumps(ensure_ascii=True): IronPython 2.7's escaper
+        # raises on non-ASCII and Vietnamese chats were silently never saved.
+        payload = {"doc_key": doc_key, "messages": to_save,
+                   "summary": summary or u""}
+        for key, val in (session or {}).items():
+            if val:
+                payload[key] = val
+        data = jsonsafe.dumps(payload, indent=2)
         with io.open(path, 'w', encoding='utf-8') as f:
             f.write(data)
     except Exception as ex:
@@ -1070,16 +950,11 @@ def save_chat_history(doc_key, messages, summary=u""):
 
 
 def _is_stale_tool_call_blob(role, content):
-    """True for a saved assistant turn that is nothing but a tool call the
-    model wrote as chat text, e.g.
+    """True for a saved assistant turn that is only a tool call written as chat
+    text (e.g. {"name": "apply_playbook", "parameters": {...}}).
 
-        {"name": "apply_playbook", "parameters": {"playbook_name": "lod-standard"}}
-
-    AgentLoop suppresses these now, but transcripts written before that fix
-    still carry them — and they are worse than cosmetic: _restore_history
-    replays them into _conversation_history, so every later turn sees a
-    "successful" example of answering with a fake tool call and copies it.
-    Dropped on load; the rest of the conversation is kept.
+    Old transcripts carry them; replayed, later turns copy the fake call.
+    Dropped on load.
     """
     if role != "assistant":
         return False
@@ -1093,10 +968,8 @@ def _is_stale_tool_call_blob(role, content):
 def _history_path_for_read(doc_key):
     """Path to read this document's history from, or None.
 
-    Falls back to the legacy shared "default" file so the conversations saved
-    before _get_doc_key() started resolving a real document title are adopted
-    by whichever model is open next, instead of appearing to vanish. Read-only
-    fallback: the next saved message goes to the per-document file.
+    Falls back (read-only) to the legacy shared "default" file so pre-doc-key
+    conversations are adopted instead of vanishing.
     """
     path = _history_file(doc_key)
     if os.path.exists(path):
@@ -1125,11 +998,7 @@ def load_chat_history(doc_key):
 
 
 def load_chat_summary(doc_key):
-    """Rolling summary saved alongside the messages, or u''.
-
-    A file written before summaries existed simply has no "summary" key, so
-    older histories load with an empty one rather than failing.
-    """
+    """Rolling summary saved alongside the messages, or u''."""
     try:
         path = _history_path_for_read(doc_key)
         if not path:
@@ -1142,6 +1011,23 @@ def load_chat_summary(doc_key):
         return u""
 
 
+def load_chat_session(doc_key):
+    """The open chat's identity and notes saved with its history:
+    {'session_id', 'session_notes', 'session_path'} ({} when none)."""
+    try:
+        path = _history_path_for_read(doc_key)
+        if not path:
+            return {}
+        with io.open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return {'session_id': data.get('session_id') or None,
+                'session_notes': data.get('session_notes') or [],
+                'session_path': data.get('session_path') or None}
+    except Exception as ex:
+        logger.debug(u"Could not load chat session: {}".format(_exc_text(ex)))
+        return {}
+
+
 def clear_chat_history(doc_key):
     """Delete the saved history file for doc_key."""
     try:
@@ -1152,11 +1038,78 @@ def clear_chat_history(doc_key):
         logger.debug(u"Could not clear chat history: {}".format(_exc_text(ex)))
 
 
+# ─── Context budget ───────────────────────────────────────────────────────────
+# Intelligence.context_budget derives every number from the ACTIVE model's real
+# context window (fixed caps were the same for 1M Claude and an 8k local model).
+
+# Bubbles re-rendered on restore/resume; only rendering is bounded here.
+MAX_REPLAY_BUBBLES = 120
+
+
+def _active_budgets():
+    """{'window', 'history', 'summary_chars', 'memory_chars',
+    'past_chats_chars'} for the active provider. Never raises."""
+    try:
+        from Intelligence import context_budget as _cb
+    except Exception:
+        return {'window': 32768, 'history': 1500, 'summary_chars': 1400,
+                'memory_chars': 3000, 'past_chats_chars': 1200}
+    provider = None
+    try:
+        from Intelligence.llm_router import LLMRouter
+        provider = LLMRouter().get_active_provider()
+    except Exception:
+        provider = None
+    window = _cb.provider_window(provider)
+    return {'window': window,
+            'history': _cb.history_budget_for(provider),
+            'summary_chars': _cb.summary_budget_chars(window),
+            'memory_chars': _cb.memory_budget_chars(window),
+            'past_chats_chars': _cb.past_chats_budget_chars(window)}
+
+
+def _budget_history(history, provider=None, system_prompt=None, query=None,
+                    max_tokens=None):
+    """The newest history that fits `provider`'s window (default: active)
+    after THIS request's system prompt and query."""
+    try:
+        from Intelligence.context_budget import fit_history
+        if provider is None:
+            from Intelligence.llm_router import LLMRouter
+            provider = LLMRouter().get_active_provider()
+        return fit_history(history, provider, system_prompt=system_prompt,
+                           user=query, reply_tokens=max_tokens)
+    except Exception:
+        return list(history or [])[-16:]
+
+
+def _fit_restored(messages, summary, viet=False):
+    """(context_window_messages, summary) for a restored / resumed chat.
+
+    The newest messages that fit the budget go to the model; the overflow is
+    folded into a summary only when none was saved (no double summarising).
+    """
+    plain = [{"role": m.get("role", ""), "content": m.get("content", "")}
+             for m in (messages or [])
+             if m.get("role") in ("user", "assistant") and m.get("content")]
+    budgets = _active_budgets()
+    try:
+        from Intelligence import context_budget as _cb
+        kept, dropped = _cb.fit_messages(plain, budgets['history'])
+    except Exception:
+        kept, dropped = plain[-24:], plain[:-24]
+    if dropped and not (summary or u"").strip():
+        try:
+            from Intelligence.conversation import fold_summary
+            summary = fold_summary(u"", dropped, viet=viet,
+                                   max_chars=budgets['summary_chars'])
+        except Exception:
+            pass
+    return kept, summary or u""
+
+
 # ─── Minimal icon vocabulary for bot chat messages ─────────────────────────────
-# Segoe MDL2 Assets glyphs already verified elsewhere in this codebase (window
-# chrome buttons, command palette, tool-card status) — reused here rather than
-# guessing new codepoints, per the Lumina rule that chat icons must be minimal
-# monochrome glyphs, never full-color detailed emoji (🔍🤖⚠️📎🔧👋🎉 etc.).
+# Verified Segoe MDL2 glyphs only; chat icons are monochrome, never colour emoji.
 _ICON_INFO    = u""   # Info — neutral notices ("no AI configured", RAG note)
 _ICON_SEARCH  = u""   # Zoom — tool discovery
 _ICON_WARNING = u""   # Warning triangle
@@ -1168,33 +1121,27 @@ _ICON_ATTACH  = u""   # Attach (paperclip)
 _ICON_ANALYZE = u""   # Analyze — fast-context "instant DB answer" badge
 _ICON_LIST    = u""   # List/reference — stats & selection section headers
 
-# Inline message-icon colours, read from the theme at import. The old fixed
-# slate #64748B ignored the host theme entirely and turned near-invisible on a
-# dark one.
+# Inline message-icon colours, read from the theme at import (dark-mode safe).
 _ICON_BLUE  = _trgb('Blue')      # info / discovery
 _ICON_AMBER = _trgb('Amber')     # warning
 _ICON_GREEN = _trgb('Success')   # success
 _ICON_RED   = _trgb('Danger')    # "no / not available" markers
 _ICON_SLATE = _trgb('Muted')     # neutral / muted
 
-# Plan / task-progress card glyphs (Segoe MDL2 Assets, verified against
-# dev/icons/mdl2_codepoints.tsv). Every state ALSO carries a word next to the
-# glyph — status is never told by colour alone.
+# Plan/progress glyphs (dev/icons/mdl2_codepoints.tsv); every state also has a word.
 _ICON_PENDING = u""   # CircleRing — step not started
 _ICON_FAILED  = u""   # Cancel — step failed
 _ICON_EDIT    = u""   # Edit — "changes the model" tag
 
 
 # ─── Plan → approve → run (multi-step plans that change the model) ─────────────
-# What the plan card hands back to the worker waiting on it. STOPPED / EXPIRED
-# come from agent_loop.PendingDecision itself.
+# Plan-card answers to the waiting worker; STOPPED / EXPIRED: agent_loop.PendingDecision.
 _PLAN_RUN        = 'run'
 _PLAN_EDIT       = 'edit'
 _PLAN_CANCEL     = 'cancel'
 _PLAN_SUPERSEDED = 'superseded'    # the user sent a new message instead
 
-#: How long a plan card waits for an answer. Long on purpose: the user is
-#: READING a plan, not dismissing a dialog. Stop or a new message end it early.
+#: Plan-card wait; long on purpose (the user is reading). Stop / new message end it.
 _PLAN_APPROVAL_TIMEOUT = 600
 
 #: Per-call confirmation card (destructive tools, or any edit under
@@ -1213,11 +1160,8 @@ _STEP_LOOK = {
 
 
 # ─── Persistent memory: explicit "remember ..." save trigger ───────────────────
-# Only unambiguous save phrasings ("remember that X", "nhớ là X", "ghi nhớ X",
-# "từ nay X") are handled deterministically — bare "nhớ"/"remember to" stay
-# with the LLM, which can still save via the remember_fact tool when the
-# statement really is durable. Both diacritic and folded Vietnamese forms are
-# in the pattern so match positions stay valid on the ORIGINAL text.
+# Only unambiguous phrasings; bare "nhớ"/"remember to" stay with the LLM
+# (remember_fact tool). Diacritic + folded forms keep positions valid on the ORIGINAL text.
 _MEM_SAVE_RX = re.compile(
     r'^\s*(?:please\s+|h[aã]y\s+)?'
     r'(?:remember|ghi\s*nh[oớ]|nh[oớ]\s+r[aằ]ng|nh[oớ]\s+l[aà]'
@@ -1227,13 +1171,11 @@ _MEM_SAVE_RX = re.compile(
 
 
 # CLASS/FUNCTIONS
-# ==================================================
 
 class T3LabAssistantWindow(T3WPFWindow):
     """Standalone T3Lab Assistant chatbox window."""
 
-    # Dynamic buttons added by _bootstrap_discovered_tools
-    _DYNAMIC_BTNS = []   # list of Button WPF objects (not names)
+    _DYNAMIC_BTNS = []   # Button objects added by _bootstrap_discovered_tools
 
     def __init__(self, is_docked=False):
         self.is_docked = is_docked
@@ -1244,9 +1186,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.error(u"Could not load T3LabAssistant XAML: {}".format(_exc_text(ex)))
             raise
 
-        # Skin the window to the host BEFORE anything renders — theme brushes,
-        # pane chrome, compact layout. Doing it later means one frame of the
-        # wrong theme flashing inside the Revit pane.
+        # Skin BEFORE anything renders, else one frame of the wrong theme flashes.
         try:
             self._apply_revit_skin()
         except Exception as ex:
@@ -1269,12 +1209,14 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._last_result      = None           # last parsed result (for votes)
         self._doc_key          = _get_doc_key() # document identifier for history
         self._persisted_msgs   = []             # flat list with timestamps, for save/load
+        # This chat's identity + its own memory (Intelligence.session_context).
+        self._session_id       = None           # stable across restore / resume
+        self._session_path     = None           # its archive, when resumed from History
+        self._session_notes    = []             # facts for THIS conversation only
+        self._past_chats_cache = None           # (key, block) — digests of earlier chats
         self._attached_files   = []             # list of file paths (images / PDFs)
-        # {provider_name: [model_list]} — filled ONLY by live probes against
-        # each vendor's models endpoint after a connection succeeds. Never
-        # pre-seeded with hardcoded names: the MODEL combo stays empty and
-        # disabled (with a hint) until the provider actually reports which
-        # models the account/server currently has.
+        # {provider_name: [model_list]} — ONLY from live probes, never hardcoded;
+        # the MODEL combo stays disabled until the provider reports its models.
         self._models_cache     = {}
         
         # ── History & Typing Animation State ──────────────────────────────────
@@ -1290,9 +1232,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._stream_host      = None           # StackPanel holding body + action row
 
         # ── Claude-style message actions ──────────────────────────────────────
-        # Set while a "Try again" is in flight: the answer it produces is filed
-        # as another version of that row instead of appended as a new reply,
-        # and the user's original message is not echoed a second time.
+        # During "Try again": the answer becomes another version of that row
+        # and the user message is not echoed again.
         self._retry_target_row   = None
         self._suppress_user_echo = False
 
@@ -1301,11 +1242,9 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._cancel_requested  = False   # Stop pressed before the loop existed
 
         # ── Turn bookkeeping ──────────────────────────────────────────────────
-        # _request_id is bumped by _set_busy(True). Every terminal handler
-        # captures it at request start and no-ops if it no longer matches, so a
-        # late worker and the Stop watchdog can never BOTH release the UI —
-        # a double release fires _drain_queued_input twice and sends two
-        # queued messages back to back.
+        # _request_id is bumped by _set_busy(True); terminal handlers no-op on a
+        # mismatch, so a late worker and the Stop watchdog never BOTH release
+        # the UI (that drained two queued messages).
         self._request_id  = 0
         self._replied     = False   # a terminal message was already posted
         self._tool_runs   = 0       # tools executed in the current turn
@@ -1332,21 +1271,16 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._forced_skill_args = u""   # user text after the /slash id (pre-boilerplate)
         self._tool_group      = None    # collapsed tool-card group for THIS turn
 
-        # Provider active before a project override was applied, so leaving the
-        # project can put it back (a scoped override must be undoable).
+        # Provider before a project override, restored on leaving the project.
         self._pre_project_provider = None
 
         # ── Usage-flow state: message queue + quick-reply chips ───────────────
-        # The input stays ENABLED while a request runs (Claude-style): Enter
-        # queues the next message, which auto-sends when the current request
-        # releases the busy state. Quick-reply chips (confirm / retry /
-        # continue) are one row at a time — replaced on every new send.
+        # Input stays enabled while busy: Enter queues, auto-sent on release.
+        # One quick-reply chip row at a time, replaced on every send.
         self._queued_inputs  = []      # [{'text': unicode, 'row': element}]
         self._quickreply_row = None    # active chip row (or None)
 
-        # Paint the project/model/action chips AFTER first render — their
-        # first update constructs LLMRouter + reads project JSON, which does
-        # not belong on the startup-critical path of the UI thread.
+        # Chips AFTER first render: LLMRouter + project JSON are off the startup path.
         def _init_chips():
             try:
                 self._update_composer_chips()
@@ -1376,17 +1310,14 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception:
             pass
 
-        # Per-project scheduled prompts (project panel → Scheduled): a 30s
-        # UI-thread timer fires due daily tasks while the window is open.
-        # No-op when no project is active or no tasks are defined.
+        # Per-project scheduled prompts: 30s UI-thread timer while the window is open.
         try:
             self._start_schedule_timer()
         except Exception:
             pass
 
         # ── Paste (Ctrl+V) + drag-drop files straight into the chat ──────────
-        # Wired in code (not XAML) so pyRevit's XAML event wiring quirks for
-        # Window-level events never break window loading.
+        # Wired in code: pyRevit's XAML wiring of Window-level events can break loading.
         try:
             self.AllowDrop = True
             self.PreviewDragOver += self._file_drag_over
@@ -1396,17 +1327,13 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
 
 
-        # ── Logo ──────────────────────────────────────────────────────────────
-
         # ── Restore conversation from previous session ─────────────────────────
         self._restore_history()
         self._update_welcome_greeting()
 
         # ── Tool discovery (background, then inject chips into UI) ─────────────
         def _discover_and_update():
-            # Unguarded, this threw unhandled on a .NET background thread when
-            # the window was closed inside the 300ms sleep — every other worker
-            # in this file wraps its dispatcher hop.
+            # Guarded: closing the window during the sleep threw on a .NET thread.
             try:
                 import time; time.sleep(0.3)
                 self.Dispatcher.Invoke(Action(self._bootstrap_discovered_tools))
@@ -1422,11 +1349,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._restore_window_state()
 
         # ── Register the MCP ExternalEvent on the UI thread ────────────────────
-        # This MUST happen here, on Revit's main thread — ExternalEvent.Create
-        # throws if called from the background startup probe below, which would
-        # leave every model-editing MCP tool (create wall/floor/column, rename,
-        # set_parameter, …) unable to open a transaction. Creating it up-front
-        # here guarantees the server can marshal those tools onto the UI thread.
+        # MUST be on Revit's main thread: ExternalEvent.Create throws from the
+        # background probe, leaving every model-editing MCP tool without a transaction.
         try:
             from Services.mcp_service import MCPService as _MCPService
             _ok, _ee_err = _MCPService.ensure_external_event()
@@ -1436,10 +1360,8 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"MCP ExternalEvent init error: {}".format(_exc_text(_ex)))
 
         # ── Register the tool-launch ExternalEvent, same constraint ───────────
-        # Without it every ribbon tool the assistant opens runs in Revit's IDLE
-        # context, where ExternalEvent.Create and Transaction are illegal —
-        # BCF Reader / ManaLoca / BatchOut threw "Attempting to create an
-        # ExternalEvent outside of a standard API execution" and never opened.
+        # Else launched tools run in the IDLE context and throw "Attempting to
+        # create an ExternalEvent outside of a standard API execution".
         try:
             _ok, _ctx_err = ensure_api_context()
             if not _ok:
@@ -1454,17 +1376,12 @@ class T3LabAssistantWindow(T3WPFWindow):
                 time.sleep(0.5)   # let window render first
 
                 # ─── 1. Auto-start Revit MCP Server & File Watcher ───
-                # In-process infrastructure: nothing is downloaded and nothing
-                # outlives Revit, so this still runs unattended — but a failure
-                # is no longer invisible. It used to vanish into logger.debug,
-                # and every tool call would then fail for no stated reason.
+                # In-process, runs unattended; a failure is logged to activity.
                 try:
                     from Services.mcp_service import MCPService
-                    # Start MCP HTTP Server if stopped
                     srv_status = MCPService.server_status()
                     if not srv_status.get('running'):
                         MCPService.start_server()
-                    # Start File Task Watcher if stopped
                     wat_status = MCPService.watcher_status()
                     if not wat_status.get('running'):
                         MCPService.start_watcher()
@@ -1475,13 +1392,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                             _exc_text(ex)))
 
                 # ─── 2. Local engine: OFFER, never start or download ───────
-                # This used to spawn `ollama serve` with subprocess.Popen and
-                # then POST /api/pull for qwen2.5:1.5b with a 600 s timeout —
-                # launching a background process and pulling ~1 GB onto the
-                # user's machine, with no consent, no cancel and every failure
-                # swallowed. The knowledge-embeddings step below already held
-                # the right line ("the ~270 MB pull is never triggered
-                # silently from startup"); this now follows it.
+                # (it once spawned `ollama serve` + pulled ~1 GB without consent)
                 try:
                     self._offer_local_engine()
                 except Exception as ex:
@@ -1498,10 +1409,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                         u"Skills scan failed: {}".format(_exc_text(ex)))
 
                 # ─── 3.5 Knowledge index: incremental scan + vectors ───
-                # Scans %APPDATA%/T3LabAI/knowledge/ plus user dirs; only
-                # changed files are re-extracted. Embeddings only when the
-                # model is ALREADY installed — the ~270 MB pull is never
-                # triggered silently from startup.
+                # Incremental; embeddings only when the model is ALREADY
+                # installed (the ~270 MB pull is never silent).
                 try:
                     if HAS_KNOWLEDGE:
                         _store = get_active_store()
@@ -1528,7 +1437,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 router = LLMRouter()
                 active = router.get_active_name()
 
-                # Update the badge display instantly from router settings
                 self.Dispatcher.Invoke(Action(self._update_ai_badge))
 
                 # Step 1: Probe the active provider first to fill cache ASAP
@@ -1557,10 +1465,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 except Exception:
                     pass
 
-                # Step 4: Proactive setup nudge — only on a fresh chat (no saved
-                # history for this document yet), only after first-run onboarding
-                # has already been shown/dismissed (avoids duplicating that flow),
-                # and only if auto-start above didn't already find a provider.
+                # Step 4: setup nudge — fresh chat, onboarding already done, no provider.
                 try:
                     from config.user_profile import UserProfile
                     already_onboarded = not UserProfile().is_first_run()
@@ -1591,16 +1496,14 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug(u"onboarding check error: {}".format(_exc_text(ex)))
 
-        # Live Revit context strip (active view + selection) under the chat.
-        # Started last so a host that refuses the read costs nothing during
-        # window construction.
+        # Live Revit context strip (view + selection); last, so a refused read costs nothing.
         try:
             self._update_revit_context()
             self._start_context_timer()
         except Exception as ex:
             logger.debug(u"revit context strip unavailable: {}".format(_exc_text(ex)))
 
-        # Persist window geometry/sidebar on close (custom X button was removed)
+        # Persist window geometry/sidebar on close
         try:
             self.Closing += self._on_closing
         except Exception:
@@ -1610,14 +1513,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         """Override pyRevit's setup_icon to remove the window icon from the title bar."""
         pass
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # REVIT INTEGRATION — chrome, theme, live context
-    # The assistant is not a guest application that happens to float over
-    # Revit; hosted in the dockable pane it should read as one of Revit's own
-    # panels. That means three things: no floating-card chrome inside the
-    # pane, colours that follow the host's Light/Dark theme, and a layout that
-    # survives a 320px-wide dock.
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══ REVIT INTEGRATION — chrome, theme, live context (reads as a Revit panel; survives a 320px dock) ═══
 
     def _apply_revit_skin(self):
         """Make the window sit inside Revit instead of on top of it."""
@@ -1627,9 +1523,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         if self.is_docked:
             self._flatten_chrome_for_pane()
 
-        # Revit's theme can change while the pane is open (Options ▸ User
-        # Interface, or the BG Theme tool in this very extension), so re-read
-        # it whenever the window is activated rather than only at startup.
+        # The theme can change while open (Options, BG Theme tool): re-read on activate.
         try:
             self.Activated += self._on_window_activated
         except Exception:
@@ -1651,13 +1545,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
 
     def _flatten_chrome_for_pane(self):
-        """Strip the floating-card chrome so the pane is filled edge to edge.
-
-        Floating, the window is a rounded card with a hairline edge. Docked,
-        that same card sits *inside* Revit's pane with the host background
-        showing through its 22px corners — the single strongest visual cue
-        that the assistant is a foreign window. Docked mode squares it off.
-        """
+        """Strip the floating-card chrome (rounded corners showed the host through)."""
         try:
             from System.Windows import CornerRadius, Thickness
             self.root_chrome.CornerRadius    = CornerRadius(0)
@@ -1665,8 +1553,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug(u"_flatten_chrome_for_pane: {}".format(_exc_text(ex)))
 
-        # The floating min/max cluster belongs to a window, not to a pane —
-        # Revit already provides the pane's own close/undock affordances.
+        # Revit provides the pane's own close/undock buttons.
         try:
             self.float_ctrls_panel.Visibility = Visibility.Collapsed
         except Exception:
@@ -1675,27 +1562,11 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _theme_scopes(self):
         """Every element that must carry its own copy of the T3Theme* brushes.
 
-        Docked, AssistantPaneControl hands the content to Revit and detaches
-        it from this window:
-
-            content = win.Content
-            win.Content = None          # <- root_chrome loses the Window
-            data.FrameworkElement = content
-
-        Window.Resources is where RevitTheme.apply() writes the tokens, so
-        after that detach it is no longer an ancestor resource scope of the
-        tree that binds to it. Every {DynamicResource T3Theme*} in the docked
-        pane then resolves to nothing and the property falls back to its
-        default — Background to null — leaving the pane transparent over
-        Revit's black HwndSource. That is the "pane went dark while Revit is
-        light" report: not a theme misdetection, a lookup that stops
-        resolving.
-
-        Writing the tokens onto the content root as well keeps them with the
-        content wherever it is reparented. Floating, both scopes are alive and
-        identical (RevitTheme caches one frozen brush per token per theme, so
-        the second copy is ~30 dictionary entries pointing at the same
-        objects); root_chrome is the nearer scope and simply wins.
+        Docked, AssistantPaneControl detaches win.Content from the Window, so
+        Window.Resources stops being an ancestor scope: every
+        {DynamicResource T3Theme*} resolved to nothing and the pane went
+        transparent over Revit's black HwndSource ("pane went dark"). Tokens
+        on the content root travel with it; floating, root_chrome just wins.
         """
         scopes = []
         root = getattr(self, 'root_chrome', None)
@@ -1707,12 +1578,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _sync_theme(self, force=False):
         """Repaint the shell in Revit's current theme (Light / Dark).
 
-        Everything bound with DynamicResource — window, chat surface, composer,
-        popups, scrollbars, chips — follows immediately. Message bodies already
-        on screen keep the colours they were rendered with; they pick up the
-        new theme as new messages arrive, or in full on the next New
-        conversation / pane reopen. Rebuilding a live transcript mid-flight
-        would mean replaying rows while a stream may be writing into one.
+        DynamicResource bindings follow immediately; the transcript is not
+        rebuilt (a stream may be writing into a row) — see _bind_theme.
         """
         if _theme is None:
             return None
@@ -1733,21 +1600,16 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     def _on_window_activated(self, sender, e):
         self._sync_theme()
+        self._sync_model_chip_if_stale()
         self._update_revit_context()
-        # Preload the local model so the FIRST message isn't a cold VRAM load.
-        # Throttled + backgrounded, and a cheap no-op for cloud providers.
         self._maybe_warm_up_local()
-        # Ensure a cached open-model digest exists so answers are grounded in
-        # the real model. Backgrounded, once per document per session.
         self._maybe_refresh_model_snapshot()
 
     def _maybe_warm_up_local(self, force=False):
         """Preload the active LOCAL model so the first message replies fast.
 
-        Ollama/LM Studio only keep a model resident AFTER a first use, so the
-        first message after the pane opens otherwise pays the multi-second load.
-        No-op for cloud providers, throttled (keep_alive holds a model ~15m), and
-        run entirely on a background thread so the UI is never blocked.
+        Ollama/LM Studio load on first use. No-op for cloud; throttled
+        (keep_alive holds ~15m); background thread.
         """
         try:
             import time as _time
@@ -1783,11 +1645,8 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._warming_up = False
 
     def _model_snapshot_grounding(self):
-        """Cached digest of the OPEN model (element counts / health / project) as
-        a short grounding block. Injected with the live turn so answers — above
-        all on a local model that cannot afford many read round-trips — start
-        already knowing the model. Empty until a snapshot has been built for
-        this document (self-study idle loop, or _maybe_refresh_model_snapshot)."""
+        """Cached digest of the OPEN model as a short grounding block for the turn
+        (saves a local model read round-trips). Empty until a snapshot exists."""
         try:
             from Intelligence.learning.enrichers import model_snapshot
             digest = model_snapshot.load_digest(self._doc_key)
@@ -1796,10 +1655,8 @@ class T3LabAssistantWindow(T3WPFWindow):
             return u""
 
     def _maybe_refresh_model_snapshot(self):
-        """Build the open-model digest in the background if this document has none
-        yet, so project grounding works without waiting for the self-study idle
-        loop. Once per document per session; read-only tools, marshalled to
-        Revit's thread by the enricher; never blocks the UI."""
+        """Build the open-model digest in the background if this document has
+        none. Once per document per session; the enricher marshals to Revit."""
         try:
             key = self._doc_key
             if self._snapshot_built_for == key or self._snapshot_building:
@@ -1827,19 +1684,14 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._snapshot_building = False
 
     # ─── Compact layout for narrow docks ─────────────────────────────────────
+    # Widths are DIPs (display scaling already folded in).
 
-    # Widths are WPF device-independent pixels, so display scaling is already
-    # folded in: a pane 400px wide on screen at 125% arrives here as 320.
-
-    #: Below this width the pane is too narrow for the full composer furniture.
     COMPACT_WIDTH = 400
 
-    #: Below this width secondary labels give way to their icons and the
-    #: composer hint gets shorter (_apply_narrow_layout).
+    #: Below this, secondary labels collapse to icons (_apply_narrow_layout).
     NARROW_WIDTH = 340
 
-    #: The floating window's min / max / close cluster (3 x 28 + 4) shares the
-    #: top bar; docked it is collapsed and costs nothing.
+    #: Floating min / max / close cluster (3 x 28 + 4); collapsed when docked.
     _FLOAT_CTRLS_WIDTH = 88
 
     _PLACEHOLDER_FULL = u"Type a request — press / for skills"
@@ -1850,10 +1702,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             if e.WidthChanged:
                 self._apply_compact_layout(e.NewSize.Width)
                 self._apply_narrow_layout(e.NewSize.Width)
-                # Always, not just on the compact transition: dragging a
-                # docked pane from 250px to 350px never crosses the threshold,
-                # so _apply_compact_layout returns early and the popups would
-                # stay clamped to the narrowest width they ever saw.
+                # Always: a resize that never crosses the threshold must still refit.
                 self._fit_popups_to_width(e.NewSize.Width)
         except Exception:
             pass
@@ -1861,16 +1710,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _apply_narrow_layout(self, width):
         """Icon-only secondary buttons and a shorter composer hint. UI THREAD.
 
-        At 280–340 DIP three rows no longer fit their labels:
-
-          top bar     3 tabs + "Prompts & Skills" + New chat    ~300 (+88 floating)
-          below card  project chip + "Ask before edits" + Undo  ~300
-          history     "Activity log" + "Clear all" beside the title
-
-        Each label collapses on its own threshold; the icon and the tooltip
-        stay, so nothing becomes unreachable. Whatever still does not fit
-        trims (project / model names, view name, copyright) rather than being
-        pushed past the pane edge — that part is pure XAML.
+        Each label collapses on its own threshold; icon and tooltip stay.
+        Name trimming is pure XAML.
         """
         try:
             w = float(width or 0)
@@ -1912,10 +1753,7 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _apply_compact_layout(self, width):
         """Tighten padding and drop optional footer text on a narrow dock.
 
-        A pane docked beside the Project Browser is routinely 300–340px. At
-        that width the 16px gutters plus the three-part footer leave the
-        composer with barely half the pane, so both give way — the copyright
-        stays (it is required), the disclaimer and the shortcut hint do not.
+        The copyright stays (required); the disclaimer goes.
         """
         try:
             compact = bool(width) and width < self.COMPACT_WIDTH
@@ -1935,8 +1773,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self.chat_scroll.Padding  = Thickness(16, 12, 10, 8)
         except Exception:
             pass
-        # First-run card: 16 + 24 + 24 + 16 of chrome left "Skip for now" and
-        # "Get started" ~200 DIP on a 280 dock — not enough for both.
+        # First-run card chrome left its two buttons ~200 DIP on a 280 dock.
         try:
             self.onboarding_card.Margin  = Thickness(8 if compact else 16)
             self.onboarding_card.Padding = Thickness(16 if compact else 24)
@@ -1949,24 +1786,18 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception:
             pass
 
-    # Popup widths are authored for a floating window; a pane docked beside the
-    # Project Browser is routinely narrower than the skills popup's MinWidth
-    # alone (340), so the popup hangs outside the pane over Revit's own UI.
+    # Docked panes are often narrower than the popups' authored MinWidth.
     _POPUP_PANELS = ('skills_popup_panel', 'project_popup_panel',
                      'model_popup_panel', 'saved_prompts_list_panel')
-    # Room for the popup's own border, margin and shadow.
-    _POPUP_GUTTER = 24
-    # The widest MinWidth authored in the XAML (skills_popup). Below this the
-    # popups are pinned to the pane; at or above it they keep their own sizes.
+    _POPUP_GUTTER = 24    # popup border, margin and shadow
+    # Widest authored MinWidth (skills_popup); below it popups pin to the pane.
     _POPUP_MIN_AUTHORED = 340
 
     def _fit_popups_to_width(self, width):
         """Clamp popup content to the pane. UI THREAD. Never raises.
 
-        Widths are pinned on the popup's Border — the element that actually
-        carries MinWidth/MaxWidth — so a popup shrinks with the pane instead
-        of spilling out of it. Once the pane is wide enough again the authored
-        widths are restored by clearing the local values.
+        Pinned on the Border that carries MinWidth/MaxWidth; cleared again
+        when the pane is wide enough.
         """
         from System.Windows import FrameworkElement
         from System.Windows.Controls import Border
@@ -1979,8 +1810,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         for name in self._POPUP_PANELS:
             try:
                 node = getattr(self, name, None)
-                # The panel may sit inside a ScrollViewer; walk up to the
-                # Border that carries the width.
+                # Walk up (past a ScrollViewer) to the Border.
                 while node is not None and not isinstance(node, Border):
                     node = getattr(node, 'Parent', None)
                 if node is None:
@@ -2000,13 +1830,9 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _keep_popup_in_pane(self, popup):
         """Shift a popup left so it does not hang past the pane. UI THREAD.
 
-        Placement Top/Bottom lines the popup's LEFT edge up with its target.
-        The model chip and the Prompts & Skills button sit at the RIGHT of the
-        pane, so their 260–380px popups ran past the pane's right edge — over
-        the Properties palette when docked. Called right before opening: it
-        measures the popup content and sets HorizontalOffset to exactly the
-        overhang, never so far that the popup leaves the pane on the left.
-        Never raises.
+        Placement Top/Bottom aligns LEFT edges, so popups of right-side targets
+        overhung the pane. Call right before opening; offsets by the overhang,
+        never past the left edge. Never raises.
         """
         try:
             from System.Windows import Point, Size
@@ -2035,10 +1861,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _start_context_timer(self):
         """Poll the active view / selection so the strip stays live.
 
-        Reads only — no transaction, no ExternalEvent — which is legal outside
-        an API context. Three consecutive failures (closed document, a modal
-        dialog holding the API, an unexpected host state) stop the timer for
-        good rather than logging once per tick forever.
+        Reads only, legal outside an API context. Three consecutive failures
+        stop the timer (floating window only — see _on_context_tick).
         """
         try:
             from System.Windows.Threading import DispatcherTimer
@@ -2052,10 +1876,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"context timer unavailable: {}".format(_exc_text(ex)))
 
     def _on_context_tick(self, sender, e):
-        # Ask the element that is actually on screen. Docked, this window is
-        # never shown — its content was detached into Revit's pane — so
-        # self.IsVisible is permanently False and this tick used to return
-        # early on every single fire, for the whole life of the pane.
+        # Ask the element on screen: docked, the Window itself is never shown.
         probe = getattr(self, 'root_chrome', None)
         if probe is None:
             probe = self
@@ -2064,15 +1885,13 @@ class T3LabAssistantWindow(T3WPFWindow):
                 return          # docked pane hidden — nothing to refresh
         except Exception:
             pass
-        # Revit's theme can change while the pane is open, and a docked pane
-        # raises no Window.Activated — this tick is the only thing that would
-        # notice. _sync_theme returns immediately unless the theme changed.
+        # A docked pane raises no Window.Activated; this tick notices theme /
+        # provider (LLMs Setting) changes. Both no-op when unchanged.
         self._sync_theme()
+        self._sync_model_chip_if_stale()
         if not self._update_revit_context():
             self._ctx_failures = getattr(self, '_ctx_failures', 0) + 1
-            # Docked, the pane lives for the whole Revit session: no open
-            # document is a normal state, and stopping here would freeze the
-            # strip (and theme sync) for every document opened afterwards.
+            # Docked, no open document is normal; stopping would freeze later docs.
             if self._ctx_failures >= 3 and not self.is_docked:
                 try:
                     self._ctx_timer.Stop()
@@ -2085,11 +1904,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _warm_live_context(self):
         """Keep ContextScout's levels/grids digest warm. UI THREAD (tick).
 
-        The digest is cached per document, so on almost every tick this is a
-        dict lookup. When the user switches models (or the cache went stale
-        after an edit) the two read-only collectors run HERE, on Revit's own
-        thread while it is idle, instead of on the routing worker in the
-        middle of a turn — the turn then finds it cached and pays nothing.
+        Cached per document (usually a dict lookup); a rebuild runs here while
+        Revit is idle, not on the routing worker mid-turn.
         """
         if not HAS_SCOUT:
             return
@@ -2114,8 +1930,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         doc = getattr(uidoc, 'Document', None)
         if doc is None:
             return None
-        # The docked pane outlives the document it was opened with; follow
-        # whichever one is active so tools act on what the user is looking at.
+        # The docked pane outlives its document; follow the active one.
         if self.is_docked:
             self.doc = doc
         view_name = u""
@@ -2147,6 +1962,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             return False
 
         view_name, count = ctx
+        # Plain-string copy for worker threads (auto model triage).
+        self._ctx_line = u"active view: {}; {} element(s) selected".format(
+            view_name or u"none", count)
         try:
             self.revit_ctx_view.Text = view_name or u"No active view"
             if count:
@@ -2174,7 +1992,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             from config.settings import T3LabAISettings
             ws = T3LabAISettings().get_window_state()
 
-            # Restore size — strictly clamp so assistant never opens full screen
+            # Strict clamp: never opens full screen
             w = ws.get('width')
             h = ws.get('height')
             if w and h:
@@ -2186,7 +2004,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self.Width  = 560.0
                 self.Height = 720.0
 
-            # Restore position — validate it is still on-screen; default to screen right
+            # Must still be on-screen; default to screen right
             left = ws.get('left')
             top  = ws.get('top')
             try:
@@ -2235,32 +2053,19 @@ class T3LabAssistantWindow(T3WPFWindow):
     # ─── Window controls ──────────────────────────────────────────────────────
 
     def _on_closing(self, sender, e):
-        """Persist window geometry/sidebar state when the window closes.
-
-        Wired to the WPF Closing event in __init__. Previously this logic lived
-        in close_clicked (the custom X button), which was removed — this keeps
-        window-state saving alive for Alt+F4 / Revit pane close.
-        """
+        """Persist window state on close (Alt+F4 / pane close) and stop timers."""
         self._save_window_state()
-        # Stop the scheduled-prompts timer: a DispatcherTimer keeps ticking
-        # after the window closes (holding the window alive) and a due task
-        # would run _process_input() on a closed window — an invisible LLM
-        # request with results shown nowhere.
+        # DispatcherTimers keep ticking after close and hold the window alive:
+        # a due scheduled task would run an invisible LLM request, and each
+        # reopen leaked another window tree.
         try:
             self._sched_timer.Stop()
         except Exception:
             pass
-        # Same reasoning for the typing-indicator timer: it ticks once a second
-        # against a closed window and holds a strong reference to the whole
-        # window tree (history, avatar bitmaps) for the rest of the Revit
-        # session — reopening the assistant leaked another one.
         try:
             self._typing_timer.Stop()
         except Exception:
             pass
-        # And the Revit context poller, for exactly the same reason: it reads
-        # the active document every 2s and would keep doing so — against a
-        # dead window — for the rest of the session.
         try:
             self._ctx_timer.Stop()
         except Exception:
@@ -2271,10 +2076,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         self.WindowState = WindowState.Minimized
 
     def maximize_clicked(self, sender, e):
-        """Toggle between standard width (560px) and wide width (720px).
-
-        Prevents full-screen blowout while giving the user extra room when needed.
-        """
+        """Toggle between standard width (560px) and wide width (720px)."""
         try:
             if self.Width > 640.0:
                 self.Width = 560.0
@@ -2289,15 +2091,9 @@ class T3LabAssistantWindow(T3WPFWindow):
     def undo_clicked(self, sender, e):
         """Undo the last Revit transaction.
 
-        Autodesk.Revit.DB.Document has neither CanUndo() nor Undo() — the old
-        code raised AttributeError straight into a logger.debug, so the button
-        did nothing at all and said nothing about it. Undo is a POSTABLE UI
-        command: it must go through UIApplication.PostCommand, and PostCommand
-        takes a RevitCommandId, not the PostableCommand enum value.
-
-        The UIApplication must come from _get_uiapp(), NOT from
-        `HOST_APP.uiapp` — that is None here, so the button always fell into
-        the "Undo is unavailable" branch.
+        DB.Document has no Undo(): it is a postable command, so PostCommand
+        with a RevitCommandId. UIApplication from _get_uiapp(), NOT
+        `HOST_APP.uiapp` (None here).
         """
         try:
             from Autodesk.Revit.UI import RevitCommandId, PostableCommand
@@ -2305,7 +2101,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             if uiapp is None:
                 raise AttributeError("no UIApplication available")
             cid = RevitCommandId.LookupPostableCommandId(PostableCommand.Undo)
-            # CanPostCommand is the "can Revit take this right now" query:
             # False while a modal dialog or another command owns the UI.
             if not uiapp.CanPostCommand(cid):
                 self._append_bot_message(
@@ -2314,14 +2109,11 @@ class T3LabAssistantWindow(T3WPFWindow):
                     icon=_ICON_WARNING, icon_color=_ICON_AMBER)
                 return
             uiapp.PostCommand(cid)
-            # PostCommand is asynchronous — Revit runs it on the next input
-            # cycle — so this must not claim the undo already happened. Revit
-            # no-ops when the undo stack is empty, and CanPostCommand does not
-            # report that, so the wording stays neutral.
+            # PostCommand is async and an empty undo stack is a silent no-op,
+            # so the wording stays neutral.
             self._append_bot_message(u"Undo sent to Revit.")
         except Exception as ex:
-            # Not _report_error: this is a standalone button, not a chat turn —
-            # claiming the turn would suppress a running request's own reply.
+            # Not _report_error: claiming the turn would suppress a running reply.
             logger.error(u"undo: {}".format(_exc_text(ex)))
             self._append_bot_message(
                 u"Undo is unavailable right now — use Ctrl+Z in Revit.",
@@ -2330,12 +2122,7 @@ class T3LabAssistantWindow(T3WPFWindow):
     # ─── Tool discovery bootstrap ──────────────────────────────────────────────
 
     def _bootstrap_discovered_tools(self):
-        """
-        Run on startup (UI thread):
-          1. Discover new tools → register launchers → update NLP prompt.
-          2. Post a chat notification for truly NEW tools.
-        Must be called from the UI thread (via Dispatcher.Invoke).
-        """
+        """Discover tools, register launchers + NLP prompt, announce NEW tools. UI THREAD."""
         try:
             if not HAS_DISCOVERY:
                 return
@@ -2343,14 +2130,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             # ── Discover (writes registry, drops vanished buttons) ───────────
             new_tools = discover_new_tools()
 
-            # ── Register launchers + inject into NLP ─────────────────────────
-            # ONE pass over the full registry: _register_discovered_launchers
-            # rebuilds the catalog and validates every script path, so calling
-            # it with just the new tools first would only reset the drop list.
+            # ── Register launchers + inject into NLP (ONE pass, full registry) ──
             _register_discovered_launchers(get_registered_tools())
 
-            # A registry entry whose script has since been deleted never
-            # reaches the model — but it should not vanish silently either.
             if DROPPED_TOOLS:
                 self._log_activity(
                     u"Tool catalog: skipped {} intent(s) with no script on "
@@ -2373,15 +2155,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"_bootstrap_discovered_tools error: {}".format(_exc_text(ex)))
 
     # ─── Old-context repeat guard ──────────────────────────────────────────────
-    # Every (intent, args) that has COMPLETED in this conversation, newest last.
-    # A small local model re-reads the transcript and re-issues work it already
-    # did: one "tô đỏ tường" produced revit_override_color on Walls/red (right),
-    # then Floors/blue and Doors/yellow (both lifted from earlier turns), and
-    # then claimed only the walls had been coloured. The turn-local guard could
-    # not see those — their arguments differ from anything in THIS turn — and
-    # the old registry only held the single immediately-previous turn, so a
-    # command from two turns back sailed through. Bounded so a long session
-    # cannot grow it without limit.
+    # Every (intent, args) COMPLETED in this conversation, newest last: small
+    # local models re-issue earlier turns' work (one "tô đỏ tường" also
+    # recoloured Floors/Doors from older turns). Bounded.
     _MAX_REMEMBERED_CALLS = 60
 
     def _earlier_turn_calls(self):
@@ -2401,9 +2177,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 if key not in known:
                     known.add(key)
                     order.append(key)
-            # Drop the oldest beyond the cap: recent work is what the model is
-            # most likely to replay, and an unbounded set would keep a command
-            # blocked long after the user could plausibly mean it again.
+            # Drop the oldest: an old command may legitimately be wanted again.
             while len(order) > self._MAX_REMEMBERED_CALLS:
                 known.discard(order.pop(0))
             self._prev_turn_calls = known
@@ -2416,40 +2190,33 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _restore_history(self):
         """Load saved conversation from disk and replay bubbles + context.
 
-        Order matters: the "restored" banner is emitted BEFORE the replayed
-        turns and with no action row. It used to be appended last as a normal
-        assistant reply, so after a Revit restart the pane looked like the
-        assistant's most recent utterance was a notice about itself — complete
-        with copy / try-again / thumbs buttons on a line it makes no sense to
-        regenerate or rate.
+        The "restored" banner goes BEFORE the replayed turns, with no action
+        row (appended last it read as the latest reply, with rate buttons).
         """
         try:
-            # Restore the rolling summary first: the replay below re-adds
-            # turns, and anything that falls back out of the window must fold
-            # onto what was already condensed rather than starting over.
+            # Summary first: turns falling out of the window fold onto it.
             self._history_summary = load_chat_summary(self._doc_key)
             saved = load_chat_history(self._doc_key)
             if not saved:
                 return
+            self._set_session(load_chat_session(self._doc_key))
 
-            replay = saved[-30:]   # last 30 messages = 15 exchanges
+            # Only the bubbles are capped; the model gets what the budget allows.
+            replay = saved[-MAX_REPLAY_BUBBLES:]
+            hidden = len(saved) - len(replay)
 
-            # Re-learn the conversation's language BEFORE anything is rendered.
-            # _LAST_USER_VIET is process state, so a Revit restart reset a
-            # Vietnamese session to the English default and the first reply
-            # after reopening came back in the wrong language. Feed the
-            # restored user turns through the normal detector, oldest first, so
-            # the most recent decidable message wins.
+            # Re-learn the language BEFORE rendering (_LAST_USER_VIET is process
+            # state, reset by a restart); oldest first, latest decidable wins.
             for msg in replay:
                 if msg.get("role") == "user" and msg.get("content"):
                     _note_user_language(msg["content"])
 
             viet = _ui_viet()
-            self._append_bot_message(self._restored_banner(saved, viet),
+            self._append_bot_message(self._restored_banner(saved, viet,
+                                                           hidden=hidden),
                                      icon=_ICON_REFRESH, icon_color=_ICON_SLATE,
                                      actions=False)
 
-            # Replay the bubbles
             for msg in replay:
                 role    = msg.get("role", "")
                 content = msg.get("content", "")
@@ -2459,22 +2226,19 @@ class T3LabAssistantWindow(T3WPFWindow):
                     self._append_user_message(content)
                 elif role == "assistant":
                     self._append_bot_message(content)
-                # Re-populate NLP context (last 16 messages = 8 exchanges)
-                self._conversation_history.append(
-                    {"role": role, "content": content}
-                )
 
+            # Re-populate the model's context from the WHOLE saved chat.
+            self._conversation_history, self._history_summary = _fit_restored(
+                saved, self._history_summary, viet=viet)
             self._persisted_msgs = list(saved)
         except Exception as ex:
             logger.debug(u"Could not restore history: {}".format(_exc_text(ex)))
 
-    def _restored_banner(self, saved, viet):
+    def _restored_banner(self, saved, viet, hidden=0):
         """One line of context for a restored session: how much, how old.
 
-        "Previous conversation restored" alone left the obvious question
-        unanswered — restored from when? A session reopened after lunch and one
-        reopened after three weeks looked identical, so stale context silently
-        framed the next question.
+        `hidden`: older messages not re-drawn (MAX_REPLAY_BUBBLES), said out
+        loud so a short pane is not mistaken for a lost chat.
         """
         exchanges = max(1, len([m for m in saved if m.get("role") == "user"]))
         when = _relative_time(
@@ -2483,12 +2247,127 @@ class T3LabAssistantWindow(T3WPFWindow):
             head = u"Đã khôi phục hội thoại trước ({} lượt{})".format(
                 exchanges, u", " + when if when else u"")
             tail = u"Bấm nút hội thoại mới dưới ô nhập để bắt đầu lại từ đầu."
+            if hidden:
+                tail = (u"{} tin nhắn cũ hơn không hiển thị ở đây nhưng vẫn "
+                        u"nằm trong ngữ cảnh. ".format(hidden) + tail)
         else:
             head = u"Previous conversation restored ({} turn{}{})".format(
                 exchanges, u"s" if exchanges != 1 else u"",
                 u", " + when if when else u"")
             tail = u"Use the new-conversation button under the message box to start fresh."
+            if hidden:
+                tail = (u"{} older message{} not shown here, still part of "
+                        u"the context. ".format(
+                            hidden, u"s are" if hidden != 1 else u" is")
+                        + tail)
         return head + u"\n" + tail
+
+    # ─── Session identity + session memory ────────────────────────────────────
+
+    def _set_session(self, meta):
+        """Adopt a chat's identity and notes ({} = a fresh chat)."""
+        meta = meta or {}
+        self._session_id = meta.get('session_id') or None
+        self._session_path = meta.get('session_path') or None
+        try:
+            from Intelligence.session_context import normalize_notes
+            self._session_notes = normalize_notes(meta.get('session_notes'))
+        except Exception:
+            self._session_notes = []
+        self._past_chats_cache = None
+
+    def _session_state(self):
+        """What save_chat_history stores about this chat besides its turns."""
+        return {'session_id': getattr(self, '_session_id', None),
+                'session_notes': list(getattr(self, '_session_notes', None) or []),
+                'session_path': getattr(self, '_session_path', None)}
+
+    def _save_session_notes(self, notes):
+        """Store new session notes and write them to the history file now
+        (a note saved before the chat's first reply must survive a crash)."""
+        self._session_notes = list(notes or [])
+        if not getattr(self, '_session_id', None):
+            self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            save_chat_history(self._doc_key, self._persisted_msgs,
+                              summary=getattr(self, '_history_summary', u''),
+                              session=self._session_state())
+        except Exception as ex:
+            logger.debug(u"Could not save session notes: {}".format(_exc_text(ex)))
+
+    def _session_prompt_block(self, viet=False, tool_hint=True):
+        """'## Notes for this conversation' + '## Earlier conversations'.
+
+        Both change rarely, so they sit in the STATIC half of the system
+        prompt (prompt cache keeps hitting).
+        """
+        parts = []
+        try:
+            from Intelligence import session_context as _sc
+            notes = _sc.notes_block(getattr(self, '_session_notes', None),
+                                    viet=viet, tool_hint=tool_hint)
+            if notes:
+                parts.append(notes)
+            past = self._past_chats_block(viet=viet, tool_hint=tool_hint)
+            if past:
+                parts.append(past)
+        except Exception as ex:
+            logger.debug(u"session prompt block: {}".format(_exc_text(ex)))
+        return u"\n\n".join(parts)
+
+    def _past_chats_block(self, viet=False, tool_hint=True):
+        """Digests of the newest earlier chats in scope (cached per chat).
+
+        Scope: the active project's archived chats, else "No project" chats
+        on the same Revit model; the open chat's own archive is excluded.
+        """
+        pid = self._active_pid()
+        key = (pid, self._doc_key, getattr(self, '_session_id', None),
+               bool(viet), bool(tool_hint))
+        cache = getattr(self, '_past_chats_cache', None)
+        if cache and cache[0] == key:
+            return cache[1]
+        block = u""
+        try:
+            from config import chat_sessions
+            from Intelligence.session_context import past_chats_block
+            sessions = chat_sessions.list_sessions(
+                pid=pid, doc_key=None if pid else self._doc_key, limit=40)
+            own = getattr(self, '_session_id', None)
+            sessions = [s for s in sessions if not (own and s.get('id') == own)]
+            block = past_chats_block(
+                sessions, _active_budgets()['past_chats_chars'], viet=viet,
+                project=bool(pid), tool_hint=tool_hint)
+        except Exception as ex:
+            logger.debug(u"past chats block: {}".format(_exc_text(ex)))
+        self._past_chats_cache = (key, block)
+        return block
+
+    def _session_note_tool(self, action, fact, replaces=None):
+        """remember_fact with scope "session": save / update / forget one of
+        this chat's notes. Returns the tool result dict. WORKER THREAD safe —
+        it touches no WPF object."""
+        try:
+            from Intelligence import session_context as _sc
+            notes = getattr(self, '_session_notes', None) or []
+            action = (action or 'save').lower()
+            if action == 'forget':
+                notes, removed = _sc.forget_note(notes, replaces or fact)
+                if removed is None:
+                    return {"error": u"No matching note in this conversation."}
+                self._save_session_notes(notes)
+                return {"success": True,
+                        "note": u"Forgot for this conversation: {}".format(removed)}
+            if action == 'update':
+                notes, ok, msg = _sc.update_note(notes, replaces, fact)
+            else:
+                notes, ok, msg = _sc.add_note(notes, fact)
+            if not ok:
+                return {"error": msg}
+            self._save_session_notes(notes)
+            return {"success": True, "note": msg}
+        except Exception as ex:
+            return {"error": u"{}".format(_exc_text(ex))}
 
     def _persist_message(self, role, content):
         """Append one message to the in-memory list and save to disk."""
@@ -2497,19 +2376,21 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._persisted_msgs.append(
                 {"role": role, "content": content, "ts": ts}
             )
+            # Id from the first message, kept through restarts/resumes (no duplicate History rows).
+            if not getattr(self, '_session_id', None):
+                self._session_id = datetime.datetime.now().strftime(
+                    "%Y%m%d_%H%M%S")
             save_chat_history(self._doc_key, self._persisted_msgs,
-                              summary=getattr(self, '_history_summary', u''))
+                              summary=getattr(self, '_history_summary', u''),
+                              session=self._session_state())
         except Exception as ex:
             logger.debug(u"Could not persist message: {}".format(_exc_text(ex)))
 
     def reset_chat_clicked(self, sender, e):
         """Clear the chat history for this document and reset the UI."""
         try:
-            # Resetting mid-request detached the live bubble while the worker
-            # kept a reference to it: the answer landed in an orphaned
-            # TextBlock (blank chat), and the stale _typing_row made
-            # _show_typing_indicator early-return for the rest of the session.
-            # _project_popup_select / _create_new_project already guard this way.
+            # Resetting mid-request orphaned the live bubble and the stale
+            # _typing_row blocked the typing indicator for the session.
             if getattr(self, '_busy', False):
                 self._append_bot_message(
                     u"Still working on the current request — press Stop first, "
@@ -2517,10 +2398,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                     icon=_ICON_WARNING, icon_color=_ICON_AMBER)
                 return
             self._reset_session_state(clear_transcript=True)
-            # Delete saved file
             clear_chat_history(self._doc_key)
-            # No "Conversation refreshed" bubble — the welcome greeting panel
-            # comes back on an empty transcript and already says the same thing.
+            # No "refreshed" bubble: the welcome panel returns on an empty transcript.
             self._update_welcome_greeting(fresh=True)
         except Exception as ex:
             logger.debug(u"reset_chat error: {}".format(_exc_text(ex)))
@@ -2535,29 +2414,23 @@ class T3LabAssistantWindow(T3WPFWindow):
                     icon=_ICON_WARNING, icon_color=_ICON_AMBER)
                 return
 
-            # Archive current conversation if it contains messages
             if getattr(self, '_persisted_msgs', None):
                 self._archive_current_session()
 
-            # Reset session state and delete current document active history
             self._reset_session_state(clear_transcript=True)
             clear_chat_history(self._doc_key)
 
-            # Update greeting (a new phrase for a new conversation)
             self._update_welcome_greeting(fresh=True)
 
-            # Switch to chat tab
             self.tab_chat_clicked()
         except Exception as ex:
             logger.debug(u"new_chat_clicked error: {}".format(_exc_text(ex)))
 
     def _archive_current_session(self):
-        """Archive current conversation to a historical session file.
+        """Archive the conversation to the active project's sessions folder.
 
-        Written to the ACTIVE PROJECT's own sessions folder
-        (config.chat_sessions.sessions_dir) and tagged with "pid", so History
-        lists a project's conversations with the project and deleting the
-        project takes them along. No project → the global archive, as before.
+        Tagged with "pid" (config.chat_sessions.sessions_dir), so deleting the
+        project takes it along. No project → the global archive.
         """
         try:
             if not getattr(self, '_persisted_msgs', None):
@@ -2566,8 +2439,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             pid = self._active_pid()
             try:
                 from config import chat_sessions
-                # The global folder still goes through _chat_history_dir so
-                # its one-time legacy import keeps running.
+                # _chat_history_dir keeps its one-time legacy import running.
                 sessions_dir = (chat_sessions.sessions_dir(pid) if pid
                                 else _chat_history_dir('sessions'))
             except Exception:
@@ -2583,22 +2455,59 @@ class T3LabAssistantWindow(T3WPFWindow):
                     break
 
             now = datetime.datetime.now()
-            session_id = now.strftime("%Y%m%d_%H%M%S")
+            session_id = (getattr(self, '_session_id', None)
+                          or now.strftime("%Y%m%d_%H%M%S"))
             ts = now.strftime("%Y-%m-%d %H:%M")
+
+            # A resumed chat goes back into ITS OWN file (same id, user's title
+            # kept), not a second History row — only while still in the same
+            # scope (same folder, or a global file tagged with this project).
+            fpath, old = None, {}
+            prev = getattr(self, '_session_path', None)
+            try:
+                if prev and os.path.isfile(prev):
+                    with io.open(prev, 'r', encoding='utf-8') as f:
+                        data_prev = json.load(f) or {}
+                    same_dir = (os.path.normcase(os.path.dirname(os.path.abspath(prev)))
+                                == os.path.normcase(os.path.abspath(sessions_dir)))
+                    tagged = bool(pid) and data_prev.get('pid') == pid
+                    if same_dir or tagged:
+                        fpath, old = prev, data_prev
+            except Exception:
+                fpath, old = None, {}
+            if old.get('renamed') and old.get('title'):
+                title = old['title']
+
+            summary = getattr(self, '_history_summary', u'')
+            digest = u""
+            try:
+                from Intelligence.session_context import make_digest
+                digest = make_digest(self._persisted_msgs, summary, title)
+            except Exception:
+                digest = u""
             session_data = {
-                "id": session_id,
+                "id": old.get('id') or session_id,
                 "doc_key": self._doc_key,
                 "title": title,
                 "timestamp": ts,
+                "updated": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "message_count": len(self._persisted_msgs),
                 "messages": list(self._persisted_msgs),
-                "summary": getattr(self, '_history_summary', u'')
+                "summary": summary
             }
+            if digest:
+                session_data["digest"] = digest
+            notes = list(getattr(self, '_session_notes', None) or [])
+            if notes:
+                session_data["session_notes"] = notes
+            if old.get('renamed'):
+                session_data["renamed"] = True
             if pid:
                 session_data["pid"] = pid
 
-            fname = "{}_{}.json".format(self._doc_key, session_id)
-            fpath = os.path.join(sessions_dir, fname)
+            if fpath is None:
+                fname = "{}_{}.json".format(self._doc_key, session_data["id"])
+                fpath = os.path.join(sessions_dir, fname)
             data = jsonsafe.dumps(session_data, indent=2)
             with io.open(fpath, 'w', encoding='utf-8') as f:
                 f.write(data)
@@ -2670,8 +2579,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     # ─── History view: per-project list, search, scope, rename ───────────────
 
-    #: Search-box debounce: the list re-renders once typing pauses, not per
-    #: keystroke (each render re-reads the archive metadata).
+    #: Search debounce: each render re-reads the archive metadata.
     _HISTORY_SEARCH_DELAY_MS = 300
 
     def _history_query(self):
@@ -2688,12 +2596,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             return False
 
     def _get_history_sessions(self, query=None, all_projects=None):
-        """Archived sessions for the History view, newest first.
+        """Archived sessions for History, newest first (chat_sessions.list_sessions).
 
-        "This project": the active project's conversations for THIS document
-        (no project → the "No project" archive). "All projects": everything,
-        every document. Items come from config.chat_sessions.list_sessions:
-        {'path', 'title', 'created', 'message_count', 'pid', ...}.
+        "This project": active project, THIS document; "All projects": everything.
         """
         try:
             from config import chat_sessions
@@ -2856,8 +2761,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 tb_meta.Text = meta_text
                 tb_meta.Style = self.FindResource("T3.Caption")
                 tb_meta.Margin = Thickness(0, 4, 0, 0)
-                # Narrow pane: "date • N messages" breaks onto a second line
-                # beside Resume / Delete instead of running under them.
+                # Narrow pane: wrap instead of running under Resume / Delete.
                 tb_meta.TextWrapping = System.Windows.TextWrapping.Wrap
 
                 info_stack.Children.Add(tb_title)
@@ -2869,7 +2773,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 act_stack.VerticalAlignment = System.Windows.VerticalAlignment.Center
                 Grid.SetColumn(act_stack, 1)
 
-                # Open / Resume button
                 btn_open = Button()
                 btn_open.Style = self.FindResource("T3.Button.Ghost")
                 btn_open.Height = 28
@@ -2912,7 +2815,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 btn_ren.Click += _make_ren_handler(fpath, tb_title, info_stack)
                 act_stack.Children.Add(btn_ren)
 
-                # Delete button
                 btn_del = _icon_btn(u"\uE74D", u"Delete this session",
                                     "T3.Danger.Text")
 
@@ -2990,27 +2892,54 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"_begin_history_rename error: {}".format(_exc_text(ex)))
 
     def _resume_history_session(self, path):
-        """Load and resume an archived session into the current chat."""
+        """Resume an archived session; it keeps its id, notes and file.
+
+        Read AFTER the open chat is archived: when the open chat IS this
+        session, that archive just received its newest turns.
+        """
         try:
             if not path or not os.path.exists(path):
                 return
-            with io.open(path, 'r', encoding='utf-8') as f:
-                sess_data = json.load(f)
 
             if getattr(self, '_persisted_msgs', None):
                 self._archive_current_session()
 
+            with io.open(path, 'r', encoding='utf-8') as f:
+                sess_data = json.load(f)
+
             self._reset_session_state(clear_transcript=True)
 
-            msgs = sess_data.get("messages", [])
+            msgs = [m for m in (sess_data.get("messages") or [])
+                    if isinstance(m, dict)
+                    and not _is_stale_tool_call_blob(m.get("role", ""),
+                                                     m.get("content", ""))]
             summary = sess_data.get("summary", u"")
 
             self._persisted_msgs = list(msgs)
-            self._history_summary = summary
+            self._set_session({'session_id': sess_data.get("id"),
+                               'session_notes': sess_data.get("session_notes"),
+                               'session_path': path})
 
-            save_chat_history(self._doc_key, self._persisted_msgs, summary=self._history_summary)
+            viet = _ui_viet()
+            self._conversation_history, self._history_summary = _fit_restored(
+                msgs, summary, viet=viet)
 
-            for m in msgs:
+            save_chat_history(self._doc_key, self._persisted_msgs,
+                              summary=self._history_summary,
+                              session=self._session_state())
+
+            # Bubbles are capped for rendering only (see MAX_REPLAY_BUBBLES).
+            replay = msgs[-MAX_REPLAY_BUBBLES:]
+            hidden = len(msgs) - len(replay)
+            if hidden:
+                self._append_bot_message(
+                    (u"{} tin nhắn cũ hơn không hiển thị ở đây nhưng vẫn nằm "
+                     u"trong ngữ cảnh.".format(hidden)) if viet else
+                    (u"{} older message{} not shown here, still part of the "
+                     u"context.".format(hidden,
+                                        u"s are" if hidden != 1 else u" is")),
+                    icon=_ICON_INFO, icon_color=_ICON_SLATE, actions=False)
+            for m in replay:
                 role = m.get("role", "")
                 content = m.get("content", "")
                 if not content:
@@ -3019,7 +2948,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                     self._append_user_message(content)
                 elif role == "assistant":
                     self._append_bot_message(content)
-                self._conversation_history.append({"role": role, "content": content})
 
             self._update_welcome_greeting()
             self.tab_chat_clicked()
@@ -3027,11 +2955,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"_resume_history_session error: {}".format(_exc_text(ex)))
 
     def clear_all_history_clicked(self, sender=None, e=None):
-        """Delete every conversation the History list currently shows.
+        """Delete every conversation the History list shows, after a count confirm.
 
-        The list can now span every project ("All projects") or a search, so
-        the button asks first and says how many go — it used to delete one
-        document's sessions silently.
+        The list can span every project or a search, hence the confirm.
         """
         try:
             sessions = self._get_history_sessions()
@@ -3093,7 +3019,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"saved_prompts_search_changed error: {}".format(_exc_text(ex)))
 
     def open_skills_folder_clicked(self, sender=None, e=None):
-        """Open the skills folder in Windows Explorer to add or edit custom prompt .md files."""
+        """Open the user skills folder (custom prompt .md files) in Explorer."""
         try:
             from Intelligence.skills_engine import _user_skills_dir
             udir = _user_skills_dir()
@@ -3126,7 +3052,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             engine = get_skills_engine()
             skills = engine.all_skills() or []
 
-            # Filter by query
             if query:
                 q = query.lower()
                 filtered = []
@@ -3168,7 +3093,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 card.Cursor = Cursors.Hand
                 card.ToolTip = u"Click to insert: /{}\n{}".format(sid, desc)
 
-                # Hover states
                 def _make_hover(target_card):
                     def _enter(sender, ev):
                         target_card.Background = bg_hover
@@ -3211,7 +3135,6 @@ class T3LabAssistantWindow(T3WPFWindow):
 
                 grid.Children.Add(info_stack)
 
-                # Command badge on the right
                 badge = Border()
                 badge.Background = self.FindResource("T3.SurfaceSunken")
                 badge.BorderBrush = self.FindResource("T3.Border")
@@ -3253,13 +3176,9 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _reset_session_state(self, clear_transcript=True):
         """Drop everything tied to the OLD conversation scope. UI THREAD.
 
-        There were three "switch scope" paths — reset_chat_clicked,
-        _activate_project and _create_new_project — and each reset a different
-        subset of the same state. _activate_project in particular detached the
-        chat rows without clearing `_stream_row` / `_typing_row`, which is the
-        exact defect already fixed for reset_chat_clicked: the answer lands in
-        an orphaned TextBlock and `_show_typing_indicator` early-returns for the
-        rest of the session. One implementation, used by all three.
+        Shared by reset_chat_clicked / _activate_project / _create_new_project.
+        A stale `_stream_row` / `_typing_row` strands the answer in an orphaned
+        TextBlock and stalls `_show_typing_indicator`.
         """
         try:
             if clear_transcript:
@@ -3268,7 +3187,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                     self.chat_history_panel.Children.RemoveAt(1)
         except Exception:
             pass
-        # Rows detached above must not stay referenced
         try:
             self._clear_stream_refs()
         except Exception:
@@ -3277,15 +3195,18 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._typing_text_block = None
         self._quickreply_row    = None
         self._queued_inputs     = []      # their chips were just removed
-        # Conversation + agent carryover
         self._conversation_history = []
-        self._history_summary      = u''   # a new conversation starts blank
+        self._history_summary      = u''
         self._persisted_msgs       = []
+        # New id on first message; earlier-chats digest rebuilt (old chat is one now).
+        self._session_id           = None
+        self._session_path         = None
+        self._session_notes        = []
+        self._past_chats_cache     = None
         self._prev_agent_decision  = None  # specialist choice must not carry over
         self._prev_turn_calls      = set()  # repeat guard is per-conversation
         self._prev_turn_call_order = []     # insertion order, for the cap
-        # Composer staging: attachments and a forced /skill belong to the old
-        # scope; carrying them into a new project silently mis-files documents.
+        # Attachments / forced /skill carried into a new project mis-file documents.
         try:
             self._attached_files = []
             self._refresh_attachment_panel()
@@ -3296,21 +3217,15 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     # ─── AI badge & provider switcher ────────────────────────────────────────
 
-    # Provider brand colors — shared with the LLMs Setting dialog so a provider
-    # can never render one colour here and another there.
+    # Provider brand colors, shared with the LLMs Setting dialog.
     _BADGE_COLORS = _SHARED_PROVIDER_COLORS
     _BADGE_GRAY = _SHARED_PROVIDER_GRAY   # #A1A1AA — no provider / offline
 
     def _render_greeting(self, name, fresh=False):
-        """Set the welcome greeting text for a given name (no settings read).
+        """Set the welcome greeting for a name (no settings read).
 
-        The phrase comes from the time-of-day pool in GUI/AssistantGreetings
-        (random, never the same one twice in a row). A new phrase is drawn
-        only when a conversation starts (fresh=True), on the first render, or
-        once the period / reply language has moved on. Everything else that
-        refreshes the headline — closing Settings, saving the profile name,
-        resuming a session — keeps the phrase and only re-renders the name,
-        so the headline does not reshuffle under the user's eyes.
+        Phrase (GUI/AssistantGreetings) redrawn only on fresh=True, first
+        render, or a period / language change, so it does not reshuffle.
         """
         try:
             viet = bool(_ui_viet())
@@ -3326,17 +3241,12 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
 
     def _update_welcome_greeting(self, fresh=False):
-        """Refresh greeting text from saved settings and toggle panel visibility.
-
-        fresh=True draws a new phrase — pass it only where a new conversation
-        starts (New chat, Reset).
-        """
+        """Refresh the greeting from settings; fresh=True only on New chat / Reset."""
         try:
             from config.user_profile import UserProfile
             name = UserProfile().get_name() or u"Thạnh"
             self._render_greeting(name, fresh=fresh)
 
-            # The welcome banner only shows on a fresh chat (no history yet).
             if self._persisted_msgs:
                 self.welcome_greeting_panel.Visibility = Visibility.Collapsed
             else:
@@ -3423,7 +3333,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             from System.Windows.Media import SolidColorBrush, Color
             name = (self.onboarding_name_box.Text or u"").strip()
             if not name:
-                # Gently require a name.
                 try:
                     self.onboarding_name_box.BorderBrush = SolidColorBrush(
                         Color.FromRgb(239, 68, 68))      # rose
@@ -3439,7 +3348,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             prof.set_name(name)
             prof.set_model_setup(provider)
 
-            # Optional API key for remote providers.
             key = u""
             try:
                 key = (self.onboarding_key_box.Text or u"").strip()
@@ -3455,7 +3363,6 @@ class T3LabAssistantWindow(T3WPFWindow):
 
             prof.mark_setup_completed()
 
-            # Activate the chosen provider live.
             try:
                 from Intelligence.llm_router import LLMRouter
                 router = LLMRouter()
@@ -3468,7 +3375,6 @@ class T3LabAssistantWindow(T3WPFWindow):
 
             self._hide_onboarding()
 
-            # Refresh greeting + badge to reflect the new profile.
             self._render_greeting(name)
             try:
                 self._update_welcome_greeting()
@@ -3487,8 +3393,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"onboarding_save_clicked error: {}".format(_exc_text(ex)))
 
     def _update_ai_badge(self):
-        """Refresh the composer model chip (the old header pill was removed —
-        the chip in the composer is now the single provider indicator)."""
+        """Refresh the composer model chip (the only provider indicator)."""
         try:
             self._update_composer_chips()
         except Exception:
@@ -3503,11 +3408,10 @@ class T3LabAssistantWindow(T3WPFWindow):
             if not ok:
                 return
 
-            # Instant UI: composer chip renders from cached/saved data (no network)
+            # Chip renders from cached data (no network)
             self.Dispatcher.Invoke(Action(self._update_ai_badge))
 
-            # Background: probe the newly-active provider + refresh its model list.
-            # Guarded so rapid repeated provider switches don't pile up threads.
+            # Background probe + model list; guarded so rapid switches don't pile up threads.
             if self._switching_provider:
                 return
             self._switching_provider = True
@@ -3521,8 +3425,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                             self._models_cache[name] = provider.get_models()
                         except Exception:
                             pass
-                        # Switched TO a local provider → preload its model now so
-                        # the user's first message on it isn't a cold VRAM load.
+                        # Local provider: preload so the first message isn't a cold VRAM load.
                         if name in ("ollama", "lmstudio") and \
                                 hasattr(provider, "warm_up"):
                             try:
@@ -3547,21 +3450,14 @@ class T3LabAssistantWindow(T3WPFWindow):
     # ─── Settings (LLMs Setting hub dialog) ──────────────────────────────────
 
     def settings_btn_clicked(self, sender, e):
-        """Open the LLMs Setting hub — provider, model, API key, projects,
-        knowledge and skills all live there now (the in-window sidebar was
-        removed)."""
+        """Open the LLMs Setting hub (provider, model, key, projects, knowledge, skills)."""
         self._open_llm_settings()
 
     def _open_llm_settings(self, tab=None, select_pid=None):
-        """Show the LLMs Setting dialog modally, then refresh anything it
-        may have changed (provider/model chip, action mode, display name,
-        projects).
+        """Show the LLMs Setting dialog modally, then refresh what it may have changed.
 
-        tab: optional tab key ('general'/'provider'/'projects'/'knowledge'/
-        'skills') to open on — 'Customize project…' used to always land on
-        General, hiding where projects are edited. select_pid preselects a
-        project in the Projects tab (used right after New project so the
-        user lands in the name box, not a generic dialog).
+        tab: 'general'/'provider'/'projects'/'knowledge'/'skills' to open on.
+        select_pid preselects a project in Projects (after New project).
         """
         try:
             from GUI.LLMSettingDialog import LLMSettingWindow
@@ -3600,19 +3496,16 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     def _refresh_after_settings(self, scope_before=None):
         """Sync the chat window with state edited in the settings dialog."""
-        # A project can be DELETED in the dialog, which clears active_project.
-        # The transcript on screen still belongs to the old scope, so the next
-        # _persist_message would have written it into the global history file.
-        # Re-scope before anything else touches history.
+        # A project DELETED in the dialog clears active_project; re-scope before
+        # _persist_message writes the old transcript into the global history.
         try:
             _pid_now = self._active_pid()
             if _pid_now != scope_before:
                 self._reset_session_state(clear_transcript=True)
                 self._restore_history()
                 self._kick_knowledge_scan()
-            # Either way the project's provider/model override may have been
-            # edited. Re-activation is blocked for an unchanged pid, so without
-            # this the edit had no effect until the user switched away and back.
+            # The provider/model override may have been edited; re-activation
+            # is blocked for an unchanged pid, so apply it here.
             self._apply_project_provider(_pid_now)
         except Exception as ex:
             logger.debug(u"scope re-sync error: {}".format(_exc_text(ex)))
@@ -3628,7 +3521,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._update_welcome_greeting()
         except Exception:
             pass
-        # The project panel overlay, if open, was rendered from pre-edit data.
+        # An open project panel was rendered from pre-edit data.
         try:
             if (getattr(self, 'project_panel_overlay', None) is not None
                     and self.project_panel_overlay.Visibility == Visibility.Visible):
@@ -3645,30 +3538,16 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _project_prompt_blocks(self, memory_tool=True):
         """(project_instructions, memory_block) for the active project.
 
-        The single source of project grounding for a turn. It exists because
-        the two prompt-building paths had drifted apart: the native
-        tool-calling path injected both blocks, while the legacy JSON-intent
-        path injected NEITHER. The legacy path is not a rare fallback — it is
-        taken whenever the user attaches a document or RAG returns a lot of
-        context, i.e. exactly when working with project material, so a project's
-        instructions and remembered conventions silently vanished at the moment
-        they mattered most.
+        The single source of project grounding for EVERY prompt path, legacy
+        JSON-intent included (taken on attachments / big RAG context).
 
-        memory_tool=False for every prompt whose turn has NO remember_fact
-        tool (legacy JSON path, knowledge / comment agents, background read
-        tasks): the facts are still listed, but the block no longer tells the
-        model to call a tool it cannot reach — a JSON-intent model answers
-        that instruction with {"intent": "remember_fact"} and "Tool does not
-        exist".
+        memory_tool=False for turns with NO remember_fact tool: facts listed,
+        no tool hint (else the model answers {"intent": "remember_fact"}).
 
-        The first value is READY TO APPEND, headers included: the user's
-        personal instructions ("## Personal instructions", from LLMs Setting)
-        FIRST, then "## Project instructions" — project instructions refine
-        the personal ones, so they come after them on every path. Callers add
-        no header of their own. Both change only when the user edits them, so
-        the system prompt stays fixed for the session (prompt caching).
-
-        Never raises; a failure just means an unscoped prompt.
+        First value is READY TO APPEND: "## Personal instructions" then
+        "## Project instructions"; cache-stable (changes only on user edits).
+        Memory = facts + this chat's notes + earlier-chat digests
+        (_session_prompt_block), sized to the model's budget. Never raises.
         """
         personal = u""
         project = u""
@@ -3684,13 +3563,27 @@ class T3LabAssistantWindow(T3WPFWindow):
             project = ps.get_active_prompt_addendum() or u""
             try:
                 from Intelligence import assistant_memory
+                try:
+                    _mem_chars = _active_budgets()['memory_chars']
+                except Exception:
+                    _mem_chars = None
                 memory = assistant_memory.build_memory_block(
                     ps.get_active_project_id(),
-                    include_tool_hint=bool(memory_tool)) or u""
+                    include_tool_hint=bool(memory_tool),
+                    max_chars=_mem_chars) or u""
             except Exception:
                 memory = u""
         except Exception:
             pass
+        session = u""
+        try:
+            _sess = getattr(self, '_session_prompt_block', None)
+            if _sess is not None:
+                session = _sess(tool_hint=bool(memory_tool)) or u""
+        except Exception:
+            session = u""
+        if session:
+            memory = (memory + u"\n\n" + session) if memory else session
         sections = []
         if personal:
             sections.append(personal)
@@ -3698,37 +3591,38 @@ class T3LabAssistantWindow(T3WPFWindow):
             sections.append(u"## Project instructions\n" + project)
         return u"\n\n".join(sections), memory
 
-    #: First line of assistant_memory.build_memory_block — how a prompt that
-    #: already carries the memory block is recognised.
+    #: First line of assistant_memory.build_memory_block (detects it in a prompt).
     _MEMORY_BLOCK_HEAD = u"## Persistent memory"
 
     def _apply_project_blocks(self, system_prompt):
-        """Append personal + project instructions and memory to a LEGACY
-        (JSON-intent) system prompt.
+        """Append instructions + memory to a LEGACY (JSON-intent) system prompt.
 
-        The legacy prompt builder (t3lab_assistant._build_system_prompt)
-        already appends the memory block itself, without the tool hint, so
-        appending it again here sent every remembered fact twice — the second
-        copy telling the model to call `remember_fact`, a tool that path does
-        not have. Memory is added here only when the base prompt lacks it
-        (e.g. the degraded builder), and then without the tool hint.
+        t3lab_assistant._build_system_prompt already appends the memory block
+        (no tool hint), so memory is added only when the base lacks it; a base
+        that has it still gets this chat's notes and earlier-chat digests.
         """
         instructions, memory = self._project_prompt_blocks(memory_tool=False)
         if instructions:
             system_prompt += u"\n\n" + instructions
         if memory and self._MEMORY_BLOCK_HEAD not in (system_prompt or u""):
             system_prompt += u"\n\n" + memory
+        elif memory:
+            session = u""
+            try:
+                _sess = getattr(self, '_session_prompt_block', None)
+                if _sess is not None:
+                    session = _sess(tool_hint=False) or u""
+            except Exception:
+                session = u""
+            if session:
+                system_prompt += u"\n\n" + session
         return system_prompt
 
     def _apply_project_provider(self, pid):
         """Apply (or undo) a project's provider/model override.
 
-        A project override is SCOPED: switch_provider(persist=False) keeps it
-        out of settings.json, so the user's global default survives a restart.
-        The missing half was the undo — leaving a project used to strand its
-        provider for the rest of the session because nothing switched back.
-        `_pre_project_provider` remembers what was active before the first
-        override so it can be restored.
+        persist=False keeps it out of settings.json; `_pre_project_provider`
+        is restored when the project is left.
         """
         try:
             from Intelligence.llm_router import LLMRouter
@@ -3749,7 +3643,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             else:
                 prev = getattr(self, '_pre_project_provider', None)
                 if prev and prev != router.get_active_name():
-                    # Back to whatever the user had before any override.
                     router.switch_provider(prev, persist=False)
                 self._pre_project_provider = None
             self._update_ai_badge()
@@ -3757,12 +3650,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"_apply_project_provider error: {}".format(_exc_text(ex)))
 
     def _project_overview_text(self, pid, header=None):
-        """Markdown overview of what the given project scope actually
-        changes (instructions / knowledge / memory / provider / chats) —
-        posted on switch, create and on demand, so the project chip stops
-        being a mystery. Cheap: small JSON reads + one os.walk of the
-        project's own files dir (external knowledge_dirs are NOT walked —
-        they may be big network shares)."""
+        """Markdown overview of what a project scope changes; posted on switch / create.
+
+        Cheap: external knowledge_dirs are NOT walked (may be network shares)."""
         from config.project_store import ProjectStore
         ps = ProjectStore()
         meta = ps.get_project(pid) or {}
@@ -3779,10 +3669,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                          u"project popup → Customize project; they steer "
                          u"every reply in this project.")
 
-        # One cached counter shared with the popup subtitle, the project panel
-        # and the settings dialog — there used to be four separate os.walk
-        # implementations with three different caps, and only one of them
-        # counted linked folders at all.
+        # One cached counter shared with popup subtitle, project panel and settings.
         try:
             n_files, n_extra, _docs, _unscanned = ps.count_documents(pid)
         except Exception:
@@ -3816,9 +3703,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         else:
             lines.append(u"- **AI provider:** follows the global setting.")
 
-        # Only CHATS are per-document (ProjectStore.history_path). Attachments
-        # and activity logs are filed per DAY — this line used to claim all
-        # three were per-document, which is simply not what the store does.
+        # Only CHATS are per-document (ProjectStore.history_path); the rest per DAY.
         lines.append(u"- **Chats:** stored in this project, separate per "
                      u"Revit document.")
         lines.append(u"- **Attachments & activity logs:** stored in this "
@@ -3833,7 +3718,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             ps = ProjectStore()
             ps.set_active_project(pid)
 
-            # Swap chat history to the new scope
             try:
                 self._reset_session_state(clear_transcript=True)
                 self._restore_history()
@@ -3842,7 +3726,6 @@ class T3LabAssistantWindow(T3WPFWindow):
 
             self._apply_project_provider(pid)
 
-            # Rescan knowledge scope for the new project in background
             self._update_knowledge_status()
             self._kick_knowledge_scan()
             name = (ps.get_project(pid) or {}).get('name') if pid else None
@@ -3873,9 +3756,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             n = len(ps.list_projects()) + 1
             meta = ps.create_project(u"Project {}".format(n))
             ps.set_active_project(meta['id'])
-            # sync the rest of the scope like a manual switch — same reset,
-            # same history re-scope and same knowledge rescan _activate_project
-            # does, instead of the partial subset this used to do.
+            # Same scope sync as _activate_project.
             try:
                 self._reset_session_state(clear_transcript=True)
                 self._restore_history()
@@ -3893,8 +3774,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 _msg = u"Created project **{}**.".format(meta['name'])
             self._append_bot_message(_msg, icon=_ICON_SUCCESS,
                                      icon_color=_ICON_GREEN)
-            # Land the user straight in the rename box instead of telling
-            # them to find Settings → Projects on their own.
+            # Land the user straight in the rename box.
             self._open_llm_settings(tab='projects', select_pid=meta['id'])
         except Exception as ex:
             logger.debug(u"_create_new_project error: {}".format(_exc_text(ex)))
@@ -3902,8 +3782,7 @@ class T3LabAssistantWindow(T3WPFWindow):
     # ─── Knowledge (RAG v2 index) ─────────────────────────────────────────────
 
     def _update_knowledge_status(self):
-        """Knowledge UI moved to the LLMs Setting dialog — kept as a no-op
-        hook so project switches / scans can still call it safely."""
+        """No-op hook: knowledge UI lives in the LLMs Setting dialog."""
         pass
 
     def _kick_knowledge_scan(self):
@@ -3963,9 +3842,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 chip.CornerRadius = CornerRadius(4)
                 chip.Padding = Thickness(8, 2, 8, 3)
                 chip.Margin = Thickness(0, 0, 4, 0)
-                # MDL2 glyph run + label run, rather than a ⚡ emoji baked
-                # into the body font — the emoji rendered in full colour and
-                # was the one bit of the chip that ignored the theme.
+                # MDL2 glyph run, not a ⚡ emoji (full colour, ignores the theme).
                 tb = TextBlock()
                 tb.FontSize = 10
                 tb.FontFamily = System.Windows.Media.FontFamily("Segoe UI")
@@ -3993,10 +3870,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _append_quick_replies(self, labels, send_texts=None):
         """Clickable reply chips under the last bot message. UI THREAD.
 
-        labels: chip captions. send_texts: what each click actually sends
-        (defaults to the caption). Only ONE quick-reply row exists at a
-        time; it disappears once a chip is clicked or the user sends any
-        other message (_remove_quick_replies in _process_input).
+        send_texts: what each click sends (default: the label). Only ONE row
+        exists; removed on a click or any other send (_remove_quick_replies).
         """
         try:
             self._remove_quick_replies()
@@ -4065,23 +3940,23 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     # ─── Turn termination (cancel / error) ────────────────────────────────────
 
-    def _ui_invoke(self, fn):
+    def _ui_invoke(self, fn, wait=True):
         """Run fn on the UI thread, swallowing a shut-down dispatcher.
 
-        Marshalling to a closed window throws on a .NET background thread with
-        no handler above it, which can take the process down.
+        (A throw on a .NET background thread can take the process down.)
+        wait=False posts (BeginInvoke) so a pure UI update cannot deadlock a
+        worker the UI thread waits on. Same FIFO order either way.
         """
         try:
-            self.Dispatcher.Invoke(Action(fn))
+            if wait:
+                self.Dispatcher.Invoke(Action(fn))
+            else:
+                self.Dispatcher.BeginInvoke(Action(fn))
         except Exception:
             pass
 
     def _claim_turn(self, rid=None):
-        """True if this caller owns the terminal message for the current turn.
-
-        Guards against two racing finishers (worker + Stop watchdog) both
-        posting a bubble and both releasing the busy lock.
-        """
+        """True if this caller owns the turn's terminal message (worker vs Stop watchdog)."""
         if rid is not None and rid != getattr(self, '_request_id', 0):
             return False
         if getattr(self, '_replied', False):
@@ -4096,18 +3971,15 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _finish_cancelled(self, rid=None, note=None):
         """End the turn because the user pressed Stop. Any thread.
 
-        Cancellation is checked BETWEEN steps — a Revit Transaction already in
-        flight is never aborted — which is what the Stop tooltip promises.
+        Checked BETWEEN steps: a Revit Transaction in flight is never aborted.
         """
         if rid is not None and rid != getattr(self, '_request_id', 0):
             return
         if getattr(self, '_batchout_request_id', None) == getattr(self, '_request_id', 0):
             if getattr(self, '_batchout_running', False):
-                # The native export must return its retained-file count. A
-                # watchdog cannot truthfully discard that outcome mid-call.
+                # The running export must report its retained-file count.
                 return
-            # A queued request has not touched the model or written files.
-            # Its eventual API callback observes cancellation/the stale id.
+            # Queued: nothing touched yet; its callback sees the stale id.
             self._batchout_request_id = None
         if not self._claim_turn(rid):
             return
@@ -4139,19 +4011,14 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _report_error(self, where, exc=None, rid=None, hint=None):
         """End the turn with a VISIBLE message. Any thread.
 
-        Every one of these paths used to clear the busy flag and hide the
-        typing dots while printing nothing at all: the user's message just sat
-        there and the assistant never answered. logger.error goes to a pyRevit
-        console that is not open.
+        logger.error alone goes to a pyRevit console that is not open.
         """
         try:
             logger.error(u"{}: {}".format(where, _exc_text(exc)))
         except Exception:
             pass
-        # Grab the failing frame NOW — sys.exc_info() is only valid while the
-        # except block that called us is still on the stack, and the message
-        # below is built later, on the UI thread. "_route_input: <message>"
-        # alone names the outermost handler, not the code that actually broke.
+        # Grab the failing frame NOW: sys.exc_info() is only valid inside the
+        # caller's except block; the message is built later on the UI thread.
         _frame = u""
         try:
             import traceback as _tbmod
@@ -4170,9 +4037,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 msg = (u"Something went wrong while handling that request — "
                        u"nothing else was changed in the model. Please try "
                        u"again; the details are in the pyRevit console.")
-                # Show the actual failure inline too. "See the console" is
-                # useless advice in a docked pane: the console is closed, the
-                # message scrolls away, and the user has nothing to report.
+                # Show the failure inline: in a docked pane the console is closed.
                 _detail = u""
                 try:
                     _detail = u"{}".format(_exc_text(exc) or u"").strip()
@@ -4210,19 +4075,13 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._stop_timer = None
 
     # ─── Turn telemetry ───────────────────────────────────────────────────────
-    # _set_busy is the one point every routing path passes through on the way
-    # in and out of a turn — deterministic answers, the native agent loop, the
-    # legacy JSON-intent loop and Stop all go through it — so the timer is
-    # started and flushed there rather than in each branch.
+    # Started / flushed in _set_busy: every routing path and Stop pass through it.
 
     def _begin_turn_timer(self):
         """Start measuring the turn about to run. UI thread. Never raises.
 
-        Everything read here must be free. Notably NOT has_local_llm(): it
-        calls provider.check_health(), which is an HTTP probe — running it at
-        the head of every turn would add exactly the latency this measures.
-        The local flag comes from the provider name instead, the same test the
-        agent path already uses (`provider.NAME in ("ollama", "lmstudio")`).
+        Everything read here must be free — NOT has_local_llm() (an HTTP
+        check_health probe); the local flag comes from the provider name.
         """
         self._turn_timer = None
         if not HAS_TELEMETRY:
@@ -4259,11 +4118,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
 
     def _end_turn_timer(self):
-        """Flush the finished turn to the telemetry log. UI thread.
-
-        The write itself is queued onto a pool thread — same reasoning as
-        _log_activity: a slow disk must never stall the window.
-        """
+        """Flush the finished turn to telemetry. UI thread; write on a pool thread."""
         t = getattr(self, '_turn_timer', None)
         self._turn_timer = None
         if t is None:
@@ -4273,11 +4128,20 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception:
             return
         try:
+            self._note_turn_cost(t)
+        except Exception:
+            pass
+        try:
             from System.Threading import ThreadPool, WaitCallback
 
             def _write(_state, _t=t):
                 try:
                     telemetry.record(_t)
+                except Exception:
+                    pass
+                try:
+                    from Intelligence import result_store
+                    result_store.prune_once()
                 except Exception:
                     pass
             ThreadPool.QueueUserWorkItem(WaitCallback(_write))
@@ -4286,6 +4150,36 @@ class T3LabAssistantWindow(T3WPFWindow):
                 telemetry.record(t)
             except Exception:
                 pass
+
+    def _note_turn_cost(self, t):
+        """Turn USD + today's total on the model chip tooltip. UI thread.
+
+        Chip text warns past agents.daily_budget_usd (0 = off). The just-logged
+        turn is added in memory so the tooltip never lags a turn."""
+        from Intelligence import pricing
+        usd = t.usd
+        if usd is None:
+            self._cost_hint = u""
+            return
+        today = telemetry.spend_today() + usd
+        budget = 0.0
+        try:
+            from config.settings import get_settings as _gs
+            budget = _gs().get_daily_budget_usd()
+        except Exception:
+            budget = 0.0
+        hint = u"Last turn {} \u00b7 today {}".format(
+            pricing.format_usd(usd), pricing.format_usd(today))
+        over = budget > 0 and today > budget
+        if budget > 0:
+            hint += u" / budget {}".format(pricing.format_usd(budget))
+        self._cost_hint = (u"\u26a0 over budget" if over
+                           else pricing.format_usd(today) + u" today")
+        try:
+            self.model_chip_btn.ToolTip = hint
+        except Exception:
+            pass
+        self._update_composer_chips()
 
     _PROVIDER_LABELS = {
         'claude': u'Claude (Anthropic)', 'openai': u'OpenAI',
@@ -4296,9 +4190,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _try_which_model(self, raw):
         """Answer "which model/LLM are you running?" from fact. WORKER THREAD.
 
-        Returns True when handled. The provider and model id are known
-        exactly, so this must never reach the LLM — see the call site in
-        _route_input for what happened when it did.
+        True when handled. Known exactly, so it must never reach the LLM
+        (see the call site in _route_input).
         """
         try:
             if not routing.asks_which_llm(raw):
@@ -4313,8 +4206,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             return False
 
     def _answer_which_model(self, raw):
-        """Post the provider/model answer. Split out so a UI failure here
-        falls back to the normal path instead of eating the turn."""
+        """Post the provider/model answer; a failure falls back to the normal path."""
         viet = _is_viet_text(raw)
         try:
             prov = get_active_provider_name() or u''
@@ -4337,8 +4229,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                    u"I'm running on **{}**, model `{}`.\n"
                    u"You can change it in **LLMs Setting**.".format(label, model))
         else:
-            # Provider set but the model id has not been resolved yet
-            # (get_active_model is cache-only). Say that, do not invent one.
+            # Model id not resolved yet (cache-only); do not invent one.
             msg = (u"Mình đang chạy trên **{}**. Tên model cụ thể chưa được "
                    u"nạp — mở **LLMs Setting** để xem và đổi.".format(label)
                    if viet else
@@ -4357,12 +4248,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         return True
 
     def _active_model_name(self):
-        """Model id of the active provider, or ''.
-
-        Reads the provider's already-resolved model — get_active_model() is
-        documented as cache-only ("No HTTP; None until models were fetched",
-        claude_provider.pick_fast_model) — so this stays free. Never raises.
-        """
+        """Model id of the active provider, or ''. Cache-only (no HTTP); never raises."""
         try:
             from Intelligence.llm_router import get_router
             prov = get_router().get_active_provider()
@@ -4375,16 +4261,12 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _set_busy(self, busy):
         """Lock/unlock the input area. Call from UI thread only.
 
-        While busy the send button STAYS ENABLED and becomes a Stop button so
-        the user can cancel a running agent request mid-flight. The text
-        input also stays enabled (Claude-style): the user composes the next
-        message while the agent works — Enter queues it, and the queue
-        drains automatically when the busy state releases.
+        While busy the send button becomes Stop and the input stays enabled:
+        Enter queues the next message, drained when busy releases.
         """
         if (not busy and getattr(self, '_batchout_request_id', None)
                 == getattr(self, '_request_id', 0)):
-            # Generic routing finally blocks finish before the queued API
-            # event. BatchOut's completion callback owns this turn's release.
+            # BatchOut's completion callback owns this turn's release.
             return
         self._busy = busy
         if busy:
@@ -4395,8 +4277,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             # Plan approval covers ONE plan's edits, never the next request.
             self._plan_preapproved = False
             self._begin_turn_timer()
-            # Tell the app-level self-study loop the assistant is active, so it
-            # backs off while the user is working (see Intelligence/learning).
+            # The self-study loop backs off while active (Intelligence/learning).
             try:
                 from Intelligence.learning import activity as _study_activity
                 _study_activity.note_active()
@@ -4416,8 +4297,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 btn.IsEnabled = not busy
             except Exception:
                 pass
-        
-        # Toggle top ProgressBar visibility
+
         try:
             from System.Windows import Visibility
             if busy:
@@ -4431,16 +4311,13 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._show_typing_indicator()
         else:
             self._hide_typing_indicator()
-            # Freeze avatar spins — rotation is the "thinking" indicator,
-            # so a finished turn must leave every icon standing still.
+            # Rotation means "thinking"; a finished turn stands still.
             self._stop_avatar_spins()
-            # A "Try again" whose turn ended without a plain reply (it ran a
-            # tool, or was stopped) must not leave the target armed — the next
-            # unrelated answer would be filed as a version of an old message.
+            # An armed "Try again" target would file the next unrelated answer
+            # as a version of an old message.
             self._retry_target_row = None
 
-        # Auto-send the next queued message once this request is fully done.
-        # BeginInvoke lets the current finish-handler stack unwind first.
+        # BeginInvoke lets the finish-handler stack unwind before the next send.
         if not busy and self._queued_inputs:
             try:
                 self.Dispatcher.BeginInvoke(Action(self._drain_queued_input))
@@ -4458,8 +4335,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                     self.chat_history_panel.Children.Remove(item['row'])
             except Exception:
                 pass
-            # Preserve anything the user is still typing — swap it out,
-            # send the queued text, swap the draft back in.
+            # Keep the user's draft across the send.
             draft = self.chat_input.Text
             self.chat_input.Text = item['text']
             self._process_input()
@@ -4472,11 +4348,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"_drain_queued_input error: {}".format(_exc_text(ex)))
 
     def _queue_input(self, raw):
-        """Queue a message typed while a request is running. UI THREAD.
-
-        Shows a muted 'Queued' chip in the transcript; clicking the chip
-        cancels that queued message.
-        """
+        """Queue a message typed while busy, as a 'Queued' chip (click cancels). UI THREAD."""
         try:
             if len(self._queued_inputs) >= 3:
                 self._append_bot_message(
@@ -4528,9 +4400,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"_queue_input error: {}".format(_exc_text(ex)))
 
     def _render_send_button(self, busy):
-        """Swap the round send button between arrow-up ↑ and Stop ⏹. UI thread only.
-
-        The icon is a Claude-style stroke Path — its Data is swapped here."""
+        """Swap the send button's Path between arrow-up and Stop. UI thread only."""
         try:
             from System.Windows.Media import Geometry
             btn = self.send_button
@@ -4563,10 +4433,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _arm_stop_watchdog(self, seconds=20.0):
         """Release the UI even if the worker never reaches a cancel checkpoint.
 
-        Without this, Stop pressed while a provider call is hung (server killed
-        mid-generation) leaves the send button disabled and the composer stuck
-        on "Stopping…" for the rest of the session. The _request_id guard means
-        that if the worker DOES finish first, this fires into a no-op.
+        E.g. a hung provider call (server killed mid-generation). If the worker
+        finishes first, the _request_id guard makes this a no-op.
         """
         self._stop_stop_watchdog()
         try:
@@ -4623,11 +4491,10 @@ class T3LabAssistantWindow(T3WPFWindow):
             self.chat_history_panel.Children.Add(self._typing_row)
             self._scroll_to_bottom()
 
-            # Start dynamic text timer
             from System.Windows.Threading import DispatcherTimer
             from System import TimeSpan
             self._typing_elapsed = 0
-            self._update_typing_text() # initial text
+            self._update_typing_text()
             
             self._typing_timer = DispatcherTimer()
             self._typing_timer.Interval = TimeSpan.FromSeconds(1)
@@ -4658,12 +4525,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             if not hasattr(self, "_typing_text_block") or self._typing_text_block is None:
                 return
             
-            # Select Vietnamese text if the input was Vietnamese, else English
             is_vn = _is_viet_text(self._last_raw)
 
-            # Quality mode = extended reasoning (Claude adaptive thinking /
-            # Qwen3 thinking). Surface it so the extra latency reads as the
-            # model thinking deeply, not as a stall.
+            # Quality mode = extended reasoning; say so, so latency isn't read as a stall.
             if self._quality_mode_on():
                 if self._typing_elapsed < 2:
                     txt = u"● ● ●  Đang suy luận sâu..." if is_vn else "● ● ●  Reasoning deeply..."
@@ -4684,13 +4548,10 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
 
     def _make_typing_row(self):
-        """Build the typing indicator: spinning brand mark + muted status text.
+        """Typing indicator: spinning brand mark + muted status text.
 
-        Replies themselves no longer carry an avatar (see _append_bot_message),
-        so the spinning T3Lab mark — the "working right now" signal — lives
-        here instead: ONE animated mark for the turn, shown exactly where the
-        answer will appear and removed the moment it arrives. Same role the
-        animated logo plays in the reference chat UI.
+        Replies carry no avatar (_append_bot_message): this is the ONE
+        "working" mark per turn, where the answer will appear.
         """
         from System.Windows.Controls import TextBlock, Grid, ColumnDefinition
         from System.Windows import Thickness, GridLength, VerticalAlignment
@@ -4736,26 +4597,24 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _add_to_history(self, role, content):
         """Add a message to conversation history and persist to disk.
 
-        Turns leaving the window are folded into a rolling summary rather than
-        dropped — a long session used to silently forget how it started. The
-        window size comes from Intelligence.conversation so it can no longer
-        disagree with agent_loop._sanitize_history, which took the last 24
-        while this truncated to 16, making the larger number dead.
+        Turns leaving the window fold into a rolling summary; the window is the
+        ACTIVE model's token budget (Intelligence.context_budget), not a count.
         """
         self._conversation_history.append({"role": role, "content": content})
         try:
             from Intelligence import conversation as _conv
+            _b = _active_budgets()
             self._conversation_history, self._history_summary = _conv.trim_history(
                 self._conversation_history,
                 getattr(self, '_history_summary', u''),
-                viet=_ui_viet())
+                budget_tokens=_b['history'], viet=_ui_viet(),
+                max_summary_chars=_b['summary_chars'])
         except Exception:
-            if len(self._conversation_history) > 24:
-                self._conversation_history = self._conversation_history[-24:]
-        # Persist to disk so it survives window close/reopen
+            # Safety net only.
+            if len(self._conversation_history) > 200:
+                self._conversation_history = self._conversation_history[-200:]
         self._persist_message(role, content)
-        # Daily activity journal — assistant side only (the user side is
-        # logged in _process_input's routing thread with attachment info).
+        # Activity journal: assistant side only (user side: _process_input).
         if role == "assistant" and content:
             one_line = u" ".join((content or u"").split())
             if len(one_line) > 400:
@@ -4787,11 +4646,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.error(u"attach_clicked error: {}".format(_exc_text(ex)))
 
     def _attach_paths(self, paths):
-        """Shared intake for picker / Ctrl+V / drag-drop. Returns count added.
+        """Shared intake for picker / Ctrl+V / drag-drop. Returns count added. UI THREAD.
 
-        Filters to supported formats (PDF + images khi RAG module có mặt),
-        skips duplicates, updates the chip strip. UI THREAD.
-        """
+        With RAG present only supported formats (PDF + images) pass."""
         if self._busy:
             self._append_bot_message(
                 u"A request is running — attach more files once it finishes.",
@@ -4834,20 +4691,18 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"_input_preview_keydown error: {}".format(_exc_text(ex)))
 
     def _paste_from_clipboard(self):
-        """Attach clipboard files (copy từ Explorer) hoặc ảnh clipboard.
+        """Attach clipboard files (copy từ Explorer) hoặc ảnh clipboard. UI THREAD.
 
-        Returns True when something was attached (text paste = False so the
-        TextBox keeps its normal behavior). UI THREAD.
+        False for a text paste, so the TextBox keeps its normal behaviour.
         """
         from System.Windows import Clipboard
-        # 1) Files copied in Explorer (Ctrl+C on files)
         try:
             if Clipboard.ContainsFileDropList():
                 files = [p for p in Clipboard.GetFileDropList()]
                 return self._attach_paths(files) > 0
         except Exception:
             pass
-        # 2) Raw bitmap (PrtScn / Snipping Tool / copy image)
+        # Raw bitmap (PrtScn / Snipping Tool)
         try:
             if Clipboard.ContainsImage():
                 img = Clipboard.GetImage()
@@ -4862,8 +4717,7 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _save_clipboard_image(self, bmp_source):
         """Write a clipboard BitmapSource as PNG vào folder attachments hôm nay.
 
-        Saving straight into the dated archive folder means send-time
-        archive_attachments sees src == dst and keeps the file in place.
+        Saved in the dated archive folder so archive_attachments sees src == dst.
         """
         try:
             import time as _time
@@ -4940,8 +4794,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             sp = StackPanel()
             sp.Orientation = System.Windows.Controls.Orientation.Horizontal
 
-            # Minimal MDL2 Attach glyph (same one used on the attach button
-            # itself) — replaces the old colored 🖼️/📄 emoji pair.
             icon_lbl = TextBlock()
             icon_lbl.Text = _ICON_ATTACH + u" "
             icon_lbl.FontFamily = System.Windows.Media.FontFamily(u"Segoe MDL2 Assets")
@@ -4994,8 +4846,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     def send_clicked(self, sender, e):
         if self._busy:
-            # While busy the button is a Stop button. Effective on the native
-            # agent path; the legacy path finishes its current step regardless.
+            # Stop; the legacy path still finishes its current step.
             self._request_stop()
             return
         self._process_input()
@@ -5003,7 +4854,6 @@ class T3LabAssistantWindow(T3WPFWindow):
     def input_keydown(self, sender, e):
         from System.Windows.Input import Key, Keyboard, ModifierKeys
 
-        # ── Slash-skills popup navigation (Claude-style) ──────────────────
         if self._slash_open:
             if e.Key == Key.Up:
                 self._slash_move(-1)
@@ -5022,14 +4872,12 @@ class T3LabAssistantWindow(T3WPFWindow):
                 e.Handled = True
                 return
 
-        # Ctrl+N starts a new conversation
         if (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control and e.Key == Key.N:
             self.new_chat_clicked()
             e.Handled = True
             return
 
         if e.Key == Key.Return or e.Key == Key.Enter:
-            # Shift+Enter inserts a newline (multi-line input)
             if (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift:
                 caret = self.chat_input.CaretIndex
                 text = self.chat_input.Text or ""
@@ -5037,8 +4885,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self.chat_input.CaretIndex = caret + 1
                 e.Handled = True
                 return
-            
-            # Enter sends.
+
             self._process_input()
             e.Handled = True
         elif e.Key == Key.Up:
@@ -5073,7 +4920,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             text = self.chat_input.Text or u""
             self.composer_placeholder.Visibility = (
                 Visibility.Collapsed if text else Visibility.Visible)
-            # Slash mode: "/" as first char, no whitespace typed yet
             m = re.match(r'^/([\w\-]*)$', text)
             if m is not None:
                 self._refresh_skills_popup(m.group(1))
@@ -5093,22 +4939,31 @@ class T3LabAssistantWindow(T3WPFWindow):
         q = (query or u"").lower()
         items = [s for s in skills
                  if q in s['id'].lower() or q in (s['name'] or u"").lower()]
-        # Built-in /memory command (not a skill) — listed in the same popup
-        # so it is discoverable the same way. _process_input won't find it
-        # in the skills catalog, so the text routes to _try_memory_command.
-        # Substring test was REVERSED ("is the query inside the word memory"),
-        # so /e, /r, /o and even a bare / surfaced the Memory row.
+        # Built-in commands (not skills), listed for discoverability: /memory
+        # routes to _try_memory_command. Prefix test, not "q in word" (that
+        # surfaced Memory for /e, /r and a bare /).
         if u'memory'.startswith(q):
             items.append({'id': u'memory', 'name': u'Memory',
                           'description': (u'View or manage what the '
                                           u'assistant remembers'),
                           'source': None, 'enabled': True})
-        # Same deal for /skills — install or update Claude skills from a
-        # GitHub repo link (routes to _try_skills_command).
+        # /skills → _try_skills_command.
         if u'skills'.startswith(q):
             items.append({'id': u'skills', 'name': u'Skills',
                           'description': (u'Install or update skills from a '
                                           u'GitHub repo'),
+                          'source': None, 'enabled': True})
+        # Tool Hub opens LLMs Setting on its tab instead of inserting a command.
+        if u'toolhub'.startswith(q):
+            items.append({'id': u'toolhub', 'name': u'Tool Hub',
+                          'description': (u'Open Tool Hub: sign in, sync, '
+                                          u'your tools, search'),
+                          'source': None, 'enabled': True,
+                          'opens': u'toolhub'})
+        if u'save-tool'.startswith(q) and q:
+            items.append({'id': u'save-tool', 'name': u'Save tool',
+                          'description': (u'Save the last turn\'s tool calls '
+                                          u'as a Tool Hub recipe draft'),
                           'source': None, 'enabled': True})
         if not items:
             self._close_skills_popup()
@@ -5176,6 +5031,10 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._close_skills_popup()
             return
         self._close_skills_popup()
+        if meta.get('opens'):
+            self.chat_input.Text = u""
+            self._open_llm_settings(tab=meta['opens'])
+            return
         self.chat_input.Text = u"/" + meta['id'] + u" "
         self.chat_input.CaretIndex = len(self.chat_input.Text)
         self.chat_input.Focus()
@@ -5192,17 +5051,9 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _apply_forced_skill(self):
         """Inject the /slash-forced skill into the dispatcher decision.
 
-        Idempotent — safe to call from several points along _route_input.
-        skill_forced=True later bypasses filter_for_specialist so an explicit
-        user invocation always wins over the agents: frontmatter filter.
-
-        The specialist is ALSO constrained to the skill's `agents:` list.
-        The dispatcher classifies the routed message, which for a bare
-        "/skill-id" is synthetic boilerplate: its word "MODIFY" matched the
-        action-verb table, so every slash-only invocation was handed the
-        revit_action role (write tools + the "tô đỏ tường" few-shot) and a
-        local model replayed the previous turn's edit instead of running
-        the playbook. The frontmatter decides now.
+        Idempotent. skill_forced=True bypasses filter_for_specialist. The
+        specialist follows the skill's `agents:` list: a bare "/skill-id" routes
+        boilerplate whose "MODIFY" matched the action-verb table → revit_action.
         """
         sid = getattr(self, '_forced_skill_id', None)
         if not sid:
@@ -5348,13 +5199,33 @@ class T3LabAssistantWindow(T3WPFWindow):
         try:
             from Intelligence.llm_router import LLMRouter
             router = LLMRouter()
-            self.model_chip_text.Text = router.get_display_label()
+            self._chip_router_ver = router.get_state_version()
+            _label = router.get_display_label()
+            _cost = getattr(self, '_cost_hint', u"")
+            if _cost:
+                _label = u"{} \u00b7 {}".format(_label, _cost)
+            self.model_chip_text.Text = _label
             rgb = self._BADGE_COLORS.get(router.get_active_name(),
                                          self._BADGE_GRAY)
             self.model_chip_dot.Fill = SolidColorBrush(
                 Color.FromRgb(rgb[0], rgb[1], rgb[2]))
         except Exception as ex:
             logger.debug(u"_update_composer_chips model error: {}".format(_exc_text(ex)))
+
+    def _sync_model_chip_if_stale(self):
+        """Re-render the chips when the provider/model changed elsewhere. UI THREAD.
+
+        The router is session-wide; LLMs Setting can switch provider while the
+        docked pane stays open (chip said "LOCAL" while the popup ticked Claude).
+        One int compare when nothing changed.
+        """
+        try:
+            from Intelligence.llm_router import LLMRouter
+            ver = LLMRouter().get_state_version()
+            if ver != getattr(self, '_chip_router_ver', None):
+                self._update_composer_chips()
+        except Exception as ex:
+            logger.debug(u"_sync_model_chip_if_stale error: {}".format(_exc_text(ex)))
 
     def project_chip_clicked(self, sender, e):
         """Open the Claude-style project picker popup."""
@@ -5368,10 +5239,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _project_row_subtitle(self, ps, pid):
         """Content hint for a project popup row: 'N files · instructions ✓'.
 
-        Uses the store's cached counter. This ran once per project while
-        building the popup, so with the old private os.walk + its own
-        get_project() a popup open cost 2N JSON reads and N directory walks on
-        the UI thread.
+        Uses the store's cached counter: runs once per project per popup open,
+        on the UI thread.
         """
         try:
             meta = ps.get_project(pid) or {}
@@ -5385,8 +5254,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             return None
 
     def _build_project_popup(self):
-        """Fill the project popup: none + projects (with content hints) +
-        actions for the active project + new/customize. UI THREAD."""
+        """Fill the project popup (none, projects, active-project actions). UI THREAD."""
         from config.project_store import ProjectStore
         ps = ProjectStore()
         active = ps.get_active_project_id()
@@ -5448,7 +5316,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
         self._create_new_project()
 
-    # ─── Project panel (Claude-style: Instructions/Memory/Context/Scheduled) ──
+    # ─── Project panel ──
 
     def _open_project_panel(self):
         """Open the project panel overlay for the active project."""
@@ -5482,12 +5350,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     def _build_project_panel(self, pid):
         """Render a READ-ONLY overview of the project scope into
-        project_panel_host. UI THREAD.
-
-        Everything editable moved to LLMs Setting → Projects (single edit
-        surface). What is left here answers "what does this project scope
-        actually cover right now", including the linked external folders the
-        old version never showed."""
+        project_panel_host. UI THREAD. Editing lives in LLMs Setting → Projects."""
         from System.Windows.Controls import (Border, Button, Grid as WGrid,
                                              ColumnDefinition, TextBlock)
         from System.Windows import (Thickness, TextWrapping, GridLength,
@@ -5508,11 +5371,9 @@ class T3LabAssistantWindow(T3WPFWindow):
         _font  = System.Windows.Media.FontFamily("Hanken Grotesk, Inter")
 
         def _txt(text, size=12, fg=None, bold=False, wrap=True, margin=None):
-            # NOT named _tb: a local of that name made the module-level theme
-            # helper local to this whole function, so the brush lookups above
-            # raised UnboundLocalError before the def was ever reached — and
-            # _open_project_panel swallows the exception, so the panel simply
-            # never appeared. `fg` is a theme TOKEN NAME now, bound live.
+            # NOT named _tb: that would shadow the module-level theme helper
+            # (UnboundLocalError, swallowed → panel never appeared).
+            # `fg` is a theme TOKEN NAME, bound live.
             t = TextBlock()
             t.Text = text
             t.FontSize = size
@@ -5523,8 +5384,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             if wrap:
                 t.TextWrapping = TextWrapping.Wrap
             else:
-                # Section titles share a row with a button; on a narrow pane
-                # they trim instead of running under it.
+                # section titles share a row with a button: trim, don't overlap
                 t.TextTrimming = System.Windows.TextTrimming.CharacterEllipsis
             if margin is not None:
                 t.Margin = margin
@@ -5558,11 +5418,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         def _small_btn(label, handler, primary=False):
             b = Button()
             b.Content = label
-            # ComposerChipBtn, not the shared PrimaryButton / SecondaryButton.
-            # Those come from the auto-synced Lumina block and are pinned to
-            # #0F172A, which follows no theme at all: in Revit's dark theme
-            # SecondaryButton paints near-black text on a near-black panel —
-            # invisible. The chip style is theme-bound.
+            # ComposerChipBtn is theme-bound; the Lumina Primary/SecondaryButton
+            # are pinned to #0F172A (invisible in Revit's dark theme).
             try:
                 b.Style = self.FindResource("ComposerChipBtn")
             except Exception:
@@ -5576,15 +5433,10 @@ class T3LabAssistantWindow(T3WPFWindow):
             b.Click += handler
             return b
 
-        # Read-only by design. Editing a project lives in ONE place — LLMs
-        # Setting → Projects — so the two surfaces can no longer write the same
-        # project.json in different shapes (this panel patched `instructions`
-        # alone while the dialog always rewrote name/instructions/provider/model
-        # together) or race each other's whole-file rewrites.
+        # Read-only by design: one edit surface (LLMs Setting → Projects), so two
+        # writers can't rewrite project.json in different shapes or race.
 
-        # ── 0. Description (what the project is for) ───────────────────────
-        # Read-only like everything here; it is written in LLMs Setting →
-        # Projects. Shown straight under the title, Claude-Projects style.
+        # ── 0. Description ──
         desc = u" ".join((meta.get('description') or u'').split())
         if desc:
             host.Children.Add(_txt(desc, size=11.5, fg='Muted',
@@ -5595,7 +5447,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 u"LLMs Setting → Projects.",
                 size=11.5, fg='Faint', margin=Thickness(0, 0, 0, 12)))
 
-        # ── 1. Instructions ────────────────────────────────────────────────
+        # ── 1. Instructions ──
         instr = (meta.get('instructions') or u'').strip()
         _section(u"Instructions",
                  _small_btn(u"Edit in LLMs Setting",
@@ -5613,8 +5465,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
         _sep()
 
-        # ── 2. Memory (project-scope facts) ────────────────────────────────
-        # Read-only here too; forgetting a fact now lives in the Projects tab.
+        # ── 2. Memory (project-scope facts; forget them in the Projects tab) ──
         _section(u"Memory")
         try:
             from Intelligence import assistant_memory as _am
@@ -5643,7 +5494,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
         _sep()
 
-        # ── 3. Knowledge (what the RAG index answers from) ─────────────────
+        # ── 3. Knowledge (what the RAG index answers from) ──
         _section(u"Knowledge")
         try:
             host.Children.Add(_txt(ps.describe_documents(pid), size=11.5,
@@ -5651,8 +5502,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception:
             pass
 
-        # Linked external folders were never shown here, so the document list
-        # looked empty for projects whose knowledge lives on a share.
+        # linked external folders (else a share-based project looks empty)
         try:
             for _d in (ps.get_knowledge_dirs(pid) or [])[:8]:
                 _missing = not os.path.isdir(_d)
@@ -5675,7 +5525,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
         _sep()
 
-        # ── 4. Scheduled (daily prompts while the window is open) ─────────
+        # ── 4. Scheduled (daily prompts while the window is open) ──
         _section(u"Scheduled prompts")
         _sched = meta.get('scheduled') or []
         if _sched:
@@ -5700,11 +5550,10 @@ class T3LabAssistantWindow(T3WPFWindow):
                 u"\u2192 Projects.", size=11.5, fg='Faint',
                 margin=Thickness(0, 6, 0, 0)))
 
-    # ─── Scheduled prompts runner ─────────────────────────────────────────────
+    # ─── Scheduled prompts runner ──
 
     def _start_schedule_timer(self):
-        """30s UI-thread timer that fires due per-project scheduled prompts
-        (project panel → Scheduled) while the window is open."""
+        """30s UI-thread timer firing due per-project scheduled prompts."""
         try:
             from System.Windows.Threading import DispatcherTimer
             from System import TimeSpan
@@ -5719,25 +5568,20 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _schedule_tick(self, sender, e):
         """Fire at most ONE due scheduled prompt per tick.
 
-        A task is due when enabled, not yet run today, and its HH:MM has
-        passed. The due test itself lives in ProjectStore.due_schedule so it is
-        testable without WPF and cannot drift from the settings UI.
+        Due test (enabled, not run today, HH:MM passed) is
+        ProjectStore.due_schedule — testable without WPF.
         """
         try:
             if self._busy:
                 return
-            # The tick drives the real composer: _process_input() snapshots
-            # staged attachments and the forced /skill, then clears both. Firing
-            # now would send the user's files with the scheduled prompt and wipe
-            # their chips. Wait for the next tick instead.
+            # The tick drives the real composer: _process_input() would send the
+            # user's staged files / forced /skill with this prompt. Wait.
             if getattr(self, '_attached_files', None):
                 return
             if getattr(self, '_forced_skill_id', None):
                 return
             if (self.chat_input.Text or u"").strip():
-                # A half-typed message would be swapped out and back; leave the
-                # user alone until the composer is idle.
-                return
+                return  # half-typed message: wait until the composer is idle
 
             from config.project_store import ProjectStore
             import time as _t
@@ -5756,10 +5600,8 @@ class T3LabAssistantWindow(T3WPFWindow):
             self.chat_input.Text = fired.get('prompt') or u''
             _before = self._request_id
             self._process_input()
-            # Stamp last_run ONLY if the turn actually started. It used to be
-            # written before sending, so a _process_input that returned early
-            # (busy re-check, an exception) marked the task done for the day
-            # without it ever reaching the model.
+            # Stamp last_run ONLY if the turn actually started (an early return
+            # used to mark the task done without it reaching the model).
             if self._request_id != _before:
                 ps.update_project(pid, {'scheduled': [
                     dict(t, last_run=_t.strftime('%Y-%m-%d'))
@@ -5770,8 +5612,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug(u"_schedule_tick error: {}".format(_exc_text(ex)))
     def _open_active_project_folder(self):
-        """Open the active project's knowledge folder (files/) in Explorer —
-        the drop target for PDF/DOCX/MD the RAG index answers from."""
+        """Open the active project's knowledge folder (files/) in Explorer."""
         d = u""
         try:
             from config.project_store import ProjectStore
@@ -5783,8 +5624,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                     icon=_ICON_WARNING, icon_color=_ICON_AMBER)
                 return
             d = os.path.join(ps.project_dir(pid), 'files')
-            # Shared opener: carries the .NET 8 UseShellExecute fallback this
-            # copy used to be missing.
+            # shared opener: carries the .NET 8 UseShellExecute fallback
             if _open_in_explorer(d):
                 return
         except Exception as ex:
@@ -5813,6 +5653,7 @@ class T3LabAssistantWindow(T3WPFWindow):
     def model_chip_clicked(self, sender, e):
         """Open the Claude-style provider/model picker popup."""
         try:
+            self._sync_model_chip_if_stale()
             self._build_model_popup()
             self._keep_popup_in_pane(self.model_popup)
             self.model_popup.IsOpen = True
@@ -5822,13 +5663,9 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _build_model_popup(self, _skip_refresh=False):
         """Fill the model popup from the instant router snapshot. UI THREAD.
 
-        Only providers that are actually READY (configured for remote /
-        probed-reachable for local) are listed. Showing every provider,
-        including ones marked "Not set up", confused users about what they
-        could actually pick, so unconfigured providers are hidden. The active
-        provider is always kept as a safety net, and a background probe keeps
-        local providers (Ollama / LM Studio) accurate since the instant
-        snapshot reports them unavailable until probed.
+        Lists only READY providers (configured remote / reachable local) plus
+        the active one; a background probe updates Ollama / LM Studio, which
+        the instant snapshot reports unavailable until probed.
         """
         from Intelligence.llm_router import LLMRouter
         router = LLMRouter()
@@ -5844,8 +5681,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             subtitle = model if model else (
                 None if info.get('available')
                 else u"Not configured — open Settings")
-            # Flag a local model that is too small for reliable tool-calling, at
-            # the exact point the user is choosing one.
+            # flag a local model too small for reliable tool-calling
             if model and name in ("ollama", "lmstudio"):
                 try:
                     from Intelligence import local_llm as _ll
@@ -5861,7 +5697,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                          self._model_popup_select(_n))))
             shown += 1
         if shown == 0:
-            # Never leave the menu blank - point the user at Settings.
             panel.Children.Add(self._popup_row(
                 u"No providers ready - open Settings to configure",
                 None, icon=u"", hover=False,
@@ -5874,11 +5709,8 @@ class T3LabAssistantWindow(T3WPFWindow):
             handler=lambda s, ev: self._model_popup_settings()))
 
     def _refresh_model_popup_async(self, prev_status):
-        """Probe local providers (fast, localhost) off-thread and rebuild the
-        popup once if their Ready status changed. Ollama / LM Studio report
-        unavailable in the instant snapshot until probed, so a just-started
-        local engine would otherwise stay hidden until the next open.
-        """
+        """Probe local providers off-thread; rebuild the popup once if their
+        Ready status changed (else a just-started engine stays hidden)."""
         if getattr(self, '_model_popup_refreshing', False):
             return
         self._model_popup_refreshing = True
@@ -5939,7 +5771,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
         self._open_llm_settings()
 
-    # ─── Harness: action mode (auto / confirm-first) + activity log ──────────
+    # ─── Harness: action mode (auto / confirm-first) + activity log ──
 
     @staticmethod
     def _action_mode():
@@ -5951,9 +5783,8 @@ class T3LabAssistantWindow(T3WPFWindow):
             mode = 'auto'
         return mode if mode in ('auto', 'confirm') else 'auto'
 
-    # What each mode does, in the words the chip's tooltip uses. The mode is
-    # enforced in code (ToolGate in Intelligence/agent_loop.py), so this text
-    # is a promise the pane keeps — not a hint to the model.
+    # Chip tooltips. Enforced in code (ToolGate in Intelligence/agent_loop.py):
+    # a promise the pane keeps, not a hint to the model.
     _MODE_TIP_AUTO = (
         u"Auto — the assistant applies model edits right away. Destructive "
         u"actions (delete, purge, ungroup, sync) still ask first, and a "
@@ -5972,15 +5803,13 @@ class T3LabAssistantWindow(T3WPFWindow):
             new_mode = ('confirm' if self._action_mode() == 'auto'
                         else 'auto')
             settings.set_agent_option('action_mode', new_mode)
-            # The chip itself renders the new state — no chat bubble, it just
-            # piled up in the transcript every time the mode was toggled.
+            # the chip shows the new state; no chat bubble (it piled up)
             self._update_action_mode_chip()
         except Exception as ex:
             logger.debug(u"action_mode_clicked error: {}".format(_exc_text(ex)))
 
     def _update_action_mode_chip(self):
-        """Render the action-mode chip state (Claude-style stroke icons:
-        shield = ask-before-edits, zap = auto). UI THREAD."""
+        """Render the action-mode chip (shield = ask, zap = auto). UI THREAD."""
         try:
             from System.Windows.Media import Geometry
             confirm = (self._action_mode() == 'confirm')
@@ -5990,15 +5819,13 @@ class T3LabAssistantWindow(T3WPFWindow):
             _ZAP = (u"M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46"
                     u"l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63"
                     u"l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z")
-            # The label collapses on a narrow pane (_apply_narrow_layout);
-            # the tooltip still names the mode AND says what it does.
+            # label collapses on a narrow pane (_apply_narrow_layout); tooltip stays
             try:
                 self.action_mode_btn.ToolTip = (
                     self._MODE_TIP_CONFIRM if confirm else self._MODE_TIP_AUTO)
             except Exception:
                 pass
-            # Bound, not copied: the chip follows a Revit Light/Dark switch
-            # like the rest of the pane instead of keeping its birth colour.
+            # bound, not copied: follows a Revit Light/Dark switch
             if confirm:
                 self.action_mode_text.Text = u"Ask before edits"
                 _bind_fg(self.action_mode_text, 'Accent')
@@ -6015,10 +5842,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def activity_log_clicked(self, sender, e):
         """Open today's activity log (notepad) or the logs folder (Explorer).
 
-        Never Process.Start the .md file directly: on machines without a
-        markdown association that throws Win32Exception ("No application is
-        associated...") which used to be swallowed silently — the button
-        looked dead. notepad.exe always exists and reads UTF-8 fine.
+        Never Process.Start the .md directly: without a markdown association it
+        throws Win32Exception (button looked dead).
         """
         try:
             from config.project_store import ProjectStore
@@ -6026,7 +5851,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             pid = ps.get_active_project_id()
             path = ps.activity_log_path(pid)
             folder = os.path.dirname(path)
-            # Shared openers — both carry the shell fallbacks.
             if os.path.isfile(path):
                 if _open_file_shell(path):
                     return
@@ -6043,11 +5867,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                 pass
 
     def _log_activity(self, text):
-        """Append to today's activity log on a pool thread. Never raises.
-
-        File appends must never run on the UI thread — a slow disk or an
-        AV scan on the log file would freeze the window per message.
-        """
+        """Append to today's activity log on a pool thread (never the UI
+        thread: slow disk / AV scan would freeze it). Never raises."""
         try:
             from System.Threading import ThreadPool, WaitCallback
 
@@ -6062,23 +5883,18 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception:
             pass
 
-    # NOTE — 2026-07-28: the DB-only fast path was deleted here.
-    # _FAST_CONTEXT_ENABLED had been False since 2026-07-06 (its keyword
-    # matching hijacked unrelated queries — "check lỗi tiếng Anh trong dự án"
-    # answered with project info), so _try_fast_context_answer, _count_elements
-    # and their keyword tables were ~220 lines of unreachable code. The agent
-    # path answers these questions from real tool results instead, under the
-    # "NUMBERS MUST COME FROM TOOLS" rule in agent_loop._AGENT_PROMPT.
+    # NOTE (2026-07-28): the DB-only keyword fast path was deleted (it hijacked
+    # unrelated queries); the agent answers from tools ("NUMBERS MUST COME FROM
+    # TOOLS" in agent_loop._AGENT_PROMPT).
 
-    # ─── Persistent memory: /memory command + "remember ..." triggers ─────────
+    # ─── Persistent memory: /memory command + "remember ..." triggers ──
 
     def _try_memory_command(self, raw):
         """Deterministic persistent-memory handling. WORKER THREAD.
 
-        Handles the /memory command family (show / forget N / clear) and
-        explicit "remember that ..." / "nhớ là ..." saves without an LLM
-        round-trip, so memory works even fully offline. Returns True when
-        the request was completely handled here (UI updated, busy released).
+        /memory (show / forget N / clear) and "remember that ..." / "nhớ là ..."
+        without an LLM (works offline). Returns True when fully handled here
+        (UI updated, busy released).
         """
         try:
             text = (raw or u'').strip()
@@ -6097,22 +5913,55 @@ class T3LabAssistantWindow(T3WPFWindow):
             msg = None
             icon, color = _ICON_SUCCESS, _ICON_GREEN
 
-            # ── /memory [show | forget N | clear] ─────────────────────────
+            notes = list(getattr(self, '_session_notes', None) or [])
+
+            # ── /memory [show | note X | forget N | clear] ──
             m = re.match(r'^/memory(?:\s+(.*))?$', low, re.S)
             if m:
                 sub = (m.group(1) or u'').strip()
+                # Same tail with its original casing (a note is stored as typed).
+                raw_sub = (re.match(r'^/memory(?:\s+(.*))?$', text,
+                                    re.S | re.I).group(1) or u'').strip()
                 if sub in (u'', u'show', u'list'):
-                    msg = assistant_memory.format_memory_report(pid, viet)
+                    msg = assistant_memory.format_memory_report(
+                        pid, viet, session_notes=notes)
                     icon, color = _ICON_LIST, _ICON_SLATE
+                elif re.match(u'^(?:note|session|ghi chú|ghi chu)(?:\\s|$)', sub):
+                    # A note for THIS conversation only (session_context).
+                    from Intelligence import session_context as _sc
+                    note = re.sub(u'^(?:note|session|ghi chú|ghi chu)\\s*', u'',
+                                  raw_sub, flags=re.I).strip()
+                    notes, ok, note_msg = _sc.add_note(notes, note)
+                    if ok:
+                        self._save_session_notes(notes)
+                        msg = (u'Đã ghi chú cho cuộc hội thoại này: {}'.format(
+                            _sc.clean_note(note)) if viet else note_msg)
+                    else:
+                        msg = (u'Gõ `/memory note <nội dung>` — ghi chú chỉ áp '
+                               u'dụng cho cuộc hội thoại này.' if viet else
+                               u'Send `/memory note <text>` — the note applies '
+                               u'to this conversation only.')
+                        icon, color = _ICON_INFO, _ICON_SLATE
                 elif sub.startswith((u'forget', u'xoa', u'xóa')):
-                    # A bare number removes fact #N (list order); anything else
-                    # is treated as the fact's text and matched by content.
+                    # N = fact #N; "S<n>" = this chat's note n; else by content
+                    # (long-term facts first, then this chat's notes).
                     arg = re.sub(u'^(?:forget|xóa|xoa)\\s*', u'', sub).strip()
-                    if re.match(r'^\d+$', arg):
+                    from Intelligence import session_context as _sc
+                    if re.match(r'^s\d+$', arg):
+                        notes, removed = _sc.forget_note(notes, arg)
+                        ok = removed is not None
+                        if ok:
+                            self._save_session_notes(notes)
+                    elif re.match(r'^\d+$', arg):
                         ok, removed = assistant_memory.remove_fact(
                             int(arg), pid)
                     elif arg:
                         ok, removed = assistant_memory.forget_fact(arg, pid)
+                        if not ok and notes:
+                            notes, removed = _sc.forget_note(notes, arg)
+                            ok = removed is not None
+                            if ok:
+                                self._save_session_notes(notes)
                     else:
                         ok, removed = False, None
                     if ok:
@@ -6124,21 +5973,33 @@ class T3LabAssistantWindow(T3WPFWindow):
                                u'No such item — type `/memory` to see the '
                                u'numbered list.')
                         icon, color = _ICON_WARNING, _ICON_AMBER
+                elif sub.startswith(u'clear') and sub[len(u'clear'):].strip() in (
+                        u'session', u'notes', u'note', u'ghi chú', u'ghi chu'):
+                    n = len(notes)
+                    self._save_session_notes([])
+                    msg = (u'Đã xóa {} ghi chú của cuộc hội thoại này. Ghi nhớ '
+                           u'lâu dài không đổi.'.format(n) if viet else
+                           u"Cleared {} note{} of this conversation. Long-term "
+                           u"memory is unchanged.".format(n, u'' if n == 1 else u's'))
+                    icon, color = _ICON_REFRESH, _ICON_SLATE
                 elif sub.startswith(u'clear'):
                     msg, icon, color = self._memory_clear_reply(
                         sub[len(u'clear'):].strip(), pid, viet)
                 else:
                     msg = (u'Lệnh memory: `/memory` · '
-                           u'`/memory forget <số|nội dung>` · '
-                           u'`/memory clear` · `/memory clear global`'
+                           u'`/memory note <nội dung>` (chỉ cuộc hội thoại này) · '
+                           u'`/memory forget <số|S số|nội dung>` · '
+                           u'`/memory clear` · `/memory clear global` · '
+                           u'`/memory clear session`'
                            if viet else
                            u'Memory commands: `/memory` · '
-                           u'`/memory forget <number|text>` · '
+                           u'`/memory note <text>` (this conversation only) · '
+                           u'`/memory forget <number|S number|text>` · '
                            u'`/memory clear` (this project) · '
-                           u'`/memory clear global`')
+                           u'`/memory clear global` · `/memory clear session`')
                     icon, color = _ICON_INFO, _ICON_SLATE
 
-            # ── "what do you remember?" ───────────────────────────────────
+            # ── "what do you remember?" ──
             if msg is None:
                 _shows = (u'what do you remember', u'what have you remembered',
                           u'what do you know about me', u'ban nho gi',
@@ -6146,10 +6007,11 @@ class T3LabAssistantWindow(T3WPFWindow):
                           u'bạn nhớ những gì', u'ban dang nho gi',
                           u'bạn đang nhớ gì')
                 if low.rstrip(u'? .').strip() in _shows:
-                    msg = assistant_memory.format_memory_report(pid, viet)
+                    msg = assistant_memory.format_memory_report(
+                        pid, viet, session_notes=notes)
                     icon, color = _ICON_LIST, _ICON_SLATE
 
-            # ── "remember that X" / "nhớ là X" / "từ nay X" ───────────────
+            # ── "remember that X" / "nhớ là X" / "từ nay X" ──
             if msg is None:
                 m2 = _MEM_SAVE_RX.match(text)
                 if m2:
@@ -6196,14 +6058,10 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _memory_clear_reply(arg, pid, viet=False):
         """`/memory clear [global]` — clear ONE scope. Returns (msg, icon, color).
 
-        It used to call clear_facts(pid, everything=True), which wiped the
-        GLOBAL memory (preferences for every project) along with the
-        project's. Now:
           /memory clear          → this project's facts only; global kept
           /memory clear global   → global facts only; projects kept
-          /memory clear, no project active → nothing is cleared; the reply
-                                   says how to clear global explicitly
-        The reply names the scope and how many facts went.
+          no project active      → nothing cleared; reply says how to clear global
+        (It used to wipe GLOBAL memory too.) The reply names scope and count.
         """
         from Intelligence import assistant_memory as _am
         arg = (arg or u'').strip().lower()
@@ -6227,8 +6085,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             return msg, _ICON_REFRESH, _ICON_SLATE
         n_global = _am.count_scope(_am.GLOBAL_SCOPE)
         if not pid:
-            # No project = no project memory. Clearing global here would be
-            # the old surprise in a new place — ask for it by name instead.
+            # never clear global implicitly — it must be asked for by name
             if viet:
                 msg = (u'Chưa chọn dự án nào nên không có ghi nhớ dự án để '
                        u'xóa. Gõ `/memory clear global` để xóa {} ghi nhớ '
@@ -6254,15 +6111,13 @@ class T3LabAssistantWindow(T3WPFWindow):
                        u'it' if n_global == 1 else u'them'))
         return msg, _ICON_REFRESH, _ICON_SLATE
 
-    # ─── Self-study: /train command ───────────────────────────────────────────
+    # ─── Self-study: /train command ──
 
     def _try_train_command(self, raw):
         """Deterministic `/train` handling. WORKER THREAD.
 
-        `/train`      → show the self-study dataset stats + readiness.
-        `/train now`  → launch the external LoRA fine-tune (detached process).
-        Weight training runs OUTSIDE Revit (CPython+GPU, tools/train/), so this
-        only reports status and kicks off that job. Returns True when handled.
+        `/train` → dataset stats; `/train now` → launch the detached LoRA
+        fine-tune (runs OUTSIDE Revit, tools/train/). Returns True when handled.
         """
         try:
             text = (raw or u'').strip()
@@ -6280,9 +6135,8 @@ class T3LabAssistantWindow(T3WPFWindow):
 
             icon, color = _ICON_INFO, _ICON_SLATE
             if sub in (u'exemplars', u'exemplar', u'portable'):
-                # Rebuild the PORTABLE few-shot layer (no GPU): distils teacher
-                # data into the git-tracked teacher_exemplars.json so a plain
-                # local model answers in the taught style on any machine.
+                # PORTABLE few-shot layer (no GPU): teacher data → git-tracked
+                # teacher_exemplars.json, usable by any machine's local model.
                 try:
                     from Intelligence.learning import exemplars as _ex
                     res = _ex.promote_from_dataset()
@@ -6355,14 +6209,65 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug('_try_train_command error: {}'.format(ex))
             return False
 
+    def _toolhub_upload_soon(self):
+        """Send audit summaries to the Tool Hub after a turn: a daemon thread,
+        a no-op when signed out, at most once a minute (toolhub.events)."""
+        try:
+            import threading
+
+            def _go():
+                try:
+                    from Intelligence.toolhub import events as _ev
+                    from Intelligence.toolhub.client import ToolHubClient
+                    _ev.upload(ToolHubClient())
+                except Exception:
+                    pass
+            t = threading.Thread(target=_go, name='T3LabToolHubUpload')
+            t.daemon = True
+            t.start()
+        except Exception:
+            pass
+
+    def _try_toolhub_command(self, raw):
+        """`/toolhub …` and `/save-tool …` (Intelligence.toolhub.commands). WORKER THREAD."""
+        try:
+            text = (raw or u'').strip()
+            low = text.lower()
+            from Intelligence.toolhub import commands as toolhub_commands
+            if not (low.startswith(u'/toolhub') or low.startswith(u'/save-tool')):
+                # bare e-mail / code typed after a /toolhub prompt
+                reply = toolhub_commands.handle_followup(text)
+                if reply is None:
+                    return False
+                self._post_bot(reply, _ICON_INFO, _ICON_SLATE)
+                return True
+            if low == u'/toolhub':
+                # bare command → the Tool Hub tab (friendlier than status text)
+                self._post_bot(u"Opening Tool Hub in LLMs Setting…",
+                               _ICON_INFO, _ICON_SLATE)
+                self._ui_invoke(
+                    lambda: self._open_llm_settings(tab='toolhub'), wait=False)
+                return True
+            if low.startswith(u'/save-tool'):
+                reply = toolhub_commands.handle_save(
+                    text, getattr(self, '_last_turn_calls', None) or [],
+                    getattr(self, '_last_turn_user_text', u'') or u'')
+            else:
+                reply = toolhub_commands.handle(text)
+            if reply is None:
+                return False
+            self._post_bot(reply, _ICON_INFO, _ICON_SLATE)
+            return True
+        except Exception as ex:
+            logger.debug('_try_toolhub_command error: {}'.format(ex))
+            return False
+
     def _try_skills_command(self, raw):
         """Install / update skills from a GitHub repo. WORKER THREAD.
 
-        Handles both the explicit command family (`/skills`,
-        `/skills install <url>`, `/skills update`, `/skills remove <id>`) and
-        the natural request ("cài skill từ https://github.com/owner/repo").
-        Deterministic — no LLM round-trip, so it works with no provider
-        configured. Returns True when the request was fully handled here.
+        `/skills [install <url> | update | remove <id>]` or the natural request
+        ("cài skill từ https://github.com/owner/repo"). No LLM needed.
+        Returns True when fully handled here.
         """
         try:
             text = (raw or u'').strip()
@@ -6407,7 +6312,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                                _ICON_GREEN if ok else _ICON_AMBER)
                 return True
 
-            # ── install / update: network work, so say so first ───────────
+            # ── install / update: network work, so say so first ──
             if action == 'install':
                 notice = (u'Đang tải skill từ {}…'.format(arg.get('url'))
                           if viet else
@@ -6463,32 +6368,24 @@ class T3LabAssistantWindow(T3WPFWindow):
             raw = self.chat_input.Text.strip()
             attached = list(self._attached_files)   # snapshot
 
-            # Read-and-clear: the echo suppression set by "Try again" is a
-            # ONE-SHOT for this call. Left on the instance it would survive
-            # every early return below (empty input, busy queue) and silently
-            # swallow the next real message the user typed.
+            # Read-and-clear: "Try again" echo suppression is ONE-SHOT (left set,
+            # an early return below would swallow the next real message).
             suppress_echo = self._suppress_user_echo
             self._suppress_user_echo = False
 
-            # Must have text OR attachments
             if not raw and not attached:
                 self._retry_target_row = None
                 return
 
-            # Language of THIS turn steers every string the assistant emits
-            # while handling it, including ones with no text of their own
-            # (tool cards, confirm cards, background notices).
+            # this turn's language steers every string emitted (cards, notices)
             _note_user_language(raw)
 
-            # ── Concurrency: queue instead of reject ──────────────────────────
-            # Runs BEFORE the slash parse below — a queued "/skill" message
-            # must not overwrite _forced_skill_id while the current request
-            # is still routing on the worker thread.
+            # ── Concurrency: queue instead of reject ──
+            # BEFORE the slash parse: a queued "/skill" must not overwrite
+            # _forced_skill_id while the current request is still routing.
             if self._busy:
-                # A plan card waiting for Run/Edit/Cancel is not work in
-                # progress — nothing has run yet. A new message means "not
-                # that, this": the card is set aside and the message goes
-                # through as soon as the waiting worker lets go of the turn.
+                # A plan card awaiting Run/Edit/Cancel has run nothing: a new
+                # message supersedes it and goes through once the worker lets go.
                 _plan_wait = getattr(self, '_pending_plan', None)
                 if _plan_wait is not None and (raw or attached):
                     _plan_wait.decide(_PLAN_SUPERSEDED)
@@ -6501,15 +6398,11 @@ class T3LabAssistantWindow(T3WPFWindow):
                     self._queue_input(raw)
                 return
 
-            # A new send supersedes any quick-reply chips still on screen.
             self._remove_quick_replies()
-            # ...and starts a fresh compact tool group, so this turn's cards
-            # never fold into the previous turn's summary row.
+            # fresh tool group: this turn's cards never fold into the last one's
             self._reset_tool_group()
 
-            # ── Slash-skill invocation: "/skill-id [rest of message]" ─────────
-            # The skill id must exist in the registry; anything else is sent
-            # through unchanged (e.g. "/абв" or a plain path-like string).
+            # ── Slash-skill: "/skill-id [rest]" (unknown ids pass through) ──
             self._close_skills_popup()
             self._forced_skill_id = None
             self._forced_skill_args = u""
@@ -6522,39 +6415,23 @@ class T3LabAssistantWindow(T3WPFWindow):
                     if any(s['id'] == m.group(1) for s in _cat):
                         self._forced_skill_id = m.group(1)
                         route_text = (m.group(2) or u"").strip()
-                        # Keep the user's own words (pre-boilerplate) so the
-                        # router can tell a scan request from a fix request.
+                        # user's own words, so the router tells scan from fix
                         self._forced_skill_args = route_text
                         if not route_text:
-                            # Slash-only invocation: the literal "/skill-id"
-                            # reads as gibberish to the model and it guesses a
-                            # target (e.g. renaming walls). Send an explicit
-                            # context-first instruction instead.
-                            # Phrased as "follow the workflow in your system
-                            # prompt" — both the native path and the legacy
-                            # JSON-intent path inject the skill body there.
-                            # The old "Apply the '<id>' playbook" wording made
-                            # JSON-intent models answer {"intent":
-                            # "apply_playbook"} → "Tool does not exist".
-                            #
-                            # THREE modes, because a bare "/skill" carries no
-                            # target at all:
-                            #  * reference  (no `tools:` — iso19650-naming,
-                            #    bep-guideline): told to "start scanning
-                            #    immediately" they have nothing to scan, and a
-                            #    small local model filled the gap by replaying
-                            #    the previous turn's tool calls.
-                            #  * read-only  (qa-checklist, lod-standard,
-                            #    shared-coordinates): nothing to lose, scan now.
-                            #  * modifying  (17 of 25 skills): plan first.
-                            #    "/annotation-standard" — a CONVENTION document
-                            #    that declares create_dimension/tag_* so a real
-                            #    "dim mặt bằng này" has tools — used to land on
-                            #    the read-only wording's "act NOW, do NOT ask
-                            #    about scope" and the model went dimensioning
-                            #    every floor plan in the project unprompted.
-                            #    Declaring tools says what a skill CAN reach,
-                            #    never that a bare invocation should fire them.
+                            # Bare "/skill-id" reads as gibberish (the model
+                            # guesses a target), so send an explicit
+                            # instruction. "Follow the workflow in your system
+                            # prompt": native and JSON-intent paths both inject
+                            # the skill body there ("Apply the playbook" gave
+                            # {"intent": "apply_playbook"} → "Tool does not exist").
+                            # Three modes (a bare invocation has no target):
+                            #  * reference (no `tools:`): summarise + ask; told
+                            #    to scan, a small model replayed last turn's calls.
+                            #  * modifying: read-only diagnosis, then a plan
+                            #    (/annotation-standard once dimensioned every
+                            #    plan unprompted — declared tools say what a
+                            #    skill CAN reach, never that a bare call fires them).
+                            #  * read-only: scan the whole project now.
                             _eng = get_skills_engine()
                             _sid = m.group(1)
                             if _eng.is_reference_skill(_sid):
@@ -6600,7 +6477,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 except Exception:
                     pass
 
-            # Record in command history
             if raw:
                 if not self._input_history or self._input_history[-1] != raw:
                     self._input_history.append(raw)
@@ -6612,34 +6488,26 @@ class T3LabAssistantWindow(T3WPFWindow):
             self.chat_input.Text = ""
             self._last_raw = raw or u"[attached documents]"
 
-            # ── Show user message in chat ──────────────────────────────────────
-            # A "Try again" re-sends the SAME prompt, so the message is already
-            # on screen — echoing it again would grow a wall of duplicates.
+            # ── Show user message (not on "Try again": already on screen) ──
             display_text     = raw
             attachment_note  = summarize_attachments(attached) if attached else None
             if not suppress_echo:
-                # A normal send also drops any stale retry target, so an
-                # abandoned "Try again" can never capture an unrelated answer.
+                # drop a stale retry target (it'd capture an unrelated answer)
                 self._retry_target_row = None
                 self._append_user_message(display_text,
                                           attachment_note=attachment_note)
-            # History/LLM context still gets plain text — no raw icon glyph.
-            # A retry records the prompt again on purpose: the conversation
-            # must keep alternating user/assistant roles (Anthropic rejects two
-            # assistant turns in a row), and "…user X, assistant Y, user X" is
-            # exactly the shape that asks the model to answer X afresh.
+            # A retry records the prompt again on purpose: roles must alternate
+            # (Anthropic rejects two assistant turns in a row).
             history_text = (u"{}\n[attached: {}]".format(display_text, attachment_note)
                             if attachment_note else display_text)
             self._add_to_history("user", history_text)
 
-            # Slash-forced skill → show the activation chip right away
             if self._forced_skill_id:
                 try:
                     self._append_skill_chips([self._forced_skill_id])
                 except Exception:
                     pass
 
-            # ── Clear attachments from UI after sending ────────────────────────
             if attached:
                 self._attached_files = []
                 try:
@@ -6648,22 +6516,15 @@ class T3LabAssistantWindow(T3WPFWindow):
                 except Exception:
                     pass
 
-            # Lock UI + show the typing indicator IMMEDIATELY (set_busy does
-            # both). Everything further down — PDF text extraction, the
-            # Ollama HTTP probe, Revit-DB fast-answer collectors, NLU catalog
-            # scoring — takes tens of ms to SECONDS. It used to run right
-            # here on the UI thread, so every Enter press froze the window
-            # until routing finished. It now runs on a routing worker thread;
-            # only the results marshal back onto the dispatcher.
+            # Lock UI + typing indicator IMMEDIATELY; routing (PDF extraction,
+            # Ollama probe, NLU scoring: ms to SECONDS) runs on a worker thread.
             self._set_busy(True)
 
             _rid = getattr(self, '_request_id', 0)
 
             def _route(_rt=route_text):
                 try:
-                    # Archive attachments into the project's dated folder and
-                    # journal the request — on the worker thread so a big PDF
-                    # copy never freezes the UI.
+                    # archive attachments + journal off the UI thread (big PDFs)
                     _files = attached
                     if _files:
                         try:
@@ -6686,22 +6547,17 @@ class T3LabAssistantWindow(T3WPFWindow):
                         _req, _skill_note))
                     self._route_input(_rt, _files)
                 except Exception as ex:
-                    # Used to hide the dots and release busy while printing
-                    # NOTHING: the user's message sat in the transcript and the
-                    # assistant simply never answered.
+                    # always say something (it used to fail silently)
                     if self._cancelled():
                         self._finish_cancelled(_rid)
                     else:
                         self._report_error(u"_route_input", ex, _rid)
                 finally:
-                    # Belt and braces: every terminal path releases busy before
-                    # returning, so this normally does nothing — but if one ever
-                    # leaks, the window must not stay locked forever.
-                    # Deliberately does NOT claim the turn: releasing busy twice
-                    # is harmless, whereas claiming would suppress a message a
-                    # legitimate finisher still wanted to post.
+                    # Belt and braces if a path leaked busy. Does NOT claim the
+                    # turn (that would suppress a legitimate finisher's message).
                     if self._busy and _rid == getattr(self, '_request_id', 0):
                         self._ui_invoke(lambda: self._set_busy(False))
+                    self._clear_turn_model()
 
             rt = Thread(ThreadStart(_route))
             rt.IsBackground = True
@@ -6709,16 +6565,80 @@ class T3LabAssistantWindow(T3WPFWindow):
             rt.Start()
 
         except Exception as ex:
-            # UI thread — Dispatcher.Invoke from here executes inline, so
-            # _report_error is safe and cannot deadlock.
+            # UI thread: Dispatcher.Invoke runs inline, no deadlock
             self._report_error(u"_process_input", ex)
+
+    def _auto_route_model(self, raw, history, attached, continuation):
+        """Pick Haiku / Sonnet / Opus for this turn. WORKER THREAD.
+
+        Intelligence.model_tier grades the request with one fast call; unpinned
+        calls of the turn use the pick. A clarifying answer keeps the previous
+        turn's model. Never raises; on failure the saved/default model runs.
+        """
+        self._turn_triage = None
+        try:
+            from Intelligence.llm_router import LLMRouter
+            from Intelligence import model_tier
+            router = LLMRouter()
+            if not model_tier.is_enabled(router.get_active_name()):
+                return
+            provider = router.get_active_provider()
+            if provider is None or not hasattr(provider, 'set_turn_model'):
+                return
+            prev = getattr(self, '_prev_turn_triage', None)
+            if continuation and prev:
+                decision = dict(prev)
+                decision['source'] = 'carryover'
+            else:
+                self._safe_update_typing_text(
+                    u"● ● ●  Đang phân tích yêu cầu…" if _is_viet_text(raw)
+                    else u"● ● ●  Reading your request…")
+                images = [p for p in (attached or []) if is_image(p)]
+                decision = model_tier.triage(
+                    provider, raw, history=history,
+                    revit_context=getattr(self, '_ctx_line', u''),
+                    specialist=(self._agent_decision or {}).get('specialist'),
+                    has_images=bool(images))
+            if not decision:
+                return
+            self._turn_model_token = provider.set_turn_model(decision['model'])
+            self._turn_triage = decision
+            self._prev_turn_triage = decision
+            name = model_tier.short_name(decision['model'])
+            self._log_activity(u"Auto model: {} ({}, {}){}".format(
+                name, decision['tier'], decision['source'],
+                u" — " + decision['brief'] if decision.get('brief') else u""))
+            self._ui_invoke(lambda: self._show_turn_model(name), wait=False)
+        except Exception as ex:
+            logger.debug(u"_auto_route_model error: {}".format(_exc_text(ex)))
+
+    def _clear_turn_model(self):
+        """End of turn: drop the auto-picked model, put the chip back."""
+        token = getattr(self, '_turn_model_token', None)
+        if token is None:
+            return
+        self._turn_model_token = None
+        try:
+            from Intelligence.llm_router import LLMRouter
+            provider = LLMRouter().get_provider('claude')
+            if provider is not None:
+                provider.clear_turn_model(token)
+        except Exception:
+            pass
+        self._ui_invoke(self._update_composer_chips, wait=False)
+
+    def _show_turn_model(self, name):
+        """Chip reads 'Auto · Sonnet 5.5' while the turn runs. UI THREAD."""
+        try:
+            self.model_chip_text.Text = u"Auto · {}".format(name)
+        except Exception:
+            pass
 
     def _provider_unreachable_note(self, viet=True):
         """Message for 'a provider is selected but its health probe failed'.
 
-        Returns u"" when there genuinely is no provider configured — the stock
-        setup guidance is the right answer then. WORKER THREAD (does HTTP via
-        check_health, same probe the gate above already ran).
+        u"" when no provider is configured (stock setup guidance applies).
+        WORKER THREAD.
         """
         try:
             from Intelligence.llm_router import LLMRouter
@@ -6752,9 +6672,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             return u""
 
     def _link_cache_dir(self):
-        """Where downloaded links are stored. Project attachments folder when
-        there is an active project, otherwise a temp folder — never the user's
-        Documents root."""
+        """Downloaded-link folder: project attachments, else temp (never Documents)."""
         try:
             from config.project_store import ProjectStore
             ps = ProjectStore()
@@ -6783,8 +6701,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         """Fetch every link in `raw`, append the readable files to `attached`
         (in place) and return the context block for the rest. WORKER THREAD.
 
-        Returns u"" when the message carries no links, so an ordinary turn
-        pays nothing for this.
+        u"" (and no cost) when the message has no links.
         """
         try:
             links = link_reader.find_links(raw)
@@ -6814,8 +6731,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             if header:
                 parts.append(header)
             parts.extend(res.get('notes') or [])
-            # Files are read by _build_attachment_context; only say WHICH ones
-            # came from a link so the model can cite the source properly.
+            # _build_attachment_context reads the files; name the linked ones for citing
             if added:
                 parts.append(u'[Đã tải về từ liên kết: {}]'.format(
                     u', '.join(os.path.basename(p) for p in added)))
@@ -6827,12 +6743,9 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _build_attachment_context(self, raw, attached):
         """Build the attachment context string. WORKER THREAD.
 
-        Large PDFs (more than a few chunks of text) are indexed into the
-        active knowledge store and answered via retrieval — top-5 excerpts
-        with file + page citations — instead of the legacy 12k-char
-        truncate-and-stuff. Small PDFs and images keep the legacy path
-        (full text / vision placeholder). Any failure degrades to the
-        legacy behavior, never to an error.
+        Large PDFs are indexed into the active knowledge store and answered via
+        retrieval (top-5 excerpts, file + page citations). Small PDFs and images
+        keep the legacy full-text path; any failure degrades to it, never errors.
         """
         pdfs = [p for p in attached if is_pdf(p)]
         if not pdfs or not HAS_KNOWLEDGE:
@@ -6849,13 +6762,11 @@ class T3LabAssistantWindow(T3WPFWindow):
                     total_chunks += entry['chunks']
                 else:
                     failed_pdfs.append(path)
-            # Small docs fit whole — the model seeing everything beats
-            # retrieval. ~3 chunks ≈ 2000 words ≈ the old 12k-char cap.
+            # small docs fit whole (~3 chunks ≈ the old 12k-char cap)
             if not doc_ids or total_chunks <= 3:
                 return build_text_context(attached)
 
-            # Semantic channel (bounded): vectorize fresh chunks for ~20s
-            # max, then search hybrid. Degrades to BM25-only silently.
+            # embed fresh chunks ≤20s, then hybrid search (else BM25-only)
             embedder = None
             try:
                 from Intelligence.knowledge.embeddings import get_default_embedder
@@ -6897,9 +6808,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _run_knowledge_agent(self, raw, history):
         """Answer from the knowledge index with citations. WORKER THREAD.
 
-        Streams through _stream_llm_turn (live bubble). Returns True when
-        the request was fully handled; False lets _route_input fall through
-        to the normal LLM path (no retrieval hits, or every provider mute).
+        Streams via _stream_llm_turn. True = handled; False = _route_input falls
+        through to the normal LLM path (no hits, or every provider mute).
         """
         try:
             from Intelligence.knowledge.knowledge_agent import (
@@ -6919,9 +6829,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             provider = router.get_active_provider()
             agent = KnowledgeAgent(embedder=embedder)
 
-            # Same grounding as every other path. Remembered facts are project
-            # conventions ("sheet prefix is WH-"), so a knowledge answer must
-            # respect them too — this path only ever got the instructions half.
+            # same grounding as every path: instructions + remembered conventions
             _p_instr, _p_mem = self._project_prompt_blocks(memory_tool=False)
             proj_instructions = u"\n\n".join(
                 [b for b in (_p_instr, _p_mem) if b])
@@ -6958,10 +6866,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                                   skills_block=skills_block,
                                   viet=_is_viet_text(raw))
 
-            # Every cancel exit from this function returns True. Returning
-            # False makes _route_input fall through to the normal LLM path,
-            # i.e. it would start a brand-new request seconds after the user
-            # pressed Stop.
+            # Every cancel exit returns True: False would fall through and start
+            # a new LLM request right after the user pressed Stop.
             if self._cancelled():
                 try:
                     self._ui_invoke(self._remove_stream_bubble)
@@ -6996,19 +6902,16 @@ class T3LabAssistantWindow(T3WPFWindow):
             self.Dispatcher.Invoke(Action(_done))
             return True
         except Exception as ex:
-            # Falling through to the legacy LLM path is the DESIGNED
-            # degradation (the user still gets an answer), so no bubble here —
-            # but a real crash must not be invisible at debug level.
+            # falling through is the DESIGNED degradation (no bubble); log at error
             logger.error("_run_knowledge_agent error: {}".format(_exc_text(ex)))
             return False
 
     def _run_comment_agent(self, pdf_path, history):
         """PDF markup-comment workflow. WORKER THREAD.
 
-        Extract annotations → trace sheet/model qua MCP → propose per item
-        → render report card with Run/Note/Skip buttons. Returns True when
-        handled; False (e.g. no annotations) lets the normal attachment
-        path analyze the PDF as a document instead.
+        Annotations → trace sheet/model qua MCP → per-item proposal → report
+        card (Run/Note/Skip). False (e.g. no annotations) = analyse the PDF as
+        a normal document instead.
         """
         try:
             from Intelligence.comments.comment_agent import CommentAgent
@@ -7036,10 +6939,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self._finish_cancelled(_rid)
                 return True
 
-            # Resolving a markup comment usually means applying THIS project's
-            # naming/annotation conventions, so the comment agent needs the
-            # same project grounding every other path gets. extra_context is
-            # already appended to its BỐI CẢNH block.
+            # project grounding (conventions); extra_context joins its BỐI CẢNH block
             _p_instr, _p_mem = self._project_prompt_blocks(memory_tool=False)
             _extra = u"\n\n".join([b for b in (_p_instr, _p_mem) if b])
 
@@ -7049,8 +6949,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 skills_block=skills_block,
                 extra_context=_extra)
 
-            # True, not False: False falls through to normal document analysis,
-            # which would start fresh work right after the user pressed Stop.
+            # True, not False: False would start document analysis after Stop
             if self._cancelled():
                 self._finish_cancelled(_rid)
                 return True
@@ -7099,8 +6998,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             self.Dispatcher.Invoke(Action(_done))
             return True
         except Exception as ex:
-            # Same designed degradation as _run_knowledge_agent — the PDF is
-            # still analysed as a plain document — but log it visibly.
+            # designed degradation as in _run_knowledge_agent; log visibly
             logger.error("_run_comment_agent error: {}".format(_exc_text(ex)))
             return False
 
@@ -7114,8 +7012,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
 
     def _execute_comment_item(self, item, setter, mode):
-        """Run/Note button on a comment row. UI THREAD entry — spawns the
-        standard revit_action specialist on a worker thread."""
+        """Run/Note on a comment row. UI THREAD; runs revit_action on a worker."""
         try:
             _v = _ui_viet()
             if self._busy:
@@ -7175,64 +7072,46 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _route_input(self, raw, attached):
         """Classify + dispatch one user request. WORKER THREAD.
 
-        Runs the whole routing ladder (RAG context build → fast Revit-DB
-        answer → learned patterns → offline NLU → LLM turn) off the UI
-        thread, so pressing Enter stays instant no matter how heavy the
-        request is. All UI feedback and _execute_result calls marshal back
-        through the Dispatcher.
+        Routing ladder (RAG context → fast Revit-DB answer → learned patterns
+        → offline NLU → LLM turn) runs off the UI thread; UI feedback and
+        _execute_result marshal back through the Dispatcher.
         """
         try:
             attached = list(attached or [])
-            # ── If attachments present and no tool-like text, go straight to RAG ─
             has_attach = bool(attached) and HAS_RAG
 
-            # ── Persistent memory (deterministic, no LLM) ──────────────────
-            # /memory commands and explicit "remember that ..." saves are
-            # answered instantly here — before learned patterns or NLU can
-            # hijack the wording.
+            # Deterministic commands (no LLM), before learned patterns / NLU
+            # can hijack the wording: /memory + "remember that ...", /train.
             if not attached and raw and self._try_memory_command(raw):
                 return
 
-            # ── Self-study /train (deterministic, no LLM) ──────────────────
-            # Shows the curated training-data stats, or launches the external
-            # fine-tune. Answered here so it never reaches the model.
             if not attached and raw and self._try_train_command(raw):
                 return
 
-            # ── "Which model are you using?" (deterministic, no LLM) ───────
-            # The assistant knows its own provider and model id for certain,
-            # so this is never a question for the LLM. Left to it, "model bạn
-            # đang dùng là gì" got read as a question about the .rvt and came
-            # back "Tôi chưa mở bất kỳ model Revit nào" — wrong noun, and an
-            # ungrounded claim about the open document on top.
+            # "which model are you using?" — left to the LLM, "model bạn đang
+            # dùng là gì" was read as a question about the .rvt.
             if not attached and raw and self._try_which_model(raw):
                 return
 
-            # ── Skill packs from GitHub (deterministic, no LLM) ────────────
-            # "/skills …" and "cài skill từ <repo link>" install or refresh
-            # Claude-format skills. Answered here so it works offline-ish
-            # (network for the download only) and can never be re-read as a
-            # Revit command by the NLU.
+            # /skills + "cài skill từ <repo link>" (never re-read as a Revit
+            # command), /toolhub (team catalog on Supabase, network only).
             if not attached and raw and self._try_skills_command(raw):
                 return
 
-            # ── Links in the message → real files ──────────────────────────
-            # A pasted URL / UNC path / local path is fetched here and pushed
-            # onto `attached`, so everything downstream treats it exactly like
-            # a dropped file: PDFs reach the knowledge index and the comment
-            # agent, images reach the vision blocks, .json/.txt/.md reach the
-            # text context. Runs AFTER the skills command above, which owns
-            # "cài skill từ <github link>" and must keep its own URL.
+            if not attached and raw and self._try_toolhub_command(raw):
+                return
+
+            # Pasted URL / UNC / local path → fetched and pushed onto
+            # `attached`, so downstream treats it like a dropped file. Runs
+            # AFTER the skills command, which owns its own GitHub URL.
             _link_ctx = u""
             if HAS_LINKS and raw:
                 _link_ctx = self._resolve_message_links(raw, attached)
                 has_attach = bool(attached) and HAS_RAG
 
-            # ── PDF markup-comment workflow (R4) ───────────────────────────
-            # Route to the CommentAgent when the user asks about comments
-            # (cmt/markup/bluebeam keywords) with a PDF attached, or drops
-            # an annotated PDF without any text. No annotations found →
-            # falls through to the normal document analysis.
+            # PDF markup comments (R4): CommentAgent when the user asks about
+            # comments with a PDF attached, or drops an annotated PDF with no
+            # text. No annotations → normal document analysis.
             if HAS_AGENTS and has_attach:
                 try:
                     _pdfs = [p for p in attached if is_pdf(p)]
@@ -7253,33 +7132,25 @@ class T3LabAssistantWindow(T3WPFWindow):
                     logger.debug(u"comment route error: {}".format(_exc_text(_cm_ex)))
 
             if has_attach and not raw:
-                # No text — summarise the documents
                 raw = u"Analyze and summarize the attached document."
 
-            # Build context-enriched prompt for NLP / Claude.
-            # RAG v2: large attached PDFs are indexed and only the top-k
-            # relevant excerpts (with page citations) are injected — small
-            # files and images keep the legacy full-text/vision path.
+            # RAG v2: large PDFs are indexed and only top-k excerpts (with page
+            # citations) injected; small files/images keep full-text/vision.
             rag_context = ''
             if has_attach:
                 rag_context = self._build_attachment_context(raw, attached)
-            # Folder listings and "couldn't read that link" notes carry no file
-            # of their own, so they ride in front of the attachment context.
+            # Link notes (folder listings, unreadable links) have no file.
             if _link_ctx:
                 rag_context = (u"{}\n\n{}".format(_link_ctx, rag_context)
                                if rag_context else _link_ctx)
 
-            # For NLP routing we use ONLY the raw user text. Prepending the
-            # ContextScout model summary here poisoned the offline NLU and
-            # keyword scoring (its words — "sheet", "view", "wall"... — leak
-            # into intent triggers) and duplicated context the LLM already
-            # receives via the system prompt in do_nlp().
+            # NLP routing uses ONLY the raw text: prepending the ContextScout
+            # summary leaked "sheet"/"view"/"wall" into intent triggers, and
+            # do_nlp() already sends it in the system prompt.
             captured = raw
 
-            # One language analysis for the whole turn: the dispatcher, the
-            # graph planner and the per-turn prompt hint all read it, so the
-            # normalisation and entity tables run once instead of three times
-            # and every stage agrees about what the sentence said.
+            # One language analysis per turn, shared by dispatcher, graph
+            # planner and prompt hint so every stage agrees.
             _utterance = None
             if HAS_LANGUAGE and raw:
                 try:
@@ -7293,20 +7164,14 @@ class T3LabAssistantWindow(T3WPFWindow):
             use_claude       = HAS_NLP and has_api_key()   # True for any configured provider
             _active_provider = get_active_provider_name()  # "claude" | "openai" | "ollama"
 
-            # An explicit /slash skill invocation must reach the agent with
-            # its playbook — the learned-pattern and NLU stages would hijack
-            # it (e.g. "/english-spellcheck" text matches the deterministic
-            # check_spelling triggers and the skill never runs).
+            # A /slash skill must reach the agent with its playbook — learned
+            # patterns / NLU would hijack it (e.g. "/english-spellcheck").
             _skill_forced = bool(getattr(self, '_forced_skill_id', None))
 
-            # EXCEPTION — /english-spellcheck SCAN requests. The agent
-            # playbook can only ever see one ai_element_filter page (50 of
-            # potentially thousands of notes) and then reports fake
-            # full-project coverage ("4495 scanned, 0 errors" after reading
-            # 50). Scans therefore go to the deterministic batch pipeline
-            # (_run_spellcheck), which reads EVERY string. Explicit
-            # fix/apply wording still reaches the agent, which owns
-            # set_parameter / rename_element.
+            # EXCEPT /english-spellcheck SCANS: the agent sees one
+            # ai_element_filter page (50 notes) yet reported "4495 scanned".
+            # Scans go to _run_spellcheck (reads EVERY string); fix/apply
+            # wording still reaches the agent (set_parameter / rename_element).
             if _skill_forced and self._forced_skill_id == 'english-spellcheck':
                 _args = getattr(self, '_forced_skill_args', u'') or u''
                 _fix_req = routing.wants_spellcheck_fix(_args)
@@ -7317,12 +7182,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                     self.Dispatcher.Invoke(Action(_run_spell))
                     return
 
-            # ── Context carryover (Claude-style continuation) ─────────────────
-            # When the assistant just asked a clarifying question, a short
-            # reply ("1", "entire project", "ok"...) is the ANSWER to that
-            # question — it must continue the same task with the same skill/
-            # specialist and full history, not be re-routed from scratch
-            # (where it matches nothing and the model loses the thread).
+            # Carryover: a short reply ("1", "ok") to a clarifying question
+            # continues the same skill/specialist instead of re-routing.
             _prev_dec = getattr(self, '_prev_agent_decision', None)
             _continuation = False
             if not _skill_forced and not has_attach and _prev_dec:
@@ -7332,12 +7193,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                         if _h.get('role') == 'assistant':
                             _last_bot = u'{}'.format(_h.get('content') or u'')
                             break
-                    # An input that independently matches a command pattern
-                    # (action verb, tô/bôi color phrase, export/build/QA
-                    # keywords...) is a NEW command even right after a real
-                    # clarifying question — "tô vàng sàn" typed after "tô đỏ
-                    # tường" finished must route fresh; riding the old thread
-                    # here replayed the completed red-walls task.
+                    # A keyword command hit is a NEW command even after a
+                    # clarifying question ("tô vàng sàn" after "tô đỏ tường"
+                    # replayed the finished red-walls task).
                     _fresh_kw = False
                     if HAS_AGENTS:
                         _fresh = AgentDispatcher().classify(
@@ -7352,13 +7210,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                 logger.debug("carryover: continuing {} / {}".format(
                     _prev_dec.get('specialist'), _prev_dec.get('skill')))
 
-            # ── 1/2. Deterministic stages: NLU first, learned patterns second ─
-            # find_learned_match() used to run BEFORE the NLU and take the turn
-            # outright on a Jaccard >= 0.8 phrasing match. That let a
-            # remembered mapping outrank a confident read of the real tool
-            # catalog — and learned mappings go stale, so a phrase learned for
-            # a tool that has since been renamed kept winning. The NLU is
-            # computed first now and routing.learned_pattern_wins() arbitrates.
+            # ── 1/2. Deterministic: NLU, then learned patterns ──
+            # Learned mappings go stale (renamed tools kept winning on a
+            # Jaccard >= 0.8 match), so routing.learned_pattern_wins() arbitrates.
             nlu_result = None
             learned = None
             _deterministic = (HAS_NLP and not has_attach and not _skill_forced
@@ -7376,23 +7230,16 @@ class T3LabAssistantWindow(T3WPFWindow):
 
             if _deterministic and nlu_result \
                     and nlu_result.get("intent") not in (None, "unknown"):
-                # _authoritative = answered from the real tool catalog
-                # (capability questions, ambiguity clarifications) — the
-                # LLM must not get a chance to override it with a guess.
-                # _instant = pure small talk (greeting, thanks, "how are you"...)
-                # answered from the canned reply even with a provider online —
-                # skipping the model here is the biggest single latency win on a
-                # slow local model. Emotional/complaint chat is NOT _instant and
-                # still flows to the LLM below for a warmer answer.
+                # _authoritative = answered from the real tool catalog; the LLM
+                # must not override it. _instant = pure small talk, canned even
+                # with a provider online (biggest latency win on a slow local
+                # model); emotional chat is not _instant and reaches the LLM.
                 if nlu_result["intent"] not in ("chat", "help") \
                         or nlu_result.get("_authoritative") \
                         or nlu_result.get("_instant") \
                         or not (use_local or use_claude):
-                    # A provider that IS configured but failed its health probe
-                    # lands here and answers from the offline canned replies,
-                    # whose text tells the user to "connect an AI in Settings"
-                    # — wrong and baffling when they just did. Say what really
-                    # happened instead.
+                    # Configured provider that failed its health probe: the
+                    # canned "connect an AI in Settings" is wrong — say why.
                     if nlu_result["intent"] in ("chat", "help") \
                             and not (use_local or use_claude):
                         _note = self._provider_unreachable_note(
@@ -7405,11 +7252,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                     self.Dispatcher.Invoke(Action(_run_nlu))
                     return
 
-            # ── 2.5 Specialist dispatch (multi-agent layer) ────────────────
-            # Keyword stage always; one tiny LLM classify call only for
-            # non-conversational messages the keywords couldn't place.
-            # Anything ambiguous falls through to the unchanged legacy
-            # path. Kill switch: agents.multi_agent.
+            # ── 2.5 Specialist dispatch (multi-agent layer) ──
+            # Keywords always; one tiny LLM classify only for non-chat messages
+            # keywords couldn't place. Kill switch: agents.multi_agent.
             self._agent_decision = None
             if HAS_AGENTS and not has_attach and (use_local or use_claude):
                 try:
@@ -7420,12 +7265,10 @@ class T3LabAssistantWindow(T3WPFWindow):
                 except Exception:
                     _multi_on, _llm_clf_on = True, True
                 if _multi_on:
-                    # Classify the USER's words. A slash-forced skill routes
-                    # the user's args (empty for a bare "/skill-id"), never
-                    # the synthetic boilerplate — classifying that text put
-                    # every slash-only invocation on the action specialist.
-                    # Empty text scores nothing, so the specialist comes
-                    # from the skill frontmatter (_apply_forced_skill).
+                    # Classify the USER's words: a slash skill routes its args,
+                    # never the synthetic boilerplate (that put every bare
+                    # "/skill-id" on the action specialist); empty text →
+                    # specialist from skill frontmatter (_apply_forced_skill).
                     _clf_text = raw
                     if _skill_forced:
                         _clf_text = (getattr(self, '_forced_skill_args', u'')
@@ -7450,9 +7293,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                             _clf_text, provider=_clf_provider,
                             skills_engine=_skills_eng,
                             allow_llm=bool(_clf_provider),
-                            # Only when the classifier is reading the user's
-                            # own words: a /slash invocation classifies the
-                            # skill args, which this analysis is not of.
+                            # only when classifying the user's own words
                             analysis=(_utterance if _clf_text == raw
                                       else None))
                     except Exception as _disp_ex:
@@ -7471,7 +7312,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                         # no hits / LLM mute → continue down the normal path
                     if self._agent_decision and \
                             self._agent_decision.get('specialist') == 'comment':
-                        # Comment workflow needs a PDF — guide the user.
                         _guide = (u"To process drawing comments: attach the "
                                   u"marked-up PDF (attach button) and resend. "
                                   u"I will read each comment, trace which "
@@ -7487,33 +7327,33 @@ class T3LabAssistantWindow(T3WPFWindow):
                         self.Dispatcher.Invoke(Action(_need_pdf))
                         return
 
-            # Slash-forced skill also applies when the dispatcher is off or
-            # never ran (multi_agent kill-switch, attachments, no provider).
+            # Also when the dispatcher never ran (kill switch, attachments,
+            # no provider).
             self._apply_forced_skill()
 
-            # Carryover: the fresh dispatcher run saw only the short reply
-            # ("1") and matched nothing — reuse the previous turn's decision
-            # so the same specialist + skill playbook steer this turn too.
+            # Carryover: the short reply matched nothing — reuse last decision.
             if _continuation and not (self._agent_decision
                                       and self._agent_decision.get('skill')):
                 self._agent_decision = dict(_prev_dec)
                 self._agent_decision['source'] = 'carryover'
 
-            # Remember the decision that actually steered this turn — the
-            # next turn's carryover check needs it.
+            # For the next turn's carryover check.
             if self._agent_decision and (
                     self._agent_decision.get('skill')
                     or self._agent_decision.get('specialist')
                     not in (None, 'general')):
                 self._prev_agent_decision = dict(self._agent_decision)
 
-            # ── 2.7 Graph path (multi-goal turns) ──────────────────────────
-            # "thống kê tường rồi xuất pdf sheet A-101" is TWO requests. The
-            # single-specialist path below can only serve one of them, and
-            # historically answered the first and dropped the rest. The planner
-            # decomposes the message; it declines anything it cannot split
-            # confidently, so a normal one-goal turn never reaches this code
-            # and keeps its exact previous behaviour.
+            # ── 2.6 Auto model switch (Claude) ──
+            # Haiku picks Haiku/Sonnet/Opus for the rest of the turn; cleared
+            # in _process_input's finally.
+            if use_claude:
+                self._auto_route_model(raw, history, attached, _continuation)
+
+            # ── 2.7 Graph path (multi-goal turns) ──
+            # "thống kê tường rồi xuất pdf sheet A-101" is TWO requests; the
+            # single-specialist path dropped the second. The planner declines
+            # what it cannot split confidently, so one-goal turns are unchanged.
             # Kill switch: agents.graph_mode.
             if (not has_attach and not _skill_forced and not _continuation
                     and (use_local or use_claude)):
@@ -7525,19 +7365,15 @@ class T3LabAssistantWindow(T3WPFWindow):
                     logger.debug("graph path error: {}".format(_gp_ex))
 
             if use_local or use_claude or has_attach:
-                # ── 3/4. LLM path (typing indicator already showing) ──────────
+                # ── 3/4. LLM path (typing indicator already showing) ──
                 nlu_hint = nlu_result if (HAS_NLP and not has_attach) else None
 
                 def do_nlp():
                     result = None
-                    # Owns the terminal message for THIS turn; a later turn
-                    # bumps _request_id and invalidates any stale finisher.
+                    # A later turn bumps _request_id and invalidates stale finishers.
                     rid = getattr(self, '_request_id', 0)
-                    # Distinguishes "the model returned nothing at all" (timeout,
-                    # connection error, empty body) from "the model answered but
-                    # picked an unrecognised intent" — without this, both looked
-                    # identical to the user: the same generic offline fallback
-                    # text, no matter what they typed.
+                    # "model returned nothing" (timeout/empty) vs "unrecognised
+                    # intent" — otherwise both showed the same offline fallback.
                     llm_call_failed = False
                     from Intelligence.llm_router import LLMRouter
                     import json as _json
@@ -7545,23 +7381,14 @@ class T3LabAssistantWindow(T3WPFWindow):
                     _router = LLMRouter()
                     _provider = _router.get_active_provider()
 
-                    # ── Native function-calling agent path ─────────────────────
-                    # Providers with SUPPORTS_NATIVE_TOOLS run the real agentic
-                    # loop: tool schemas travel through the API `tools` param,
-                    # replies are plain text (no JSON-in-prompt). If the path
-                    # can't even start (registry unavailable, provider mute on
-                    # turn 1 — e.g. an Ollama model without tool support), it
-                    # returns False and the legacy JSON-intent loop below runs.
-                    # Compact retrieval context (RAG v2 excerpts) no longer
-                    # blocks the native path — only bulky legacy stuffing
-                    # still goes to the JSON-intent loop.
-                    #
-                    # Attached IMAGES used to force the legacy path too, and
-                    # that path can only send a string: the model received the
-                    # bare "[Hình ảnh đính kèm: x.png]" placeholder and quite
-                    # correctly answered "I can't see images". A vision-capable
-                    # provider now takes the native path and gets the real
-                    # image blocks (see _run_native_agent's image_files).
+                    # ── Native function-calling agent path ──
+                    # SUPPORTS_NATIVE_TOOLS providers: schemas via the API
+                    # `tools` param, plain-text replies. Returns False if it
+                    # can't start (no registry, provider mute on turn 1, e.g.
+                    # Ollama without tools) → legacy JSON-intent loop below.
+                    # Compact RAG excerpts stay native; only bulky stuffing goes
+                    # legacy. Images go native on a vision provider — the legacy
+                    # path sends only the "[Hình ảnh đính kèm: x.png]" string.
                     _img_files = [p for p in attached if is_image(p)]
                     _can_see = bool(_img_files) and bool(
                         getattr(_provider, 'SUPPORTS_VISION', False))
@@ -7569,10 +7396,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                         rag_context and len(rag_context) < 4000
                         and (not _img_files or _can_see))
 
-                    # Text-only provider (Ollama / LM Studio / DeepSeek): be
-                    # explicit about WHY the image can't be read and what to do
-                    # about it, instead of leaving the model to improvise an
-                    # excuse from a bare "[image attached]" placeholder.
+                    # Text-only provider (Ollama / LM Studio / DeepSeek): tell
+                    # the model why it can't see the image and what to suggest.
                     _rag_query = rag_context
                     if _img_files and not _can_see:
                         _note = (
@@ -7592,34 +7417,26 @@ class T3LabAssistantWindow(T3WPFWindow):
 
                     if (not has_attach and not rag_context) or _compact_rag:
                         _handled = False
-                        # Specialist spec + matched skills from the dispatcher
-                        # decision (multi-agent layer). None = legacy behavior.
+                        # None = legacy behaviour.
                         _spec = None
                         _skill_ids = None
                         _dec = getattr(self, '_agent_decision', None)
                         if HAS_SPECIALISTS and _dec:
-                            # Every AgentLoop-backed specialist rides the
-                            # native path with its own prompt/tools/budget
-                            # ('knowledge'/'comment' have dedicated
-                            # pipelines handled earlier, 'general' means
-                            # provider default = _spec None).
+                            # AgentLoop specialists ('knowledge'/'comment' have
+                            # own pipelines above; 'general' = _spec None).
                             if _dec.get('specialist') in (
                                     'revit_data', 'revit_action',
                                     'multi_doc', 'modeling',
                                     'qa_check', 'export'):
                                 _spec = get_spec(_dec['specialist'])
                             if _dec.get('skill'):
-                                # build_skills_block injects up to two bodies;
-                                # send it the two best-ranked matches rather
-                                # than only the single winner, so a message
-                                # that legitimately spans two playbooks gets
-                                # both. A forced /slash skill stays alone.
+                                # build_skills_block injects up to two: send
+                                # the top-2 ranked; a forced /slash skill
+                                # stays alone and skips the specialist filter.
                                 _skill_ids = [_dec['skill']]
                                 if not _dec.get('skill_forced'):
                                     _skill_ids = self._ranked_skill_ids(
                                         captured, _dec['skill'])
-                                # keep only skills declared for this specialist
-                                # (explicit /slash invocation skips the filter)
                                 if not _dec.get('skill_forced'):
                                     try:
                                         from Intelligence.skills_engine import (
@@ -7643,13 +7460,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                                 image_files=(_img_files if _can_see else None),
                                 analysis=_utterance)
                         except Exception as _na_ex:
-                            # Also record it where it can actually be READ.
-                            # logger.debug alone goes to pyRevit's debug log,
-                            # which is off by default — so a native-path crash
-                            # looked to everyone (including the activity log)
-                            # like the legacy path simply having been chosen,
-                            # and the user only ever saw the legacy path's
-                            # "Could not read data from the model."
+                            # Also to the activity log: pyRevit's debug log is
+                            # off by default, so a crash looked like the legacy
+                            # path had simply been chosen.
                             logger.debug(u"native agent path error: {}".format(
                                 _exc_text(_na_ex)))
                             self._log_activity(
@@ -7660,13 +7473,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                         if _handled:
                             return
 
-                    # Skill playbook for the LEGACY path too. When the native
-                    # agent path is unavailable (provider without native
-                    # tools, MCP server not up, turn-1 provider mute), a
-                    # /slash skill used to reach this JSON-intent loop as the
-                    # bare boilerplate with NO playbook injected — the model
-                    # then hallucinated pseudo-intents ("apply_playbook") and
-                    # the skill never ran.
+                    # Skill playbook for the LEGACY path too — without it the
+                    # model hallucinated intents like "apply_playbook".
                     _legacy_skills_block = u""
                     try:
                         _dec_lg = getattr(self, '_agent_decision', None) or {}
@@ -7675,9 +7483,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                         if _sk_lg:
                             from Intelligence.skills_engine import (
                                 build_skills_block as _bsb)
-                            # Same ranked top-2 the native path gets, so the
-                            # two prompt paths cannot drift apart. A forced
-                            # /slash skill stays alone.
+                            # Same top-2 as the native path.
                             _ids_lg = ([_sk_lg]
                                        if getattr(self, '_forced_skill_id', None)
                                        else self._ranked_skill_ids(captured, _sk_lg))
@@ -7685,14 +7491,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                     except Exception:
                         _legacy_skills_block = u""
 
-                    # Step budget. 5 was set before specialists existed and is
-                    # now the outlier: the native path gives 6–14 depending on
-                    # the specialist. Five is not enough for an ordinary
-                    # multi-step read ("check the model name against ISO
-                    # 19650" spent one step on context and two on sheet lists,
-                    # then hit the wall and told the user to split the request
-                    # — work the assistant should just finish). Follow the
-                    # specialist's own budget, with the native path's default.
+                    # Step budget: the specialist's own (native path gives
+                    # 6–14); the old 5 made an ISO 19650 name check give up.
                     max_iterations = 10
                     try:
                         _spec_budget = getattr(_spec, 'max_iterations', None)
@@ -7702,40 +7502,30 @@ class T3LabAssistantWindow(T3WPFWindow):
                         pass
                     current_iteration = 0
                     current_history = list(history)
-                    # Deterministic repeat guards — small local models ignore
-                    # prompt rules and re-emit calls: the same call again in
-                    # the same turn ("tô xanh sàn" ran 3x), or a finished
-                    # PREVIOUS turn's call mid-turn ("tô tím cửa" replayed).
-                    # Prompt rules alone don't stop this; the loop does.
+                    # Repeat guards: small local models re-emit calls in the
+                    # same turn ("tô xanh sàn" ran 3x) or replay a previous
+                    # turn's ("tô tím cửa"); prompt rules alone don't stop it.
                     _turn_calls = set()          # (intent, args) run THIS turn
                     _prev_calls = self._earlier_turn_calls()
                     _blocked_repeats = 0
                     _announce_nudges = 0         # "I'm about to…" with no call
-                    # ONE approval gate for the whole request — the same
-                    # ToolGate the native path uses, so the destructive
-                    # confirm, "Ask before edits" and the first-purge dry run
-                    # hold here too. This loop used to hand every call
-                    # straight to srv._execute_tool. Built on the first tool
-                    # call (it needs the server), then reused: it remembers
-                    # whether this request already made its dry-run purge.
+                    # ONE ToolGate per request, as on the native path
+                    # (destructive confirm, "Ask before edits", first-purge dry
+                    # run). Built on the first tool call (needs the server).
                     _legacy_gate = {"g": None}
 
-                    # Initial user prompt. _rag_query == rag_context except
-                    # when a text-only provider was handed images (see above).
+                    # _rag_query == rag_context unless a text-only provider got images.
                     current_query = (_rag_query + u"\n\n" + captured) if _rag_query else captured
 
                     while current_iteration < max_iterations:
                         current_iteration += 1
 
-                        # Stop before spending another LLM turn. This loop used
-                        # to ignore _cancel_requested entirely, so Stop greyed
-                        # out the button while the agent kept issuing up to five
-                        # more calls and executing real write tools.
+                        # Honour Stop before another LLM turn (it once kept
+                        # running write tools after Stop).
                         if self._cancelled():
                             self._finish_cancelled(rid)
                             return
 
-                        # Dynamically query Revit context on each iteration
                         _ctx_block = u""
                         if HAS_SCOUT:
                             try:
@@ -7743,21 +7533,16 @@ class T3LabAssistantWindow(T3WPFWindow):
                             except Exception:
                                 pass
 
-                        # Retrieve registered tools from server.py — compact
-                        # catalog (C4): names + one-line purpose only. The full
-                        # JSON schemas of all ~75 tools used to be inlined here
-                        # on EVERY iteration, which crushed small local models
-                        # (token bloat + broken JSON). The model now requests a
-                        # schema on demand via the describe_tool meta-intent.
+                        # Compact catalog (C4): name + one-line purpose; full
+                        # schemas (~75 tools) crushed small models, so the model
+                        # asks for one via the describe_tool meta-intent.
                         server_tools_str = u""
                         tools_list = []
                         try:
                             from core.server import get_t3labai_server
                             srv = get_t3labai_server()
                             tools_list = srv._handle_tools_list().get('tools', [])
-                            # Local models: shrink the catalog to the curated
-                            # essential subset (same rationale as the native
-                            # agent path — accuracy + context budget).
+                            # Local models: essential subset only (as native path).
                             if tools_list and getattr(_provider, 'NAME', '') in ("ollama", "lmstudio"):
                                 from Intelligence.tool_schema import ESSENTIAL_TOOL_NAMES
                                 _ess = [t for t in tools_list
@@ -7780,11 +7565,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                             logger.debug(u"Failed to list server tools: {}".format(_exc_text(tool_err)))
 
                         system_prompt = _build_system_prompt(revit_context=_ctx_block)
-                        # Project instructions + remembered facts. This path is
-                        # reached whenever the user attaches a document or RAG
-                        # returns a lot of context (see the native/legacy gate
-                        # above) — precisely when the project's conventions
-                        # matter — yet it carried NEITHER block until now.
+                        # Project instructions + remembered facts (this path
+                        # serves attachments, where conventions matter most).
                         system_prompt = self._apply_project_blocks(system_prompt)
                         if server_tools_str:
                             system_prompt += server_tools_str
@@ -7801,10 +7583,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                         if has_attach or rag_context:
                             system_prompt = _RAG_SYSTEM_PREFIX + system_prompt
 
-                        # Perform the chat completion.
-                        # Iteration 1 streams live into a growing bubble (smooth,
-                        # low time-to-first-token). Subsequent tool-loop turns are
-                        # internal, so they use a plain blocking call.
+                        # Iteration 1 streams into a bubble; later internal
+                        # tool-loop turns use a blocking call.
                         _resp = None
                         try:
                             if current_iteration == 1:
@@ -7814,9 +7594,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                                     response_format={"type": "json_object"}
                                 )
                             elif _provider and _provider_usable(_provider):
-                                _resp = _provider.chat(current_history[-16:], system_prompt, current_query, max_tokens=1200, response_format={"type": "json_object"})
+                                _resp = _provider.chat(_budget_history(current_history, _provider, system_prompt, current_query, 1200), system_prompt, current_query, max_tokens=1200, response_format={"type": "json_object"})
                             else:
-                                _resp = _router.chat(current_history[-16:], system_prompt, current_query, max_tokens=1200, response_format={"type": "json_object"})
+                                _resp = _router.chat(_budget_history(current_history, None, system_prompt, current_query, 1200), system_prompt, current_query, max_tokens=1200, response_format={"type": "json_object"})
                         except Exception as chat_ex:
                             logger.debug(u"Router chat error: {}".format(_exc_text(chat_ex)))
 
@@ -7824,24 +7604,20 @@ class T3LabAssistantWindow(T3WPFWindow):
                             llm_call_failed = True
                             break
 
-                        # Parse response JSON
                         _cleaned = self._clean_bot_response(_resp)
                         _parsed = None
                         try:
                             import re as _re
-                            # First try extracting JSON block using regex if model included extra text
+                            # The model may wrap the JSON in extra text.
                             _m = _re.search(r'\{[\s\S]*\}', _resp)
                             if _m:
                                 _parsed = _json.loads(_m.group())
                             else:
-                                # Fallback to direct parsing
                                 _parsed = _json.loads(_resp)
                                 
-                            # Ensure intent is present
                             if "intent" not in _parsed:
                                 _parsed["intent"] = "unknown"
                         except Exception:
-                            # Fallback if model returns corrupted JSON/text
                             _parsed = {
                                 "intent": "unknown",
                                 "message": u"Could not read data from the model. Please try again."
@@ -7852,10 +7628,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                             params = _parsed.get("params", {}) or {}
                             message = _parsed.get("message", "")
 
-                            # C4 meta-intent: the model asks for one tool's full
-                            # schema (the catalog above only carries one-liners).
-                            # Feed the schema back and let it produce the real
-                            # tool call on the next iteration.
+                            # C4 meta-intent: feed one tool's full schema back;
+                            # the real call comes next iteration.
                             if intent == "describe_tool":
                                 self.Dispatcher.Invoke(Action(self._remove_stream_bubble))
                                 tname = u"{}".format(
@@ -7888,13 +7662,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                                     u'"message": "..."}}.'.format(info))
                                 continue
 
-                            # Determine if it's a local MCP tool call — check
-                            # against the real registry, not a "revit_" prefix
-                            # guess, since several real tool names don't start
-                            # with "revit_" (place_wall, create_grid, etc.) and
-                            # a hallucinated "revit_*" name that ISN'T
-                            # registered would otherwise be sent into the
-                            # External Event round-trip for nothing.
+                            # Check the real registry, not a "revit_" prefix
+                            # (place_wall, create_grid don't have one).
                             is_local_tool = False
                             try:
                                 from core.server import get_t3labai_server
@@ -7908,11 +7677,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                                 _call_key = (intent, _json_text(
                                     params or {}, sort_keys=True))
                                 _dup_now = _call_key in _turn_calls
-                                # A previous turn's call re-emitted AFTER this
-                                # turn already did its own different work =
-                                # old-context drift. (The FIRST call of a turn
-                                # matching the previous turn stays allowed —
-                                # the user may legitimately repeat a command.)
+                                # Previous turn's call AFTER this turn did other
+                                # work = drift (as a first call it's allowed:
+                                # the user may repeat a command).
                                 _old_ctx = (not _dup_now and bool(_turn_calls)
                                             and _call_key in _prev_calls)
                                 if _dup_now or _old_ctx:
@@ -7948,34 +7715,21 @@ class T3LabAssistantWindow(T3WPFWindow):
                                         {"role": "user", "content": _guard_msg})
                                     current_query = _guard_msg
                                     continue
-                                # The streamed preview (if any) is superseded by
-                                # explicit tool-execution feedback below.
                                 self.Dispatcher.Invoke(Action(self._remove_stream_bubble))
-                                # Update typing indicator UI to show tool execution
                                 is_vn = _is_viet_text(captured)
                                 status_msg = u"● ● ●  Đang chạy công cụ `{}`...".format(intent) if is_vn else "● ● ●  Executing tool `{}`...".format(intent)
                                 self._safe_update_typing_text(status_msg)
 
-                                # The model's own "what I'm doing" line, if it
-                                # wrote one. The tool NAME and ARGS used to be
-                                # printed here too, but the card below says all
-                                # of that and also shows the RESULT.
+                                # Model's "what I'm doing" line; name/args/result
+                                # are on the card below.
                                 if message:
                                     self._safe_append_bot(
                                         message, icon=_ICON_SYNC,
                                         icon_color=_ICON_BLUE)
 
-                                # Real tool card — the same one the native agent
-                                # path draws. This path used to print only a
-                                # "[Tool Call] …" line BEFORE execution and
-                                # nothing after, so the tool's data reached the
-                                # user only if the model chose to repeat it in
-                                # prose. It often does not: "list levels" ran
-                                # list_levels, then answered "Danh sách các mức
-                                # đã được liệt kê. Bạn muốn làm gì tiếp?" and
-                                # the levels themselves were never shown. The
-                                # card puts the result on screen deterministically,
-                                # whatever the model says afterwards.
+                                # Tool card (as on the native path) shows the
+                                # result whatever the model says after — "list
+                                # levels" once answered without the levels.
                                 _card = {"cur": None}
 
                                 def _open_card(_n=intent, _a=params):
@@ -7986,7 +7740,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                                 except Exception:
                                     pass
 
-                                # Execute the tool in the Revit context using the external event handler
                                 import time as _time
                                 _t0 = _time.time()
                                 tool_result = None
@@ -7999,10 +7752,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                                         srv, _legacy_gate["g"], intent,
                                         params, _is_viet_text(captured))
                                 except Exception as execute_err:
-                                    # _exc_text, never str(): a Revit error
-                                    # carrying a non-ASCII message made str()
-                                    # raise UnicodeEncodeError here, killing the
-                                    # whole turn from inside the error handler.
+                                    # _exc_text, never str(): non-ASCII Revit
+                                    # errors raised UnicodeEncodeError here.
                                     tool_result = {"error": _exc_text(execute_err),
                                                    "tool": intent}
 
@@ -8020,13 +7771,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                                 except Exception:
                                     pass
 
-                                # Register the successful call (errors stay
-                                # unregistered — rule 4 allows ONE retry with
-                                # corrected/same args after a failure). A call
-                                # the user DECLINED is registered too — the
-                                # repeat guard then stops the model asking
-                                # again — but it ran nothing, so it is not a
-                                # step that "had already run" on Stop.
+                                # Errors stay unregistered (rule 4: ONE retry).
+                                # A DECLINED call is registered (no re-asking)
+                                # but doesn't count as a run step.
                                 if not (isinstance(tool_result, dict)
                                         and tool_result.get('error')):
                                     _turn_calls.add(_call_key)
@@ -8034,25 +7781,18 @@ class T3LabAssistantWindow(T3WPFWindow):
                                             and tool_result.get('cancelled')):
                                         self._tool_runs += 1
 
-                                # Tool execution is where the seconds go, so
-                                # this is the checkpoint that makes Stop feel
-                                # immediate. Returning here skips finish(), so
-                                # there is no double release.
+                                # Checkpoint that makes Stop feel immediate;
+                                # returning skips finish() (no double release).
                                 if self._cancelled():
                                     self._finish_cancelled(rid)
                                     return
 
-                                # Log tool call and result to current_history using portable roles
                                 _result_text = _json_text(tool_result)
                                 current_history.append({"role": "assistant", "content": _json_text(_parsed)})
                                 current_history.append({"role": "user", "content": u"Tool `{}` returned: {}".format(intent, _result_text)})
 
-                                # Setup subsequent query — restate WHICH request
-                                # is being executed. A bare "proceed to the next
-                                # step" let small models drift into the chat
-                                # history and replay the PREVIOUS turn's command
-                                # ("tô vàng sàn" re-ran the finished "tô đỏ
-                                # tường" task).
+                                # Restate WHICH request: a bare "next step" let
+                                # small models replay the previous turn's command.
                                 current_query = (
                                     u"Tool `{}` returned: {}. Continue with the "
                                     u"NEXT step of the user's LATEST request "
@@ -8066,20 +7806,12 @@ class T3LabAssistantWindow(T3WPFWindow):
                                         captured))
                                 continue
                             else:
-                                # A model that picks "unknown" but still wrote a
-                                # message (small/local models do this a lot —
-                                # they don't map cleanly to one of the listed
-                                # intents but still try to answer) should have
-                                # that answer shown, not silently swapped out
-                                # for the generic offline fallback in finish().
+                                # "unknown" with a message (common on small
+                                # models): show the answer, not the fallback.
                                 if intent == "unknown" and message.strip():
                                     _parsed["intent"] = "chat"
-                                # Narrated instead of acted. Same hole the
-                                # native AgentLoop had: a reply that only
-                                # promises the work ("Đang liệt kê các mức
-                                # trong dự án…") ended the turn with no tool
-                                # run and no data — "list levels" answered
-                                # nothing. Nudge once, then let it stand.
+                                # Narrated instead of acted ("Đang liệt kê các
+                                # mức…" with no tool run): nudge once.
                                 if (self._tool_runs == 0 and not _turn_calls
                                         and _announce_nudges < 1
                                         and _announces_work(
@@ -8103,20 +7835,13 @@ class T3LabAssistantWindow(T3WPFWindow):
                             result = {"intent": "chat", "message": _cleaned}
                             break
 
-                    # Remember this turn's executed calls — later turns'
-                    # old-context guard needs them. Pure-chat turns keep the
-                    # registry alive.
+                    # For later turns' old-context guard.
                     if _turn_calls:
                         self._remember_turn_calls(_turn_calls)
 
-                    # Falling out of the while loop leaves result=None, because
-                    # every tool-executing branch ends in `continue` and only a
-                    # text reply breaks with a result. finish() then walked all
-                    # the way down to "I didn't understand this request" — after
-                    # five tools had SUCCESSFULLY run and modified the model.
-                    # Only synthesise when tools actually ran; with none, the
-                    # existing llm_call_failed / didn't-understand paths are
-                    # still the right answer.
+                    # Loop exhausted leaves result=None (tool branches
+                    # `continue`), which showed "I didn't understand" after
+                    # five successful edits. Synthesise only when tools ran.
                     if result is None and self._tool_runs:
                         result = {
                             "intent": "chat",
@@ -8140,9 +7865,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                             r_intent   = result.get("intent") if result else None
                             _conv      = ("chat", "help", "greet")
 
-                            # Step budget exhausted mid-plan — show what ran and
-                            # offer the same one-click continuation the native
-                            # agent path already offers.
+                            # Budget exhausted: one-click Continue, as native.
                             if result and result.get("_max_steps"):
                                 if has_stream:
                                     self._remove_stream_bubble()
@@ -8162,8 +7885,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                                 self._set_busy(False)
                                 return
 
-                            # Plain conversational reply that already streamed live
-                            # → keep the bubble, just apply markdown + record it.
+                            # Streamed chat reply → keep the bubble, apply markdown.
                             if has_stream and r_intent in _conv:
                                 if r_intent == "help":
                                     msg = result.get("params", {}).get(
@@ -8184,18 +7906,12 @@ class T3LabAssistantWindow(T3WPFWindow):
                                 self._set_busy(False)
                                 return
 
-                            # Action/tool result → discard any preview bubble and
-                            # let the executor render its own message + run it.
+                            # Action result → drop the preview; the executor renders.
                             if has_stream:
                                 self._remove_stream_bubble()
                             self._hide_typing_indicator()
-                            # A generic "I didn't understand" guess from the offline
-                            # NLU is only worth showing when the LLM call actually
-                            # completed and ALSO had nothing better — if the LLM
-                            # never responded at all, that guess would silently
-                            # masquerade as "the assistant tried and failed to
-                            # match your request", which is misleading; the
-                            # llm_call_failed branch below gives the real reason.
+                            # The NLU's generic fallback only when the LLM did
+                            # answer; if it never did, llm_call_failed says why.
                             nlu_hint_usable = (
                                 nlu_hint and nlu_hint.get("intent") not in (None, "unknown")
                                 and not (llm_call_failed and nlu_hint.get("_generic_fallback"))
@@ -8221,10 +7937,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                                 if fb:
                                     self._execute_result(fb)
                                 elif llm_call_failed:
-                                    # The AI genuinely never answered (timeout /
-                                    # connection error / API rejection) — say so
-                                    # plainly, WITH the provider's real reason
-                                    # when it was recorded (get_last_error).
+                                    # Never answered: say so, with the provider's
+                                    # reason (get_last_error) when recorded.
                                     label = get_provider_display_label()
                                     detail = u""
                                     try:
@@ -8253,18 +7967,16 @@ class T3LabAssistantWindow(T3WPFWindow):
                                     self._set_busy(False)
                         except Exception as finish_ex:
                             self._clear_stream_refs()
-                            # _claim_turn was already taken at the top of
-                            # finish(); release it so the error can be shown.
+                            # Release _claim_turn so the error can be shown.
                             self._replied = False
                             self._report_error(u"finish", finish_ex, rid)
 
                     self.Dispatcher.Invoke(Action(finish))
 
-                # Already on the routing worker thread — run the LLM turn
-                # inline instead of spawning yet another thread.
+                # Already on the worker thread — run inline.
                 do_nlp()
             else:
-                # ── 5. No provider configured at all — keyword fallback ─────────
+                # ── 5. No provider configured — keyword fallback ──
                 fb = keyword_parse(raw)
 
                 def _finish_offline(_fb=fb):
@@ -8277,42 +7989,30 @@ class T3LabAssistantWindow(T3WPFWindow):
                         self._set_busy(False)
                 self.Dispatcher.Invoke(Action(_finish_offline))
         except Exception:
-            # Bubble to _route()'s handler in _process_input — it hides the
-            # typing indicator and releases the busy lock on the UI thread.
+            # To _process_input's handler (hides typing, releases busy on UI).
             raise
 
-    # ─── Execute intent ────────────────────────────────────────────────────────
+    # ─── Execute intent ───
 
     def _execute_result(self, result):
-        """Execute the action described by a parsed result dict.
-
-        Responsibilities:
-        - Display bot message
-        - Add bot reply to conversation history
-        - Learn successful patterns
-        - Release busy state when done (including after background exports)
-        """
+        """Execute a parsed result dict: show + record the reply, learn the
+        pattern, release busy (also after background exports)."""
         intent  = result.get("intent", "unknown")
         message = result.get("message", "")
         params  = result.get("params", {})
         raw     = self._last_raw
-        # Kept so a 👍/👎 on the reply can act on the route that produced it
-        # (_vote_decision reads it when the reply row is built).
+        # For 👍/👎 on the reply (_vote_decision).
         self._last_result = dict(result or {})
 
         def _bot(msg):
-            """Show message and record in conversation history."""
             self._append_bot_message(msg)
             self._add_to_history("assistant", msg)
 
         def _learn(msg=''):
-            """Record successful command→intent mapping."""
             learn_pattern(raw, intent, params, msg)
 
-        # ── Conversational-input guard (last line of defence) ─────────────────
-        # Pure small talk ("morning", "thanks", "ok"...) must never launch a
-        # tool, no matter which layer produced the intent — a mis-learned
-        # pattern or an LLM hallucination could map it to open_*/export.
+        # Last line of defence: small talk never launches a tool, whatever
+        # layer (mis-learned pattern, LLM hallucination) produced the intent.
         if intent not in ("help", "chat", "greet", "unknown") and HAS_NLP:
             try:
                 from Intelligence.nlu_engine import is_conversational
@@ -8333,7 +8033,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self._set_busy(False)
                 return
 
-        # ── Conversation (no action needed) ──────────────────────────────────
         if intent in ("help", "chat", "greet"):
             reply = params.get("answer", message) if intent == "help" else message
             reply = self._clean_bot_response(reply) if reply else u""
@@ -8346,8 +8045,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             request_id = getattr(self, '_request_id', 0)
             if getattr(self, '_batchout_request_id', None) == request_id:
                 return
-            # The LLM finish() claims a synchronous reply before handing its
-            # intent here. Transfer terminal ownership to the API callback.
+            # finish() already claimed the turn; hand it to the API callback.
             self._replied = False
             _bot("Export queued. Waiting for Revit..." if intent == "export_direct"
                  else "BatchOut launch queued. Waiting for Revit...")
@@ -8402,9 +8100,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                 _finished_batchout(False, _exc_text(ex))
             return
 
-        # ── Spell-check all Text Notes (deterministic DB scan + LLM proofread) ─
-        # The scan is done HERE, not at the LLM's discretion — small local
-        # models used to just chat back "please send me the text notes".
+        # Spell-check: deterministic scan HERE (small models replied "please
+        # send me the text notes"), then LLM proofread.
         if intent == "check_spelling":
             confirm = message or (
                 u"Đang quét Text Note trong model để kiểm tra chính tả tiếng Anh..."
@@ -8415,7 +8112,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._run_spellcheck(raw)
             return
 
-        # ── Simple tool launchers ─────────────────────────────────────────────
         if intent in TOOL_LAUNCHERS:
             confirm = message or u"Opening {}...".format(get_tool_title(intent))
             _bot(confirm)
@@ -8423,7 +8119,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._launch_tool(intent, TOOL_LAUNCHERS[intent])
             return
 
-        # ── MCP Revit intents ─────────────────────────────────────────────────
+        # MCP Revit intents
         try:
             from Intelligence.t3lab_agent import is_mcp_intent, get_intent_info
             if is_mcp_intent(intent):
@@ -8449,11 +8145,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception as _mcp_ex:
             logger.debug(u"MCP intent handler error: {}".format(_exc_text(_mcp_ex)))
 
-        # ── Recover hallucinated open_* intents ──────────────────────────────
-        # The LLM sometimes invents a near-miss intent name ("open_mcp_control"
-        # instead of "open_mcpcontrol"). Before declaring the tool missing,
-        # resolve the user's own words against the full tool catalog and
-        # launch the tool only if one clearly wins.
+        # Near-miss open_* names ("open_mcp_control"): resolve the user's words
+        # against the catalog; launch only on a clear winner.
         if intent.startswith("open_") and HAS_NLP:
             _match = None
             try:
@@ -8470,19 +8163,14 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self._launch_tool(_match['intent'],
                                   TOOL_LAUNCHERS[_match['intent']])
                 return
-            # Nothing resolved — name the tools that DO exist rather than
-            # leaving the user with a dead intent name. `_cands` comes from
-            # resolve_tool's ambiguity list (top 3 plausible tools).
+            # Nothing resolved — name tools that DO exist.
             if intent not in TOOL_LAUNCHERS:
                 _bot(self._unknown_tool_text(intent, raw))
                 self._set_busy(False)
                 return
 
-        # ── Unknown / fallthrough ─────────────────────────────────────────────
-        # Reaching here with a non-empty, non-"unknown" intent means the model
-        # returned a tool name that isn't registered anywhere (T3Lab UI tool
-        # or MCP tool) — say so plainly instead of the misleading "Đã thực
-        # hiện." ("Done."), since nothing was actually executed.
+        # Fallthrough: a named intent here is unregistered anywhere — say so,
+        # never "Đã thực hiện." (nothing ran).
         if intent == "unknown":
             _bot(params.get("message", u"The request is not clear — could you describe it in more detail?"))
         elif message:
@@ -8494,24 +8182,14 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _launch_tool(self, intent, launcher):
         """Open a ribbon tool from chat. UI THREAD.
 
-        The launcher is marshalled into a real Revit API context instead of
-        being called here. `_execute_result` runs on the WPF dispatcher, i.e.
-        Revit's main thread while Revit is IDLE — and idle is not a "standard
-        API execution": a tool that creates an ExternalEvent (BCF Reader,
-        ManaLoca, BatchOut) or opens a Transaction threw as soon as its window
-        was built, after the assistant had already said it was opening.
-
-        The hop is ASYNCHRONOUS by necessity — Revit fires external events
-        from this very thread's message loop, so waiting for the result here
-        would deadlock. Busy is therefore released immediately (the tool has
-        been handed over) and only a FAILURE gets reported afterwards.
+        The launcher runs in a real Revit API context: the dispatcher thread
+        while Revit is IDLE is not one, so tools creating an ExternalEvent
+        (BCF Reader, ManaLoca, BatchOut) or a Transaction threw. The hop is
+        ASYNC (waiting would deadlock this thread's message loop), so busy is
+        released at once and the outcome reported later.
         """
         def _report(ok, err):
-            # SUCCESS used to return silently. The turn then ended on the
-            # "Opening X..." line — a progress message that never resolved, so
-            # the user sat watching an ellipsis with no way to tell whether
-            # the window had opened, was still coming, or had died. Report
-            # both outcomes: an unresolved in-progress line reads as a hang.
+            # Report success too: an unresolved "Opening X..." reads as a hang.
             if ok:
                 self._ui_invoke(
                     lambda: self._append_bot_message(
@@ -8536,24 +8214,15 @@ class T3LabAssistantWindow(T3WPFWindow):
         return u"Opened **{}** — the tool window is now in Revit.".format(title)
 
     def _launch_failure_text(self, intent, err):
-        """Honest failure message for a launcher that did not open its tool.
-
-        Replaces the old "Could not open the tool. Check the console." — the
-        console is not where a Revit user looks, and the message named neither
-        the tool nor the reason.
-        """
+        """Failure message naming the tool and the reason (not "check the console")."""
         title = get_tool_title(intent)
         if err:
             return u"Could not open **{}**: {}".format(title, err)
         return u"Could not open **{}** — the tool reported no reason.".format(title)
 
     def _unknown_tool_text(self, intent, raw):
-        """Message for an intent that resolves to no installed tool.
-
-        Lists real alternatives from the live catalog so the user is not left
-        guessing. The old code advertised intents whose pushbuttons had been
-        deleted, so this path used to be reached constantly.
-        """
+        """Message for an intent with no installed tool, listing real
+        alternatives from the live catalog."""
         lines = [u"There is no tool called `{}` in this extension.".format(intent)]
         names = []
         try:
@@ -8574,11 +8243,9 @@ class T3LabAssistantWindow(T3WPFWindow):
         return u"\n\n".join(lines)
 
     def _run_spellcheck(self, raw):
-        """Collect every TextNote, proofread them in batches via the LLM,
-        then post one consolidated report (element IDs included).
+        """Proofread all model text, post one report with element IDs.
 
-        Runs on a background thread; scope switches to the active view when
-        the request mentions it ("trong view này", "active view", ...).
+        Background thread; active-view scope when the request says so.
         """
         viet = _is_viet_text(raw)
         low = (raw or u"").lower()
@@ -8592,25 +8259,16 @@ class T3LabAssistantWindow(T3WPFWindow):
             ui_findings, ui_total, ui_uniq, ui_failed = [], 0, 0, 0
             try:
                 from Services import spell_checker as SC
-                # Collect on the Revit MAIN thread via the MCP server's
-                # ExternalEvent. The old direct SC.collect_text_notes(self.doc)
-                # call ran the collector on THIS worker thread — Revit rejected
-                # it, the exception was swallowed and "No Text Notes found"
-                # came back on models full of notes. Whole-project scope now
-                # also proofreads sheet/view/room/level names + project info,
-                # not just TextNotes.
+                # Collect on the Revit MAIN thread via the MCP ExternalEvent —
+                # from this worker Revit rejects it ("No Text Notes found" on
+                # full models). collect_spellcheck_text gathers all
+                # human-authored text (notes, names, title blocks, Project
+                # Information, revisions, dimension overrides, schedules...).
                 notes = None
                 res = None
                 try:
                     from core.server import get_t3labai_server
                     srv = get_t3labai_server()
-                    # ONE main-thread collector for the whole model. Replaces the
-                    # old piecemeal calls (TextNotes + sheets/views/rooms/levels
-                    # + 4 project-info fields): it also gathers title-block
-                    # labels, the FULL Project Information, revision
-                    # descriptions, view "Title on Sheet", dimension text
-                    # overrides, model text and schedule names, so every place
-                    # that holds human-authored text gets proofread.
                     res = srv._execute_tool('collect_spellcheck_text',
                                             {'view_only': view_only})
                     if not isinstance(res, dict):
@@ -8630,19 +8288,13 @@ class T3LabAssistantWindow(T3WPFWindow):
                     logger.debug(u"spellcheck server collect error: {}".format(_exc_text(_col_ex)))
                     notes = None
                 if notes is None and isinstance(res, dict) and res.get('error'):
-                    # The scan TOOL failed (e.g. document-context error) —
-                    # surface that instead of the misleading "No Text Notes
-                    # found": every model has at least view/level names, so
-                    # an empty scan almost always means the scan itself
-                    # broke, and hiding the error sent debugging the wrong
-                    # way (looked like an empty model).
+                    # The scan itself broke — say so, not "No Text Notes found".
                     report = (u"Không quét được model — MCP server báo lỗi: {}"
                               if viet else
                               u"Could not scan the model — MCP server error: {}"
                               ).format(res.get('error'))
                 elif notes is None:
-                    # Last resort — only works when Revit tolerates an
-                    # off-thread read (idle).
+                    # Last resort: off-thread read (works only while idle).
                     notes = SC.collect_text_notes(self.doc, view_only=view_only)
                 if report is not None:
                     pass          # scan error already reported above
@@ -8655,13 +8307,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                             u" in the active view" if view_only else u" in the project")
                 else:
                     uniq = SC.dedupe_notes(notes)
-                    # PRIMARY detector — deterministic dictionary + edit-distance
-                    # engine (no AI provider needed). This replaces "hand every
-                    # batch to the connected LLM and trust the answer": small
-                    # local models (llama3.1:8b, qwen...) routinely replied
-                    # NO_ERRORS on obvious typos, so the scan looked clean while
-                    # Claude-via-MCP flagged them all. The dictionary engine
-                    # catches them offline and instantly.
+                    # PRIMARY: deterministic dictionary + edit distance, no AI
+                    # (small local models replied NO_ERRORS on obvious typos).
                     det = SC.check_deterministic(uniq)
                     if det is not None:
                         if len(uniq) > 300:
@@ -8686,9 +8333,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                             u"connected — reinstall the extension or connect a "
                             u"provider in Settings.").format(len(notes))
                     else:
-                        # Fallback (dictionary asset missing) — legacy LLM batch
-                        # path. Cloud providers take much larger batches than the
-                        # small-local-model default (25 notes / 3.5k chars).
+                        # Dictionary missing → LLM batches; cloud takes larger
+                        # ones than the local default (25 notes / 3.5k chars).
                         try:
                             _cloud = get_active_provider_name() in (
                                 "claude", "openai")
@@ -8733,11 +8379,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                 report = (u"Spell-check failed — see the console for details."
                           if viet else u"Spell-check failed — see console for details.")
             if report:
-                # Findings render as an interactive card (proposed fix +
-                # clickable element-id links that select & zoom in Revit);
-                # the plain-text report still goes to history so follow-up
-                # "fix ..." turns have the full list, and stays the visible
-                # fallback if the card fails to build.
+                # Findings → interactive card (fix + select/zoom id links);
+                # the text report goes to history for follow-up "fix ..."
+                # turns and is the fallback if the card fails.
                 def _show(_r=report, _f=ui_findings, _t=ui_total,
                           _u=ui_uniq, _fb=ui_failed):
                     shown = False
@@ -8762,15 +8406,11 @@ class T3LabAssistantWindow(T3WPFWindow):
         t.Start()
 
 
-    # ─── Native agentic loop (function calling) ────────────────────────────────
+    # ─── Native agentic loop (function calling) ───
 
     def _ranked_skill_ids(self, text, primary, limit=2):
-        """Up to `limit` skill ids for this message, best-ranked first.
-
-        `primary` is the dispatcher's own choice and always leads — the LLM
-        classification stage may have picked a skill the keyword triggers
-        never matched, and that verdict must not be discarded.
-        """
+        """Up to `limit` skill ids, best first; `primary` (the dispatcher's
+        pick, maybe LLM-chosen with no keyword match) always leads."""
         ids = [primary] if primary else []
         try:
             from Intelligence.skills_engine import get_skills_engine
@@ -8784,23 +8424,17 @@ class T3LabAssistantWindow(T3WPFWindow):
         return ids[:limit]
 
     def _build_knowledge_reference(self, query, local=False, history=None):
-        """Retrieve a compact project-knowledge block to ground the tool agent.
+        """Compact project-knowledge block for the tool agent, or ''.
 
-        BM25-only (no embedder) so it stays fast and deterministic on every
-        request — the lexical channel is exactly what carries local models.
-        Returns a prompt fragment or '' (nothing relevant / no index).
-        Budget is tighter for local models to protect their context window.
-
-        `history` lets the retriever resolve a follow-up question against what
-        was just discussed ("còn tầng 2 thì sao?" carries none of the nouns it
-        needs on its own).
+        BM25-only (fast, deterministic); smaller budget for local models.
+        `history` resolves follow-ups ("còn tầng 2 thì sao?").
         """
         if not HAS_KNOWLEDGE:
             return u''
         try:
             from Intelligence.knowledge.knowledge_agent import (
                 KnowledgeAgent, build_reference_block)
-            agent = KnowledgeAgent(embedder=None)   # BM25-only: fast + always-on
+            agent = KnowledgeAgent(embedder=None)
             top_k = 2 if local else 3
             hits = agent.retrieve(query, top_k=top_k, history=history)
             if not hits:
@@ -8811,7 +8445,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"knowledge reference build error: {}".format(_exc_text(ex)))
             return u''
 
-    # ─── Graph path (multi-goal turns) ────────────────────────────────────────
+    # ─── Graph path (multi-goal turns) ───
 
     def _graph_enabled(self):
         """Kill switch + prerequisites for the graph agent layer."""
@@ -8828,31 +8462,24 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _build_orchestrator(self, provider, history, viet, progress=None):
         """A GraphOrchestrator whose runner is one `_run_native_agent` turn.
 
-        max_parallel is pinned to 1: the runner streams into the chat
-        transcript, and two agent turns writing into one transcript interleave
-        into nonsense. The executor's parallel path is real and tested, but it
-        belongs to headless callers — see Intelligence/graph/executor.py.
-
-        progress: optional {"card": handle} for the task-progress card of an
-        APPROVED plan. The orchestrator is built before the plan exists, so
-        the caller fills "card" in after Run; until then (and for plans that
-        need no approval) the runner's step marks are no-ops.
+        max_parallel = 1: turns stream into one transcript (parallel is for
+        headless callers, Intelligence/graph/executor.py).
+        progress: optional {"card": handle}; the caller fills "card" after Run
+        of an APPROVED plan — until then step marks are no-ops.
         """
         base_history = list(history)
 
         def _runner(node, context, state):
             if self._cancelled():
-                # Tell the graph, not just this node: cancelling the state
-                # stops the sweep between layers instead of failing every
-                # remaining node one at a time.
+                # Cancel the graph state: stops between layers instead of
+                # failing every remaining node.
                 state.cancel()
                 return None
             step = self._plan_step_of(node)
             self._mark_plan_step(progress, step, 'running')
             spec = get_spec(node.specialist) if node.specialist else None
             skill_ids = [node.skill] if node.skill else None
-            # `context` carries what earlier nodes produced. It rides in front
-            # of this node's own goal exactly like attachment RAG excerpts do.
+            # `context` = earlier nodes' output, passed like RAG excerpts.
             try:
                 self._run_native_agent(
                     provider, list(base_history), node.goal,
@@ -8862,9 +8489,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self._mark_plan_step(progress, step, 'failed')
                 raise
             text = getattr(self, '_last_agent_text', u'') or None
-            # Provisional: the verifier and the fallback route can still
-            # change a step's outcome — _finalize_plan_progress settles it
-            # from the graph state once the whole plan is over.
+            # Provisional — _finalize_plan_progress settles it from the graph
+            # state (verifier / fallback route may change it).
             self._mark_plan_step(progress, step, 'done' if text else 'failed')
             return text
 
@@ -8890,15 +8516,13 @@ class T3LabAssistantWindow(T3WPFWindow):
             _runner, dispatcher=AgentDispatcher(), skills_engine=skills_engine,
             provider=provider, max_parallel=1, on_step=_on_step)
 
-    # ─── Parallel task cards ──────────────────────────────────────────────────
+    # ─── Parallel task cards ───
 
     def _parallel_tasks_enabled(self):
         """Kill switch for concurrent task cards (agents.parallel_tasks).
 
-        Default ON, but hard-gated downstream by eligible_for_parallel: it only
-        ever fires for a genuinely writer-FREE multi-goal plan (>=2 read goals),
-        so two model-writes can never interleave. Cancellable per card. Needs the
-        graph layer it plugs into, so a disabled graph disables this too.
+        Default ON; eligible_for_parallel limits it to writer-FREE plans with
+        >=2 read goals. Off when the graph layer is off.
         """
         if not self._graph_enabled():
             return False
@@ -8909,18 +8533,13 @@ class T3LabAssistantWindow(T3WPFWindow):
             return True
 
     def _run_agent_text(self, provider, base_history, node, cancel_check=None):
-        """Run ONE read goal to completion with NO streaming; return its text.
+        """Run ONE read goal with NO streaming; return its text. Never raises.
 
-        The parallel counterpart of _build_orchestrator's per-node runner: it
-        never touches the shared streaming bubble or self._last_agent_text
-        (which concurrent tasks would clobber), returning the answer as a value
-        instead. Read-only by construction — the parallel path is gated on a
-        writer-free plan AND the catalog handed to the loop is filtered down
-        to read tools — so it needs neither the action-group wrapper nor an
-        approval card (several background tasks cannot share one blocking
-        card), and it withholds the launcher and memory tools (a background
-        task must not open a window or race a fact write).
-        Runs on a task worker thread. Never raises.
+        Parallel counterpart of _build_orchestrator's runner: never touches
+        the streaming bubble or self._last_agent_text (concurrent tasks would
+        clobber them). Read-only (writer-free plan + read-tool catalog), so no
+        action group or approval card; no launcher or memory tools. Task
+        worker thread.
         """
         try:
             from Intelligence.agent_loop import (AgentLoop,
@@ -8937,18 +8556,13 @@ class T3LabAssistantWindow(T3WPFWindow):
                                              and HAS_SPECIALISTS) else None
         _is_local = provider.NAME in ("ollama", "lmstudio")
 
-        # Read tools only — no launcher (terminal, opens a window) and no
-        # memory pseudo-tool. Both would be wrong for a background sub-goal.
         _spec_tools = spec.tools_for(_is_local) if spec is not None else None
         if _spec_tools:
             tools = tool_schema.get_tools_by_names(provider.NAME, _spec_tools, [])
         else:
             tools = tool_schema.get_tools_for_provider(
                 provider.NAME, [], essential_only=_is_local)
-        # A 'general' sub-goal gets the FULL catalog above, write tools
-        # included — and a background task has no approval card to stop at,
-        # in either action mode. The plan was judged read-only, so hold it
-        # to that: a tool it cannot see is a tool it cannot call.
+        # 'general' gets the FULL catalog; with no approval card, hide writers.
         tools = read_only_tools(tools)
         if not tools:
             return None
@@ -8959,9 +8573,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         _proj_instructions, _mem_block = self._project_prompt_blocks(
             memory_tool=False)
         if spec is not None and HAS_SPECIALISTS:
-            # Grounding appended here, not passed as project_instructions:
-            # the specialist builder would put its own "## Project
-            # instructions" header in front of the personal block.
+            # Grounding appended below: the builder would put its own
+            # "## Project instructions" header on the personal block.
             system_prompt = build_specialist_prompt(
                 spec, project_instructions=u"",
                 skills_block=u"", local=_is_local, lang=_lang)
@@ -8973,21 +8586,17 @@ class T3LabAssistantWindow(T3WPFWindow):
             system_prompt += u"\n\n" + _mem_block
 
         def _exec(name, args):
-            # Belt and braces for the filtered catalog: a text-rescued call
-            # can still name any tool, and this task has no approval card.
+            # A text-rescued call can still name any tool.
             if (tool_schema.is_model_modifying(name)
                     or srv.is_destructive(name, args or {})):
                 return {"error": u"`{}` needs the user's approval; this "
                                  u"background step is read-only. Report what "
                                  u"you found and say the action needs a "
                                  u"separate request.".format(name)}
-            # srv._execute_tool marshals anything main-thread-bound onto Revit's
-            # thread via ExternalEvent — that queue is the real serializer, so
-            # several read tasks contend there and nowhere else.
+            # The ExternalEvent queue serializes main-thread work.
             return srv._execute_tool(name, dict(args or {}))
 
-        # Bridge BOTH cancel signals into the loop's cooperative guard: the
-        # window-wide cancel and this individual task's Cancel button.
+        # Window-wide cancel + this task's Cancel button.
         def _guard():
             try:
                 if self._cancelled():
@@ -9008,10 +8617,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _run_parallel_tasks(self, plan, provider, history, viet):
         """Run an all-read multi-goal plan concurrently as task cards.
 
-        Each goal becomes an AgentTask; its full answer is posted to the
-        transcript ATOMICALLY when the task finishes (never streamed), which is
-        what lets several run at once without their text interleaving. WORKER
-        THREAD (marshals every UI touch through _ui_invoke).
+        Each answer is posted ATOMICALLY when its task finishes (never
+        streamed), so texts can't interleave. WORKER THREAD (_ui_invoke).
         """
         from Intelligence.agents.task_manager import get_task_manager, DONE
         nodes = plan.agent_nodes()
@@ -9021,9 +8628,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
         state = {"cards": {}, "tasks": {}, "done": 0}
 
-        # Build the card panel FIRST (all rows 'running') so a task that finishes
-        # fast still finds its card. _ui_invoke is synchronous, so this returns
-        # before any task is submitted.
+        # Panel FIRST so a fast task finds its card (_ui_invoke is synchronous).
         def _panel():
             self._hide_typing_indicator()
             state["cards"] = self._append_task_cards(nodes, state, mgr, viet)
@@ -9060,11 +8665,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             state["tasks"][node.id] = t
 
     def _append_task_cards(self, nodes, state, mgr, viet):
-        """Build the running/done/failed task-card panel. UI thread only.
-
-        Returns {node_id: handle} for _update_task_card. Each card carries a
-        Cancel button wired to mgr.cancel(task.id).
-        """
+        """Task-card panel; returns {node_id: handle}. UI thread only."""
         cards = {}
         try:
             from System.Windows.Controls import (Border, TextBlock, StackPanel,
@@ -9153,7 +8754,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             else:  # FAILED or anything non-terminal-looking
                 status.Text = u""   # MDL2 Cancel
                 _bind_fg(status, 'Danger')
-            # A finished task can no longer be cancelled.
             try:
                 handle["cancel"].IsEnabled = False
                 handle["cancel"].Visibility = Visibility.Collapsed
@@ -9165,17 +8765,11 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _run_graph_plan(self, raw, history, utterance=None):
         """Plan and run a MULTI-GOAL turn as a graph. WORKER THREAD.
 
-        Returns True when the request was handled here. False means the
-        message was not multi-goal (or the layer is off / unavailable) and the
-        caller must fall through to its normal single-specialist path —
-        nothing has been shown to the user in that case.
-
-        Plan → approve → run: a plan with at least one step that changes the
-        model is shown on a plan card FIRST and nothing runs until Run is
-        clicked (Edit puts the steps in the composer, Cancel drops it, Stop or
-        a new message end the wait). An approved plan runs with a task
-        progress card whose steps tick pending → running → done/failed. A
-        read-only plan has nothing to lose and runs immediately, as before.
+        True = handled. False = not multi-goal / layer off; nothing was shown
+        and the caller falls through to the single-specialist path.
+        A plan with a model-changing step waits on a plan card for Run (Edit →
+        composer, Cancel drops, Stop / new message end the wait), then runs
+        with a progress card. Read-only plans run immediately.
         """
         if not self._graph_enabled():
             return False
@@ -9186,16 +8780,14 @@ class T3LabAssistantWindow(T3WPFWindow):
             return False
         if provider is None or not getattr(provider, 'SUPPORTS_NATIVE_TOOLS',
                                            False):
-            # Every node is an agent turn; without native tools there is no
-            # agent loop to run them in.
+            # Every node is an agent turn — needs native tools.
             return False
 
         viet = _is_viet_text(raw)
         rid = getattr(self, '_request_id', 0)
         progress = {"card": None}
 
-        # Decide BEFORE anything is shown: a plan the layer declines must leave
-        # the turn exactly as it found it, so the caller can fall through.
+        # Decide BEFORE anything is shown, so the caller can fall through.
         try:
             orchestrator = self._build_orchestrator(provider, history, viet,
                                                     progress=progress)
@@ -9209,19 +8801,14 @@ class T3LabAssistantWindow(T3WPFWindow):
 
         approved = False
         if self._plan_needs_approval(plan):
-            # ── Plan → approve → run ───────────────────────────────────────
             decision = self._await_plan_approval(plan, viet)
             if decision != _PLAN_RUN:
                 self._end_unapproved_plan(plan, decision, rid)
                 return True
             approved = True
         else:
-            # Parallel task cards: an all-READ multi-goal plan can run its
-            # goals at once as cancellable cards instead of one-at-a-time.
-            # Gated hard (opt-in switch + writer-free) — see
-            # task_manager.eligible_for_parallel. Any writer present, or the
-            # switch off, falls straight through to the sequential
-            # orchestrator below, exactly as before.
+            # All-READ plan → concurrent cancellable cards
+            # (task_manager.eligible_for_parallel); else sequential below.
             try:
                 from Intelligence.agents.task_manager import eligible_for_parallel
                 if eligible_for_parallel(plan.is_multi, len(plan.agent_nodes()),
@@ -9233,10 +8820,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                 logger.debug(u"parallel tasks skipped: {}".format(_exc_text(ex)))
 
         if approved:
-            # The user approved THESE edits on the plan card: "Ask before
-            # edits" does not ask again per call while this plan runs
-            # (destructive calls still confirm one by one). Reset in the
-            # finally below, and by the next _set_busy(True) regardless.
+            # Edits approved on the card: "Ask before edits" skips per-call
+            # asks (destructive still confirm). Reset in finally and by the
+            # next _set_busy(True).
             self._plan_preapproved = True
 
             def _show_progress():
@@ -9244,8 +8830,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 progress["card"] = self._append_plan_progress_card(plan, viet)
             self._ui_invoke(_show_progress)
 
-        # Past this point the plan owns the turn: its nodes stream into the
-        # transcript, so falling through afterwards would answer twice.
+        # From here the plan owns the turn (falling through would answer twice).
         try:
             result = orchestrator.handle(
                 raw, utterance=utterance, plan=plan,
@@ -9278,7 +8863,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._ui_invoke(_finish)
         return True
 
-    # ─── Plan approval card ───────────────────────────────────────────────────
+    # ─── Plan approval card ───
 
     @staticmethod
     def _plan_needs_approval(plan):
@@ -9296,13 +8881,9 @@ class T3LabAssistantWindow(T3WPFWindow):
         """WORKER THREAD: show the plan card and block until it is answered.
 
         Returns _PLAN_RUN / _PLAN_EDIT / _PLAN_CANCEL / _PLAN_SUPERSEDED, or
-        PendingDecision.STOPPED (Stop) / EXPIRED (no answer) / 'error' (the
-        card could not be shown — nothing may run unapproved).
-
-        While the card waits the turn stays busy, so the composer keeps its
-        usual busy behaviour: typing works, the send button is Stop, and a
-        message sent now supersedes the plan (_process_input) instead of
-        waiting behind it.
+        PendingDecision.STOPPED / EXPIRED / 'error' (card not shown — nothing
+        may run unapproved). The turn stays busy: send is Stop, and a new
+        message supersedes the plan (_process_input).
         """
         from Intelligence.agent_loop import PendingDecision
         pending = PendingDecision()
@@ -9312,9 +8893,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         def _ui():
             try:
                 self._hide_typing_indicator()
-                # Waiting on the USER, not working: no busy bar while the
-                # card is read (Run brings it back; any other answer ends
-                # the turn, which hides it anyway).
+                # Waiting on the USER: no busy bar (Run brings it back).
                 self._show_loading_bar(False)
                 handle["seal"] = self._append_plan_card(plan, pending, viet)
             except Exception as ex:
@@ -9347,10 +8926,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _end_unapproved_plan(self, plan, decision, rid):
         """Close a turn whose plan was not run. WORKER THREAD.
 
-        The card already says what happened; what is added here is the
-        transcript line (so a follow-up like "skip step 2" has the plan to
-        refer to) and a bubble only where the card alone would leave the user
-        guessing (expired / could not be shown).
+        Adds the history record (so "skip step 2" can refer to the plan) and
+        a bubble only when expired / not shown.
         """
         from Intelligence.agent_loop import PendingDecision
         if decision == PendingDecision.STOPPED:
@@ -9413,11 +8990,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"plan edit error: {}".format(_exc_text(ex)))
 
     def _append_plan_card(self, plan, pending, viet):
-        """The plan card: numbered steps, which ones change the model, and
-        Run / Edit / Cancel. UI THREAD. Returns seal(text).
-
-        Layout is a vertical stack of star-width grids and a WrapPanel of
-        buttons, so it reflows down to the 240 DIP pane instead of clipping.
+        """Plan card: numbered steps, model-changing marks, Run / Edit /
+        Cancel. UI THREAD. Returns seal(text). Star grids + WrapPanel reflow
+        down to the 240 DIP pane.
         """
         from System.Windows.Controls import (Border, TextBlock, StackPanel,
                                               Grid, ColumnDefinition,
@@ -9488,8 +9063,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             tag.FontSize     = 11
             tag.TextWrapping = TextWrapping.Wrap
             if st['modifies']:
-                # Glyph AND words: "changes the model" is never told by
-                # colour alone.
+                # Glyph AND words, never colour alone.
                 self._add_icon_run(tag, _ICON_EDIT, _trgb('Warning'), size=11)
                 tag.Inlines.Add(Run(u"Changes the model · {}".format(
                     st['role'])))
@@ -9563,7 +9137,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._scroll_to_bottom()
         return _seal
 
-    # ─── Task progress card (approved plans) ──────────────────────────────────
+    # ─── Task progress card (approved plans) ───
 
     @staticmethod
     def _plan_step_of(node):
@@ -9582,9 +9156,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._ui_invoke(lambda: self._set_plan_step(handle, step_id, state))
 
     def _append_plan_progress_card(self, plan, viet):
-        """One card listing the approved plan's steps, each with a state
-        glyph AND word that tick pending → running → done/failed, plus Stop.
-        UI THREAD. Returns the handle _set_plan_step updates (or None)."""
+        """Progress card: each step's glyph AND word (pending → running →
+        done/failed), plus Stop. UI THREAD. Returns the handle or None."""
         try:
             from System.Windows.Controls import (Border, TextBlock, StackPanel,
                                                   Grid, ColumnDefinition)
@@ -9717,10 +9290,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _final_step_state(graph_status, current, cancelled):
         """Where a step ends up once the plan is over.
 
-        graph_status: the GraphState status of the step (None when the run
-        crashed and there is no state). current: what the card shows now.
-        The graph is the authority — the verifier can fail a step whose
-        runner returned text, and a fallback route can rescue one that failed.
+        graph_status (None if the run crashed) is the authority over
+        `current` (what the card shows): verifier / fallback can change it.
         """
         if graph_status in ('done', 'failed', 'skipped', 'cancelled'):
             return graph_status
@@ -9757,14 +9328,8 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     @staticmethod
     def _graph_summary(result, viet):
-        """Closing line for a graph turn.
-
-        Every node already streamed its own answer into the transcript, so
-        repeating the reducer's full concatenation here would show the user the
-        same text twice. What is NOT otherwise visible is which steps did not
-        happen — so the summary is a tally, plus the reducer's own report for
-        the steps that failed.
-        """
+        """Closing line for a graph turn: a tally plus the reducer's report
+        for failed steps only (each node already streamed its answer)."""
         plan, state = result.plan, result.state
         if plan is None or state is None:
             return u''
@@ -9788,11 +9353,9 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     @staticmethod
     def _analysis_hint(text, analysis=None):
-        """Per-message language analysis for the volatile context block.
+        """Per-message language hint for the volatile context block.
 
-        Returns u'' when the language layer is unavailable or the sentence is
-        plain enough to need no help, so an ordinary turn costs no extra
-        tokens. Never raises — a hint is an optimisation, not a requirement.
+        u'' when unavailable or not needed (no extra tokens). Never raises.
         """
         if not HAS_LANGUAGE or not (text or u'').strip():
             return u''
@@ -9806,14 +9369,8 @@ class T3LabAssistantWindow(T3WPFWindow):
             return u''
 
     def _note_native_skip(self, reason):
-        """Record WHY the native tool-calling path was skipped.
-
-        These used to be logger.debug only. pyRevit's debug log is off by
-        default, so every skip was invisible: the turn quietly dropped to the
-        legacy JSON-intent path, and when that path then failed to parse a
-        local model's prose the user just saw "Could not read data from the
-        model" with nothing anywhere explaining that the good path never ran.
-        """
+        """Record WHY the native path was skipped, in the activity log too
+        (pyRevit's debug log is off by default)."""
         msg = u"native path skipped: {}".format(reason)
         logger.debug(msg)
         try:
@@ -9826,27 +9383,16 @@ class T3LabAssistantWindow(T3WPFWindow):
                           image_files=None, analysis=None, hold_busy=False):
         """Run the native tool-calling agent loop. WORKER THREAD.
 
-        spec: optional SpecialistSpec — narrows the tool catalog, adds a
-        role block to the system prompt and tightens the loop budget
-        (multi-agent layer). None = today's exact behavior.
-        skill_ids: optional matched skill ids injected into the prompt.
-        rag_context: optional compact retrieval excerpts (attachment RAG)
-        prepended to the user content only.
-        image_files: attached image paths sent as real vision blocks. The
-        caller only passes them when the provider reports SUPPORTS_VISION.
-        analysis: optional pre-built language.Utterance for `captured`, reused
-        for the per-turn analysis hint instead of re-analysing the message.
-        hold_busy: keep the busy state ON after this turn. Set by the graph
-        path, which runs several of these back to back for ONE user message —
-        releasing the composer between steps would let a new request land in
-        the middle of a running plan.
+        spec: SpecialistSpec narrowing tools/prompt/budget (None = default).
+        rag_context: retrieval excerpts prepended to the user content only.
+        image_files: sent as vision blocks (caller checks SUPPORTS_VISION).
+        analysis: pre-built language.Utterance for `captured`, reused.
+        hold_busy: keep busy ON after this turn — the graph path runs several
+        of these for ONE message and must not free the composer mid-plan.
 
-        Returns True when the request was fully handled (UI updated, busy
-        released unless hold_busy). Returns False so the legacy JSON-intent
-        path can run — only when nothing was shown to the user yet.
-
-        The answer text is also left on `self._last_agent_text`, which the
-        graph path reads to pass one node's result to the next.
+        Returns True when fully handled; False (only if nothing was shown
+        yet) lets the legacy JSON-intent path run. The answer is left on
+        `self._last_agent_text` for the graph path's next node.
         """
         self._last_agent_text = u""
         if provider is None or not getattr(provider, "SUPPORTS_NATIVE_TOOLS", False):
@@ -9867,19 +9413,24 @@ class T3LabAssistantWindow(T3WPFWindow):
             return False
 
         launcher = tool_schema.make_launcher_tool(list(TOOL_LAUNCHERS.keys()))
-        # Local providers get a curated subset: the full ~110 schemas
-        # overflow local context windows and small models pick tools far
-        # less accurately from a huge catalog (cloud providers are fine).
+        # Local providers get a curated subset: ~110 schemas overflow local
+        # context and small models pick worse from a huge catalog.
         _is_local = provider.NAME in ("ollama", "lmstudio")
         _spec_tools = spec.tools_for(_is_local) if spec is not None else None
         _use_launcher = spec.use_launcher if spec is not None else True
         _extras = [launcher] if _use_launcher else []
-        # Persistent-memory tool: always available so the model can save a
-        # durable preference the moment the user states one. Executed
-        # locally in _exec_tool — never reaches the Revit server.
+        # Local tools (handled in _exec_tool, never reach the Revit server):
+        # memory, past chats (read-only), Tool Hub search for tools the model
+        # cannot see, and published recipes (sha256-verified) as recipe_<slug>.
         _extras.append(tool_schema.make_memory_tool())
-        # Matched skills may declare extra tools their playbook needs —
-        # union them into a restricted subset (validated by the registry).
+        _extras.append(tool_schema.make_past_chats_tool())
+        _extras.append(tool_schema.make_find_tools_tool())
+        try:
+            from Intelligence.toolhub import catalog as _hub_catalog, recipes as _hub_recipes
+            _extras.extend(_hub_recipes.recipe_tools(_hub_catalog.load()['rows'].values()))
+        except Exception:
+            pass
+        # Matched skills may declare extra tools — union into the subset.
         if _spec_tools and skill_ids:
             try:
                 from Intelligence.skills_engine import get_skills_engine
@@ -9890,12 +9441,23 @@ class T3LabAssistantWindow(T3WPFWindow):
                     _spec_tools = frozenset(_spec_tools) | _sk_tools
             except Exception:
                 pass
+        # Claude: defer_loading + server-side tool search (only CLOUD_ESSENTIAL
+        # + extras in the prompt); the provider strips it if the API rejects it.
+        _defer = False
+        if provider.NAME == "claude" and not _is_local:
+            try:
+                from config.settings import get_settings as _gs
+                _defer = bool(_gs().is_tool_search_enabled())
+            except Exception:
+                _defer = True
         if _spec_tools:
             tools = tool_schema.get_tools_by_names(
-                provider.NAME, _spec_tools, _extras)
+                provider.NAME, _spec_tools, _extras, defer=_defer)
         else:
             tools = tool_schema.get_tools_for_provider(
-                provider.NAME, _extras, essential_only=_is_local)
+                provider.NAME, _extras, essential_only=_is_local, defer=_defer)
+        _deferred_on = any(isinstance(t, dict) and t.get("defer_loading")
+                           for t in tools)
         if len(tools) <= len(_extras):   # registry unavailable
             self._note_native_skip(
                 u"tool registry empty for provider {} (got {} tools, {} of them "
@@ -9908,9 +9470,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                 ctx = ContextScout.get_context_summary_for_ai()
             except Exception:
                 pass
-        # Prepend the cached open-model digest (element counts / health) so the
-        # agent starts grounded in the real model — a local model then spends
-        # its round-trips on the task, not on re-discovering the project.
+        # Cached open-model digest: the agent starts grounded instead of
+        # spending round-trips re-discovering the project.
         _snap = self._model_snapshot_grounding()
         if _snap:
             ctx = u"{}\n\n{}".format(ctx, _snap) if ctx else _snap
@@ -9924,46 +9485,37 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception:
             pass
 
-        # The model must answer in the same language the window renders in,
-        # otherwise a Vietnamese turn gets Vietnamese tool cards wrapped
-        # around an English answer.
+        # Answer in the window's language (else Vietnamese cards wrap an
+        # English answer).
         _lang = _reply_language()
         if _lang == 'auto':
             _lang = 'vi' if _is_viet_text(captured) else 'en'
 
         # ── STATIC system prompt ──────────────────────────────────────────────
-        # Everything below is stable for the session, which is the whole point:
-        # it sits behind ONE prompt-cache breakpoint. Anything that changes per
-        # turn (live Revit state, per-question knowledge excerpts) goes into
-        # _volatile below and rides along with the user turn instead — putting
-        # it here made the system block never repeat, so the cache never hit.
+        # Session-stable, behind ONE prompt-cache breakpoint. Per-turn state
+        # goes in _volatile with the user turn, or the cache never hits.
         if spec is not None and HAS_SPECIALISTS:
-            # Personal + project instructions and the skill block are
-            # appended below in the same order build_specialist_prompt uses
-            # (instructions, then skills), so a turn without personal
-            # instructions produces the exact prompt it always did — but the
-            # specialist builder would otherwise put its own "## Project
-            # instructions" header in front of the personal block.
+            # Instructions + skills appended below in build_specialist_prompt's
+            # order, without its own "## Project instructions" header.
             system_prompt = build_specialist_prompt(
                 spec, project_instructions=u"",
                 skills_block=u"", local=_is_local, lang=_lang)
         else:
             system_prompt = build_agent_system_prompt(local=_is_local,
                                                       lang=_lang)
+        if _deferred_on:
+            # A constant — the system block stays cacheable.
+            system_prompt += u"\n\n" + tool_schema.TOOL_CATEGORIES_LINE
         if _proj_instructions:
             system_prompt += u"\n\n" + _proj_instructions
         if _skills_block:
             system_prompt += u"\n\n" + _skills_block
 
-        # Persistent memory — facts saved in previous chats steer BOTH the
-        # specialist and the default prompt path.
         if _mem_block:
             system_prompt += u"\n\n" + _mem_block
 
-        # Rolling summary of turns that scrolled out of the window. Static
-        # enough to belong here: it only changes when turns fall out (every
-        # few turns), so the prompt cache still hits in between — unlike live
-        # Revit state, which changes every turn and rides the user message.
+        # Rolling summary of scrolled-out turns: changes only every few turns,
+        # so the cache still hits in between.
         try:
             from Intelligence.conversation import summary_block
             _sum_block = summary_block(
@@ -9974,12 +9526,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
 
         # ── VOLATILE context (travels with the user turn) ─────────────────────
-        # Project-knowledge grounding: a compact reference block so the tool
-        # agent's ANSWERS and ACTIONS follow documented standards, not just the
-        # knowledge specialist. Retrieved from the user's request (BM25); a
-        # stray hit on an unrelated command is harmless (the header tells the
-        # model to ignore irrelevant excerpts). knowledge/comment specialists
-        # have their own retrieval pipeline and never reach this path.
+        # Project-knowledge reference (BM25 on the request) so tool answers
+        # follow documented standards; the header tells the model to ignore
+        # stray hits. knowledge/comment specialists retrieve on their own.
         _kref = u""
         try:
             _spec_name = spec.name if spec is not None else 'general'
@@ -9989,13 +9538,9 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception:
             _kref = u""
 
-        # Harness action mode: 'confirm' = "Ask before edits" (chip next to
-        # the project picker). ENFORCED in code — every model-modifying call
-        # goes through _run_gated_tool's approval card — so the model is told
-        # NOT to ask in text as well. The old wording ("reply with a plan, then
-        # STOP and wait") made every edit a double confirmation once the card
-        # existed: a typed "yes", then a click. Fixed per mode, so the system
-        # block still caches.
+        # 'confirm' = "Ask before edits": enforced by _run_gated_tool's card, so
+        # the model must NOT also ask in text (that made a double confirmation).
+        # Fixed per mode, so the system block still caches.
         if self._action_mode() == 'confirm':
             system_prompt += (
                 u"\n\n## ACTION MODE: ASK BEFORE EDITS\n"
@@ -10010,15 +9555,19 @@ class T3LabAssistantWindow(T3WPFWindow):
         viet = _is_viet_text(captured)
 
         # ── C2: vision ────────────────────────────────────────────────────────
-        # Two sources of images, and they compose: files the user attached
-        # (paperclip / paste / drag-drop) and, for "look at this view", a
-        # snapshot of the active view. Both ship as Claude-format image
-        # blocks — claude_provider sends them natively, openai_provider
-        # converts them to image_url; providers without SUPPORTS_VISION never
-        # get here (the caller keeps them on the text path).
+        # Attached images + (for "look at this view") an active-view snapshot,
+        # as Claude-format image blocks (openai_provider converts to image_url).
         user_content = captured
         if rag_context:
             user_content = rag_context + u"\n\n" + captured
+        # Auto model switch: Haiku's pre-read of this turn, for Sonnet / Opus.
+        try:
+            from Intelligence.model_tier import brief_note
+            _brief = brief_note(getattr(self, '_turn_triage', None))
+            if _brief:
+                user_content = _brief + u"\n\n" + user_content
+        except Exception:
+            pass
         _vision_files = list(image_files or [])
         shot = None
         if self._wants_view_snapshot(captured, provider):
@@ -10031,23 +9580,19 @@ class T3LabAssistantWindow(T3WPFWindow):
         if _vision_files:
             try:
                 from Intelligence.rag_processor import build_vision_content_blocks
-                # Text goes in last (the builder's own contract), so the
-                # RAG/attachment context stays attached to the question.
                 user_content = build_vision_content_blocks(
                     user_content, _vision_files)
             except Exception as _vx:
                 logger.debug(u"vision block build error: {}".format(_exc_text(_vx)))
         if shot:
-            # The PNG is now base64 inside user_content: the file itself is
-            # done with, and %TEMP%\T3Lab_ViewShots used to keep every one.
+            # Now base64 in user_content; %TEMP%\T3Lab_ViewShots kept them all.
             try:
                 os.remove(shot)
             except Exception:
                 pass
 
-        # Live state rides with THIS turn instead of the cached system block.
-        # It never reaches _conversation_history (which stores the raw user
-        # text), so it stays ephemeral and the transcript does not grow.
+        # Live state rides with THIS turn only; _conversation_history keeps
+        # the raw user text, so the transcript does not grow.
         try:
             from Intelligence.agent_loop import (build_context_block,
                                                  apply_context_block)
@@ -10060,45 +9605,85 @@ class T3LabAssistantWindow(T3WPFWindow):
             logger.debug(u"context block build error: {}".format(_exc_text(_ctx_ex)))
 
         # ── B5: tool-execution wrapper ────────────────────────────────────────
-        # Every call goes through _run_gated_tool with ONE ToolGate per
-        # request — the same seam the legacy JSON-intent loop uses: destructive
-        # tools block on an in-chat Confirm/Cancel card, "Ask before edits"
-        # holds every model-modifying call on one too, and the first
-        # purge_unused of a request is always forced to dry_run.
+        # Every call goes through _run_gated_tool with ONE ToolGate per request
+        # (same seam as the legacy loop): destructive tools and, in "Ask before
+        # edits", every model-modifying call wait on a card; the first
+        # purge_unused is forced to dry_run.
         #
-        # B4 (one request = one TransactionGroup = one Undo entry) USED to live
-        # here and is gone. A TransactionGroup cannot outlive the
-        # ExternalEvent.Execute that opened it — Revit force-discards every
-        # phase an event handler leaves open, logging "An API event handler
-        # left some transaction phases open for the active document" once per
-        # write. The group therefore never grouped anything, while the stale
-        # handle it left behind was Assimilate()d later and took the whole
-        # process down on the next request. See the withdrawal note on
-        # __begin_action_group in lib/core/server.py before reinstating any of
-        # this: each tool now commits its own transaction, so a multi-step
-        # request is N undo entries.
+        # B4 (one request = one TransactionGroup) is withdrawn: a group cannot
+        # outlive the ExternalEvent.Execute that opened it (Revit discards it,
+        # journal: "An API event handler left some transaction phases open"),
+        # and its stale handle, Assimilate()d later, crashed Revit. Read the note on
+        # __begin_action_group in lib/core/server.py before reinstating it;
+        # a multi-step request is now N undo entries.
         gate = self._new_tool_gate(srv)
-        # Belt and braces: an AppDomain-anchored server from before a pyRevit
-        # reload may still be carrying a group handle from the old code.
+        # A server anchored before a pyRevit reload may still hold a group.
         try:
             srv._release_stale_action_group()
         except Exception:
             pass
 
         # ── D1: cancel the loop when the USER switches documents mid-request ──
-        # Agent-initiated document changes (switch_active_document /
-        # open_document / close_document called by the model for a multi-doc
-        # workflow) DISARM the guard for the rest of the request instead of
-        # tripping it — the agent is deliberately working across models.
-        #
-        # Declared HERE, above _exec_tool, because _exec_tool closes over it.
-        # It used to be assigned ~50 lines further down and only worked
-        # because nothing called _exec_tool in between; any reordering would
-        # have turned that into a NameError at the first tool call.
+        # Agent-initiated switch/open/close_document DISARMS the guard instead
+        # (deliberate multi-doc work). Must stay above _exec_tool, which
+        # closes over it (else NameError at the first tool call).
         doc_guard = {"key": _get_doc_key(), "armed": True}
+
+        _loop_box = {}
+
+        def _find_tools(args):
+            """find_tools, local: Tool Hub search -> tool_reference blocks
+            (Claude, deferred) or matches + add_tools (other providers)."""
+            try:
+                from Intelligence.toolhub import find as _hub_find
+                from Intelligence.toolhub.client import ToolHubClient
+                _lp = _loop_box.get('loop')
+                _cur = (_lp._tools if _lp is not None else tools) or []
+                _names = [t.get('name') or (t.get('function') or {}).get('name')
+                          for t in _cur if isinstance(t, dict)]
+                _reg = [{'slug': t['name'], 'description': t.get('description', '')}
+                        for t in tool_schema.get_server_tools()]
+                _client = ToolHubClient()
+                if not _client.signed_in():
+                    _client = None
+                res, add = _hub_find.run(args.get('query'), args.get('limit'),
+                                         _names, _reg, deferred=_deferred_on,
+                                         client=_client)
+                if add and _lp is not None:
+                    _lp.add_tools(tool_schema.tools_named(provider.NAME, add))
+                return res
+            except Exception as ex:
+                return {"error": u"find_tools failed: {}".format(_exc_text(ex))}
 
         def _exec_tool(name, args):
             args = dict(args or {})
+            if name == tool_schema.FIND_TOOLS_NAME:
+                return _find_tools(args)
+            if name.startswith('recipe_'):
+                # Steps re-enter _exec_tool: ToolGate + audit see each call.
+                try:
+                    from Intelligence.toolhub import catalog as _hc, recipes as _hr
+                    _row = _hc.load()['rows'].get(name[len('recipe_'):])
+                    if not _row:
+                        return {"error": u"Recipe {} is not in the local catalog; "
+                                         u"run /toolhub sync.".format(name)}
+                    return _hr.run(_row, args, _exec_tool)
+                except Exception as ex:
+                    return {"error": u"Recipe failed: {}".format(_exc_text(ex))}
+            if name == tool_schema.PAST_CHATS_TOOL_NAME:
+                # Local and read-only: the archived chats of this scope.
+                try:
+                    from Intelligence import session_context as _sc
+                    _pid = self._active_pid()
+                    return _sc.search_past_chats(
+                        pid=_pid, query=args.get('query'),
+                        session_id=args.get('session_id'),
+                        limit=args.get('limit') or 5,
+                        doc_key=None if _pid else self._doc_key,
+                        exclude_id=getattr(self, '_session_id', None))
+                except Exception as _pc_ex:
+                    return {"error": u"search_past_chats failed: {}".format(
+                        _exc_text(_pc_ex))}
             if name == tool_schema.MEMORY_TOOL_NAME:
                 # Local pseudo-tool — persists a fact, never touches Revit.
                 try:
@@ -10113,19 +9698,24 @@ class T3LabAssistantWindow(T3WPFWindow):
                     _fact = args.get('fact')
                     _scope = args.get('scope') or 'project'
                     _replaces = args.get('replaces')
+                    if _scope == 'session':
+                        return self._session_note_tool(_action, _fact, _replaces)
                     if _action == 'forget':
-                        # `replaces` names the fact to drop; fall back to `fact`
-                        # if the model put the gist there instead.
+                        # Fall back to `fact` if the model put the gist there.
                         _ok, _removed = assistant_memory.forget_fact(
                             _replaces or _fact, project_id=_pid)
                         if _ok:
                             return {"success": True,
                                     "note": u"Forgot: {}".format(_removed)}
+                        if getattr(self, '_session_notes', None):
+                            # Not a long-term fact — maybe a note of this chat.
+                            _res = self._session_note_tool(
+                                'forget', _fact, _replaces)
+                            if _res.get("success"):
+                                return _res
                         return {"error": u"No matching fact to forget."}
                     if _action == 'update':
-                        # Supersede the prior fact named by `replaces` with the
-                        # new `fact`; update_fact falls back to a save if the old
-                        # one isn't found, so the correction still lands.
+                        # update_fact saves anew if the old fact isn't found.
                         _ok, _note = assistant_memory.update_fact(
                             _replaces or _fact, _fact,
                             scope=_scope, project_id=_pid)
@@ -10139,16 +9729,11 @@ class T3LabAssistantWindow(T3WPFWindow):
                     return {"error": _note}
                 except Exception as _mem_ex:
                     return {"error": u"{}".format(_mem_ex)}
-            # What counts as destructive is declared with the tools themselves
-            # (server._DESTRUCTIVE_TOOLS / _DESTRUCTIVE_OPS) so a new tool can
-            # opt in at the point of definition instead of needing an edit
-            # here; the gate reads it through srv.is_destructive.
+            # Destructiveness is declared with the tools (server._DESTRUCTIVE_TOOLS
+            # / _DESTRUCTIVE_OPS), read via srv.is_destructive.
             res = self._run_gated_tool(srv, gate, name, args, viet)
-            # Multi-doc workflow: the model changed the active document ON
-            # PURPOSE — the doc-changed guard must not abort the request.
-            # Activation can complete asynchronously, so retargeting the key
-            # here could race; disarming for the rest of the request is the
-            # safe, predictable behavior.
+            # Deliberate doc change: disarm (activation is async, so retargeting
+            # the key could race).
             if name in ('switch_active_document', 'open_document',
                         'close_document'):
                 try:
@@ -10161,20 +9746,11 @@ class T3LabAssistantWindow(T3WPFWindow):
         def _exec_reads_batch(batch):
             """Run a run of read-only calls in ONE crossing to Revit.
 
-            Only reachable for plain reads (agent_loop.leading_read_run stops
-            at the first write, launcher or memory call). One read CAN still
-            need a card: check_bad_geometry with deep_probe is destructive
-            (it can hard-crash Revit). A batch holding any call the gate would
-            stop returns None — AgentLoop then discards the prefetch and runs
-            every call through _exec_tool, card included.
-
-            This used to call srv.execute_tools_batch, which the server has
-            never defined. AgentLoop wraps the call in `except Exception:
-            return {}`, so the AttributeError was swallowed and batching
-            silently never engaged — one dead round-trip per turn, invisible.
-            Executed here instead: still ONE seam for the loop, and correct.
-            `batch` is [(name, args), ...]; the return must be a list of the
-            same length or AgentLoop discards it.
+            Reads only (agent_loop.leading_read_run), but a read can still need
+            a card (check_bad_geometry deep_probe): then return None and
+            AgentLoop runs each call through _exec_tool. (srv.execute_tools_batch
+            never existed; the swallowed AttributeError hid that.)
+            `batch` is [(name, args), ...]; return a list of the same length.
             """
             from Intelligence.agent_loop import GATE_RUN
             if any(gate.verdict(_name, _args) != GATE_RUN
@@ -10190,8 +9766,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 if not doc_guard["armed"]:
                     return False
                 cur = _get_doc_key()
-                # "default" = the read failed (API busy / no context) — that is
-                # UNKNOWN, not "changed"; only trip on a positive mismatch.
+                # "default" = read failed (unknown, not changed).
                 return cur != "default" and cur != doc_guard["key"]
             except Exception:
                 return False
@@ -10201,9 +9776,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         card   = {"cur": None}
 
         # ── Throttled live-stream rendering ───────────────────────────────────
-        # Deltas are batched: at most ~25 UI updates/second, pushed with
-        # BeginInvoke so the worker never blocks on the dispatcher. Only
-        # state-transition callbacks below use the synchronous Invoke.
+        # ≤ ~25 updates/s via BeginInvoke (worker never blocks); only the
+        # state-transition callbacks below use synchronous Invoke.
         def _push_stream(force):
             now = _time.time()
             if not force and (now - stream["last"]) < 0.04:
@@ -10214,8 +9788,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             def _ui():
                 try:
                     if not stream["open"]:
-                        # Nothing visible yet (model still "thinking") —
-                        # keep the typing indicator, don't open a bubble.
+                        # Still "thinking": keep the typing indicator.
                         if not snap:
                             return
                         stream["open"] = True
@@ -10241,8 +9814,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             text = _hide_reasoning(text)
             stream["text"] = u""
             if not text:
-                # Reasoning-only turn (everything was <think>) — never render
-                # an empty bubble; discard any half-open one and move on.
+                # Reasoning-only turn: drop any half-open bubble.
                 def _drop():
                     try:
                         if stream["open"]:
@@ -10250,19 +9822,13 @@ class T3LabAssistantWindow(T3WPFWindow):
                             self._remove_stream_bubble()
                     except Exception:
                         pass
-                try:
-                    self.Dispatcher.Invoke(Action(_drop))
-                except Exception:
-                    pass
+                self._ui_invoke(_drop, wait=False)
                 return
 
             def _ui():
                 try:
-                    # "Show thinking" off hides the INTERIM narration only —
-                    # the final answer always renders. The text still goes to
-                    # history (the model must see its own turn) and still
-                    # drives the typing indicator, so the user keeps a live
-                    # signal instead of staring at a frozen window.
+                    # "Show thinking" off hides INTERIM narration only; it still
+                    # goes to history and the typing indicator.
                     if not is_final and not self._chat_verbosity()[1]:
                         if stream["open"]:
                             stream["open"] = False
@@ -10290,7 +9856,13 @@ class T3LabAssistantWindow(T3WPFWindow):
             except Exception:
                 pass
 
+        # "/save-tool" turns this turn's successful calls into a recipe draft.
+        self._last_turn_calls = []
+        self._last_turn_user_text = captured
+        _pending_args = {}
+
         def on_tool_start(name, args, iteration):
+            _pending_args[name] = dict(args or {})
             def _ui():
                 try:
                     self._hide_typing_indicator()
@@ -10308,20 +9880,19 @@ class T3LabAssistantWindow(T3WPFWindow):
                 pass
 
         def on_tool_done(name, result, ok, seconds):
+            try:
+                self._last_turn_calls.append((name, _pending_args.pop(name, {}), bool(ok)))
+            except Exception:
+                pass
             def _ui():
                 try:
                     self._update_tool_card(card["cur"], ok, seconds, result)
                 except Exception:
                     pass
+            # Pure UI; queue order keeps it after on_tool_start's card.
+            self._ui_invoke(_ui, wait=False)
 
-            try:
-                self.Dispatcher.Invoke(Action(_ui))
-            except Exception:
-                pass
-
-        # Skill chip — show which playbook is steering this turn. A /slash-
-        # forced skill already drew its chip at send time (_process_input),
-        # so drawing it here again would duplicate the row.
+        # Skill chip (a /slash-forced skill drew it in _process_input).
         _dec_chip = getattr(self, '_agent_decision', None)
         if skill_ids and not (_dec_chip and _dec_chip.get('skill_forced')):
             def _show_chips():
@@ -10329,10 +9900,20 @@ class T3LabAssistantWindow(T3WPFWindow):
                     self._append_skill_chips(skill_ids)
                 except Exception:
                     pass
+            self._ui_invoke(_show_chips, wait=False)
+
+        try:
+            from config.settings import get_settings as _gs2
+            _compact_on = bool(_gs2().is_compact_tool_results_enabled())
+        except Exception:
+            _compact_on = True
+
+        def _spill_result(name, result):
             try:
-                self.Dispatcher.Invoke(Action(_show_chips))
+                from Intelligence import result_store
+                return result_store.save_result(name, result)
             except Exception:
-                pass
+                return None
 
         loop = AgentLoop(
             provider, _exec_tool, tools,
@@ -10344,16 +9925,22 @@ class T3LabAssistantWindow(T3WPFWindow):
                 "guard_check":   _guard_check,
             },
             max_iterations=(spec.max_iterations if spec is not None else 10),
-            max_tokens=(spec.max_tokens if spec is not None else 1500),
+            # see specialists.CLOUD_MAX_TOKENS
+            max_tokens=(spec.tokens_for(_is_local) if spec is not None
+                        else (1500 if _is_local else 16000)),
+            # Confirm-card waits are excluded by pause()/resume().
+            time_budget_sec=(240 if _is_local else 600),
+            # Bigger results are shrunk; result_store keeps them in full.
+            result_chars=(4000 if _is_local else 32000),
+            spill_result=_spill_result,
+            # Client-side folding; Claude does context editing in the API.
+            compact_results=(provider.NAME != "claude" and _compact_on),
             turn_timer=getattr(self, '_turn_timer', None),
             execute_tools_batch=_exec_reads_batch,
-            # tool_schema.is_model_modifying, NOT srv.is_write_tool — the
-            # server has never had that method. Attribute access raises before
-            # AgentLoop is even constructed, so EVERY Revit request through the
-            # pane died here and fell through to the legacy JSON path, which a
-            # local model's prose then failed to parse: "Could not read data
-            # from the model." The native path had simply never run.
+            # NOT srv.is_write_tool — it never existed and the AttributeError
+            # silently sent every request to the legacy path.
             is_write_tool=tool_schema.is_model_modifying)
+        _loop_box['loop'] = loop
 
         self._agent_loop = loop
         if self._cancel_requested:
@@ -10362,6 +9949,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             result = loop.run(history, system_prompt, user_content)
         finally:
             self._agent_loop = None
+            self._toolhub_upload_soon()
 
         # Provider never answered turn 1 and nothing reached the UI →
         # hand back to the legacy path (it has its own fallbacks).
@@ -10370,12 +9958,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                 and not result.get("text")
                 and not result.get("tool_runs")
                 and not stream["open"]):
-            # Log WHY. This handover is invisible to the user: the legacy path
-            # answers without native tools, so a data question can come back as
-            # a confident prose stub with no tool call behind it. The provider
-            # recorded a real reason (bad key, no model, HTTP/tool-payload
-            # error) — losing it here is what made that look like the model
-            # simply "chose" not to use tools.
+            # Log WHY: the handover is invisible, and without the provider's
+            # reason it looks like the model "chose" not to use tools.
             try:
                 logger.debug(u"native path: turn 1 failed ({}) -> legacy "
                              u"fallback".format(provider.get_last_error()
@@ -10384,13 +9968,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                 pass
             return False
 
-        # Model "answered" with an EMPTY turn — no text, no tool calls
-        # (local models do this when a playbook/tool catalog confuses
-        # them). Nothing has reached the UI, so ending here left the user
-        # with just a skill chip and total silence (observed 2026-07-22:
-        # "khối lượng bê tông" → schedule-qto chip → nothing). Fall back
-        # to the legacy JSON-intent path instead — it always ends with a
-        # visible reply (answer, keyword fallback, or a real error).
+        # EMPTY model turn (confused local model; 2026-07-22: a skill chip,
+        # then silence) → legacy path, which always replies visibly.
         if (result.get("status") == "done"
                 and not (result.get("text") or u"").strip()
                 and not result.get("tool_runs")
@@ -10408,8 +9987,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                         self._finalize_stream_bubble(txt)
                         self._add_to_history("assistant", txt)
                     else:
-                        # Nothing visible ever landed — drop the shell
-                        # instead of leaving an empty bubble in the chat.
                         self._remove_stream_bubble()
                     self._clear_stream_refs()
                 self._hide_typing_indicator()
@@ -10469,12 +10046,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                             result.get("tool_runs")),
                         icon=_ICON_SUCCESS, icon_color=_ICON_GREEN)
 
-                # Confirm-question flow: when the reply ends by asking the
-                # user to approve an action (action-mode plans, destructive
-                # confirmations, rule-5 clarifications phrased as yes/no),
-                # offer one-click answers instead of making the user type
-                # "ok". The short chip reply then rides the carryover
-                # continuation, so the same specialist/skill resumes.
+                # Reply ends with a yes/no approval question → one-click
+                # answers; the chip reply rides the carryover so the same
+                # specialist/skill resumes.
                 if st == "done":
                     _tail = (result.get("text") or u"")[-220:].lower()
                     if u"?" in _tail and any(k in _tail for k in (
@@ -10488,8 +10062,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
                 li = result.get("launch_intent")
                 if li:
-                    # Terminal launcher: _execute_result opens the window on
-                    # the UI thread and releases the busy state itself.
+                    # _execute_result opens the window and releases busy.
                     self._execute_result({"intent": li, "message": u"",
                                           "params": {}})
                 elif not hold_busy:
@@ -10498,9 +10071,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self._report_error(u"native agent finish", ex)
 
         self.Dispatcher.Invoke(Action(_finish_ui))
-        # What this turn actually said, for a caller chaining several turns
-        # together (the graph path). The streamed text is the fallback: a turn
-        # that streamed its whole answer can finish with result["text"] empty.
+        # For the graph path; a fully streamed turn can leave result["text"] empty.
         self._last_agent_text = ((result.get("text") or u"").strip()
                                  or (stream.get("text") or u"").strip())
         return True
@@ -10508,11 +10079,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     # ─── Tool-call cards ───────────────────────────────────────────────────────
 
     # ── Compact tool-call group ──────────────────────────────────────────────
-    # With "Show tool calls" off, a turn's cards do not vanish — they move
-    # into ONE collapsible row ("✓ 5 tools · 3.2s") that expands on click.
-    # Vanishing was the tempting option and the wrong one: a failing call
-    # would disappear with it, and the next question would be "why did it do
-    # nothing?" — the same blind wait this whole setting exists to remove.
+    # "Show tool calls" off folds a turn's cards into ONE collapsible row
+    # ("✓ 5 tools · 3.2s") rather than hiding them, so failures stay findable.
 
     def _chat_verbosity(self):
         """(show_tool_calls, show_thinking) — never raises."""
@@ -10525,8 +10093,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             return (True, True)
 
     def _reset_tool_group(self):
-        """Drop the current turn's compact group so the next turn starts a
-        fresh one. Called when a new user message is sent."""
+        """Start a fresh compact group (on each new user message)."""
         self._tool_group = None
 
     def _ensure_tool_group(self):
@@ -10716,8 +10283,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             from System.Windows.Media import SolidColorBrush, Color
 
             status = handle["status"]
-            # A call the user declined on its approval card ran nothing: it
-            # is neither a success (green check) nor a failure (red cross).
+            # Declined on its approval card: neither success nor failure.
             declined = isinstance(result, dict) and bool(result.get("cancelled"))
             if declined:
                 status.Text       = _ICON_STOP
@@ -10738,19 +10304,16 @@ class T3LabAssistantWindow(T3WPFWindow):
                 group['running']  = u''
                 if not ok:
                     group['failed'] += 1
-                    # A failure must never stay folded away — the summary row
-                    # is a convenience for the happy path only.
+                    # A failure never stays folded away.
                     group['body'].Visibility = Visibility.Visible
                     group['chevron'].Text    = u""
                 self._refresh_tool_group_label(group)
 
-            # _json_text, not json.dumps: a Revit result carrying Windows
-            # code-page bytes raises in the encoder, and the u"{}".format
-            # fallback used to fail on exactly the same bytes.
+            # _json_text, not json.dumps: Windows code-page bytes in a Revit
+            # result break the encoder (and the u"{}".format fallback).
             res_s = _json_text(result)
             rt = handle["result"]
-            # Friendly one-line summary of common result shapes; full JSON
-            # stays available on hover so nothing is hidden.
+            # One-line summary; full JSON in the tooltip.
             summary = self._summarize_tool_result(result, res_s)
             rt.Text       = summary[:240] + (u"…" if len(summary) > 240 else u"")
             rt.ToolTip    = res_s[:4000]
@@ -10799,13 +10362,8 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     @staticmethod
     def _summarize_tool_result(result, fallback):
-        """Turn a tool-result dict into a short human line for the card body.
-
-        Reads the tool-computed count/summary fields the agent itself relies
-        on (total_count, element_counts, count, message...) so the card reads
-        like a status line instead of a raw JSON dump. Full JSON stays in the
-        tooltip. Falls back to compact JSON for unrecognized shapes.
-        """
+        """Short human line for the card body from the tool's count/summary
+        fields (total_count, element_counts, message...); else `fallback`."""
         if not isinstance(result, dict):
             return fallback
         if result.get("error"):
@@ -10813,7 +10371,6 @@ class T3LabAssistantWindow(T3WPFWindow):
         if result.get("cancelled"):
             return u"Not run — declined on the approval card"
         parts = []
-        # Explicit human message from the tool, if any.
         msg = result.get("message") or result.get("summary")
         if msg:
             parts.append(u"{}".format(msg))
@@ -10830,7 +10387,6 @@ class T3LabAssistantWindow(T3WPFWindow):
         if isinstance(ec, dict) and ec:
             top = sorted(ec.items(), key=lambda kv: kv[1], reverse=True)[:4]
             parts.append(u", ".join(u"{}: {}".format(k, v) for k, v in top))
-        # A bare success flag with nothing else still deserves a word.
         if not parts and result.get("success") is True:
             parts.append(u"Done")
         if not parts:
@@ -10841,10 +10397,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _extract_element_ids(result, _limit=60):
         """Collect Revit element ids out of a tool-result dict (C1).
 
-        Recognizes the common id-bearing shapes across the ~75 MCP tools:
-        {'id': n}, {'element_id': n}, {'element_ids'|'created_ids'|'ids': [...]},
-        and nested lists of {'id': n} dicts (get_current_view_elements, ...).
-        Order-preserving, deduped, capped so a huge element dump stays cheap.
+        Knows {'id'|'element_id': n}, {'element_ids'|'created_ids'|'ids': [...]}
+        and nested lists of such dicts. Ordered, deduped, capped at _limit.
         """
         out  = []
         seen = set()
@@ -10884,9 +10438,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _select_in_revit_async(self, element_ids):
         """Select + zoom elements from an element-link click (C1).
 
-        Spawns a WORKER thread: _execute_tool blocks on the ExternalEvent,
-        and waiting for that on the UI thread would deadlock (the handler
-        itself needs the UI thread to run).
+        WORKER thread: waiting on the ExternalEvent from the UI thread would
+        deadlock (the handler needs the UI thread).
         """
         ids = [i for i in (element_ids or [])]
         if not ids:
@@ -10902,9 +10455,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                                          'limit': len(ids)})
             except Exception:
                 res = None
-            # Tell the user WHY a link didn't move the view. Revit's own
-            # "No good view could be found." dialog is now avoided upstream,
-            # so silence here would otherwise look like a dead link.
+            # Say WHY the view didn't move (Revit's own "No good view" dialog
+            # is suppressed upstream, so silence looks like a dead link).
             try:
                 if not isinstance(res, dict):
                     return
@@ -10929,14 +10481,10 @@ class T3LabAssistantWindow(T3WPFWindow):
         t.Start()
 
     def _append_spellcheck_findings(self, findings, viet, total, uniq):
-        """Interactive spell-check result TABLE — one row per distinct
-        correction (# · Wrong · Correct · Qty · Element IDs · View), matching
-        the way Claude-via-MCP presents a scan. Every element-id is a clickable
-        link that opens the view containing that element and zooms to it
-        (uidoc.ShowElements). UI THREAD.
+        """Spell-check result table, one row per distinct correction; element
+        ids link to their view (uidoc.ShowElements). UI THREAD.
 
-        Returns True when the card rendered; the caller falls back to the
-        plain-text markdown-table report on False so findings are never lost.
+        False = not rendered; the caller falls back to the markdown report.
         """
         try:
             from System.Windows.Controls import (Border, StackPanel, TextBlock,
@@ -10959,10 +10507,8 @@ class T3LabAssistantWindow(T3WPFWindow):
 
             _font = System.Windows.Media.FontFamily("Hanken Grotesk, Inter")
 
-            # Every colour here is a THEME TOKEN, never a hex. This card used
-            # to hardcode the Lumina palette (white card, #0F172A ink), so in
-            # Revit's dark theme it rendered as a white slab of near-black
-            # text inside a dark pane. See docs/assistant-revit-ui.md.
+            # THEME TOKENS only, never hex (hardcoded Lumina broke dark theme).
+            # See docs/assistant-revit-ui.md.
             card = Border()
             _bind_bg(card, 'CardBg')
             _bind_border(card, 'CardBorder')
@@ -10974,8 +10520,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             panel = StackPanel()
 
             instances = sum(len(r["ids"]) for r in rows)
-            # Monochrome MDL2 glyph instead of the 🔍 emoji, so the header
-            # matches the icon language of the tool cards and follows the theme.
+            # MDL2 glyph, not an emoji: matches the tool cards and the theme.
             head_row = StackPanel()
             head_row.Orientation = Orientation.Horizontal
             head_row.Margin      = Thickness(0, 0, 0, 8)
@@ -11035,7 +10580,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 grid.Children.Add(tb)
                 return tb
 
-            # header row
             heads = ([u"#", u"Sai", u"Đúng", u"SL", u"Element IDs", u"View"] if viet
                      else [u"#", u"Wrong", u"Correct", u"Qty", u"Element IDs", u"View"])
             for c, h in enumerate(heads):
@@ -11061,12 +10605,8 @@ class T3LabAssistantWindow(T3WPFWindow):
 
                 _cell(u"{}".format(rr), 0, rr, 'Muted', size=11)
 
-                # Wrong / Correct: plain text, no chip. The wrong word used to
-                # sit in a bordered red pill while the correction was bare bold
-                # text — two visual languages for one before→after pair. The
-                # theme's own note on Danger says it is "error TEXT … never a
-                # fill", so the pill was against the palette as well as
-                # lopsided. Same size, same weight, colour carries the meaning.
+                # Wrong / Correct: same plain text, colour carries the meaning
+                # (Danger is error TEXT, never a fill — no red pill).
                 _cell(r["wrong"], 1, rr, 'Danger', size=12, bold=True)
 
                 right = r["right"]
@@ -11079,7 +10619,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 _cell(u"{}".format(len(r["ids"])), 3, rr, 'Muted', size=11,
                       align_r=True)
 
-                # element-id links (WrapPanel) — click opens the element's view
                 ids = [x for x in r["ids"] if x is not None]
                 wrap = WrapPanel()
                 wrap.Orientation = Orientation.Horizontal
@@ -11160,11 +10699,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             return False
 
     # ─── Tool approval gate (shared by the native and legacy paths) ───────────
-    # WHAT needs approval is decided by Intelligence.agent_loop.ToolGate (pure,
-    # tested); this block only shows the card and blocks on it. Both prompt
-    # paths execute through _run_gated_tool, so the destructive confirm, the
-    # first-purge dry run and "Ask before edits" can no longer differ between
-    # them — the legacy JSON-intent loop used to run every call unchecked.
+    # WHAT needs approval: Intelligence.agent_loop.ToolGate (pure, tested);
+    # this block only shows the card and blocks on it. Both paths go through
+    # _run_gated_tool so their gating cannot differ.
 
     def _new_tool_gate(self, srv):
         """A fresh ToolGate for ONE request (it remembers the first purge)."""
@@ -11177,10 +10714,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _run_gated_tool(self, srv, gate, name, args, viet):
         """Gate, then execute, one tool call. WORKER THREAD.
 
-        Returns the tool's result, or agent_loop.declined_result(name) when
-        the user said no (or Stop / the timeout answered for them) — the model
-        reads that as "skipped, do not retry", never as a failure to work
-        around.
+        Returns the result, or agent_loop.declined_result(name) on no / Stop /
+        timeout (the model reads it as "skipped, do not retry").
         """
         from Intelligence.agent_loop import GATE_RUN, declined_result
         args, verdict = gate.prepare(name, args)
@@ -11194,8 +10729,7 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     @staticmethod
     def _note_model_changed():
-        """The assistant just changed the model: the cached levels/grids
-        digest in the live context may be stale (it may have made a level)."""
+        """Model changed: invalidate the cached levels/grids digest."""
         try:
             _inv = getattr(ContextScout, 'invalidate_datums', None)
             if _inv is not None:
@@ -11206,12 +10740,10 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _confirm_tool_blocking(self, name, args, viet,
                                timeout_sec=_CONFIRM_TIMEOUT,
                                kind='destructive'):
-        """WORKER thread: render a Confirm/Cancel card and block until the
-        user decides. Returns True only on an explicit Confirm click —
-        timeout, Stop, or any error all count as declined.
+        """WORKER thread: show a Confirm/Cancel card and block. True only on
+        an explicit Confirm (timeout / Stop / error = declined).
 
-        kind: 'destructive' (red card, every action mode) or 'edit' (an
-        ordinary model change held by "Ask before edits").
+        kind: 'destructive' (red, every mode) or 'edit' ("Ask before edits").
         """
         from Intelligence.agent_loop import PendingDecision
         pending = PendingDecision()
@@ -11232,17 +10764,22 @@ class T3LabAssistantWindow(T3WPFWindow):
             return False
 
         def _abort():
-            # Stop on EITHER path: the native loop's own flag, and the
-            # window-wide one the legacy loop checks.
+            # Native loop's flag, or the window-wide one (legacy loop).
             loop = getattr(self, '_agent_loop', None)
             if loop is not None and loop.is_cancelled():
                 return True
             return self._cancelled()
 
-        decision = pending.wait(timeout_sec, should_abort=_abort)
+        _loop = getattr(self, '_agent_loop', None)
+        try:
+            if _loop is not None:
+                _loop.pause()          # user time is not budget time
+            decision = pending.wait(timeout_sec, should_abort=_abort)
+        finally:
+            if _loop is not None:
+                _loop.resume()
         if decision is not True and decision is not False:
-            # Timeout / Stop — seal the card so stale buttons can't approve
-            # a request that is already over.
+            # Seal the card so stale buttons can't approve a finished request.
             _msg = (u"Stopped — skipped" if decision == PendingDecision.STOPPED
                     else u"Expired — skipped")
 
@@ -11259,12 +10796,10 @@ class T3LabAssistantWindow(T3WPFWindow):
         return decision is True
 
     def _make_card_button(self, label, primary=False, tooltip=None):
-        """A button for an in-chat card that follows the Revit theme. UI THREAD.
+        """An in-chat card button that follows the Revit theme. UI THREAD.
 
-        T3.Button.Base supplies only the SHAPE (flat template, control radius,
-        30px, hand cursor, focus ring) and no colour of its own; the colours
-        are bound to the theme tokens like every other transcript element, so
-        the button survives a Light/Dark switch while it sits on screen.
+        T3.Button.Base gives only the shape; colours are theme-token bindings,
+        so the button survives a Light/Dark switch on screen.
         """
         from System.Windows.Controls import Button
         from System.Windows import Thickness
@@ -11309,9 +10844,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                              kind='destructive'):
         """Confirm/Cancel card for one held tool call. UI thread only.
 
-        Returns seal(text): disables the card and shows `text`. A click
-        decides `pending` (agent_loop.PendingDecision) — first answer wins, so
-        a click that lands after Stop or the timeout changes nothing.
+        Returns seal(text), which disables the card and shows `text`. A click
+        decides `pending` (agent_loop.PendingDecision); first answer wins.
         """
         from System.Windows.Controls import (Border, TextBlock, StackPanel,
                                               WrapPanel)
@@ -11353,16 +10887,12 @@ class T3LabAssistantWindow(T3WPFWindow):
             card.Background  = SolidColorBrush(Color.FromRgb(254, 242, 242))  # #FEF2F2
             card.BorderBrush = SolidColorBrush(Color.FromRgb(252, 165, 165))  # #FCA5A5
             head.Foreground  = SolidColorBrush(Color.FromRgb(185, 28, 28))    # #B91C1C
-            # Minimal MDL2 warning glyph — needs its own FontFamily run; the
-            # plain "⚠" character rendered in the body font would show as a
-            # colored emoji glyph (or tofu) instead of a flat monochrome icon.
+            # MDL2 glyph in its own run ("⚠" in the body font = emoji/tofu).
             self._add_icon_run(head, _ICON_WARNING, (185, 28, 28), size=12)
             head.Inlines.Add(Run(u"Confirm destructive action"))
             body.Text = u"`{}` — {}".format(name, args_s)
-            # Fixed ink, not a theme token. This card stays light red in BOTH
-            # themes on purpose (a destructive prompt has to shout), so token
-            # text inverts with the host and disappears on it: BotText is
-            # #E4E4E4 in Revit's dark theme — near-white on #FEF2F2.
+            # Fixed ink: the card stays light red in BOTH themes on purpose,
+            # and token text (BotText #E4E4E4 in dark) would vanish on it.
             body.Foreground      = SolidColorBrush(Color.FromRgb(63, 63, 63))     # #3F3F3F
             status_tb.Foreground = SolidColorBrush(Color.FromRgb(140, 106, 106))  # #8C6A6A
             status_tb.Margin     = Thickness(0, 4, 0, 0)
@@ -11381,11 +10911,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                 b.BorderThickness = Thickness(0)
                 return b
 
-            # Fixed colours, like the card itself — the two buttons live on a
-            # surface that does not follow the host, so theme tokens read wrong
-            # on it in dark mode (CardBg is a mid grey there: grey label on a
-            # red button, 2.1:1; Ink is white: white label on a light grey
-            # button).
+            # Fixed colours too: tokens read wrong on this surface in dark
+            # mode (grey on red at 2.1:1, white on light grey).
             ok_btn = _mk_btn(u"Confirm",
                              Color.FromRgb(196, 43, 28),      # #C42B1C
                              Color.FromRgb(255, 255, 255))
@@ -11393,8 +10920,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                              Color.FromRgb(230, 230, 230),    # #E6E6E6
                              Color.FromRgb(63, 63, 63))       # #3F3F3F
         else:
-            # An ordinary edit held by "Ask before edits": a question, not an
-            # alarm — the theme card with an accent edge, not the red one.
+            # "Ask before edits": a question, not an alarm — accent edge.
             _bind_bg(card, 'CardBg')
             _bind_border(card, 'Accent')
             _bind_fg(head, 'Ink')
@@ -11459,9 +10985,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     # ─── Vision view capture (C2) ──────────────────────────────────────────────
 
     def _wants_view_snapshot(self, text, provider):
-        """True when the user asks the assistant to LOOK at the current view
-        and the active provider can take Claude-format image blocks (the
-        agent path currently ships vision only for Claude)."""
+        """True when the user asks to LOOK at the current view and the
+        provider takes image blocks (Claude only, for now)."""
         if not text:
             return False
         if provider is None or getattr(provider, "NAME", "") != "claude":
@@ -11484,8 +11009,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         try:
             import tempfile
             folder = os.path.join(tempfile.gettempdir(), 'T3Lab_ViewShots')
-            # Shots are deleted once sent (_run_native_agent); this clears
-            # the ones a crashed or cancelled turn left behind.
+            # Clears shots a crashed/cancelled turn left (sent ones are deleted).
             try:
                 from core import housekeeping
                 housekeeping.run_once('assistant.viewshots',
@@ -11509,13 +11033,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     _avatar_bitmap_failed = False
 
     def _get_avatar_bitmap(self):
-        """Return the cached BitmapImage for the tool's own icon.png, or None.
-
-        icon.png is the SAME icon Revit shows on the T3Lab Assistant ribbon
-        button (T3LabAssistant.pushbutton/icon.png) — using it as the chat
-        avatar means the bubble literally shows the tool's real icon instead
-        of a generic colored "T3" initials badge.
-        """
+        """Cached BitmapImage of the ribbon icon (T3LabAssistant.pushbutton/
+        icon.png) used as the chat avatar, or None."""
         if self._avatar_bitmap is not None:
             return self._avatar_bitmap
         if self._avatar_bitmap_failed:
@@ -11538,9 +11057,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             return None
 
     def _stop_avatar_spins(self):
-        """Freeze every live avatar spin (UI thread only). Rotation is the
-        'thinking' indicator: bubbles born during a busy turn spin, and the
-        moment the turn ends they all stop and rest upright."""
+        """Stop every live avatar spin (the 'thinking' indicator). UI thread."""
         spins = getattr(self, '_live_avatar_spins', None) or []
         if not spins:
             return
@@ -11556,12 +11073,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._live_avatar_spins = []
 
     def _make_avatar(self, letter, size=36):
-        """Create a circular avatar showing the tool's real icon.png.
-
-        Falls back to a plain initials badge (BatchOut blue #3498DB) only if
-        the icon file can't be loaded — the app must never crash a chat row
-        over a missing/locked icon asset.
-        """
+        """Circular avatar showing icon.png; an initials badge if it can't load."""
         from System.Windows.Controls import Border, TextBlock
         from System.Windows import Thickness, CornerRadius
         from System.Windows.Media import SolidColorBrush, Color, ImageBrush, Stretch
@@ -11574,13 +11086,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         av.Margin = Thickness(0, 2, 10, 0)
         av.VerticalAlignment = VerticalAlignment.Top
 
-        # Spin the avatar ONLY while the assistant is thinking (user request
-        # 2026-07-22, replacing the earlier permanent rotation). Since replies
-        # went bubble-less the only avatar left is the one in the typing row,
-        # which exists exactly for the duration of a busy turn — so a moving
-        # mark still means "working right now", and _set_busy(False) freezing
-        # live spins remains the belt-and-braces stop. 30fps cap keeps the
-        # animation cheap.
+        # Spin ONLY while busy (user request 2026-07-22); _set_busy(False)
+        # stops live spins. 30fps cap keeps it cheap.
         if getattr(self, '_busy', False):
             try:
                 from System.Windows.Media import RotateTransform
@@ -11623,11 +11130,10 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     @staticmethod
     def _add_icon_run(text_block, glyph, rgb=None, size=13.5):
-        """Prepend a Segoe MDL2 Assets icon Run to a TextBlock, followed by a
-        thin space — the ONLY way to render a real icon glyph inline: the rest
-        of the bubble uses Hanken Grotesk/Inter, which has no glyph at these
-        private-use codepoints, so the icon needs its own FontFamily run
-        rather than living in the same string as the body text.
+        """Prepend a Segoe MDL2 Assets icon Run + thin space to a TextBlock.
+
+        The body font has no glyphs at these private-use codepoints, so the
+        icon needs its own FontFamily run.
         """
         from System.Windows.Documents import Run
         from System.Windows.Media import FontFamily as _WpfFontFamily, SolidColorBrush, Color
@@ -11641,9 +11147,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         text_block.Inlines.Add(Run(u"  "))
 
     # ─── Claude-style message actions ────────────────────────────────────────
-    # Line-art glyphs for the icon row that sits under every assistant reply.
-    # Same geometry language as the composer icons (1.5px round-capped strokes
-    # on a 24x24 viewbox), so the whole surface reads as one icon set.
+    # Line-art glyphs for the reply action row (same 1.5px / 24x24 language
+    # as the composer icons).
 
     _ACT_COPY  = (u"M8 8h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Z "
                   u"M4 16a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2")
@@ -11698,8 +11203,7 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _vote_decision(self):
         """Snapshot of how the current turn was routed, for the vote loop.
 
-        Taken when the reply row is built so a vote cast much later still
-        refers to the turn it belongs to, not to whatever is running now.
+        Taken at row build time so a late vote refers to its own turn.
         """
         dec = getattr(self, '_agent_decision', None) or {}
         last = getattr(self, '_last_result', None) or {}
@@ -11716,9 +11220,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _adopt_retry_version(self, text, icon=None, icon_color=None):
         """File `text` as another version of the row Try again was pressed on.
 
-        Returns True when the text was adopted (so the caller must NOT also
-        append a new row). Any failure returns False and the reply lands as a
-        normal new message — a broken regenerate must never swallow an answer.
+        True = adopted (caller must NOT append a row). On False the reply
+        lands as a new message, so a broken regenerate never swallows it.
         """
         row = getattr(self, '_retry_target_row', None)
         if row is None:
@@ -11744,16 +11247,11 @@ class T3LabAssistantWindow(T3WPFWindow):
             return False
 
     def _append_user_message(self, text, attachment_note=None):
-        """Add the user's message as a right-aligned bubble.
+        """Add the user's message as right-aligned text.
 
-        No fill, no border, no shadow: the user's turn is right-aligned text on
-        the same surface as everything else. (It was Revit's selected-row blue
-        tint, then briefly a bordered + shadowed card — both read as a second
-        surface inside a pane this narrow.) Alignment alone marks the speaker.
-
-        attachment_note, if given, renders as its own line with a minimal
-        Attach glyph — replaces the old baked-in "📎 filename" text so the
-        indicator is a real icon, not a colored emoji character.
+        No fill/border/shadow: a card reads as a second surface in a pane this
+        narrow; alignment alone marks the speaker. attachment_note renders on
+        its own line with an MDL2 Attach glyph.
         """
         try:
             from System.Windows.Controls import Border, TextBlock, Grid, ColumnDefinition
@@ -11797,9 +11295,7 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _clean_bot_response(text):
         """Strip chain-of-thought, meta-commentary, and excessive whitespace."""
         import re as _re
-        # Remove <think>...</think> blocks (reasoning models)
         text = _re.sub(r'<think>[\s\S]*?</think>', '', text, flags=_re.IGNORECASE)
-        # Remove lines that read like internal planning/meta-commentary
         _skip_prefixes = (
             u"* user", u"* role", u"* tone", u"* language", u"* option",
             u"* the user", u"* since i am", u"* as an ai",
@@ -11814,15 +11310,11 @@ class T3LabAssistantWindow(T3WPFWindow):
             if any(low.startswith(p) for p in _skip_prefixes):
                 continue
             lines_out.append(line)
-        # Collapse 3+ consecutive blank lines to 1
         text = _re.sub(r'\n{3,}', u'\n\n', u'\n'.join(lines_out))
         return text.strip()
 
-    # Legacy colored emoji markers (still reachable through chat history saved
-    # before the fast-context path was removed) mapped to a minimal MDL2 glyph
-    # + Lumina
-    # color — converted at render time so no caller needs to change its
-    # markdown text, only this one renderer.
+    # Leading emoji markers → MDL2 glyph + colour at render time (old saved
+    # history, nlu_engine text and model-invented emoji alike).
     _MD_ICON_MARKERS = [
         (u"⚡ ",            "_ICON_ANALYZE", "_ICON_BLUE"),   # instant DB answer
         (u"\U0001f4cb ",   "_ICON_LIST",    "_ICON_SLATE"),  # stats/info section
@@ -11830,13 +11322,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         (u"\U0001f3af ",   "_ICON_LIST",    "_ICON_SLATE"),  # selection section
         (u"\U0001f4ca ",   "_ICON_LIST",    "_ICON_BLUE"),   # LLM chart/stats emoji
         (u"\U0001f4c8 ",   "_ICON_LIST",    "_ICON_BLUE"),   # LLM trend emoji
-        # nlu_engine's capability answers and the assistant's own status lines
-        # were still emitting full-colour emoji, against the house rule stated
-        # at _ICON_INFO above. Converting them HERE rather than editing ~30
-        # string literals keeps one renderer authoritative, and any emoji a
-        # model invents in its reply gets the same treatment for free.
-        # A variation-selector form (U+FE0F) must precede its bare twin —
-        # startswith would match the bare marker and strand the selector.
+        # (house rule at _ICON_INFO). A U+FE0F variation form must precede its
+        # bare twin, or startswith strands the selector.
         (u"✅ ",       "_ICON_SUCCESS", "_ICON_GREEN"),  # ✅ yes / found
         (u"✔ ",       "_ICON_SUCCESS", "_ICON_GREEN"),  # ✔ completed
         (u"❌ ",       "_ICON_STOP",    "_ICON_RED"),    # ❌ none / no tool
@@ -11879,12 +11366,8 @@ class T3LabAssistantWindow(T3WPFWindow):
 
     @staticmethod
     def _build_md_inlines(text_block, text):
-        """
-        Populate text_block.Inlines with paragraph-level markdown:
-        leading emoji→MDL2 icon markers, # headings, bullet lines (* / -),
-        **bold** / `code` inline spans, line breaks. Tables are handled one
-        level up by _render_md_blocks (a TextBlock cannot host a grid).
-        """
+        """Fill text_block.Inlines with paragraph-level markdown (icon markers,
+        headings, quotes, lists, inline spans). Tables: _render_md_blocks."""
         from System.Windows.Documents import Run, LineBreak
         from System.Windows import FontWeights
 
@@ -11894,7 +11377,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             if i > 0:
                 text_block.Inlines.Add(LineBreak())
 
-            # Legacy emoji section markers → minimal MDL2 icon run
             stripped = line.strip()
             for marker, glyph_name, color_name in T3LabAssistantWindow._MD_ICON_MARKERS:
                 if stripped.startswith(marker):
@@ -11903,7 +11385,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                     line = stripped[len(marker):]
                     break
 
-            # Headings: "# " / "## " / "### " → semibold, slightly larger
             stripped = line.strip()
             if stripped.startswith(u'#'):
                 h = len(stripped) - len(stripped.lstrip(u'#'))
@@ -11915,7 +11396,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                     text_block.Inlines.Add(r)
                     continue
 
-            # Blockquote: "> text" → muted bar + text
             if stripped.startswith(u'> '):
                 from System.Windows.Media import SolidColorBrush, Color
                 bar = Run()
@@ -11929,7 +11409,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 text_block.Inlines.Add(quote)
                 continue
 
-            # Ordered list: "1. text", "2) text" → keep the number, indent-align
             import re as _re_md
             _om = _re_md.match(r'^(\d{1,3})[.)]\s+(.*)$', stripped)
             if _om:
@@ -11940,23 +11419,20 @@ class T3LabAssistantWindow(T3WPFWindow):
                 T3LabAssistantWindow._add_inline_md(text_block, _om.group(2))
                 continue
 
-            # Bullet lines (also nested "  - " / "  * ")
             if stripped.startswith(u'* ') or stripped.startswith(u'- '):
                 indent = len(line) - len(line.lstrip())
                 prefix_run = Run()
                 prefix_run.Text = (u'    ' if indent >= 2 else u'') + u'• '
                 text_block.Inlines.Add(prefix_run)
-                line = stripped[2:]             # remaining text after bullet marker
+                line = stripped[2:]
 
             T3LabAssistantWindow._add_inline_md(text_block, line)
 
     def _make_md_table(self, raw_rows):
         """Render markdown pipe-rows ("| a | b |") as a bordered WPF Grid.
 
-        Returns a Border-wrapped Grid, or None when the rows don't form a
-        usable table (caller then falls back to showing the raw text).
-        Header row (followed by |---|---|) gets the Lumina table header
-        treatment; star-sized columns so the table always fits the bubble.
+        None when the rows don't form a table (caller shows the raw text).
+        Star-sized columns so the table always fits the bubble.
         """
         try:
             import re as _re
@@ -12039,8 +11515,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             return None
 
     def _make_code_block(self, code_lines):
-        """Render a fenced ``` code block as a monospace card with a subtle
-        surface bg and horizontal scroll so code formatting is preserved."""
+        """Fenced ``` code block as a monospace card with horizontal scroll."""
         from System.Windows.Controls import Border, TextBlock, ScrollViewer, ScrollBarVisibility
         from System.Windows import Thickness, CornerRadius
         from System.Windows.Media import SolidColorBrush, Color, FontFamily
@@ -12078,13 +11553,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         return hr
 
     def _render_md_blocks(self, text, icon=None, icon_color=None):
-        """Build the CONTENT of a bot bubble: a StackPanel of paragraph
-        TextBlocks, real table Grids, fenced code cards, and rules.
-
-        The old single-TextBlock renderer showed markdown tables as raw
-        "| a | b |" pipe text; consecutive pipe-lines now become a bordered
-        grid with a header row, so LLM answers containing tables read
-        cleanly. icon/icon_color prefix the first paragraph.
+        """Bot reply content: a StackPanel of paragraph TextBlocks, table
+        Grids, code cards and rules. icon/icon_color prefix the first paragraph.
         """
         from System.Windows.Controls import StackPanel, TextBlock
         from System.Windows import TextWrapping, Thickness
@@ -12125,7 +11595,6 @@ class T3LabAssistantWindow(T3WPFWindow):
         while i < n:
             s = lines[i].strip()
 
-            # Fenced code block: ```lang ... ``` → monospace card
             if s.startswith(u"```"):
                 i += 1
                 code_lines = []
@@ -12141,7 +11610,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                     para.extend(code_lines)
                 continue
 
-            # Horizontal rule: standalone ---, ***, ___
             if s in (u"---", u"***", u"___"):
                 _flush_para()
                 try:
@@ -12176,27 +11644,16 @@ class T3LabAssistantWindow(T3WPFWindow):
         return panel
 
     def _append_bot_message(self, text, icon=None, icon_color=None, actions=True):
-        """Add an assistant reply — plain text on the pane, no bubble.
+        """Add an assistant reply — full-width text on the pane, no bubble
+        (in a ~320px docked pane a bubble + avatar gutter leaves two-word lines).
 
-        Only the user's turn carries a filled bubble; the assistant's answer
-        renders straight onto the chat background, full width, with the
-        Claude-style action row (copy · try again · 👍 · 👎) underneath. In a
-        docked pane barely 320px wide, dropping the bubble border and the
-        avatar gutter is not only the reference look — it is the difference
-        between a readable answer and a column of two-word lines.
-
-        icon/icon_color: optional Segoe MDL2 glyph + RGB tuple rendered before
-        the text, in its own FontFamily run — the minimal-icon replacement for
-        the old baked-in colored emoji prefixes.
+        icon/icon_color: optional MDL2 glyph + RGB tuple before the text.
         """
-        # Never render an empty reply — a blank assistant row looks like a
-        # broken answer (observed with agent turns whose text was consumed
-        # elsewhere).
+        # A blank row looks like a broken answer.
         if not (text or u"").strip() and icon is None:
             return
 
-        # A pending "Try again" folds this answer into the row it was fired
-        # from instead of stacking a second copy underneath it.
+        # A pending "Try again" folds this answer into its row.
         if getattr(self, '_retry_target_row', None) is not None:
             if self._adopt_retry_version(text, icon=icon, icon_color=icon_color):
                 return
@@ -12215,8 +11672,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             Grid.SetColumn(host, 0)
             row.Children.Add(host)
 
-            # State for the action row: the text itself, any regenerated
-            # versions, and the prompt that produced it (for Try again).
+            # Action-row state: versions, and the prompt (for Try again).
             row.Tag = {
                 'versions':   [text],
                 'index':      0,
@@ -12225,13 +11681,10 @@ class T3LabAssistantWindow(T3WPFWindow):
                 'vote':       None,
                 'host':       host,
                 'prompt':     getattr(self, '_last_raw', u"") or u"",
-                # What produced this reply — so a 👍/👎 can act on the route
-                # and not just be filed in the activity log.
+                # So a 👍/👎 can act on the route.
                 'decision':   self._vote_decision(),
             }
 
-            # Block renderer: paragraphs + real table grids. Falls back to a
-            # plain TextBlock if anything in the renderer throws.
             try:
                 content = self._render_md_blocks(text, icon=icon, icon_color=icon_color)
             except Exception:
@@ -12260,12 +11713,10 @@ class T3LabAssistantWindow(T3WPFWindow):
     # ─── Live streaming bubble ────────────────────────────────────────────────
 
     def _begin_stream_bubble(self):
-        """Create an empty assistant row that will be filled token-by-token.
+        """Empty assistant row filled token-by-token. UI thread only.
 
-        Same bubble-less shape as a finished reply (see _append_bot_message),
-        so text does not visibly re-flow when streaming ends and the markdown
-        renderer takes over. Stores references in self._stream_row /
-        self._stream_tb / self._stream_host. UI thread only.
+        Same shape as a finished reply, so nothing re-flows at finalize.
+        Sets self._stream_row / _stream_tb / _stream_host.
         """
         try:
             from System.Windows.Controls import TextBlock, Grid, StackPanel, ColumnDefinition
@@ -12301,12 +11752,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._stream_host = None
 
     def _finalize_stream_bubble(self, text):
-        """Re-render the live bubble with full markdown once streaming is done.
-
-        The streaming TextBlock showed plain text; swap the bubble's content
-        for the block renderer so tables/headings in the finished reply get
-        their real layout. Falls back to inline-only rendering on error.
-        """
+        """Re-render the live (plain-text) row with full markdown when done."""
         try:
             tb = self._stream_tb
             if tb is None:
@@ -12314,16 +11760,14 @@ class T3LabAssistantWindow(T3WPFWindow):
             row  = self._stream_row
             host = getattr(self, '_stream_host', None)
 
-            # A pending "Try again" folds the streamed answer into the row it
-            # was fired from — the throwaway stream row goes away entirely.
+            # Pending "Try again": fold into its row, drop the stream row.
             if getattr(self, '_retry_target_row', None) is not None:
                 if self._adopt_retry_version(text):
                     self._remove_stream_bubble()
                     return
 
             if host is not None and row is not None:
-                # Promote the streaming row to a full reply row: markdown body
-                # + the action icons, identical to _append_bot_message output.
+                # Promote to a full reply row, as _append_bot_message builds.
                 row.Tag = {
                     'versions':   [text],
                     'index':      0,
@@ -12343,8 +11787,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                     tb.Text = text
             self._scroll_to_bottom()
         except Exception:
-            # Last resort: leave the plain streamed text in place rather than
-            # losing an answer the user already watched arrive.
+            # Keep the plain streamed text rather than lose the answer.
             try:
                 if self._stream_tb is not None:
                     self._stream_tb.Text = text
@@ -12372,8 +11815,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                          query, max_tokens=1200, **kwargs):
         """Run one streaming LLM turn, filling a live bubble. Worker thread.
 
-        The bubble is created lazily on the first token so the animated typing
-        indicator stays visible until the model actually starts replying.
+        The bubble appears on the first token (typing indicator until then).
         Returns the full raw response text (str) or None.
         """
         extractor = StreamingJSONExtractor()
@@ -12406,24 +11848,19 @@ class T3LabAssistantWindow(T3WPFWindow):
                 pass
 
         try:
-            # **kwargs MUST be forwarded. The tool loop's first (streamed) turn
-            # passes response_format={"type":"json_object"}; dropping it meant
-            # iteration 1 ran without JSON mode, so a prose reply failed the
-            # JSON regex and a correct answer the user had just watched stream
-            # in was overwritten with "Could not read data from the model".
-            # Both chat_stream implementations already accept **kwargs.
-            # is_configured(), NOT check_health(): the health probe is a live
-            # GET /models on the cloud providers, so gating the turn on it put
-            # a network round-trip (8s timeout, no retry) in front of every
-            # message and silently rerouted through the router whenever a proxy
-            # dropped it. Attempt the real call and let its own error surface —
-            # same rationale as has_api_key() in Intelligence/t3lab_assistant.py.
+            # **kwargs MUST be forwarded (response_format=json_object on the
+            # tool loop's first turn; without it prose failed the JSON parse).
+            # is_configured(), NOT check_health(): that is a live GET /models
+            # (8s) before every message. Let the real call's error surface —
+            # as has_api_key() in Intelligence/t3lab_assistant.py.
             if provider is not None and _provider_usable(provider):
                 return provider.chat_stream(
-                    history[-16:], system_prompt, query, _on_delta,
+                    _budget_history(history, provider, system_prompt, query,
+                                    max_tokens), system_prompt, query, _on_delta,
                     max_tokens, **kwargs)
             return router.chat_stream(
-                history[-16:], system_prompt, query, _on_delta,
+                _budget_history(history, None, system_prompt, query,
+                                max_tokens), system_prompt, query, _on_delta,
                 max_tokens, **kwargs)
         except Exception as ex:
             logger.debug(u"_stream_llm_turn error: {}".format(_exc_text(ex)))
@@ -12436,30 +11873,25 @@ class T3LabAssistantWindow(T3WPFWindow):
             pass
 
 
-# MAIN SCRIPT
-# ==================================================
+# ── MAIN SCRIPT ──
 
 
 def show_assistant_dialog():
     """Show T3Lab Assistant docked in Revit, like the Properties palette.
 
-    startup.py registers the pane while Revit starts (lib/assistant_pane.py);
-    GUI/AssistantPaneControl moves this window's content into it and keeps
-    the CPython background threads running (GIL pump). The first click loads
-    the assistant, later clicks show / hide it with the conversation intact.
+    startup.py registers the pane (lib/assistant_pane.py); GUI/
+    AssistantPaneControl moves this window's content into it and runs the GIL
+    pump. Later clicks show / hide it with the conversation intact.
 
-    Falls back to the modal window when the pane is not available — Revit
-    started before T3Lab was installed, or the registration failed (reason in
+    Falls back to the modal window when the pane is unavailable (reason in
     %APPDATA%\\T3LabAI\\engine_check.log).
     """
     if not revit.doc:
         forms.alert("Please open a Revit document first.", exitscript=True)
         return None
 
-    # This click is an API context: (re)create the ExternalEvents here. A
-    # docked assistant created earlier keeps working after a pyRevit reload
-    # re-imported Services/, which would otherwise leave the queue without
-    # an event and every tool launch running outside the API context.
+    # API context: (re)create the ExternalEvents, else after a reload
+    # re-imports Services/ every tool launch runs outside the API context.
     try:
         ensure_api_context()
     except Exception as ex:

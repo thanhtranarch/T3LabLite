@@ -17,10 +17,31 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-19
+
+ManaSched v2 and the latest T3Lab Assistant, copied from `t3lab-revit-api`, plus the PDF Markup split button.
+
 ### Added
+- **ManaSched v2 — Excel / Google Sheets tables in Revit** (Annotation & Data › manaData):
+  - Import an Excel range as a schedule, drafting view or legend with its formatting (fonts, colours, borders, merged cells, column widths and row heights) and keep it linked to the file.
+  - Pick the sheet and the cells in an Excel-like viewer.
+  - Paste a Google Sheets link (normal, Publish-to-web or bare id) or browse to a `.gsheet` shortcut. No sign-in: the sheet must be shared "Anyone with the link" or published. Downloads are cached in `%APPDATA%\T3LabAI\gsheets`.
+  - **Linked Tables**: see which tables are out of date ("Sheet changed", "Offline"); Update Tables, reload from another file, or unlink.
+  - Schedule data round-trip: export schedule values to Excel, edit them, import and review every change, then apply in one undo step.
+- **Tool Hub in the Assistant**: sign in with the e-mail link or the 6-digit code, synced tool catalog with offline search, `/toolhub` and `/save-tool` commands, tool recipes, and a `find_tools` search the model can call. LLMs Setting has a new **Tool Hub** tab (sign in, sync, my tools, search in one window).
+- **Assistant — model per role**: the newest model of each provider by default; auto model switch (Haiku pre-reads, Sonnet/Opus take complex turns); cost in USD per turn and a daily budget.
+- **Assistant — per-chat memory** (Claude Projects-style) and a context window sized to the selected model.
 - **PDF Markup split button** (Support › Cloud Links): **Bluebeam Status** now shares a split button with the new **T3Lab PDF Markup**, which opens [T3Lab PDF](https://pdf.t3lab.space/) (offline PDF markup for drawings) in the default browser. The button used last stays on top, also after Revit restarts (saved when Revit closes, in `%APPDATA%\T3LabAI\ribbon_state.json`).
 
 ### Changed
+- **Assistant**:
+  - History budget = model window minus the measured fixed part (system prompt + tools), not a fixed share.
+  - Large tool results are capped (32k cloud / 4k local) and old results inside a turn are folded; the full result is kept on disk.
+  - Cloud answers up to 16k/32k tokens, 10-minute stream timeout, and the agent loop can pause.
+  - Claude tool search + `defer_loading` keeps the cloud tool list short.
+  - The model chip follows provider changes made outside the pane; no offline answers when Claude is configured.
+  - Pure UI updates are posted with `BeginInvoke`, so the pane no longer blocks Revit while it streams.
+- **API keys** in `%APPDATA%\T3LabAI\settings.json` (and the Tool Hub session) are now encrypted with Windows DPAPI for the current user. Existing plain keys keep working.
 - `Bluebeam Status` moved into `CloudLinks.stack/PDFMarkup.splitbutton`. A copy-over update moves the old `CloudLinks.stack/Bluebeam Status.urlbutton` folder to `_retired_ribbon` on the next Revit start.
 
 ## [2.0.0] - 2026-10-09

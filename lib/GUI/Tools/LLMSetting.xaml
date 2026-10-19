@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         Title="AI Assistant Settings"
-        Width="460" Height="700"
+        Width="520" Height="700"
         MinWidth="420" MinHeight="560"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" AllowsTransparency="True"
@@ -1774,7 +1774,7 @@
             <Border Grid.Row="1" Background="{StaticResource T3.SurfaceSunken}"
                     BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
                     Padding="16,4">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <RadioButton x:Name="tab_general" Content="General"
                                  GroupName="LLMSettingsTabs"
                                  Style="{StaticResource T3.Chip}"
@@ -1795,7 +1795,11 @@
                                  GroupName="LLMSettingsTabs"
                                  Style="{StaticResource T3.Chip}"
                                  Tag="skills" Checked="tab_changed"/>
-                </StackPanel>
+                    <RadioButton x:Name="tab_toolhub" Content="Tool Hub"
+                                 GroupName="LLMSettingsTabs"
+                                 Style="{StaticResource T3.Chip}"
+                                 Tag="toolhub" Checked="tab_changed"/>
+                </WrapPanel>
             </Border>
 
             <!-- ══════════════════ ROW 2: CONTENT SCROLLABLE ══════════════════ -->
@@ -1901,7 +1905,7 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBox x:Name="global_memory_add_box" Grid.Column="0" Style="{StaticResource T3.TextBox}"
-                                             MaxLength="300" PreviewKeyDown="global_memory_add_keydown"/>
+                                             MaxLength="1000" PreviewKeyDown="global_memory_add_keydown"/>
                                     <Button x:Name="global_memory_add_btn" Grid.Column="2"
                                             Style="{StaticResource T3.Button.Secondary}"
                                             Content="Add" Click="global_memory_add_clicked"/>
@@ -1933,6 +1937,14 @@
                                           Style="{StaticResource T3.CheckBox}" Margin="0,0,0,4"
                                           Checked="extended_thinking_toggled" Unchecked="extended_thinking_toggled"/>
                                 <TextBlock Text="ON: Claude spends more tokens thinking through complex multi-step problems before acting."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,0,0,12"/>
+
+                                <Separator Margin="0,0,0,12"/>
+
+                                <CheckBox x:Name="auto_model_toggle" Content="Auto model (Claude)"
+                                          Style="{StaticResource T3.CheckBox}" Margin="0,0,0,4"
+                                          Checked="auto_model_toggled" Unchecked="auto_model_toggled"/>
+                                <TextBlock Text="ON: Haiku reads each request first and picks the model: Haiku for simple questions, Sonnet for normal tasks, Opus for complex ones. OFF: every request uses the model selected above."
                                            Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,0,0,12"/>
 
                                 <Separator Margin="0,0,0,12"/>
@@ -2248,7 +2260,7 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <TextBox x:Name="project_memory_add_box" Grid.Column="0" Style="{StaticResource T3.TextBox}"
-                                                 MaxLength="300" PreviewKeyDown="project_memory_add_keydown"/>
+                                                 MaxLength="1000" PreviewKeyDown="project_memory_add_keydown"/>
                                         <Button x:Name="project_memory_add_btn" Grid.Column="2"
                                                 Style="{StaticResource T3.Button.Secondary}"
                                                 Content="Add" Click="project_memory_add_clicked"/>
@@ -2355,6 +2367,90 @@
                                             Content="Open Folder" Click="open_skills_dir_clicked" Margin="0,0,0,4"/>
                                 </WrapPanel>
                                 <StackPanel x:Name="skills_list_panel"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ════════ TAB 6: TOOL HUB ════════ -->
+                    <StackPanel x:Name="panel_toolhub" Visibility="Collapsed">
+                        <TextBlock Text="TOOL HUB ACCOUNT" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                        <Border Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
+                                BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock x:Name="toolhub_status_text" Text="Loading…"
+                                           Style="{StaticResource T3.Body}" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                <TextBlock Text="The team catalog of shared Revit tools and recipes. Sign in to search it from the Assistant and to share your own tools."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+
+                                <StackPanel x:Name="toolhub_signin_panel">
+                                    <TextBlock Text="1. Your work e-mail" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="8"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="toolhub_email_box" Grid.Column="0" Style="{StaticResource T3.TextBox}"
+                                                 PreviewKeyDown="toolhub_email_keydown"/>
+                                        <Button x:Name="toolhub_send_btn" Grid.Column="2"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                Content="Send code" Click="toolhub_send_clicked"/>
+                                    </Grid>
+                                    <TextBlock Text="2. The 6-digit code from that e-mail. If it only has a link: right-click the link, Copy link (do not open it), and paste it here."
+                                               Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="8"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="toolhub_code_box" Grid.Column="0" Style="{StaticResource T3.TextBox}"
+                                                 PreviewKeyDown="toolhub_code_keydown"/>
+                                        <Button x:Name="toolhub_verify_btn" Grid.Column="2"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                Content="Sign in" Click="toolhub_verify_clicked"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <WrapPanel x:Name="toolhub_account_panel" Visibility="Collapsed">
+                                    <Button x:Name="toolhub_sync_btn" Style="{StaticResource T3.Button.Secondary}"
+                                            Content="Sync now" Click="toolhub_sync_clicked" Margin="0,0,8,4"/>
+                                    <Button x:Name="toolhub_signout_btn" Style="{StaticResource T3.Button.Ghost}"
+                                            Content="Sign out" Click="toolhub_signout_clicked" Margin="0,0,0,4"/>
+                                </WrapPanel>
+
+                                <TextBlock x:Name="toolhub_hint" Text="" Style="{StaticResource T3.Caption}"
+                                           TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="MY TOOLS" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                        <Border Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
+                                BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="Tools you saved from a chat turn (type /save-tool in the Assistant), with their review status and the owner's notes."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <StackPanel x:Name="toolhub_mine_panel"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="SEARCH THE CATALOG" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                        <Border Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
+                                BorderThickness="1" CornerRadius="4" Padding="12">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="toolhub_search_box" Grid.Column="0" Style="{StaticResource T3.TextBox}"
+                                             PreviewKeyDown="toolhub_search_keydown"/>
+                                    <Button x:Name="toolhub_search_btn" Grid.Column="2"
+                                            Style="{StaticResource T3.Button.Secondary}"
+                                            Content="Search" Click="toolhub_search_clicked"/>
+                                </Grid>
+                                <StackPanel x:Name="toolhub_results_panel"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>

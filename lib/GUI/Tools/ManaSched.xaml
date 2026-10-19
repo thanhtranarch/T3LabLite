@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="ManaSched"
         Width="1160" Height="780"
-        MinWidth="960" MinHeight="620"
+        MinWidth="1000" MinHeight="620"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -1714,445 +1714,469 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
           </Style>
         <!-- ═══ HẾT T3 STYLES ═══ -->
-            <!-- STYLES_PLACEHOLDER -->
         </ResourceDictionary>
     </Window.Resources>
 
-    <!-- ═══ Outer Window Border (Zero-Gap Grid) ═══ -->
+    <!-- ═══ Outer Window Border ═══ -->
     <Border BorderBrush="{StaticResource T3.BorderStrong}" BorderThickness="1"
             Background="{StaticResource T3.Surface}" CornerRadius="{StaticResource T3.R.Window}" ClipToBounds="True">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="48"/>      <!-- Row 0: Full-width Title Bar -->
-                <RowDefinition Height="*"/>       <!-- Row 1: Main Body with Sidebar Rail -->
-                <RowDefinition Height="48"/>      <!-- Row 2: Full-width Footer Bar -->
+                <RowDefinition Height="48"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="48"/>
             </Grid.RowDefinitions>
 
-            <!-- ══════════════════ ROW 0: FULL-WIDTH TITLE BAR ══════════════════ -->
+            <!-- ══════════════════ ROW 0: TITLE BAR ══════════════════ -->
             <Border Grid.Row="0" Style="{StaticResource T3.TitleBar}">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <!-- Title and Subtitle -->
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,0"
-                                    shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                            <Image x:Name="logo_image" Height="28" Margin="0,0,12,0"
-                                   VerticalAlignment="Center"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
-                            <StackPanel Orientation="Vertical" VerticalAlignment="Center">
-                                <TextBlock Text="Schedule Manager" Style="{StaticResource T3.Title}"/>
-                                <TextBlock Text="Link, export and duplicate project schedules" Style="{StaticResource T3.Subtitle}"/>
-                            </StackPanel>
-                            <!-- AI Mode Status Pill -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
+                                shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Image x:Name="logo_image" Height="28" Margin="0,0,12,0"
+                               VerticalAlignment="Center"
+                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <StackPanel Orientation="Vertical" VerticalAlignment="Center">
+                            <TextBlock Text="Schedule Manager" Style="{StaticResource T3.Title}"/>
+                            <TextBlock Text="Excel tables in Revit, picked by eye and kept in sync · schedule values round-trip through Excel"
+                                       Style="{StaticResource T3.Subtitle}"/>
                         </StackPanel>
-
-                        <!-- Window Controls -->
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal"
-                                    shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                            <Button x:Name="btn_minimize" Style="{StaticResource T3.WinCtrl}" ToolTip="Minimize">
-                                <TextBlock Text="&#xE921;" Style="{StaticResource T3.Icon}"/>
-                            </Button>
-                            <Button x:Name="btn_maximize" Style="{StaticResource T3.WinCtrl}" ToolTip="Maximize">
-                                <TextBlock Text="&#xE922;" Style="{StaticResource T3.Icon}"/>
-                            </Button>
-                            <Button x:Name="btn_close_chrome" Style="{StaticResource T3.WinClose}" ToolTip="Close" IsCancel="True">
-                                <TextBlock Text="&#xE8BB;" Style="{StaticResource T3.Icon}"/>
-                            </Button>
-                        </StackPanel>
-                    </Grid>
-                </Border>
-
-            <!-- ══════════════════ ROW 1: WORKSPACE WITH REFINED SIDEBAR ══════════════════ -->
-            <Grid Grid.Row="1">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="58"/>    <!-- Col 0: Left Navigation Icon Rail -->
-                    <ColumnDefinition Width="*"/>     <!-- Col 1: Main Content Work Area -->
-                </Grid.ColumnDefinitions>
-
-                <!-- ══════════════════ COL 0: LEFT NAVIGATION ICON RAIL ══════════════════ -->
-                <Border Grid.Column="0"
-                    Background="{StaticResource T3.SurfaceSunken}"
-                    BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,1,0">
-                <Grid Margin="0,12,0,12">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/> <!-- Excel Link Nav -->
-                        <RowDefinition Height="Auto"/> <!-- Duplicator Nav -->
-                        <RowDefinition Height="*"/>    <!-- Spacer -->
-                    </Grid.RowDefinitions>
-
-                    <!-- Tab 1: Excel Link -->
-                    <RadioButton x:Name="nav_excel_link" Grid.Row="0"
-                                 GroupName="ScheduleNav" IsChecked="True"
-                                 Style="{StaticResource T3.Rail.Tile}"
-                                 ToolTip="Excel Link"
-                                 HorizontalAlignment="Center" Margin="0,0,0,8">
-                        <TextBlock Text="&#xE71B;" Style="{StaticResource T3.Icon.Rail}"/>
-                    </RadioButton>
-
-                    <!-- Tab 2: Duplicator -->
-                    <RadioButton x:Name="nav_duplicator" Grid.Row="1"
-                                 GroupName="ScheduleNav" IsChecked="False"
-                                 Style="{StaticResource T3.Rail.Tile}"
-                                 ToolTip="Duplicator"
-                                 HorizontalAlignment="Center" Margin="0,0,0,8">
-                        <TextBlock Text="&#xE8C8;" Style="{StaticResource T3.Icon.Rail}"/>
-                    </RadioButton>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal"
+                                shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <Button x:Name="btn_minimize" Style="{StaticResource T3.WinCtrl}" ToolTip="Minimize">
+                            <TextBlock Text="&#xE921;" Style="{StaticResource T3.Icon}"/>
+                        </Button>
+                        <Button x:Name="btn_maximize" Style="{StaticResource T3.WinCtrl}" ToolTip="Maximize">
+                            <TextBlock Text="&#xE922;" Style="{StaticResource T3.Icon}"/>
+                        </Button>
+                        <Button x:Name="btn_close_chrome" Style="{StaticResource T3.WinClose}" ToolTip="Close" IsCancel="True">
+                            <TextBlock Text="&#xE8BB;" Style="{StaticResource T3.Icon}"/>
+                        </Button>
+                    </StackPanel>
                 </Grid>
             </Border>
 
-                <!-- ══════════════════ COL 1: MAIN WORKSPACE ══════════════════ -->
-                <!-- ══════════════════ ROW 1: WORKSPACE TABS ══════════════════ -->
-                <TabControl x:Name="tab_main" Grid.Column="1"
-                            Margin="0" Background="Transparent" BorderThickness="0">
+            <!-- ══════════════════ ROW 1: RAIL + PAGES ══════════════════ -->
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="58"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="{StaticResource T3.SurfaceSunken}"
+                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,1,0">
+                    <StackPanel Margin="0,12,0,12">
+                        <RadioButton x:Name="nav_new" GroupName="ScheduleNav" IsChecked="True"
+                                     Style="{StaticResource T3.Rail.Tile}" ToolTip="New Table — preview an Excel or Google sheet, drag over the cells, create the table in Revit"
+                                     HorizontalAlignment="Center" Margin="0,0,0,8">
+                            <TextBlock Text="&#xE8B5;" Style="{StaticResource T3.Icon.Rail}"/>
+                        </RadioButton>
+                        <RadioButton x:Name="nav_tables" GroupName="ScheduleNav" IsChecked="False"
+                                     Style="{StaticResource T3.Rail.Tile}" ToolTip="Linked Tables — see which Excel / Google Sheets tables changed and update them"
+                                     HorizontalAlignment="Center" Margin="0,0,0,8">
+                            <TextBlock Text="&#xE71B;" Style="{StaticResource T3.Icon.Rail}"/>
+                        </RadioButton>
+                        <RadioButton x:Name="nav_data" GroupName="ScheduleNav" IsChecked="False"
+                                     Style="{StaticResource T3.Rail.Tile}" ToolTip="Schedule Data — edit schedule values in Excel and write them back"
+                                     HorizontalAlignment="Center" Margin="0,0,0,8">
+                            <TextBlock Text="&#xE8AB;" Style="{StaticResource T3.Icon.Rail}"/>
+                        </RadioButton>
+                    </StackPanel>
+                </Border>
+
+                <TabControl x:Name="tab_main" Grid.Column="1" Margin="0" Background="Transparent" BorderThickness="0">
                     <TabControl.ItemContainerStyle>
                         <Style TargetType="TabItem" BasedOn="{StaticResource T3.TabItem.Hidden}"/>
                     </TabControl.ItemContainerStyle>
 
-                    <!-- ==================== TAB ITEM 0: EXCEL LINK ==================== -->
-                    <TabItem x:Name="tab_excel_link">
+                    <!-- ==================== PAGE 1: NEW TABLE (sheet viewer + pick cells) ==================== -->
+                    <TabItem x:Name="tab_new">
                         <Grid Background="{StaticResource T3.Surface}">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="390" MinWidth="320"/>
-                                <ColumnDefinition Width="1"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
 
-                            <!-- Left: Schedule Browser Column -->
-                            <Grid Grid.Column="0" Background="{StaticResource T3.Surface}">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/> <!-- Header & selection -->
-                                    <RowDefinition Height="Auto"/> <!-- Search pill -->
-                                    <RowDefinition Height="*"/>    <!-- DataGrid -->
-                                </Grid.RowDefinitions>
-
-                                <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
-                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                        Padding="16,8">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="SCHEDULES" Style="{StaticResource T3.Label}"
-                                                   VerticalAlignment="Center"/>
-                                        <Button x:Name="xl_select_all_btn" Grid.Column="2"
-                                                Content="All" Style="{StaticResource T3.Button.Secondary}"
-                                                Height="24" Padding="8,0" Margin="0,0,4,0"/>
-                                        <Button x:Name="xl_clear_btn" Grid.Column="3"
-                                                Content="Clear" Style="{StaticResource T3.Button.Secondary}"
-                                                Height="24" Padding="8,0" Margin="0,0,8,0"/>
-                                        <TextBlock x:Name="xl_count_text" Grid.Column="4" Text="—"
-                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"/>
-                                    </Grid>
-                                </Border>
-
-                                <Border Grid.Row="1" Background="{StaticResource T3.Surface}"
-                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                        Padding="12,8">
-                                    <TextBox x:Name="xl_search_box"
-                                             Style="{StaticResource T3.Search}"
-                                             Tag="Search schedules..."/>
-                                </Border>
-
-                                <Grid Grid.Row="2">
-                                    <DataGrid x:Name="xl_dg_schedules" Style="{StaticResource T3.DataGrid}"
-                                              IsReadOnly="False" BorderThickness="0">
-                                        <DataGrid.Columns>
-                                            <DataGridTemplateColumn Width="36"
-                                                                    HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
-                                                                    CellStyle="{StaticResource T3.DataGridCell.Check}">
-                                                <DataGridTemplateColumn.Header>
-                                                    <CheckBox x:Name="chk_all_xl_dg_schedules" Style="{StaticResource T3.CheckBox.Cell}"
-                                                              Click="select_all_xl_dg_schedules_clicked"
-                                                              ToolTip="Select all rows"/>
-                                                </DataGridTemplateColumn.Header>
-                                                <DataGridTemplateColumn.CellTemplate>
-                                                    <DataTemplate>
-                                                        <Grid>
-                                                            <TextBlock x:Name="row_is_checked_text" Text="{Binding is_checked}" Visibility="Collapsed"/>
-                                                            <CheckBox IsChecked="{Binding Text, ElementName=row_is_checked_text, Mode=OneWay}"
-                                                                      Style="{StaticResource T3.CheckBox.Cell}"/>
-                                                        </Grid>
-                                                    </DataTemplate>
-                                                </DataGridTemplateColumn.CellTemplate>
-                                            </DataGridTemplateColumn>
-                                            <DataGridTextColumn Header="SCHEDULE NAME" Binding="{Binding name}" Width="*" MinWidth="140" IsReadOnly="True">
-                                                <DataGridTextColumn.ElementStyle>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
-                                                        <Setter Property="ToolTip" Value="{Binding name}"/>
-                                                        <Setter Property="VerticalAlignment" Value="Center"/>
-                                                        <Setter Property="Margin" Value="8,0"/>
-                                                    </Style>
-                                                </DataGridTextColumn.ElementStyle>
-                                            </DataGridTextColumn>
-                                            <DataGridTextColumn Header="FIELDS" Binding="{Binding field_count}" Width="55" IsReadOnly="True"
-                                                                ElementStyle="{StaticResource T3.Cell.Number}"/>
-                                            <DataGridTextColumn Header="KEY" Binding="{Binding is_key_text}" Width="44" IsReadOnly="True"
-                                                                ElementStyle="{StaticResource T3.Cell.Mono}"/>
-                                        </DataGrid.Columns>
-                                    </DataGrid>
-                                    <TextBlock x:Name="xl_dg_empty" Style="{StaticResource T3.Empty}"
-                                               Text="No schedules found." Margin="16" Visibility="Collapsed"/>
+                            <!-- Workbook bar -->
+                            <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
+                                    BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1" Padding="16,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="WORKBOOK" Style="{StaticResource T3.Label}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                    <TextBox x:Name="txt_file" Grid.Column="1" Style="{StaticResource T3.TextBox}"
+                                             Margin="0,0,8,0"
+                                             ToolTip="Browse for an .xlsx, or paste a Google Sheets link here and press Enter (the sheet must be shared 'Anyone with the link')"/>
+                                    <Button x:Name="btn_open_link" Grid.Column="2" Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
+                                            ToolTip="Open the Google Sheets link pasted in the box">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE774;" Style="{StaticResource T3.Icon}" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Open link" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="btn_browse" Grid.Column="3" Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
+                                            ToolTip="Pick an .xlsx workbook or a Google Drive .gsheet shortcut">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE8E5;" Style="{StaticResource T3.Icon}" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Browse..." VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="btn_reread" Grid.Column="4" Style="{StaticResource T3.Button.Secondary}" IsEnabled="False"
+                                            ToolTip="Read the workbook again after saving it in Excel (keeps the sheet and the selection)">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE72C;" Style="{StaticResource T3.Icon}" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Re-read" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
                                 </Grid>
-                            </Grid>
+                            </Border>
 
-                            <!-- Vertical Divider -->
-                            <Border Grid.Column="1" Background="{StaticResource T3.Border}"/>
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" MinWidth="480"/>
+                                    <ColumnDefinition Width="1"/>
+                                    <ColumnDefinition Width="320"/>
+                                </Grid.ColumnDefinitions>
 
-                            <!-- Right: Options + Preview + Actions -->
-                            <Grid Grid.Column="2" Background="{StaticResource T3.Surface}">
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/> <!-- Options & Info -->
-                                    <RowDefinition Height="*"/>    <!-- Preview Grid -->
-                                    <RowDefinition Height="Auto"/> <!-- Progress -->
-                                    <RowDefinition Height="Auto"/> <!-- Action bar -->
-                                </Grid.RowDefinitions>
-
-                                <!-- Top Toolbar -->
-                                <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
-                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                        Padding="16,8">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <CheckBox x:Name="chk_keep_formatting" Content="Keep Formatting"
-                                                  Style="{StaticResource T3.CheckBox}" VerticalAlignment="Center"/>
-                                        <TextBlock x:Name="txt_info" Grid.Column="1"
-                                                   Style="{StaticResource T3.Caption}" VerticalAlignment="Center"
-                                                   Margin="16,0,0,0" TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                                <!-- Sheet viewer: drag over cells to pick the range, sheet tabs below -->
+                                <Grid Grid.Column="0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Border Grid.Row="0" BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1" Padding="16,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="DRAG OVER THE CELLS TO IMPORT" Style="{StaticResource T3.Label}" VerticalAlignment="Center"/>
+                                            <TextBlock x:Name="txt_selection" Grid.Column="1" Style="{StaticResource T3.Mono}"
+                                                       VerticalAlignment="Center" Text="—"/>
+                                        </Grid>
+                                    </Border>
+                                    <Grid Grid.Row="1">
+                                        <!-- A spreadsheet viewer is the one grid that must scroll sideways:
+                                             columns keep their Excel widths so the sheet reads like Excel. -->
+                                        <DataGrid x:Name="dg_sheet" Style="{StaticResource T3.DataGrid}"
+                                                  IsReadOnly="True" AutoGenerateColumns="False" BorderThickness="0"
+                                                  SelectionUnit="Cell" SelectionMode="Extended"
+                                                  CanUserSortColumns="False" CanUserReorderColumns="False"
+                                                  CanUserResizeRows="False" HeadersVisibility="Column"
+                                                  FrozenColumnCount="1"
+                                                  EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                                                  ScrollViewer.HorizontalScrollBarVisibility="Auto"/>
+                                        <TextBlock x:Name="sheet_empty" Style="{StaticResource T3.Empty}" Margin="16"
+                                                   Text="Browse for an Excel workbook, or paste a Google Sheets link above. Its sheets open here: pick a sheet tab, then drag over the cells to import."/>
                                     </Grid>
-                                </Border>
+                                    <Border Grid.Row="2" Background="{StaticResource T3.SurfaceSunken}"
+                                            BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0" Padding="8,4">
+                                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                                            <StackPanel x:Name="pnl_sheet_tabs" Orientation="Horizontal"/>
+                                        </ScrollViewer>
+                                    </Border>
+                                </Grid>
 
-                                <!-- Preview Area -->
-                                <ScrollViewer x:Name="scroll_preview" Grid.Row="1"
-                                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                              Background="{StaticResource T3.Surface}">
-                                    <StackPanel x:Name="ctr_grid" Background="{StaticResource T3.Surface}"/>
+                                <Border Grid.Column="1" Background="{StaticResource T3.Border}"/>
+
+                                <!-- Settings -->
+                                <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                              Padding="16,16,12,16">
+                                    <StackPanel>
+                                        <TextBlock Text="RANGE" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                        <ComboBox x:Name="cmb_range" Style="{StaticResource T3.ComboBox}"
+                                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}" Margin="0,0,0,8"
+                                                  ToolTip="Selected cells, the used range, the print area, an Excel table or a named range"/>
+                                        <TextBox x:Name="txt_range" Style="{StaticResource T3.TextBox.Mono}" Margin="0,0,0,4"
+                                                 ToolTip="Cells to import, e.g. A1:F20 — typing here selects them in the sheet"/>
+                                        <TextBlock Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,16"
+                                                   Text="A named range or Excel table follows the table when it grows in Excel; selected cells stay fixed."/>
+
+                                        <TextBlock Text="CREATE AS" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                        <ComboBox x:Name="cmb_kind" Style="{StaticResource T3.ComboBox}"
+                                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="txt_kind_hint" Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                                        <TextBlock Text="VIEW NAME" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                        <TextBox x:Name="txt_name" Style="{StaticResource T3.TextBox}" Margin="0,0,0,16"/>
+
+                                        <Grid Margin="0,0,0,16">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="64"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="SIZE %" Style="{StaticResource T3.Label}" VerticalAlignment="Center"/>
+                                            <TextBox x:Name="txt_scale" Grid.Column="1" Style="{StaticResource T3.TextBox.Mono}" Text="100"
+                                                     ToolTip="100 = the size Excel shows at 100 % zoom"/>
+                                        </Grid>
+
+                                        <CheckBox x:Name="chk_keep_link" Style="{StaticResource T3.CheckBox}" IsChecked="True" Margin="0,0,0,8"
+                                                  Content="Keep linked to the Excel file"/>
+                                        <CheckBox x:Name="chk_formatting" Style="{StaticResource T3.CheckBox}" IsChecked="True" Margin="0,0,0,8"
+                                                  Content="Copy Excel formatting"/>
+                                        <CheckBox x:Name="chk_hidden" Style="{StaticResource T3.CheckBox}" IsChecked="False" Margin="0,0,0,16"
+                                                  Content="Include hidden rows and columns"/>
+
+                                        <Border Style="{StaticResource T3.Panel}" Padding="12">
+                                            <TextBlock x:Name="txt_summary" Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
+                                                       Text="Pick a workbook and the cells to import."/>
+                                        </Border>
+                                    </StackPanel>
                                 </ScrollViewer>
-
-                                <!-- Progress Bar -->
-                                <ProgressBar x:Name="prg_excel" Grid.Row="2"
-                                             Style="{StaticResource T3.ProgressBar}"
-                                             Visibility="Collapsed" Margin="16,4"/>
-
-                                <!-- Action bar -->
-                                <Border Grid.Row="3" Background="{StaticResource T3.SurfaceSunken}"
-                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0"
-                                        Padding="16,8">
-                                    <Grid>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
-                                        <WrapPanel Grid.Row="0" Orientation="Horizontal">
-                                            <Button x:Name="btn_preview" Content="Preview"
-                                                    Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"/>
-                                            <Button x:Name="btn_export" Content="Export to Excel"
-                                                    Style="{StaticResource T3.Button.Primary}" IsDefault="True"
-                                                    Margin="0,0,8,0"/>
-                                            <Button x:Name="btn_import" Content="Import from Excel"
-                                                    Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"/>
-                                            <Button x:Name="btn_update" Content="Apply Changes"
-                                                    Style="{StaticResource T3.Button.Secondary}"
-                                                    IsEnabled="False" Margin="0,0,8,0"/>
-                                        </WrapPanel>
-                                        <TextBlock x:Name="txt_excel_status" Grid.Row="1"
-                                                   Style="{StaticResource T3.Caption}" Margin="0,4,0,0"/>
-                                    </Grid>
-                                </Border>
                             </Grid>
                         </Grid>
                     </TabItem>
 
-                    <!-- ==================== TAB ITEM 1: DUPLICATOR ==================== -->
-                    <TabItem x:Name="tab_duplicator">
+                    <!-- ==================== PAGE 2: LINKED TABLES ==================== -->
+                    <TabItem x:Name="tab_tables">
+                        <Grid Background="{StaticResource T3.Surface}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
+                                    BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1" Padding="16,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="EXCEL TABLES IN THIS PROJECT" Style="{StaticResource T3.Label}" VerticalAlignment="Center"/>
+                                    <TextBlock x:Name="tbl_count_text" Grid.Column="1" Text="—"
+                                               Style="{StaticResource T3.Caption}" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Row="1" BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1" Padding="12,8">
+                                <TextBox x:Name="tbl_search_box" Style="{StaticResource T3.Search}" Tag="Search tables..."/>
+                            </Border>
+
+                            <Grid Grid.Row="2">
+                                <DataGrid x:Name="dg_tables" Style="{StaticResource T3.DataGrid}"
+                                          IsReadOnly="False" BorderThickness="0"
+                                          EnableRowVirtualization="True"
+                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Width="36"
+                                                                HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                                                CellStyle="{StaticResource T3.DataGridCell.Check}">
+                                            <DataGridTemplateColumn.Header>
+                                                <CheckBox x:Name="chk_all_dg_tables" Style="{StaticResource T3.CheckBox.Cell}"
+                                                          Click="select_all_dg_tables_clicked" ToolTip="Select all rows"/>
+                                            </DataGridTemplateColumn.Header>
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <Grid>
+                                                        <TextBlock x:Name="row_tbl_checked_text" Text="{Binding is_checked}" Visibility="Collapsed"/>
+                                                        <CheckBox IsChecked="{Binding Text, ElementName=row_tbl_checked_text, Mode=OneWay}"
+                                                                  Style="{StaticResource T3.CheckBox.Cell}"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Header="VIEW" Binding="{Binding name}" Width="2*" MinWidth="140" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="TYPE" Binding="{Binding kind_text}" Width="104" IsReadOnly="True"/>
+                                        <DataGridTextColumn Header="SOURCE" Binding="{Binding source}" Width="3*" MinWidth="160" IsReadOnly="True"
+                                                            ElementStyle="{StaticResource T3.Cell.Muted}"/>
+                                        <DataGridTextColumn Header="UPDATED" Binding="{Binding updated}" Width="128" IsReadOnly="True"
+                                                            ElementStyle="{StaticResource T3.Cell.Mono}"/>
+                                        <DataGridTemplateColumn Header="STATUS" Width="128" IsReadOnly="True"
+                                                                CellTemplate="{StaticResource T3.StatusPill}"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <TextBlock x:Name="tbl_empty" Style="{StaticResource T3.Empty}" Margin="16"
+                                           Text="No Excel tables in this project yet. Create one on the New Table page."
+                                           Visibility="Collapsed"/>
+                            </Grid>
+
+                            <Border Grid.Row="3" Background="{StaticResource T3.SurfaceSunken}"
+                                    BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0" Padding="16,8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="btn_tbl_reload" Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
+                                            ToolTip="Point the ticked table at another workbook (same sheet and range) and update it">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE8E5;" Style="{StaticResource T3.Icon}" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Reload from..." VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="btn_tbl_unlink" Grid.Column="1" Style="{StaticResource T3.Button.Secondary}" Margin="0,0,12,0"
+                                            ToolTip="Stop syncing the ticked tables; the drawing stays as a static copy">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE711;" Style="{StaticResource T3.Icon}" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Unlink" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                    <TextBlock x:Name="tbl_note" Grid.Column="2" Style="{StaticResource T3.Caption}"
+                                               VerticalAlignment="Center" TextWrapping="Wrap"
+                                               Text="Tick tables and press Update Tables. With nothing ticked, every table whose Excel file or Google Sheet changed is updated."/>
+                                </Grid>
+                            </Border>
+                        </Grid>
+                    </TabItem>
+
+                    <!-- ==================== PAGE 3: SCHEDULE DATA ==================== -->
+                    <TabItem x:Name="tab_data">
                         <Grid Background="{StaticResource T3.Surface}">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="390" MinWidth="320"/>
+                                <ColumnDefinition Width="360" MinWidth="300"/>
                                 <ColumnDefinition Width="1"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <!-- Left: Schedule Browser -->
-                            <Grid Grid.Column="0" Background="{StaticResource T3.Surface}">
+                            <!-- Left: schedules to export -->
+                            <Grid Grid.Column="0">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="*"/>
                                 </Grid.RowDefinitions>
-
                                 <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
-                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                        Padding="16,8">
+                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1" Padding="16,8">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="SCHEDULES" Style="{StaticResource T3.Label}"
-                                                   VerticalAlignment="Center"/>
-                                        <Button x:Name="dup_select_all_btn" Grid.Column="2"
-                                                Content="All" Style="{StaticResource T3.Button.Secondary}"
-                                                Height="24" Padding="8,0" Margin="0,0,4,0"/>
-                                        <Button x:Name="dup_clear_btn" Grid.Column="3"
-                                                Content="Clear" Style="{StaticResource T3.Button.Secondary}"
-                                                Height="24" Padding="8,0" Margin="0,0,8,0"/>
-                                        <TextBlock x:Name="dup_count_text" Grid.Column="4" Text="—"
+                                        <TextBlock Text="SCHEDULES" Style="{StaticResource T3.Label}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="data_count_text" Grid.Column="1" Text="—"
                                                    Style="{StaticResource T3.Caption}" VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
-
-                                <Border Grid.Row="1" Background="{StaticResource T3.Surface}"
-                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                        Padding="12,8">
-                                    <TextBox x:Name="dup_search_box"
-                                             Style="{StaticResource T3.Search}"
-                                             Tag="Search schedules..."/>
+                                <Border Grid.Row="1" BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1" Padding="12,8">
+                                    <TextBox x:Name="data_search_box" Style="{StaticResource T3.Search}" Tag="Search schedules..."/>
                                 </Border>
-
                                 <Grid Grid.Row="2">
-                                    <DataGrid x:Name="dup_dg_schedules" Style="{StaticResource T3.DataGrid}"
-                                              IsReadOnly="False" BorderThickness="0">
+                                    <DataGrid x:Name="dg_schedules" Style="{StaticResource T3.DataGrid}"
+                                              IsReadOnly="False" BorderThickness="0"
+                                              EnableRowVirtualization="True"
+                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                         <DataGrid.Columns>
                                             <DataGridTemplateColumn Width="36"
                                                                     HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
                                                                     CellStyle="{StaticResource T3.DataGridCell.Check}">
                                                 <DataGridTemplateColumn.Header>
-                                                    <CheckBox x:Name="chk_all_dup_dg_schedules" Style="{StaticResource T3.CheckBox.Cell}"
-                                                              Click="select_all_dup_dg_schedules_clicked"
-                                                              ToolTip="Select all rows"/>
+                                                    <CheckBox x:Name="chk_all_dg_schedules" Style="{StaticResource T3.CheckBox.Cell}"
+                                                              Click="select_all_dg_schedules_clicked" ToolTip="Select all rows"/>
                                                 </DataGridTemplateColumn.Header>
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
                                                         <Grid>
-                                                            <TextBlock x:Name="row_is_checked_text_2" Text="{Binding is_checked}" Visibility="Collapsed"/>
-                                                            <CheckBox IsChecked="{Binding Text, ElementName=row_is_checked_text_2, Mode=OneWay}"
+                                                            <TextBlock x:Name="row_sch_checked_text" Text="{Binding is_checked}" Visibility="Collapsed"/>
+                                                            <CheckBox IsChecked="{Binding Text, ElementName=row_sch_checked_text, Mode=OneWay}"
                                                                       Style="{StaticResource T3.CheckBox.Cell}"/>
                                                         </Grid>
                                                     </DataTemplate>
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>
-                                            <DataGridTextColumn Header="SCHEDULE NAME" Binding="{Binding name}" Width="*" MinWidth="140" IsReadOnly="True">
-                                                <DataGridTextColumn.ElementStyle>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
-                                                        <Setter Property="ToolTip" Value="{Binding name}"/>
-                                                        <Setter Property="VerticalAlignment" Value="Center"/>
-                                                        <Setter Property="Margin" Value="8,0"/>
-                                                    </Style>
-                                                </DataGridTextColumn.ElementStyle>
-                                            </DataGridTextColumn>
-                                            <DataGridTextColumn Header="FIELDS" Binding="{Binding field_count}" Width="55" IsReadOnly="True"
+                                            <DataGridTextColumn Header="SCHEDULE NAME" Binding="{Binding name}" Width="*" MinWidth="140" IsReadOnly="True"/>
+                                            <DataGridTextColumn Header="FIELDS" Binding="{Binding field_count}" Width="64" IsReadOnly="True"
                                                                 ElementStyle="{StaticResource T3.Cell.Number}"/>
-                                            <DataGridTextColumn Header="" Width="44" IsReadOnly="True"/>
                                         </DataGrid.Columns>
                                     </DataGrid>
-                                    <TextBlock x:Name="dup_dg_empty" Style="{StaticResource T3.Empty}"
-                                               Text="No schedules found." Margin="16" Visibility="Collapsed"/>
+                                    <TextBlock x:Name="data_empty" Style="{StaticResource T3.Empty}" Margin="16"
+                                               Text="No schedules found." Visibility="Collapsed"/>
                                 </Grid>
                             </Grid>
 
-                            <!-- Vertical Divider -->
                             <Border Grid.Column="1" Background="{StaticResource T3.Border}"/>
 
-                            <!-- Right: Duplication Settings & Log -->
-                            <Grid Grid.Column="2" Background="{StaticResource T3.Surface}">
+                            <!-- Right: import + review changes -->
+                            <Grid Grid.Column="2">
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/> <!-- Settings Form -->
-                                    <RowDefinition Height="*"/>    <!-- Log Output -->
-                                    <RowDefinition Height="Auto"/> <!-- Status -->
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
                                 </Grid.RowDefinitions>
-
-                                <!-- Settings Form -->
                                 <Border Grid.Row="0" Background="{StaticResource T3.SurfaceSunken}"
-                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1"
-                                        Padding="24,16">
-                                    <StackPanel>
-                                        <TextBlock Text="DUPLICATION SETTINGS" Style="{StaticResource T3.Label}" Margin="0,0,0,12"/>
-
-                                        <Grid Margin="0,0,0,8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="130"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="Copy Count:" Style="{StaticResource T3.Body}" VerticalAlignment="Center"/>
-                                            <TextBox x:Name="txt_dup_count" Grid.Column="1" Text="1" Width="80"
-                                                     HorizontalAlignment="Left" Style="{StaticResource T3.TextBox}"/>
-                                        </Grid>
-
-                                        <Grid Margin="0,0,0,8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="130"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="Base Name:" Style="{StaticResource T3.Body}" VerticalAlignment="Center"/>
-                                            <TextBox x:Name="txt_dup_basename" Grid.Column="1"
-                                                     Style="{StaticResource T3.TextBox}" MaxWidth="400" HorizontalAlignment="Left"/>
-                                        </Grid>
-
-                                        <Grid Margin="0,0,0,8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="130"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="Method:" Style="{StaticResource T3.Body}" VerticalAlignment="Center"/>
-                                            <ComboBox x:Name="cmb_dup_method" Grid.Column="1"
-                                                      Style="{StaticResource T3.ComboBox}"
-                                                      ItemContainerStyle="{StaticResource T3.ComboBoxItem}"
-                                                      MinWidth="240" MaxWidth="380" HorizontalAlignment="Left"/>
-                                        </Grid>
-
-                                        <Grid Margin="0,0,0,12">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="130"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="View Template:" Style="{StaticResource T3.Body}" VerticalAlignment="Center"/>
-                                            <ComboBox x:Name="cmb_dup_template" Grid.Column="1"
-                                                      Style="{StaticResource T3.ComboBox}"
-                                                      ItemContainerStyle="{StaticResource T3.ComboBoxItem}"
-                                                      MinWidth="240" MaxWidth="380" HorizontalAlignment="Left"/>
-                                        </Grid>
-
-                                        <Button x:Name="btn_dup_run" Content="Duplicate Schedules"
-                                                Style="{StaticResource T3.Button.Secondary}"
-                                                HorizontalAlignment="Left"/>
-                                    </StackPanel>
+                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,0,0,1" Padding="16,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Style="{StaticResource T3.Caption}" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,12,0"
+                                                   Text="Export the ticked schedules, edit the values in Excel (grey columns are read-only), import the file, review, apply."/>
+                                        <Button x:Name="btn_import" Grid.Column="1" Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
+                                                ToolTip="Read an edited workbook; each sheet is matched to the schedule of the same name">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE8B5;" Style="{StaticResource T3.Icon}" Margin="0,0,8,0"/>
+                                                <TextBlock Text="Import from Excel..." VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Button>
+                                        <Button x:Name="btn_apply" Grid.Column="2" Style="{StaticResource T3.Button.Secondary}" IsEnabled="False"
+                                                ToolTip="Write the ticked changes to the model (one undo step)">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#xE73E;" Style="{StaticResource T3.Icon}" Margin="0,0,8,0"/>
+                                                <TextBlock x:Name="txt_apply" Text="Apply changes" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
                                 </Border>
 
-                                <!-- Log Output -->
-                                <Grid Grid.Row="1" Margin="24,12,24,12">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto"/>
-                                        <RowDefinition Height="*"/>
-                                    </Grid.RowDefinitions>
-                                    <TextBlock Grid.Row="0" Text="LOG:" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                                    <TextBox x:Name="txt_dup_log" Grid.Row="1"
-                                             IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
-                                             VerticalScrollBarVisibility="Auto"
-                                             Style="{StaticResource T3.TextBox}"
-                                             FontFamily="Consolas"
-                                             FontSize="12.5"/>
-                                </Grid>
-
-                                <!-- Status bar inside column -->
-                                <Border Grid.Row="2" Background="{StaticResource T3.SurfaceSunken}"
-                                        BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0"
-                                        Padding="24,8">
-                                    <TextBlock x:Name="txt_dup_status" Style="{StaticResource T3.Caption}"/>
+                                <Border Grid.Row="1" Style="{StaticResource T3.Panel}" Padding="0" Margin="16">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <Grid Grid.Row="0">
+                                            <DataGrid x:Name="dg_changes" Style="{StaticResource T3.DataGrid}"
+                                                      IsReadOnly="False" BorderThickness="0"
+                                                      EnableRowVirtualization="True"
+                                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                                <DataGrid.Columns>
+                                                    <DataGridTemplateColumn Width="36"
+                                                                            HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
+                                                                            CellStyle="{StaticResource T3.DataGridCell.Check}">
+                                                        <DataGridTemplateColumn.Header>
+                                                            <CheckBox x:Name="chk_all_dg_changes" Style="{StaticResource T3.CheckBox.Cell}"
+                                                                      Click="select_all_dg_changes_clicked" ToolTip="Select all rows"/>
+                                                        </DataGridTemplateColumn.Header>
+                                                        <DataGridTemplateColumn.CellTemplate>
+                                                            <DataTemplate>
+                                                                <Grid>
+                                                                    <TextBlock x:Name="row_chg_checked_text" Text="{Binding is_checked}" Visibility="Collapsed"/>
+                                                                    <CheckBox IsChecked="{Binding Text, ElementName=row_chg_checked_text, Mode=OneWay}"
+                                                                              Style="{StaticResource T3.CheckBox.Cell}"/>
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </DataGridTemplateColumn.CellTemplate>
+                                                    </DataGridTemplateColumn>
+                                                    <DataGridTextColumn Header="SCHEDULE" Binding="{Binding schedule}" Width="2*" MinWidth="100" IsReadOnly="True"/>
+                                                    <DataGridTextColumn Header="ELEMENT ID" Binding="{Binding element_id}" Width="96" IsReadOnly="True"
+                                                                        ElementStyle="{StaticResource T3.Cell.Mono}"/>
+                                                    <DataGridTextColumn Header="FIELD" Binding="{Binding field}" Width="2*" MinWidth="100" IsReadOnly="True"/>
+                                                    <DataGridTextColumn Header="CURRENT" Binding="{Binding old}" Width="2*" MinWidth="80" IsReadOnly="True"
+                                                                        ElementStyle="{StaticResource T3.Cell.Muted}"/>
+                                                    <DataGridTextColumn Header="NEW" Binding="{Binding new}" Width="2*" MinWidth="80" IsReadOnly="True"/>
+                                                </DataGrid.Columns>
+                                            </DataGrid>
+                                            <TextBlock x:Name="changes_empty" Style="{StaticResource T3.Empty}" Margin="16"
+                                                       Text="Import an edited Excel file to review its changes here."/>
+                                        </Grid>
+                                        <Border Grid.Row="1" BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0" Padding="12,4">
+                                            <TextBlock x:Name="txt_changes_info" Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
+                                                       Text="No file imported."/>
+                                        </Border>
+                                    </Grid>
                                 </Border>
                             </Grid>
                         </Grid>
@@ -2160,7 +2184,7 @@
                 </TabControl>
             </Grid>
 
-            <!-- ══════════════════ ROW 2: UNIFIED FOOTER BAR ══════════════════ -->
+            <!-- ══════════════════ ROW 2: FOOTER ══════════════════ -->
             <Border Grid.Row="2" Style="{StaticResource T3.FooterBar}">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -2172,8 +2196,15 @@
                         <Border Width="1" Height="16" Margin="12,0"
                                 Background="{StaticResource T3.Border}" VerticalAlignment="Center"/>
                         <TextBlock x:Name="txt_statusbar" Text="Ready"
-                                   Style="{StaticResource T3.Body.Secondary}" VerticalAlignment="Center"/>
+                                   Style="{StaticResource T3.Body.Secondary}" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
+                    <Button x:Name="btn_primary" Grid.Column="1" Style="{StaticResource T3.Button.Primary}" IsDefault="True">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock x:Name="ico_primary" Text="&#xE710;" Style="{StaticResource T3.Icon}" Margin="0,0,8,0"/>
+                            <TextBlock x:Name="txt_primary" Text="Create Table" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                 </Grid>
             </Border>
         </Grid>

@@ -17,6 +17,7 @@ import sys
 import json
 import re as _re
 
+from Intelligence.context_budget import fit_history
 from Intelligence.llm_provider import (BaseLLMProvider, http_post, http_post_stream,
                                        http_get_auth, parse_openai_stream_line,
                                        openai_chat_agent, openai_agent_tool_results)
@@ -177,7 +178,8 @@ class DeepSeekProvider(BaseLLMProvider):
         msgs  = []
         if system_prompt:
             msgs.append({"role": "system", "content": system_prompt})
-        for h in (messages or [])[-8:]:
+        for h in fit_history(messages, self, system_prompt=system_prompt,
+                             user=text, reply_tokens=max_tokens):
             role    = h.get("role", "user")
             content = h.get("content", "")
             if role not in ("user", "assistant"):
@@ -231,7 +233,8 @@ class DeepSeekProvider(BaseLLMProvider):
         msgs  = []
         if system_prompt:
             msgs.append({"role": "system", "content": system_prompt})
-        for h in (messages or [])[-8:]:
+        for h in fit_history(messages, self, system_prompt=system_prompt,
+                             user=text, reply_tokens=max_tokens):
             role    = h.get("role", "user")
             content = h.get("content", "")
             if role not in ("user", "assistant"):

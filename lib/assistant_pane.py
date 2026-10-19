@@ -31,7 +31,7 @@ PANE_GUID = "7F3A9B2E-C4D1-4E8F-A6B5-1234567890AB"   # = core/server.py show_ass
 PANE_TITLE = "T3Lab Assistant"
 HOST_KEY = "T3Lab.AssistantPaneHost"
 PLACEHOLDER_TEXT = ("T3Lab Assistant is not loaded yet. Click T3Lab Assistant "
-                    "on the T3Lab tab to load it here.")
+                    "on the T3Lab_Dev tab to load it here.")
 
 # register() states
 REGISTERED = "registered"

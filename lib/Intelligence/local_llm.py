@@ -426,7 +426,13 @@ def parse_command(user_input, history=None, model=None):
     messages = [{"role": "system", "content": _sys}]
 
     if history:
-        for h in history[-8:]:
+        # num_ctx is pinned to 8192 below — history gets what that window
+        # has left after this request's system prompt and the user turn.
+        from Intelligence.context_budget import (fit_messages, history_budget,
+                                                 request_overhead)
+        _hist, _dropped = fit_messages(history, history_budget(
+            8192, local=True, overhead=request_overhead(_sys, None, user_input)))
+        for h in _hist:
             role    = h.get("role", "user")
             content = h.get("content", "")
             if role in ("user", "assistant") and content:

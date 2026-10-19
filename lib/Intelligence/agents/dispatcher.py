@@ -443,10 +443,14 @@ class AgentDispatcher(object):
             # response_format is required now that Ollama's JSON grammar is
             # opt-in rather than hardcoded on — this stage json.loads() the
             # reply below. Cloud providers accept and ignore it.
+            # thinking_off: current Haiku thinks by default and would spend
+            # the 60-token cap before writing the label (Claude only; the
+            # other providers ignore it).
             raw = provider.chat([], system, text or '', max_tokens=60,
                                 temperature=0.0, model_override=fast,
                                 response_format={"type": "json_object"},
-                                timeout_ms=_CLASSIFY_TIMEOUT_MS)
+                                timeout_ms=_CLASSIFY_TIMEOUT_MS,
+                                thinking_off=True)
         except TypeError:
             try:
                 raw = provider.chat([], system, text or '', 60)

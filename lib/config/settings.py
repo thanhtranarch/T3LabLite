@@ -17,6 +17,8 @@ import io
 import os
 import json
 
+from config import secret_store as secrets
+
 
 # Personal instructions (Claude's "personal preferences"): one free-text block
 # the user writes once in LLMs Setting → General, injected into EVERY chat and
@@ -166,6 +168,12 @@ class T3LabAISettings(object):
             # Ollama is unreachable, so the assistant works even with no model.
             'active_provider': 'ollama',
             'model_preferences': {},
+            # Per-role model pins, validated against the provider's live
+            # list: {"claude": {"fast": "", "agent": "", "quality": ""}}.
+            # Empty = the provider's preference order (newest Haiku for
+            # classification, newest Sonnet for agent turns, newest Opus for
+            # quality mode / the teacher).
+            'model_roles': {},
             'username': 'Thạnh',
             'window_state': {
                 'left':         None,
@@ -188,6 +196,9 @@ class T3LabAISettings(object):
                 'multi_agent':    True,
                 'llm_classify':   True,
                 'quality_mode':   False,
+                # Claude: Haiku pre-reads each turn and picks Haiku / Sonnet /
+                # Opus for it (Intelligence/model_tier.py).
+                'auto_model':     True,
                 'graph_mode':     True,
                 'show_tool_calls': True,
                 'show_thinking':   True,
@@ -195,6 +206,15 @@ class T3LabAISettings(object):
                 'parallel_tasks':  True,
                 'opus_teacher':    False,
                 'self_train_auto': False,
+                # Claude: server-side tool search + defer_loading (the ~90
+                # non-essential tool schemas leave the prompt until searched).
+                'tool_search':     True,
+                # USD per day across turns before the composer chip warns.
+                # 0 = no warning. Estimates only (Intelligence/pricing.py).
+                'daily_budget_usd': 0,
+                # Fold tool results older than the last 6 within one turn
+                # (Claude: server-side context editing; others: client stub).
+                'compact_tool_results': True,
             },
             'skills': {
                 'disabled': [],
@@ -279,7 +299,15 @@ class T3LabAISettings(object):
 
         The dict is kept in sync with the file by reload() / set_api_key().
         """
-        return self._settings.get('api_keys', {}).get(provider_name)
+        stored = self._settings.get('api_keys', {}).get(provider_name)
+        if not stored:
+            return stored
+        if secrets.is_protected(stored):
+            return secrets.unprotect(stored)
+        # Plaintext from before DPAPI: encrypt it once, in place.
+        if secrets.available():
+            self.set_api_key(provider_name, stored)
+        return stored
 
     def set_api_key(self, provider_name, api_key):
         """Set API key for a provider.
@@ -289,7 +317,7 @@ class T3LabAISettings(object):
         in-memory data.
         """
         def _m(s):
-            s.setdefault('api_keys', {})[provider_name] = api_key
+            s.setdefault('api_keys', {})[provider_name] = secrets.protect(api_key)
         return self._update(_m)
 
     def get_active_provider(self):
@@ -301,6 +329,25 @@ class T3LabAISettings(object):
         def _m(s):
             s['active_provider'] = name
         return self._update(_m)
+
+    def get_role_model(self, provider_name, role):
+        """Pinned model id for a role ('fast' | 'agent' | 'quality') of a
+        provider, or '' when the provider's preference order decides."""
+        roles = self._settings.get('model_roles', {}) or {}
+        prov = roles.get(provider_name) or {}
+        return u'{}'.format(prov.get(role) or u'') if isinstance(prov, dict) else u''
+
+    def set_role_model(self, provider_name, role, model_name):
+        def _m(s):
+            roles = s.setdefault('model_roles', {})
+            roles.setdefault(provider_name, {})[role] = model_name or ''
+        return self._update(_m)
+
+    def get_daily_budget_usd(self):
+        try:
+            return float(self._settings.get('agents', {}).get('daily_budget_usd', 0) or 0)
+        except Exception:
+            return 0.0
 
     def get_provider_model(self, provider_name):
         """Return the saved model name for a provider, or None."""
@@ -389,6 +436,15 @@ class T3LabAISettings(object):
         """
         return bool(self._settings.get('agents', {}).get('quality_mode', False))
 
+    def is_auto_model_enabled(self):
+        """Auto model switch (default on, Claude only).
+
+        Each turn is graded by a fast triage call and runs on Haiku (simple),
+        Sonnet (normal) or Opus (complex) instead of one fixed model. Maximum
+        quality, when on, takes precedence: every turn runs on the top model.
+        """
+        return bool(self._settings.get('agents', {}).get('auto_model', True))
+
     # ------------------------------------------------------------------
     # Chat verbosity
     #
@@ -431,6 +487,24 @@ class T3LabAISettings(object):
         return bool(self._settings.get('agents', {}).get(
             'allow_sync_with_central', False))
 
+
+    def is_tool_search_enabled(self):
+        """Claude only: send the registry with `defer_loading` + the
+        server-side BM25 tool search instead of loading ~98 schemas up front.
+        Default on; the provider falls back to the plain list by itself when
+        the API rejects the feature."""
+        return bool(self._settings.get('agents', {}).get('tool_search', True))
+
+    def set_tool_search_enabled(self, enabled):
+        return self.set_agent_option('tool_search', bool(enabled))
+
+    def is_compact_tool_results_enabled(self):
+        """Within one agent turn, old tool results are folded away so a
+        20-iteration turn does not carry twenty element dumps. Claude does
+        it server-side (context_management clear_tool_uses, append-only, so
+        preserved thinking is untouched); other providers get a client-side
+        stub. Default on."""
+        return bool(self._settings.get('agents', {}).get('compact_tool_results', True))
 
     def get_action_mode(self):
         """Harness action mode for model-editing tools.

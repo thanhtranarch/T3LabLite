@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 __title__ = "Schedule\nManager"
 __author__ = "Tran Tien Thanh"
-__doc__ = "Schedule Manager — unified Export/Import Excel and Schedule Duplication tool."
+__doc__ = "Schedule Manager — Excel tables in Revit kept in sync (TableGen-style) and schedule values round-tripped through Excel."
 
 import os, sys
 # ─── CPython 3 & lib bootstrap ────────────────────────────────────────────────
@@ -40,7 +40,9 @@ except NameError:
         reload = None
 
 if reload:
-    for _mod in ('GUI.WPF_Base', 'GUI.ManaSchedDialog', 'ManaSchedDialog'):
+    for _mod in ('GUI.WPF_Base', 'Snippets.xlsx_table', 'Snippets.gsheet_source',
+                 'Snippets.excel_table_revit',
+                 'Snippets.schedule_data', 'GUI.ManaSchedDialog', 'ManaSchedDialog'):
         if _mod in sys.modules:
             try:
                 reload(sys.modules[_mod])

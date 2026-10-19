@@ -12,7 +12,9 @@ from __future__ import unicode_literals
 __author__ = "Tran Tien Thanh"
 __title__  = "Claude Provider"
 
+import copy
 import json
+import re
 import os
 import sys
 
@@ -52,10 +54,24 @@ _THINK_BUDGET = 3000
 _THINK_EFFORT = "high"
 _THINK_BETA   = "interleaved-thinking-2025-05-14"   # legacy-mode only; GA (no header needed) on 4.6+ adaptive thinking
 
-# Opus-parity mode: agent turns get a wider answer ceiling so rich replies
-# (multi-step summaries, tables, code) never truncate. Utility calls are
-# unaffected — they pin a fast model + tiny token cap via model_override.
-_QUALITY_AGENT_TOKENS = 4000
+# Floor for every agent turn: a cloud answer (multi-step summary, table,
+# IronPython for send_code_to_revit) must never be cut at the 1,500 tokens
+# a local model gets. Streaming is always on, so the cap is free until used;
+# a caller's explicit HIGHER cap is never lowered. Utility calls (classify)
+# pin a fast model + tiny cap through chat() with model_override instead.
+_CLOUD_AGENT_TOKENS = 16000
+
+# Server-side context editing (beta): the API clears old tool results
+# from the conversation before the model sees it — append-only on our side,
+# so the cached prefix and preserved-thinking blocks stay valid. Gated by
+# agents.compact_tool_results; dropped (per model) on a 400 naming it.
+_CONTEXT_EDIT = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+_CONTEXT_BETA = "context-management-2025-06-27"
+
+# Streaming / blocking agent call timeout. .NET: Timeout waits for the
+# response headers, ReadWriteTimeout is per read — a 32k-token answer at
+# ~80 tok/s streams for ~7 minutes, so both get 10 minutes.
+_AGENT_TIMEOUT_MS = 600000
 
 
 # ─── Provider ──────────────────────────────────────────────────────────────────
@@ -70,8 +86,12 @@ class ClaudeProvider(BaseLLMProvider):
 
     def __init__(self):
         self._model         = None   # None → auto-select text vs vision model
+        self._rejected_model = None  # saved model the API answered "not found" for
+        self._turn_model    = None   # (token, model) — auto model switch, see set_turn_model
         self._cached_models = None   # filled on first successful /v1/models fetch
         self._thinking_mode = {}     # model name -> "adaptive" | "legacy", learned on first 400
+        self._tool_search_mode = {}  # model name -> "off" once the API rejected deferral
+        self._context_edit_mode = {} # model name -> "off" once the API rejected it
 
     # ── Credentials ───────────────────────────────────────────────────────────
 
@@ -139,29 +159,93 @@ class ClaudeProvider(BaseLLMProvider):
         Deliberately does no HTTP (badge/sidebar call this) — returns None
         until a live model list has been fetched at least once.
         """
-        if self._model:
-            return self._model
-        return self._pick_model(self._cached_models or [], _PREF_TEXT)
+        return (self._user_model()
+                or self._pick_model(self._cached_models or [], _PREF_TEXT))
 
     def set_model(self, model_name):
         self._model = model_name
         return True
 
+    def _user_model(self):
+        """The saved model, or None when it cannot be a usable Claude model.
+
+        A saved id that is not a Claude model at all (a leftover test value
+        like "test_custom_model_99", another provider's model) or that the API
+        already answered `not_found_error` for made EVERY request 404 — the
+        assistant then fell back to its offline canned replies while the chip
+        still said Claude. Falling back to the live default instead keeps the
+        assistant working; the saved choice is left alone in settings.json.
+        """
+        m = self._model
+        if not m or m == getattr(self, '_rejected_model', None):
+            return None
+        if u"claude" not in u"{}".format(m).lower():
+            return None
+        return m
+
+    def _record_error(self, msg):
+        BaseLLMProvider._record_error(self, msg)
+        # "model: <id>" not found → stop sending that id. chat_stream()'s
+        # blocking retry runs right after this, so the same turn recovers.
+        text = u"{}".format(msg)
+        if (self._model and u"not_found_error" in text
+                and u"model: {}".format(self._model) in text):
+            self._rejected_model = self._model
+
     @staticmethod
-    def _pick_model(models, prefs):
-        """Pick a model from a LIVE list by substring preference order."""
+    def _version_key(model_id):
+        """Sort key: the generation numbers after the family word, so
+        claude-sonnet-5-5 (5, 5) beats claude-sonnet-4-6 (4, 6). A dated
+        snapshot (claude-sonnet-4-5-20250929) carries no extra weight; ids
+        without a parseable version sort last."""
+        m = re.search(r"(?:haiku|sonnet|opus|fable|mythos)-(\d+)(?:-(\d+))?",
+                      u"{}".format(model_id or u""))
+        if not m:
+            return (-1, -1)
+        return (int(m.group(1)), int(m.group(2) or 0))
+
+    @classmethod
+    def _pick_model(cls, models, prefs):
+        """Pick a model from a LIVE list by substring preference order; within
+        the first family that matches, the NEWEST generation (the live list
+        is not ordered by version)."""
         if not models:
             return None
         for p in prefs:
-            for m in models:
-                if p in m:
-                    return m
+            family = [m for m in models if p in m]
+            if family:
+                return max(family, key=cls._version_key)
         return models[0]
+
+    # Roles a settings override can pin: "fast" (classification), "agent"
+    # (every tool-calling turn), "quality" (Opus-parity / teacher). The
+    # override must be in the live list; otherwise the preference order
+    # decides as before — no model id is ever hardcoded here.
+    _ROLE_PREFS = {"fast": _PREF_FAST, "agent": _PREF_VISION,
+                   "quality": _PREF_QUALITY}
+
+    def _role_override(self, role):
+        try:
+            _ensure_lib_in_path()
+            from config.settings import get_settings
+            return (get_settings().get_role_model(self.NAME, role) or u"").strip()
+        except Exception:
+            return u""
+
+    def _role_model(self, role, models):
+        override = self._role_override(role)
+        if override and override in (models or []):
+            return override
+        return self._pick_model(models or [], self._ROLE_PREFS[role])
 
     def pick_fast_model(self):
         """Fastest model from the CACHED live list — used for tiny utility
         calls (classification). No HTTP; None until models were fetched."""
-        return self._pick_model(self._cached_models or [], _PREF_FAST)
+        return self._role_model("fast", self._cached_models or [])
+
+    def pick_agent_model(self):
+        """The model agent (tool-calling) turns run on. May fetch /v1/models."""
+        return self._role_model("agent", self.get_models())
 
     def pick_quality_model(self):
         """Most capable model (Opus > Sonnet > Haiku) from the LIVE list.
@@ -170,7 +254,42 @@ class ClaudeProvider(BaseLLMProvider):
         Opus regardless of the user's saved default. May fetch /v1/models.
         Returns None when no key / no live list.
         """
-        return self._pick_model(self.get_models(), _PREF_QUALITY)
+        return self._role_model("quality", self.get_models())
+
+    # ── Auto model switch (Intelligence.model_tier) ───────────────────────────
+    # The triage call grades a turn fast / standard / deep; each tier maps to a
+    # ROLE, so the ids still come from the live list and a role pinned in
+    # settings (model_roles) is honoured: fast → Haiku, standard → the agent
+    # role (Sonnet first), deep → the quality role (Opus first).
+    _TIER_ROLES = {"fast": "fast", "standard": "agent", "deep": "quality"}
+
+    def pick_tier_model(self, tier):
+        """Model for a triage tier from the live list, or None. May fetch."""
+        role = self._TIER_ROLES.get(tier)
+        if not role:
+            return None
+        return self._role_model(role, self.get_models())
+
+    def set_turn_model(self, model):
+        """Use `model` for every call of the current chat turn that does not
+        pin its own (utility calls keep their model_override). Returns a token
+        for clear_turn_model(). The assistant runs one turn at a time; the
+        token keeps a late clear from wiping a newer turn's choice."""
+        token = object()
+        self._turn_model = (token, model) if model else None
+        return token
+
+    def clear_turn_model(self, token=None):
+        cur = self._turn_model
+        if cur is not None and (token is None or cur[0] is token):
+            self._turn_model = None
+
+    def get_turn_model(self):
+        cur = self._turn_model
+        return cur[1] if cur else None
+
+    def _turn_or_user_model(self):
+        return self.get_turn_model() or self._user_model()
 
     @staticmethod
     def _quality_mode():
@@ -190,11 +309,12 @@ class ClaudeProvider(BaseLLMProvider):
         Opus. Utility calls bypass this via model_override, so classification
         stays on the fast model.
         """
+        models = self.get_models()
         if self._quality_mode():
-            prefs = _PREF_QUALITY
-        else:
-            prefs = _PREF_VISION if prefer_vision else _PREF_TEXT
-        return self._pick_model(self.get_models(), prefs)
+            return self._role_model("quality", models)
+        if prefer_vision:
+            return self._role_model("agent", models)
+        return self._pick_model(models, _PREF_TEXT)
 
     # ── Chat ─────────────────────────────────────────────────────────────────
 
@@ -216,7 +336,7 @@ class ClaudeProvider(BaseLLMProvider):
         # model_override: callers doing tiny utility calls (dispatcher
         # classification) can pin the fastest model without touching the
         # user's saved choice.
-        model = (kwargs.get("model_override") or self._model
+        model = (kwargs.get("model_override") or self._turn_or_user_model()
                  or self._default_model(prefer_vision=has_vision))
         if not model:
             return self._fail_no_model("chat()")
@@ -230,18 +350,37 @@ class ClaudeProvider(BaseLLMProvider):
             "system":     system_prompt,
             "messages":   msgs,
         }
+        # thinking_off: tiny utility calls (classify, triage). Current Haiku
+        # thinks by default, and a 60-token cap spent on thinking leaves no
+        # text at all. Models that refuse "disabled" (Sonnet 5.5, Opus 5.5)
+        # get the request again without it.
+        if kwargs.get("thinking_off"):
+            payload["thinking"] = {"type": "disabled"}
 
         headers = {
             "x-api-key":         api_key,
             "anthropic-version": ANTHROPIC_API_VER,
         }
 
+        timeout_ms = int(kwargs.get("timeout_ms") or 60000)
         try:
-            resp_text  = http_post(CLAUDE_API_URL, payload, headers,
-                                   timeout_ms=int(kwargs.get("timeout_ms")
-                                                  or 60000))
+            try:
+                resp_text = http_post(CLAUDE_API_URL, payload, headers,
+                                      timeout_ms=timeout_ms)
+            except Exception as ex:
+                if "thinking" not in payload or not self._thinking_rejected(ex):
+                    raise
+                payload.pop("thinking", None)
+                resp_text = http_post(CLAUDE_API_URL, payload, headers,
+                                      timeout_ms=timeout_ms)
             api_result = json.loads(resp_text)
-            return api_result["content"][0]["text"].strip()
+            # The first block is a thinking block whenever the model thought
+            # (current Haiku/Sonnet/Opus do by default) — read the text block.
+            for block in api_result.get("content") or []:
+                if block.get("type", "text") == "text" and "text" in block:
+                    return (block.get("text") or u"").strip()
+            raise ValueError(u"no text block (stop_reason {})".format(
+                api_result.get("stop_reason")))
         except Exception as ex:
             self._record_error(u"chat() failed: {}".format(ex))
             return None
@@ -257,7 +396,8 @@ class ClaudeProvider(BaseLLMProvider):
             return self._fail_no_key("chat_stream()")
 
         has_vision = self.has_image_blocks(user_content)
-        model = self._model or self._default_model(prefer_vision=has_vision)
+        model = (self._turn_or_user_model()
+                 or self._default_model(prefer_vision=has_vision))
         if not model:
             return self._fail_no_model("chat_stream()")
 
@@ -373,8 +513,25 @@ class ClaudeProvider(BaseLLMProvider):
         except Exception:
             return False
 
+    @staticmethod
+    def _compact_enabled():
+        try:
+            _ensure_lib_in_path()
+            from config.settings import get_settings
+            return bool(get_settings().is_compact_tool_results_enabled())
+        except Exception:
+            return False
+
+    def _context_edit_on(self, model):
+        return self._compact_enabled() and \
+            self._context_edit_mode.get(model) != "off"
+
+    @staticmethod
+    def _context_edit_rejected(ex):
+        return "context_management" in u"{}".format(ex).lower()
+
     def _agent_payload(self, model, system_prompt, messages, tools, max_tokens,
-                       stream, thinking_mode=None):
+                       stream, thinking_mode=None, context_edit=False):
         """Build a Messages API payload with prompt caching on system + tools
         AND on the conversation prefix.
 
@@ -392,11 +549,7 @@ class ClaudeProvider(BaseLLMProvider):
         models), or "legacy" (older enabled+budget_tokens shape — see the
         module-level comment above _THINK_BUDGET for why both exist).
         """
-        cached_tools = list(tools or [])
-        if cached_tools:
-            last = dict(cached_tools[-1])          # copy — tool list is shared/cached
-            last["cache_control"] = {"type": "ephemeral"}
-            cached_tools = cached_tools[:-1] + [last]
+        cached_tools = self._cache_marked_tools(tools)
 
         payload = {
             "model":      model,
@@ -416,9 +569,52 @@ class ClaudeProvider(BaseLLMProvider):
             payload["thinking"]   = {"type": "enabled",
                                      "budget_tokens": _THINK_BUDGET}
             payload["max_tokens"] = max(max_tokens, _THINK_BUDGET + 2000)
+        if context_edit:
+            payload["context_management"] = copy.deepcopy(_CONTEXT_EDIT)
         if stream:
             payload["stream"] = True
         return payload
+
+    @staticmethod
+    def _cache_marked_tools(tools):
+        """Copy of `tools` with ONE cache breakpoint, on the last entry that
+        can carry it: a plain tool without `defer_loading`. A deferred tool
+        with cache_control is a 400, and a server tool entry (tool search)
+        takes none either. tool_schema.with_deferred_loading orders the list
+        deferred-first so this breakpoint still covers everything."""
+        out = []
+        for t in tools or []:
+            t = dict(t) if isinstance(t, dict) else t
+            if isinstance(t, dict):
+                t.pop("cache_control", None)
+            out.append(t)
+        for i in range(len(out) - 1, -1, -1):
+            t = out[i]
+            if isinstance(t, dict) and not t.get("type") \
+                    and not t.get("defer_loading"):
+                t["cache_control"] = {"type": "ephemeral"}
+                break
+        return out
+
+    @staticmethod
+    def _plain_tools(tools):
+        _ensure_lib_in_path()
+        from Intelligence.tool_schema import strip_deferred_loading
+        return strip_deferred_loading(tools)
+
+    @staticmethod
+    def _uses_tool_search(tools):
+        return any(isinstance(t, dict) and (t.get("type") or t.get("defer_loading"))
+                   for t in tools or [])
+
+    @staticmethod
+    def _tool_search_rejected(ex):
+        """True if `ex` is the API refusing tool search / deferred loading
+        (an older model, a proxy that strips the field) rather than any
+        other failure."""
+        msg = u"{}".format(ex).lower()
+        return ("tool_search" in msg or "defer_loading" in msg
+                or "tool_reference" in msg)
 
     @staticmethod
     def _thinking_rejected(ex):
@@ -467,14 +663,13 @@ class ClaudeProvider(BaseLLMProvider):
 
         # Agent turns favour a more capable model when the user hasn't picked
         # one — resolved from the LIVE model list, never a hardcoded name.
-        model = self._model or self._default_model(prefer_vision=True)
+        model = (self._turn_or_user_model()
+                 or self._default_model(prefer_vision=True))
         if not model:
             return self._fail_no_model("chat_agent()")
 
-        # Opus-parity mode widens the answer ceiling so rich multi-step
-        # replies never truncate. Never lower a caller's explicit higher cap.
-        if self._quality_mode():
-            max_tokens = max(max_tokens, _QUALITY_AGENT_TOKENS)
+        # Cloud answer floor — never lower a caller's explicit higher cap.
+        max_tokens = max(max_tokens, _CLOUD_AGENT_TOKENS)
 
         # Deep reasoning (opt-in): extended thinking between tool calls.
         # Default to adaptive (current-generation shape); a cached "legacy"
@@ -484,9 +679,20 @@ class ClaudeProvider(BaseLLMProvider):
 
         def _headers(mode):
             h = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_API_VER}
+            betas = []
             if mode == "legacy":
-                h["anthropic-beta"] = _THINK_BETA
+                betas.append(_THINK_BETA)
+            if self._context_edit_on(model):
+                betas.append(_CONTEXT_BETA)
+            if betas:
+                h["anthropic-beta"] = ",".join(betas)
             return h
+
+        # Tool search / defer_loading (tool_schema.with_deferred_loading): a
+        # model that rejected it once gets the plain list from then on.
+        if self._uses_tool_search(tools) and \
+                self._tool_search_mode.get(model) == "off":
+            tools = self._plain_tools(tools)
 
         # ── Streaming attempt ────────────────────────────────────────────────
         state = {
@@ -534,8 +740,23 @@ class ClaudeProvider(BaseLLMProvider):
                     state["cur"] = {"type": cb.get("type"), "parts": [],
                                     "sig": cb.get("signature"),
                                     "data": cb.get("data")}
-                else:
+                elif cb.get("type") == "server_tool_use":
+                    # The model's call to the server-side tool search. Its
+                    # input streams as input_json_delta like a tool_use; it
+                    # is echoed back in the transcript and NEVER answered
+                    # with a tool_result (the API rejects that).
+                    state["cur"] = {"type": "server_tool_use",
+                                    "id": cb.get("id", ""),
+                                    "name": cb.get("name", ""), "parts": []}
+                elif cb.get("type") == "tool_search_tool_result":
+                    # Whole block arrives in the start event; kept as is so
+                    # the discovered tools stay usable on later turns.
+                    state["cur"] = {"type": "tool_search_tool_result",
+                                    "raw": cb, "parts": []}
+                elif cb.get("type") == "text":
                     state["cur"] = {"type": "text", "parts": []}
+                else:
+                    state["cur"] = {"type": "raw", "raw": cb, "parts": []}
 
             elif etype == "content_block_delta":
                 delta = obj.get("delta", {}) or {}
@@ -574,17 +795,46 @@ class ClaudeProvider(BaseLLMProvider):
                 except Exception:
                     pass
 
+        def _stream_once():
+            payload = self._agent_payload(model, system_prompt, messages, tools,
+                                          max_tokens, stream=True,
+                                          thinking_mode=thinking_mode,
+                                          context_edit=self._context_edit_on(model))
+            http_post_stream(CLAUDE_API_URL, payload, _headers(thinking_mode),
+                             _on_line, timeout_ms=_AGENT_TIMEOUT_MS)
+            return bool(state["blocks"]) or state["stop_reason"] is not None
+
         streamed_ok = False
         try:
             self._clear_error()
-            payload = self._agent_payload(model, system_prompt, messages, tools,
-                                          max_tokens, stream=True,
-                                          thinking_mode=thinking_mode)
-            http_post_stream(CLAUDE_API_URL, payload, _headers(thinking_mode),
-                             _on_line, timeout_ms=180000)
-            streamed_ok = bool(state["blocks"]) or state["stop_reason"] is not None
+            streamed_ok = _stream_once()
         except Exception as ex:
-            if thinking_mode == "adaptive" and self._thinking_rejected(ex):
+            if self._context_edit_on(model) and self._context_edit_rejected(ex):
+                # Context editing refused (older model / proxy): drop it for
+                # this model and retry once.
+                self._context_edit_mode[model] = "off"
+                state["blocks"], state["cur"], state["stop_reason"] = [], None, None
+                try:
+                    streamed_ok = _stream_once()
+                except Exception as ex2:
+                    self._record_error(u"chat_agent stream failed: {}".format(ex2))
+            elif self._uses_tool_search(tools) and self._tool_search_rejected(ex):
+                # The API refused tool search / deferred loading for this
+                # model: send the plain list, remember it, retry once.
+                self._tool_search_mode[model] = "off"
+                tools = self._plain_tools(tools)
+                state["blocks"], state["cur"], state["stop_reason"] = [], None, None
+                try:
+                    payload = self._agent_payload(model, system_prompt, messages,
+                                                  tools, max_tokens, stream=True,
+                                                  thinking_mode=thinking_mode)
+                    http_post_stream(CLAUDE_API_URL, payload, _headers(thinking_mode),
+                                     _on_line, timeout_ms=_AGENT_TIMEOUT_MS)
+                    streamed_ok = (bool(state["blocks"])
+                                  or state["stop_reason"] is not None)
+                except Exception as ex2:
+                    self._record_error(u"chat_agent stream failed: {}".format(ex2))
+            elif thinking_mode == "adaptive" and self._thinking_rejected(ex):
                 # This model generation doesn't accept adaptive thinking —
                 # fall back to the legacy shape and remember the verdict so
                 # future calls on this model skip straight to it.
@@ -595,7 +845,7 @@ class ClaudeProvider(BaseLLMProvider):
                                                   tools, max_tokens, stream=True,
                                                   thinking_mode=thinking_mode)
                     http_post_stream(CLAUDE_API_URL, payload, _headers(thinking_mode),
-                                     _on_line, timeout_ms=180000)
+                                     _on_line, timeout_ms=_AGENT_TIMEOUT_MS)
                     streamed_ok = (bool(state["blocks"])
                                   or state["stop_reason"] is not None)
                 except Exception as ex2:
@@ -604,17 +854,17 @@ class ClaudeProvider(BaseLLMProvider):
                 self._record_error(u"chat_agent stream failed: {}".format(ex))
 
         if streamed_ok:
-            return self._agent_result_from_blocks(state["blocks"],
-                                                  state["stop_reason"],
-                                                  state["usage"])
+            return self._with_model(self._agent_result_from_blocks(
+                state["blocks"], state["stop_reason"], state["usage"]), model)
 
         # ── Blocking fallback ────────────────────────────────────────────────
         def _do_blocking(mode):
             payload    = self._agent_payload(model, system_prompt, messages, tools,
                                              max_tokens, stream=False,
-                                             thinking_mode=mode)
+                                             thinking_mode=mode,
+                                             context_edit=self._context_edit_on(model))
             resp_text  = http_post(CLAUDE_API_URL, payload, _headers(mode),
-                                   timeout_ms=180000)
+                                   timeout_ms=_AGENT_TIMEOUT_MS)
             api_result = json.loads(resp_text)
             blocks = []
             for b in api_result.get("content", []) or []:
@@ -631,19 +881,47 @@ class ClaudeProvider(BaseLLMProvider):
                 elif b.get("type") == "redacted_thinking":
                     blocks.append({"type": "redacted_thinking", "parts": [],
                                    "data": b.get("data")})
+                elif b.get("type") == "server_tool_use":
+                    blocks.append({"type": "server_tool_use", "id": b.get("id", ""),
+                                   "name": b.get("name", ""),
+                                   "parts": [json.dumps(b.get("input") or {})]})
+                elif b.get("type"):
+                    # tool_search_tool_result and anything newer: pass
+                    # through untouched so the transcript stays valid.
+                    blocks.append({"type": "raw", "raw": b, "parts": []})
             return (blocks, api_result.get("stop_reason"),
                     api_result.get("usage") or {})
 
         try:
             blocks, stop_reason, usage = _do_blocking(thinking_mode)
-            return self._agent_result_from_blocks(blocks, stop_reason, usage)
+            return self._with_model(self._agent_result_from_blocks(
+                blocks, stop_reason, usage), model)
         except Exception as ex:
+            if self._context_edit_on(model) and self._context_edit_rejected(ex):
+                self._context_edit_mode[model] = "off"
+                try:
+                    blocks, stop_reason, usage = _do_blocking(thinking_mode)
+                    return self._with_model(self._agent_result_from_blocks(
+                        blocks, stop_reason, usage), model)
+                except Exception as ex2:
+                    self._record_error(u"chat_agent() failed: {}".format(ex2))
+                    return None
+            if self._uses_tool_search(tools) and self._tool_search_rejected(ex):
+                self._tool_search_mode[model] = "off"
+                tools = self._plain_tools(tools)
+                try:
+                    blocks, stop_reason, usage = _do_blocking(thinking_mode)
+                    return self._with_model(self._agent_result_from_blocks(
+                        blocks, stop_reason, usage), model)
+                except Exception as ex2:
+                    self._record_error(u"chat_agent() failed: {}".format(ex2))
+                    return None
             if thinking_mode == "adaptive" and self._thinking_rejected(ex):
                 self._thinking_mode[model] = thinking_mode = "legacy"
                 try:
                     blocks, stop_reason, usage = _do_blocking(thinking_mode)
-                    return self._agent_result_from_blocks(blocks, stop_reason,
-                                                          usage)
+                    return self._with_model(self._agent_result_from_blocks(
+                        blocks, stop_reason, usage), model)
                 except Exception as ex2:
                     self._record_error(u"chat_agent() failed: {}".format(ex2))
                     return None
@@ -679,6 +957,19 @@ class ClaudeProvider(BaseLLMProvider):
             elif b["type"] == "redacted_thinking":
                 content.append({"type": "redacted_thinking",
                                 "data": b.get("data")})
+            elif b["type"] == "server_tool_use":
+                # Server-side tool search call: transcript only, never a
+                # client tool call.
+                try:
+                    args = json.loads(joined) if joined.strip() else {}
+                except Exception:
+                    args = {}
+                content.append({"type": "server_tool_use", "id": b.get("id", ""),
+                                "name": b.get("name", ""), "input": args})
+            elif b["type"] in ("tool_search_tool_result", "raw"):
+                raw = b.get("raw")
+                if isinstance(raw, dict):
+                    content.append(dict(raw))
             else:  # tool_use
                 try:
                     args = json.loads(joined) if joined.strip() else {}
@@ -698,6 +989,14 @@ class ClaudeProvider(BaseLLMProvider):
             "usage":         dict(usage or {}),
         }
 
+    def _with_model(self, result, model):
+        """Stamp the model this call really ran on (the badge shows the
+        cheap-first default, agent turns use the agent role) so telemetry
+        prices the right model."""
+        if isinstance(result, dict):
+            result["model"] = model
+        return result
+
     @staticmethod
     def agent_tool_results(tool_calls, result_strs):
         """Anthropic format: ONE user message holding all tool_result blocks.
@@ -708,13 +1007,31 @@ class ClaudeProvider(BaseLLMProvider):
         """
         blocks = []
         for i, tc in enumerate(tool_calls):
+            if u"{}".format(tc.get("id", "")).startswith("srvtoolu_"):
+                continue            # server tool search: no tool_result allowed
             res = result_strs[i] if i < len(result_strs) else u'{"cancelled": true}'
             blocks.append({
                 "type":        "tool_result",
                 "tool_use_id": tc.get("id", ""),
-                "content":     res,
+                "content":     _tool_result_content(res),
             })
         return [{"role": "user", "content": blocks}]
+
+
+def _tool_result_content(res):
+    """tool_result content: the JSON text, or — for find_tools — the list of
+    `tool_reference` blocks it carries under "__blocks__", so the API loads
+    those deferred tool schemas for the next turn."""
+    if u'"__blocks__"' not in res:
+        return res
+    try:
+        data = json.loads(res)
+    except ValueError:
+        return res
+    refs = [b for b in (data.get("__blocks__") or [])
+            if isinstance(b, dict) and b.get("type") == "tool_reference"
+            and b.get("tool_name")]
+    return refs if refs else res
 
 
 # ─── Path helper ───────────────────────────────────────────────────────────────

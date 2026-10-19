@@ -188,7 +188,23 @@ class TurnTimer(object):
             'out_tok':     self.output_tokens,
             'cache_read':  self.cache_read_tokens,
             'cache_write': self.cache_creation_tokens,
+            # Estimated cost (Intelligence/pricing.py); None for local or
+            # unknown models. Additive key — readers use .get('usd').
+            'usd':         self.usd,
         }
+
+    @property
+    def usd(self):
+        try:
+            from Intelligence import pricing
+            if self.local:
+                return None
+            return pricing.estimate_usd(self.model, self.input_tokens,
+                                        self.output_tokens,
+                                        self.cache_read_tokens,
+                                        self.cache_creation_tokens)
+        except Exception:
+            return None
 
 
 # ─── sink ─────────────────────────────────────────────────────────────────────
@@ -263,6 +279,17 @@ def prune_once():
         return prune()
     except Exception:
         return 0
+
+
+def spend_today(path=None, now=None):
+    """Sum of the `usd` field over today's turns (0.0 when none)."""
+    total = 0.0
+    for rec in read_turns(path or _log_path(now)):
+        try:
+            total += float(rec.get('usd') or 0)
+        except Exception:
+            continue
+    return round(total, 6)
 
 
 def read_turns(path):

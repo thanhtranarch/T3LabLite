@@ -110,12 +110,20 @@ QA_TOOLS = READ_TOOLS | frozenset([
 ])
 
 
+# Cloud answer ceilings (Claude / OpenAI / DeepSeek). Streaming is already on
+# for every cloud call, so a large cap costs nothing until it is used.
+# 16k covers long tables and summaries; 32k is for the specialists that
+# write IronPython for send_code_to_revit. Local models keep max_tokens.
+CLOUD_MAX_TOKENS = 16000
+CLOUD_MAX_TOKENS_CODE = 32000
+
+
 class SpecialistSpec(object):
 
     def __init__(self, name, description, tool_names=None,
                  restrict_cloud=False, prompt_intro='', few_shot='',
                  max_iterations=10, max_tokens=1500, allows_writes=True,
-                 use_launcher=True):
+                 use_launcher=True, cloud_max_tokens=CLOUD_MAX_TOKENS):
         self.name = name
         self.description = description
         self.tool_names = tool_names          # None = provider default
@@ -123,9 +131,16 @@ class SpecialistSpec(object):
         self.prompt_intro = prompt_intro
         self.few_shot = few_shot              # text block, local models only
         self.max_iterations = max_iterations
-        self.max_tokens = max_tokens
+        self.max_tokens = max_tokens          # local models (small context)
+        self.cloud_max_tokens = cloud_max_tokens
         self.allows_writes = allows_writes
         self.use_launcher = use_launcher
+
+    def tokens_for(self, local):
+        """Answer ceiling for one agent call: the small local cap, or the
+        cloud cap (a Claude/OpenAI turn writing code or a long table must
+        never be cut at 1,500 tokens)."""
+        return self.max_tokens if local else self.cloud_max_tokens
 
     def tools_for(self, local):
         """The tool-name subset to apply, or None for provider default."""
@@ -188,6 +203,7 @@ SPECIALISTS = {
         restrict_cloud=False,     # cloud keeps the full registry
         max_iterations=10,
         max_tokens=1500,
+        cloud_max_tokens=CLOUD_MAX_TOKENS_CODE,   # send_code_to_revit
         prompt_intro=(
             "## Role: ACTION specialist\n"
             "This request modifies the model. Work in this order: (1) read "
@@ -255,6 +271,7 @@ SPECIALISTS = {
         restrict_cloud=False,
         max_iterations=14,
         max_tokens=1600,
+        cloud_max_tokens=CLOUD_MAX_TOKENS_CODE,   # send_code_to_revit
         prompt_intro=(
             "## Role: MODELING specialist\n"
             "This request BUILDS geometry. Units are METERS. Build order: "

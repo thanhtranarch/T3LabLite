@@ -2,8 +2,9 @@
 """
 Conversation window + rolling summary.
 
-The assistant keeps a bounded number of turns in memory and sends them to the
-model each turn. Older turns were simply dropped, so a long session silently
+The assistant keeps as many turns as the active model's context budget allows
+(Intelligence.context_budget) and sends them to the model each turn. Older
+turns were simply dropped, so a long session silently
 forgot how it started — the user re-states a constraint from turn 2 and by
 turn 20 the model has never seen it.
 
@@ -28,17 +29,21 @@ __title__  = "Conversation"
 
 import re
 
-# Turns kept verbatim in memory and sent to the model.
-#
-# This is the single source of truth for the window. It used to be written
-# twice — script._add_to_history truncated to 16 while
-# agent_loop._sanitize_history took the last 24 — so the larger number never
-# bound and the docstring claiming "24 turns gives stronger multi-turn
-# continuity" described something that could not happen.
-HISTORY_LIMIT = 24
+from Intelligence import context_budget
 
-# Summary budget. Long enough to carry a session's worth of decisions, short
-# enough that it stays a rounding error next to the tool schemas.
+# The verbatim window is a TOKEN budget, not a message count.
+#
+# It was a fixed 24 messages (12 exchanges) for every model — a 1M-token
+# Claude forgot the start of a session as fast as an 8k local model. The
+# budget now comes from the active model's context window
+# (context_budget.history_budget); callers pass it in. This default is what
+# a caller that knows nothing about the model gets: the smallest window the
+# assistant supports, so it can never overflow anything.
+DEFAULT_HISTORY_TOKENS = context_budget.history_budget(
+    context_budget.UNKNOWN_WINDOW)
+
+# Default summary budget — the floor. Callers that know the model pass
+# context_budget.summary_budget_chars(window), which grows with the window.
 MAX_SUMMARY_CHARS = 1400
 
 # One folded turn, before the whole summary is trimmed.
@@ -118,17 +123,31 @@ def fold_summary(existing, turns, viet=False, max_chars=MAX_SUMMARY_CHARS):
     return u'\n'.join(lines)
 
 
-def trim_history(history, summary=u'', limit=HISTORY_LIMIT, viet=False):
+def trim_history(history, summary=u'', budget_tokens=None, viet=False,
+                 max_summary_chars=None, limit=None):
     """Enforce the window, folding whatever falls out into `summary`.
 
-    Returns (kept_history, new_summary). Under the limit nothing changes and
-    the summary is returned untouched.
+    budget_tokens   verbatim history allowed, in estimated tokens (default
+                    DEFAULT_HISTORY_TOKENS); the newest messages that fit
+                    are kept
+    limit           an explicit message count instead of a token budget
+    max_summary_chars  summary size (default MAX_SUMMARY_CHARS)
+
+    Returns (kept_history, new_summary). When everything fits nothing changes
+    and the summary is returned untouched.
     """
     hist = list(history or [])
-    if len(hist) <= limit:
+    if limit:
+        if len(hist) <= limit:
+            return hist, (summary or u'')
+        kept, dropped = hist[-limit:], hist[:len(hist) - limit]
+    else:
+        kept, dropped = context_budget.fit_messages(
+            hist, budget_tokens or DEFAULT_HISTORY_TOKENS)
+    if not dropped:
         return hist, (summary or u'')
-    dropped = hist[:len(hist) - limit]
-    return hist[-limit:], fold_summary(summary, dropped, viet=viet)
+    return kept, fold_summary(summary, dropped, viet=viet,
+                              max_chars=max_summary_chars or MAX_SUMMARY_CHARS)
 
 
 def summary_block(summary, viet=False):

@@ -45,8 +45,12 @@ from datetime import datetime
 GLOBAL_SCOPE  = "global"
 PROJECT_SCOPE = "project"
 
-MAX_FACTS_PER_SCOPE = 30      # oldest dropped beyond this
-MAX_FACT_CHARS      = 300     # longer facts are clipped
+# No cap on how many facts a scope holds. It used to be 30, and the 31st
+# save silently dropped the oldest fact — memory forgot things nobody asked
+# it to forget. What reaches the PROMPT is bounded instead, by the active
+# model's budget (build_memory_block max_chars, context_budget).
+MAX_FACTS_PER_SCOPE = None
+MAX_FACT_CHARS      = 1000    # longer facts are clipped (was 300)
 MIN_FACT_CHARS      = 4       # reject empty / degenerate saves
 
 _LOCK = threading.Lock()
@@ -123,7 +127,7 @@ def add_fact(text, scope=PROJECT_SCOPE, project_id=None):
                 return True, u'Already in memory.'
         bucket.append({'text': text,
                        'created': datetime.now().strftime('%Y-%m-%d')})
-        while len(bucket) > MAX_FACTS_PER_SCOPE:
+        while MAX_FACTS_PER_SCOPE and len(bucket) > MAX_FACTS_PER_SCOPE:
             bucket.pop(0)
         ok = _save(data)
     if ok:
@@ -464,28 +468,45 @@ def clear_facts(project_id=None, everything=False):
 
 # ─── Prompt / report rendering ────────────────────────────────────────────────
 
-def build_memory_block(project_id=None, include_tool_hint=True):
-    """System-prompt section carrying every remembered fact ('' when none).
+def build_memory_block(project_id=None, include_tool_hint=True, max_chars=None):
+    """System-prompt section carrying the remembered facts ('' when none).
 
     include_tool_hint=False for prompt paths that have no remember_fact
     tool (the legacy JSON-intent path) — mentioning an uncallable tool
     there would leak into the "message" field.
+
+    max_chars bounds the fact lines (context_budget.memory_budget_chars for
+    the active model). Over it, the OLDEST facts are left out of this prompt
+    — never out of memory — and a line says how many; None shows them all.
     """
     facts = list_facts(project_id)
     if not facts:
         return u''
     lines = [u'## Persistent memory '
              u'(facts saved in previous chats — apply them without re-asking)']
+    fact_lines = []
     for i, (scope, f) in enumerate(facts):
         tag = u'all projects' if scope == GLOBAL_SCOPE else u'this project'
-        lines.append(u'{}. [{}] {}'.format(i + 1, tag, f.get('text') or u''))
+        fact_lines.append(u'{}. [{}] {}'.format(i + 1, tag, f.get('text') or u''))
+    hidden = 0
+    if max_chars:
+        while (len(fact_lines) > 1
+               and sum(len(l) + 1 for l in fact_lines) > max_chars):
+            fact_lines.pop(0)
+            hidden += 1
+    lines.extend(fact_lines)
+    if hidden:
+        lines.append(u'({} older fact(s) not shown here; the user can list '
+                     u'them with /memory.)'.format(hidden))
     if include_tool_hint:
         lines.append(
             u'When the user states a NEW durable preference or convention '
             u'("from now on...", "remember...", "our standard is..."), call '
             u'the `remember_fact` tool ONCE with a short English sentence — '
             u'scope "global" for user preferences, "project" for facts about '
-            u'this model. Never store one-off requests, secrets, or element '
+            u'this model, "session" for something that holds only for THIS '
+            u'conversation (the current task\'s scope, a temporary '
+            u'assumption). Never store one-off requests, secrets, or element '
             u'ids. If the user CHANGES a fact above, call `remember_fact` with '
             u'action "update" (replaces=old gist, fact=new statement) so the '
             u'old one is superseded, not duplicated. If the user CANCELS a '
@@ -493,16 +514,37 @@ def build_memory_block(project_id=None, include_tool_hint=True):
     return u'\n'.join(lines)
 
 
-def format_memory_report(project_id=None, viet=False):
-    """Markdown chat report for the /memory command."""
+def format_memory_report(project_id=None, viet=False, session_notes=None):
+    """Markdown chat report for the /memory command.
+
+    session_notes: the open chat's notes (session_context), listed after the
+    facts as S1, S2… so `/memory forget S2` can address them.
+    """
     facts = list_facts(project_id)
+    session_lines = []
+    if session_notes:
+        try:
+            from Intelligence.session_context import notes_report_lines
+            session_lines = notes_report_lines(session_notes, viet=viet)
+        except Exception:
+            session_lines = []
+    if not facts and session_lines:
+        head = (u'Chưa có ghi nhớ lâu dài nào.' if viet
+                else u'No long-term facts yet.')
+        return u'\n'.join([head] + session_lines + [u'', (
+            u'Xóa 1 ghi chú: `/memory forget S<số>` · Xóa hết ghi chú: '
+            u'`/memory clear session`' if viet else
+            u'Remove a note: `/memory forget S<number>` · Remove all notes: '
+            u'`/memory clear session`')])
     if not facts:
         if viet:
             return (u'Tôi chưa lưu ghi nhớ nào. Nói **"nhớ là ..."** hoặc '
                     u'**"remember that ..."** để tôi ghi nhớ sở thích của bạn '
-                    u'hoặc quy ước của dự án cho các lần chat sau.')
+                    u'hoặc quy ước của dự án cho các lần chat sau. Chỉ cho '
+                    u'cuộc hội thoại này: `/memory note <nội dung>`.')
         return (u'Nothing in memory yet. Say **"remember that ..."** and I will '
-                u'keep that preference or project convention for future chats.')
+                u'keep that preference or project convention for future chats. '
+                u'For this conversation only: `/memory note <text>`.')
     lines = []
     if viet:
         lines.append(u'**Ghi nhớ hiện có** ({} mục):'.format(len(facts)))
@@ -516,11 +558,14 @@ def format_memory_report(project_id=None, viet=False):
         txt = (f.get('text') or u'').replace(u'|', u'\\|')
         lines.append(u'| {} | {} | {} | {} |'.format(
             i + 1, tag, txt, f.get('created') or u''))
+    lines.extend(session_lines)
     lines.append(u'')
     if viet:
-        lines.append(u'Xóa 1 mục: `/memory forget <số|nội dung>` · Xóa hết: '
-                     u'`/memory clear`')
+        lines.append(u'Xóa 1 mục: `/memory forget <số|S số|nội dung>` · Xóa hết: '
+                     u'`/memory clear` · Ghi chú cho cuộc hội thoại này: '
+                     u'`/memory note <nội dung>`')
     else:
-        lines.append(u'Remove one: `/memory forget <number|text>` · '
-                     u'Remove all: `/memory clear`')
+        lines.append(u'Remove one: `/memory forget <number|S number|text>` · '
+                     u'Remove all: `/memory clear` · Note for this '
+                     u'conversation only: `/memory note <text>`')
     return u'\n'.join(lines)

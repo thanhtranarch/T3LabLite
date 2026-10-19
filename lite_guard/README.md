@@ -42,6 +42,21 @@ python lite_guard/test_update_schedule.py
 runs the schedule tests and a stubbed run of `updater.py` (no Revit, no
 network). CI runs it with `guard.py`.
 
+## The "What's new" popup
+
+`startup.py` calls `install()` in `lib/core/whats_new.py` (Lite only, under
+`lite_only`; `markers` checks the call). On the first Revit start with a new
+`version.txt`, the first Idling shows a Revit TaskDialog with that release's
+`CHANGELOG.md` section, once per version per Windows user (stored as
+`whats_new_seen` in `%APPDATA%\T3LabAI\mcp_paths.json`). After skipped
+updates it lists every release since the last one shown. So every release
+needs its `## [x.y.z]` section before `version.txt` changes --
+`test_repo_changelog_has_the_current_version` fails otherwise.
+
+```
+python lite_guard/test_whats_new.py
+```
+
 ## Setup (once per clone)
 
 ```

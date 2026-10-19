@@ -13,7 +13,9 @@ Releasing a new version:
 1. Move the entries from `[Unreleased]` into a new `## [x.y.z] - YYYY-MM-DD`
    heading at the top.
 2. Set the same version number in `version.txt`.
-3. Commit and push -- Check Update on user machines will pick it up.
+3. Commit and push -- Check Update on user machines will pick it up, and the
+   first Revit start after the update shows that section in a popup
+   (`lib/core/whats_new.py`). Keep the first lines short: they fill the popup.
 
 ## [Unreleased]
 
@@ -31,6 +33,7 @@ ManaSched v2 and the latest T3Lab Assistant, copied from `t3lab-revit-api`, plus
 - **Tool Hub in the Assistant**: sign in with the e-mail link or the 6-digit code, synced tool catalog with offline search, `/toolhub` and `/save-tool` commands, tool recipes, and a `find_tools` search the model can call. LLMs Setting has a new **Tool Hub** tab (sign in, sync, my tools, search in one window).
 - **Assistant — model per role**: the newest model of each provider by default; auto model switch (Haiku pre-reads, Sonnet/Opus take complex turns); cost in USD per turn and a daily budget.
 - **Assistant — per-chat memory** (Claude Projects-style) and a context window sized to the selected model.
+- **What's new popup**: the first Revit start after an update shows what changed in the new version, once per version (after skipped updates, every release since the last one shown). "Open the full changelog" opens this file on GitHub.
 - **PDF Markup split button** (Support › Cloud Links): **Bluebeam Status** now shares a split button with the new **T3Lab PDF Markup**, which opens [T3Lab PDF](https://pdf.t3lab.space/) (offline PDF markup for drawings) in the default browser. The button used last stays on top, also after Revit restarts (saved when Revit closes, in `%APPDATA%\T3LabAI\ribbon_state.json`).
 
 ### Changed

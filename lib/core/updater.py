@@ -241,40 +241,8 @@ def fetch_remote_changelog():
     return None
 
 
-def extract_whats_new(changelog_text, local_version, max_lines=20):
-    """Collect changelog lines for every release newer than local_version.
-
-    Expects Keep-a-Changelog style headings: '## [x.y.z] - date'.
-    Returns a list of display lines (may be empty).
-    """
-    local = parse_version(local_version)
-    include = False
-    out = []
-    for raw in (changelog_text or "").replace('\r\n', '\n').split('\n'):
-        line = raw.strip()
-        if line.startswith('## '):
-            header = line[3:].strip()
-            ver_text = header.lstrip('[').split(']')[0].strip()
-            # skip non-release headings such as [Unreleased]
-            if not any(ch.isdigit() for ch in ver_text):
-                include = False
-                continue
-            include = parse_version(ver_text) > local
-            if include:
-                if out:
-                    out.append("")
-                out.append("Version " + header.replace('[', '').replace(']', ''))
-        elif include:
-            if line.startswith('### '):
-                out.append(line[4:].strip() + ":")
-            elif line.startswith('- ') or line.startswith('* '):
-                out.append("  • " + line[2:].strip())
-            elif line and out and out[-1].startswith("  • "):
-                # continuation of a wrapped bullet line
-                out[-1] += " " + line
-    if len(out) > max_lines:
-        out = out[:max_lines] + ["  ..."]
-    return [item.replace("**", "") for item in out]
+# Parser shared with the once-per-version popup (core/whats_new.py).
+from core.whats_new import extract_whats_new  # noqa: E402,F401
 
 
 def get_whats_new_text(local_version):

@@ -1,1605 +1,954 @@
 # -*- coding: utf-8 -*-
 """
-Schedule Manager Dialog
+Schedule Manager Dialog — WPF host for ManaSched.xaml.
 
-WPF event handler for ManaSched.xaml.
-Provides two tools:
-  - Excel Link: export/import Revit schedule to/from .xlsx
-  - Duplicator: batch-duplicate schedules with optional view template
+Three pages, all things Revit cannot do on its own:
+
+  New Table      (TableGen-style) the workbook — a local .xlsx or a Google
+                 Sheet (pasted link / .gsheet shortcut, Snippets/gsheet_source.py)
+                 — opens in a sheet viewer that
+                 looks like Excel (fills, bold, colours, column widths, sheet
+                 tabs); drag over the cells — or pick a named range / Excel
+                 table — and create a schedule, drafting view or legend with
+                 the Excel formatting, linked or as a static copy.
+  Linked Tables  which tables are out of date; update / reload / unlink.
+                                             → Snippets/excel_table_revit.py
+  Schedule Data  export schedule values to .xlsx (Element ID + one column per
+                 field), edit in Excel, import, review every change, write the
+                 ticked ones back in one undo step.   → Snippets/schedule_data.py
+
+Removed on purpose (Revit already does it): schedule duplication / view
+template assignment (Duplicate View, View Templates) and the "as displayed"
+text export (File > Export > Reports > Schedule).
+
+This module is UI only; the Revit logic lives in the two Snippets above and
+the Excel reader in Snippets/xlsx_table.py.
 
 Author: Tran Tien Thanh
 Mail: trantienthanh909@gmail.com
 """
 
 __author__ = "Tran Tien Thanh"
-__title__  = "Schedule Manager Dialog"
+__title__ = "Schedule Manager Dialog"
 
-# ============================================================
-# IMPORTS
-# ============================================================
 import os
-import zipfile
-import json
-
-try:
-    from xml.etree import ElementTree as ET
-except ImportError:
-    import xml.etree.ElementTree as ET
 
 import clr
 clr.AddReference('System')
+clr.AddReference('System.Data')
 clr.AddReference('PresentationCore')
 clr.AddReference('PresentationFramework')
 clr.AddReference('WindowsBase')
 
-import System
-from System.Windows import Visibility, MessageBox, MessageBoxButton, MessageBoxImage
-from System.Windows.Controls import (
-    ComboBoxItem,
-    TextBlock,
-)
+from System.Data import DataTable
+from System.Windows import Visibility
+from System.Windows.Controls import (ComboBoxItem, DataGridCellInfo, DataGridLength,
+                                     DataGridTemplateColumn, RadioButton)
+from System.Windows.Markup import XamlReader
 
-from pyrevit import revit, DB, forms
 from GUI.WPF_Base import T3WPFWindow
+from GUI import T3Dialog
+from Snippets._compat import eid_value, make_eid, short_error
+from Snippets import xlsx_table as xt
+from Snippets import excel_table_revit as etr
+from Snippets import gsheet_source as gs
+from Snippets import schedule_data as sd
 
-# ============================================================
-# XAML PATH
-# ============================================================
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'ManaSched.xaml')
 
+RANGE_SELECTION = "Selected cells"
+VIEW_MAX_ROWS = 400                 # sheet viewer limits (the import itself has none)
+VIEW_MAX_COLS = 50
+HIGHLIGHT_MAX_CELLS = 5000          # beyond this a named range is not drawn as a selection
+KIND_ORDER = [etr.KIND_SCHEDULE, etr.KIND_DRAFTING, etr.KIND_LEGEND]
+KIND_HINT = {
+    etr.KIND_SCHEDULE: "Header-only schedule: place it on as many sheets as you like. "
+                       "Fonts, fills, borders, merges and sizes are set cell by cell.",
+    etr.KIND_DRAFTING: "Closest copy of the Excel look (text notes, lines, solid fills). "
+                       "A drafting view goes on one sheet.",
+    etr.KIND_LEGEND: "Same drawing as a drafting view, placeable on many sheets. "
+                     "Needs one legend view in the project to copy.",
+}
+TABLES_HINT = ("Tick tables and press Update Tables. With nothing ticked, every table "
+               "whose Excel file or Google Sheet changed is updated.")
+EXCEL_FILTER = ("Excel workbook or Google Drive shortcut (*.xlsx;*.xlsm;*.gsheet)|"
+                "*.xlsx;*.xlsm;*.gsheet|Excel workbook (*.xlsx;*.xlsm)|*.xlsx;*.xlsm")
+
 
 # ============================================================
-# REVIT VERSION HELPER
+# ROW MODELS (plain Python, read through string bridges)
 # ============================================================
-from Snippets._compat import make_eid, eid_value
 
-def _eid_int(element_id):
-    """ElementId integer value - compatible across Revit 2020-2027+."""
-    return eid_value(element_id)
+class TableRow(object):
+    def __init__(self, view, info):
+        self.view_id = eid_value(view.Id)
+        self.info = info
+        self.name = view.Name
+        self.kind_text = etr.KIND_LABEL.get(info.get('kind'), info.get('kind', ''))
+        rng = info.get('range') or xt.USED_RANGE
+        self.source = u"{} · {} · {}".format(etr.source_label(info),
+                                            info.get('sheet') or '?', rng)
+        self.updated = info.get('updated') or ''
+        self.StatusText = "Checking"
+        self.Severity = "Warning"
+        self.detail = ''
+        self.is_checked = False
 
 
-# ============================================================
-# SCHEDULE COLLECTOR
-# ============================================================
-def _get_all_schedules(doc):
-    """Return sorted list of (name, ViewSchedule) for all non-internal schedules."""
-    result = []
-    collector = DB.FilteredElementCollector(doc)\
-                  .OfClass(DB.ViewSchedule)\
-                  .WhereElementIsNotElementType()\
-                  .ToElements()
-    for sch in collector:
+class ScheduleRow(object):
+    def __init__(self, name, schedule):
+        self.name = name
+        self.sched_id = eid_value(schedule.Id)
         try:
-            if sch.IsTitleblockRevisionSchedule:
-                continue
-            if sch.IsInternalKeynoteSchedule:
-                continue
-            result.append((sch.Name, sch))
+            self.field_count = str(schedule.Definition.GetFieldCount())
         except Exception:
-            pass
-    result.sort(key=lambda x: x[0])
-    return result
+            self.field_count = "—"
+        self.is_checked = False
 
 
-def _get_view_templates(doc):
-    """Return sorted list of (name, View|None) for schedule-compatible view templates."""
-    result = [("(None)", None)]
-    collector = DB.FilteredElementCollector(doc)\
-                  .OfClass(DB.View)\
-                  .WhereElementIsNotElementType()\
-                  .ToElements()
-    for vt in collector:
-        try:
-            if not vt.IsTemplate:
-                continue
-            if vt.ViewType in (DB.ViewType.Schedule, DB.ViewType.Undefined):
-                result.append((vt.Name, vt))
-        except Exception:
-            pass
-    result.sort(key=lambda x: x[0])
-    return result
+class ChangeRow(object):
+    def __init__(self, change):
+        self.change = change
+        self.schedule = change['schedule']
+        self.element_id = str(change['element_id'])
+        self.field = change['field']
+        self.old = change['old']
+        self.new = change['new']
+        self.is_checked = True
 
 
-# ============================================================
-# SCHEDULE DATA EXTRACTION
-# ============================================================
-
-def _extract_schedule_data(schedule, doc, keep_formatting=False):
-    """
-    Extract header + rows from a ViewSchedule.
-
-    keep_formatting=True  -> read cell text via GetCellText (preserves calc
-                             fields and formatting, no element ID writeback).
-    keep_formatting=False -> read from element parameters (supports writeback).
-
-    Returns a dict with keys:
-      schedule_name, headers, rows, element_ids, fields, from_cells
-    """
-    if keep_formatting:
-        return _extract_from_cells(schedule)
-    return _extract_from_elements(schedule, doc)
+def _visible(flag):
+    return Visibility.Visible if flag else Visibility.Collapsed
 
 
-def _extract_from_cells(schedule):
-    """Read cell text directly - preserves formatting, no element ID column."""
-    try:
-        from Autodesk.Revit.DB import SectionType
-        table = schedule.GetTableData()
-        body  = table.GetSectionData(SectionType.Body)
-        n_rows = body.NumberOfRows
-        n_cols = body.NumberOfColumns
-        if n_rows == 0 or n_cols == 0:
-            return None
-
-        headers = []
-        for c in range(n_cols):
-            try:
-                headers.append(schedule.GetCellText(SectionType.Body, 0, c) or "")
-            except Exception:
-                headers.append("")
-
-        rows = []
-        for r in range(1, n_rows):
-            row_data = []
-            for c in range(n_cols):
-                try:
-                    row_data.append(schedule.GetCellText(SectionType.Body, r, c) or "")
-                except Exception:
-                    row_data.append("")
-            if any(v.strip() for v in row_data):
-                rows.append(row_data)
-
-        return {
-            'schedule_name': schedule.Name,
-            'headers': headers,
-            'fields': [{'name': h, 'param_id': None, 'can_edit': False} for h in headers],
-            'rows': rows,
-            'element_ids': [],
-            'from_cells': True,
-        }
-    except Exception:
-        return None
+def _combo_fill(combo, labels, select=0):
+    combo.Items.Clear()
+    for label in labels:
+        item = ComboBoxItem()
+        item.Content = label
+        combo.Items.Add(item)
+    if labels:
+        combo.SelectedIndex = max(0, min(select, len(labels) - 1))
 
 
-def _extract_from_elements(schedule, doc):
-    """Read from element parameters - supports writeback."""
-    try:
-        definition = schedule.Definition
-        fields = []
-        for i in range(definition.GetFieldCount()):
-            f = definition.GetField(i)
-            if f.IsHidden:
-                continue
-            param_id = None
-            try:
-                pid = _eid_int(f.ParameterId)
-                if pid != -1:
-                    param_id = pid
-            except Exception:
-                pass
-            field_type = f.FieldType
-            is_editable = field_type not in (
-                DB.ScheduleFieldType.Formula,
-                DB.ScheduleFieldType.Count,
-                DB.ScheduleFieldType.ElementType,
-            )
-            fields.append({
-                'name': f.GetName(),
-                'param_id': param_id,
-                'can_edit': is_editable,
-                'field_type': field_type,
-            })
-
-        headers = [fld['name'] for fld in fields]
-        collector = DB.FilteredElementCollector(doc, schedule.Id).ToElements()
-        rows, element_ids = [], []
-
-        for elem in collector:
-            eid = _eid_int(elem.Id)
-            element_ids.append(eid)
-            row_data = [_get_param_value(elem, fld, doc) for fld in fields]
-            rows.append(row_data)
-
-        return {
-            'schedule_name': schedule.Name,
-            'headers': headers,
-            'fields': fields,
-            'rows': rows,
-            'element_ids': element_ids,
-            'from_cells': False,
-        }
-    except Exception:
-        return None
-
-
-def _get_param_value(elem, field, doc):
-    """Read one field value from an element."""
-    try:
-        field_name = field['name']
-        param_id   = field['param_id']
-        field_type = field.get('field_type')
-
-        elem_type = None
-        try:
-            type_id = elem.GetTypeId()
-            if type_id and _eid_int(type_id) != -1:
-                elem_type = doc.GetElement(type_id)
-        except Exception:
-            pass
-
-        # ElementType fields come from the type
-        if field_type == DB.ScheduleFieldType.ElementType and elem_type:
-            param = None
-            if param_id and param_id < 0:
-                try:
-                    param = elem_type.get_Parameter(DB.BuiltInParameter(param_id))
-                except Exception:
-                    pass
-            if not param:
-                param = elem_type.LookupParameter(field_name)
-            return _read_param(param) if param else ""
-
-        # Instance parameter
-        param = None
-        if param_id and param_id < 0:
-            try:
-                param = elem.get_Parameter(DB.BuiltInParameter(param_id))
-            except Exception:
-                pass
-        if not param:
-            param = elem.LookupParameter(field_name)
-
-        # Fall back to type
-        if not param and elem_type:
-            if param_id and param_id < 0:
-                try:
-                    param = elem_type.get_Parameter(DB.BuiltInParameter(param_id))
-                except Exception:
-                    pass
-            if not param:
-                param = elem_type.LookupParameter(field_name)
-
-        return _read_param(param) if param else ""
-    except Exception:
-        return ""
-
-
-def _read_param(param):
-    """Return display string for a Parameter."""
-    try:
-        val = param.AsValueString()
-        if val:
-            return val
-        st = param.StorageType
-        if st == DB.StorageType.String:
-            return param.AsString() or ""
-        if st == DB.StorageType.Integer:
-            return str(param.AsInteger())
-        if st == DB.StorageType.Double:
-            return str(round(param.AsDouble(), 6))
-        if st == DB.StorageType.ElementId:
-            eid = param.AsElementId()
-            if eid and _eid_int(eid) != -1:
-                ref = param.Element.Document.GetElement(eid)
-                if ref:
-                    try:
-                        return ref.Name
-                    except Exception:
-                        return str(_eid_int(eid))
-        return ""
-    except Exception:
-        return ""
+def _combo_text(combo):
+    item = combo.SelectedItem
+    if item is None:
+        return ''
+    return str(getattr(item, 'Content', item) or '')
 
 
 # ============================================================
-# EXCEL EXPORT  (zipfile - no Office interop required)
-# ============================================================
-
-def _col_letter(col_num):
-    """1-based column index -> Excel column letter (A, B, ..., Z, AA, ...)."""
-    result = ""
-    while col_num > 0:
-        col_num -= 1
-        result = chr(col_num % 26 + ord('A')) + result
-        col_num //= 26
-    return result
-
-
-def _export_to_xlsx(filepath, schedules_data):
-    """Write one or more schedule datasets to an .xlsx file using zipfile."""
-    ns_main = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-    ns_r    = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-    ns_ct   = 'http://schemas.openxmlformats.org/package/2006/content-types'
-    ns_rel  = 'http://schemas.openxmlformats.org/package/2006/relationships'
-
-    # Collect all shared strings
-    shared  = []
-    str_idx = {}
-
-    def _si(s):
-        s = str(s) if s is not None else ""
-        if s not in str_idx:
-            str_idx[s] = len(shared)
-            shared.append(s)
-        return str_idx[s]
-
-    for sd in schedules_data:
-        for h in sd.get('headers', []):
-            _si(h)
-        if not sd.get('from_cells', False):
-            _si('Element ID')
-        for row in sd.get('rows', []):
-            for cell in row:
-                _si(cell)
-
-    def _to_str(el):
-        try:
-            return ET.tostring(el, encoding='unicode')
-        except Exception:
-            raw = ET.tostring(el)
-            return raw.decode('utf-8') if isinstance(raw, bytes) else str(raw)
-
-    def _workbook():
-        wb = ET.Element('workbook', {'xmlns': ns_main, 'xmlns:r': ns_r})
-        sh = ET.SubElement(wb, 'sheets')
-        for i, sd in enumerate(schedules_data):
-            name = sd['schedule_name'][:31]\
-                     .replace('/', '_').replace('\\', '_').replace('*', '_')\
-                     .replace('?', '_').replace('[', '_').replace(']', '_')
-            ET.SubElement(sh, 'sheet', {
-                'name': name, 'sheetId': str(i+1), 'r:id': 'rId{}'.format(i+1)
-            })
-        return _to_str(wb)
-
-    def _styles():
-        ss = ET.Element('styleSheet', {'xmlns': ns_main})
-        fonts = ET.SubElement(ss, 'fonts', {'count': '2'})
-        f0 = ET.SubElement(fonts, 'font')
-        ET.SubElement(f0, 'sz', {'val': '11'}); ET.SubElement(f0, 'name', {'val': 'Calibri'})
-        f1 = ET.SubElement(fonts, 'font')
-        ET.SubElement(f1, 'b'); ET.SubElement(f1, 'sz', {'val': '11'})
-        ET.SubElement(f1, 'name', {'val': 'Calibri'})
-        fills = ET.SubElement(ss, 'fills', {'count': '3'})
-        ET.SubElement(ET.SubElement(fills, 'fill'), 'patternFill', {'patternType': 'none'})
-        ET.SubElement(ET.SubElement(fills, 'fill'), 'patternFill', {'patternType': 'gray125'})
-        hf = ET.SubElement(fills, 'fill')
-        pf = ET.SubElement(hf, 'patternFill', {'patternType': 'solid'})
-        ET.SubElement(pf, 'fgColor', {'rgb': 'FFCDCDCD'})
-        borders = ET.SubElement(ss, 'borders', {'count': '1'})
-        b0 = ET.SubElement(borders, 'border')
-        ET.SubElement(b0, 'left'); ET.SubElement(b0, 'right')
-        ET.SubElement(b0, 'top'); ET.SubElement(b0, 'bottom')
-        csx = ET.SubElement(ss, 'cellStyleXfs', {'count': '1'})
-        ET.SubElement(csx, 'xf', {'numFmtId': '0', 'fontId': '0', 'fillId': '0', 'borderId': '0'})
-        cx = ET.SubElement(ss, 'cellXfs', {'count': '2'})
-        ET.SubElement(cx, 'xf', {
-            'numFmtId': '0', 'fontId': '0', 'fillId': '0', 'borderId': '0', 'xfId': '0'
-        })
-        ET.SubElement(cx, 'xf', {
-            'numFmtId': '0', 'fontId': '1', 'fillId': '2', 'borderId': '0',
-            'xfId': '0', 'applyFont': '1', 'applyFill': '1'
-        })
-        cs = ET.SubElement(ss, 'cellStyles', {'count': '1'})
-        ET.SubElement(cs, 'cellStyle', {'name': 'Normal', 'xfId': '0', 'builtinId': '0'})
-        return _to_str(ss)
-
-    def _sst():
-        root = ET.Element('sst', {
-            'xmlns': ns_main,
-            'count': str(len(shared)),
-            'uniqueCount': str(len(shared)),
-        })
-        for s in shared:
-            si = ET.SubElement(root, 'si')
-            t  = ET.SubElement(si, 't')
-            t.text = s
-        return _to_str(root)
-
-    def _worksheet(sd):
-        ws  = ET.Element('worksheet', {'xmlns': ns_main})
-        shd = ET.SubElement(ws, 'sheetData')
-        headers    = sd.get('headers', [])
-        rows       = sd.get('rows', [])
-        eids       = sd.get('element_ids', [])
-        from_cells = sd.get('from_cells', False)
-
-        # Header row
-        hdr_el = ET.SubElement(shd, 'row', {'r': '1'})
-        if from_cells:
-            for c, h in enumerate(headers):
-                cel = ET.SubElement(hdr_el, 'c', {
-                    'r': '{}{}'.format(_col_letter(c+1), 1), 't': 's', 's': '1'
-                })
-                ET.SubElement(cel, 'v').text = str(_si(h))
-        else:
-            cel = ET.SubElement(hdr_el, 'c', {'r': 'A1', 't': 's', 's': '1'})
-            ET.SubElement(cel, 'v').text = str(_si('Element ID'))
-            for c, h in enumerate(headers):
-                cel = ET.SubElement(hdr_el, 'c', {
-                    'r': '{}{}'.format(_col_letter(c+2), 1), 't': 's', 's': '1'
-                })
-                ET.SubElement(cel, 'v').text = str(_si(h))
-
-        # Data rows
-        for r_idx, row in enumerate(rows):
-            excel_row = r_idx + 2
-            row_el = ET.SubElement(shd, 'row', {'r': str(excel_row)})
-            if from_cells:
-                for c, val in enumerate(row):
-                    cel = ET.SubElement(row_el, 'c', {
-                        'r': '{}{}'.format(_col_letter(c+1), excel_row), 't': 's'
-                    })
-                    ET.SubElement(cel, 'v').text = str(_si(val))
-            else:
-                eid = eids[r_idx] if r_idx < len(eids) else None
-                cel = ET.SubElement(row_el, 'c', {'r': 'A{}'.format(excel_row)})
-                ET.SubElement(cel, 'v').text = str(eid) if eid else '0'
-                for c, val in enumerate(row):
-                    cell_ref = '{}{}'.format(_col_letter(c+2), excel_row)
-                    val_str = str(val) if val is not None else ""
-                    is_num = False
-                    try:
-                        if val_str.strip():
-                            float(val_str)
-                            is_num = True
-                    except Exception:
-                        pass
-                    if is_num:
-                        cel = ET.SubElement(row_el, 'c', {'r': cell_ref})
-                        ET.SubElement(cel, 'v').text = val_str
-                    else:
-                        cel = ET.SubElement(row_el, 'c', {'r': cell_ref, 't': 's'})
-                        ET.SubElement(cel, 'v').text = str(_si(val_str))
-        return _to_str(ws)
-
-    def _rels():
-        r = ET.Element('Relationships', {'xmlns': ns_rel})
-        ET.SubElement(r, 'Relationship', {
-            'Id': 'rId1',
-            'Type': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument',
-            'Target': 'xl/workbook.xml',
-        })
-        return _to_str(r)
-
-    def _wb_rels():
-        r = ET.Element('Relationships', {'xmlns': ns_rel})
-        for i in range(len(schedules_data)):
-            ET.SubElement(r, 'Relationship', {
-                'Id': 'rId{}'.format(i+1),
-                'Type': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet',
-                'Target': 'worksheets/sheet{}.xml'.format(i+1),
-            })
-        ET.SubElement(r, 'Relationship', {
-            'Id': 'rId{}'.format(len(schedules_data)+1),
-            'Type': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings',
-            'Target': 'sharedStrings.xml',
-        })
-        ET.SubElement(r, 'Relationship', {
-            'Id': 'rId{}'.format(len(schedules_data)+2),
-            'Type': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles',
-            'Target': 'styles.xml',
-        })
-        return _to_str(r)
-
-    def _ct():
-        t = ET.Element('Types', {'xmlns': ns_ct})
-        ET.SubElement(t, 'Default', {
-            'Extension': 'rels',
-            'ContentType': 'application/vnd.openxmlformats-package.relationships+xml',
-        })
-        ET.SubElement(t, 'Default', {
-            'Extension': 'xml', 'ContentType': 'application/xml',
-        })
-        ET.SubElement(t, 'Override', {
-            'PartName': '/xl/workbook.xml',
-            'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
-        })
-        ET.SubElement(t, 'Override', {
-            'PartName': '/xl/sharedStrings.xml',
-            'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml',
-        })
-        ET.SubElement(t, 'Override', {
-            'PartName': '/xl/styles.xml',
-            'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml',
-        })
-        for i in range(len(schedules_data)):
-            ET.SubElement(t, 'Override', {
-                'PartName': '/xl/worksheets/sheet{}.xml'.format(i+1),
-                'ContentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
-            })
-        return _to_str(t)
-
-    decl = '<?xml version="1.0" encoding="UTF-8"?>'
-    with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr('[Content_Types].xml',           decl + _ct())
-        zf.writestr('_rels/.rels',                   decl + _rels())
-        zf.writestr('xl/workbook.xml',               decl + _workbook())
-        zf.writestr('xl/_rels/workbook.xml.rels',    decl + _wb_rels())
-        zf.writestr('xl/sharedStrings.xml',          decl + _sst())
-        zf.writestr('xl/styles.xml',                 decl + _styles())
-        for i, sd in enumerate(schedules_data):
-            zf.writestr(
-                'xl/worksheets/sheet{}.xml'.format(i+1),
-                decl + _worksheet(sd)
-            )
-
-
-# ============================================================
-# EXCEL IMPORT  (zipfile)
-# ============================================================
-
-def _import_from_xlsx(filepath):
-    """
-    Read the first non-hidden sheet from an xlsx file.
-
-    Returns (data_dict, error_str).
-    data_dict keys: schedule_name, headers, rows, element_ids
-    """
-    try:
-        ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-
-        with zipfile.ZipFile(filepath, 'r') as zf:
-            # Shared strings
-            shared = []
-            try:
-                ss_root = ET.fromstring(zf.read('xl/sharedStrings.xml'))
-                for si in ss_root.findall('.//{%s}si' % ns):
-                    t = si.find('.//{%s}t' % ns)
-                    shared.append(t.text if t is not None and t.text else "")
-            except Exception:
-                pass
-
-            # Sheet names
-            wb_root     = ET.fromstring(zf.read('xl/workbook.xml'))
-            sheets_info = [
-                sh.get('name', '')
-                for sh in wb_root.findall('.//{%s}sheet' % ns)
-            ]
-
-            schedule_name = sheets_info[0] if sheets_info else "Schedule"
-
-            def _read_sheet(idx):
-                sheet_xml  = zf.read('xl/worksheets/sheet{}.xml'.format(idx+1))
-                sheet_root = ET.fromstring(sheet_xml)
-                rows_data  = {}
-                for row_el in sheet_root.findall('.//{%s}row' % ns):
-                    rn    = int(row_el.get('r', 0))
-                    cells = {}
-                    for cell_el in row_el.findall('.//{%s}c' % ns):
-                        cell_ref  = cell_el.get('r', '')
-                        cell_type = cell_el.get('t', '')
-                        v_el      = cell_el.find('{%s}v' % ns)
-                        if v_el is not None and v_el.text:
-                            if cell_type == 's':
-                                idx2 = int(v_el.text)
-                                value = shared[idx2] if idx2 < len(shared) else ""
-                            else:
-                                value = v_el.text
-                        else:
-                            value = ""
-                        col_str = ''.join(c for c in cell_ref if c.isalpha())
-                        col_num = 0
-                        for ch in col_str:
-                            col_num = col_num * 26 + (ord(ch.upper()) - ord('A') + 1)
-                        cells[col_num] = value
-                    rows_data[rn] = cells
-                return rows_data
-
-            data_rows = _read_sheet(0)
-
-        if not data_rows:
-            return None, "No data found in file."
-
-        header_row = data_rows.get(1, {})
-        h1 = header_row.get(1, "").strip().lower()
-        if h1 in ('element id', 'elementid', 'id', 'element_id'):
-            eid_col    = 1
-            data_start = 2
-        else:
-            eid_col    = None
-            data_start = 1
-
-        # Collect headers
-        headers = []
-        col = data_start
-        while True:
-            h = header_row.get(col, "").strip()
-            if not h:
-                if col > data_start + 5:
-                    break
-            else:
-                headers.append(h)
-            col += 1
-            if col > data_start + 200:
-                break
-
-        rows, element_ids = [], []
-        row_nums = sorted(r for r in data_rows if r > 1)
-        for rn in row_nums:
-            row_data = data_rows[rn]
-            if eid_col:
-                eid_val = row_data.get(eid_col, "")
-                try:
-                    element_ids.append(int(float(eid_val)) if eid_val else None)
-                except Exception:
-                    element_ids.append(None)
-            row_values = [row_data.get(data_start + ci, "") for ci in range(len(headers))]
-            if any(v for v in row_values):
-                rows.append(row_values)
-            elif eid_col and element_ids and element_ids[-1]:
-                rows.append(row_values)
-
-        return {
-            'schedule_name': schedule_name,
-            'headers':       headers,
-            'rows':          rows,
-            'element_ids':   element_ids,
-        }, None
-
-    except Exception as ex:
-        return None, "Import error: {}".format(ex)
-
-
-# ============================================================
-# CHANGE DETECTION + MODEL UPDATER
-# ============================================================
-
-def _find_changes(current_data, imported_data):
-    """
-    Compare imported xlsx data against live Revit data.
-    Returns list of change dicts (element_id, field_name, param_id,
-                                  old_value, new_value).
-    """
-    changes = []
-    if not current_data or not imported_data:
-        return changes
-
-    cur_headers = current_data['headers']
-    cur_col_map = {h: i for i, h in enumerate(cur_headers)}
-    cur_fields  = current_data.get('fields', [])
-
-    cur_by_eid = {}
-    for ri, eid in enumerate(current_data['element_ids']):
-        if eid:
-            cur_by_eid[eid] = current_data['rows'][ri]
-
-    imp_headers = imported_data.get('headers', [])
-
-    for imp_idx, imp_row in enumerate(imported_data['rows']):
-        imp_eid = (imported_data['element_ids'][imp_idx]
-                   if imp_idx < len(imported_data['element_ids']) else None)
-        if not imp_eid:
-            continue
-        cur_row = cur_by_eid.get(imp_eid)
-        if cur_row is None:
-            continue
-
-        for ci, header in enumerate(imp_headers):
-            cur_ci = cur_col_map.get(header)
-            if cur_ci is None:
-                continue
-            # Skip non-editable fields
-            if cur_ci < len(cur_fields) and not cur_fields[cur_ci].get('can_edit', True):
-                continue
-            param_id = cur_fields[cur_ci].get('param_id') if cur_ci < len(cur_fields) else None
-
-            imp_val = str(imp_row[ci]).strip() if ci < len(imp_row) else ""
-            cur_val = str(cur_row[cur_ci]).strip() if cur_ci < len(cur_row) else ""
-
-            if imp_val != cur_val:
-                changes.append({
-                    'element_id': imp_eid,
-                    'field_name': header,
-                    'param_id':   param_id,
-                    'old_value':  cur_val,
-                    'new_value':  imp_val,
-                })
-
-    return changes
-
-
-def _apply_changes(changes, doc):
-    """
-    Write changes back to Revit elements inside a single transaction.
-    Returns (success_count, error_list, skipped_count).
-    """
-    if not changes:
-        return 0, [], 0
-
-    success, errors, skipped = 0, [], 0
-
-    t = DB.Transaction(doc, "T3Lab: Schedule Manager - Apply Changes")
-    t.Start()
-    try:
-        for ch in changes:
-            eid = ch['element_id']
-            if not eid:
-                skipped += 1
-                continue
-            try:
-                elem = doc.GetElement(make_eid(eid))
-            except Exception:
-                elem = None
-            if not elem:
-                skipped += 1
-                continue
-
-            ok, err_msg = _set_param_value(elem, ch, doc)
-            if ok:
-                success += 1
-            else:
-                errors.append("ID {}: {}".format(eid, err_msg))
-
-        t.Commit()
-    except Exception as ex:
-        t.RollBack()
-        return 0, [str(ex)], 0
-
-    return success, errors, skipped
-
-
-def _set_param_value(elem, change, doc):
-    """Set a single parameter value on an element. Returns (bool, error_str)."""
-    try:
-        field_name = change['field_name']
-        param_id   = change['param_id']
-        value      = change['new_value']
-
-        param = None
-        if param_id and param_id < 0:
-            try:
-                param = elem.get_Parameter(DB.BuiltInParameter(param_id))
-            except Exception:
-                pass
-        if not param:
-            param = elem.LookupParameter(field_name)
-
-        # Try element type as fallback
-        if not param:
-            elem_type = None
-            try:
-                type_id = elem.GetTypeId()
-                if type_id and _eid_int(type_id) != -1:
-                    elem_type = doc.GetElement(type_id)
-            except Exception:
-                pass
-            if elem_type:
-                if param_id and param_id < 0:
-                    try:
-                        param = elem_type.get_Parameter(DB.BuiltInParameter(param_id))
-                    except Exception:
-                        pass
-                if not param:
-                    param = elem_type.LookupParameter(field_name)
-
-        if not param:
-            return False, "'{}' not found".format(field_name)
-        if param.IsReadOnly:
-            return False, "'{}' is read-only".format(field_name)
-
-        st = param.StorageType
-        if st == DB.StorageType.String:
-            param.Set(str(value) if value else "")
-        elif st == DB.StorageType.Integer:
-            if not value:
-                param.Set(0)
-            else:
-                try:
-                    param.Set(int(float(value)))
-                except ValueError:
-                    # Exported as display text ("Yes", an enum name ...).
-                    if not param.SetValueString(str(value)):
-                        return False, "'{}' is not a valid value for '{}'".format(
-                            value, field_name)
-        elif st == DB.StorageType.Double:
-            # Export writes AsValueString() -- project display units (2400 for
-            # 2400 mm). Set(float) would store that number in Revit's internal
-            # feet, so read it back the same way it was written.
-            if not value:
-                param.Set(0.0)
-            elif not param.SetValueString(str(value)):
-                return False, "'{}' is not a valid value for '{}'".format(
-                    value, field_name)
-        else:
-            return False, "Unsupported StorageType"
-
-        return True, ""
-    except Exception as ex:
-        return False, str(ex)
-
-
-# ============================================================
-# PREVIEW RENDERER
-# ============================================================
-
-def _render_preview(container, all_data):
-    """
-    Render lightweight preview tables into a WPF StackPanel (ctr_grid).
-    Shows up to 50 rows per schedule.
-    """
-    from System.Windows.Controls import (
-        Grid as WPFGrid, ColumnDefinition, RowDefinition,
-        Border as WPFBorder,
-    )
-    from System.Windows.Media import BrushConverter
-
-    MAX_ROWS = 50
-    bc = BrushConverter()
-
-    def _b(hex_str):
-        try:
-            return bc.ConvertFromString(hex_str)
-        except Exception:
-            return None
-
-    container.Children.Clear()
-
-    for data in all_data:
-        headers = data.get('headers', [])
-        rows    = data.get('rows', [])
-        name    = data.get('schedule_name', '')
-
-        # Schedule name label
-        lbl = TextBlock()
-        lbl.Text       = name
-        lbl.FontSize   = 13
-        lbl.FontWeight = System.Windows.FontWeights.SemiBold
-        lbl.Foreground = _b('#18181B')
-        lbl.Margin     = System.Windows.Thickness(0, 8, 0, 4)
-        container.Children.Add(lbl)
-
-        n_cols = len(headers)
-        if n_cols == 0:
-            continue
-
-        grid = WPFGrid()
-        grid.Margin = System.Windows.Thickness(0, 0, 0, 12)
-
-        for _ in range(n_cols):
-            cd = ColumnDefinition()
-            cd.MinWidth = 80
-            grid.ColumnDefinitions.Add(cd)
-
-        def _add_cell(g, text, row, col, is_header):
-            brd = WPFBorder()
-            brd.BorderBrush     = _b('#E4E4E7')
-            brd.BorderThickness = System.Windows.Thickness(0, 0, 1, 1)
-            brd.Background      = _b('#F4F4F6') if is_header else _b('#FFFFFF')
-            brd.Padding         = System.Windows.Thickness(6, 3, 6, 3)
-            tb = TextBlock()
-            cell_str      = str(text) if text is not None else ""
-            tb.Text       = cell_str
-            tb.FontSize   = 11
-            tb.FontWeight = (System.Windows.FontWeights.SemiBold
-                             if is_header else System.Windows.FontWeights.Normal)
-            tb.Foreground = _b('#18181B')
-            tb.TextTrimming = System.Windows.TextTrimming.CharacterEllipsis
-            tb.ToolTip      = cell_str
-            brd.Child = tb
-            WPFGrid.SetRow(brd, row)
-            WPFGrid.SetColumn(brd, col)
-            g.Children.Add(brd)
-
-        # Header row
-        grid.RowDefinitions.Add(RowDefinition())
-        for ci, h in enumerate(headers):
-            _add_cell(grid, h, 0, ci, is_header=True)
-
-        # Data rows
-        display_rows = rows[:MAX_ROWS]
-        for ri, row in enumerate(display_rows):
-            grid.RowDefinitions.Add(RowDefinition())
-            for ci in range(n_cols):
-                val = row[ci] if ci < len(row) else ""
-                _add_cell(grid, val, ri+1, ci, is_header=False)
-
-        if len(rows) > MAX_ROWS:
-            grid.RowDefinitions.Add(RowDefinition())
-            more = TextBlock()
-            more.Text      = "... {} more row(s) not shown".format(len(rows) - MAX_ROWS)
-            more.FontSize  = 11
-            more.Foreground = _b('#71717A')
-            more.Margin    = System.Windows.Thickness(4, 2, 0, 2)
-            WPFGrid.SetRow(more, len(display_rows)+1)
-            WPFGrid.SetColumnSpan(more, n_cols)
-            grid.Children.Add(more)
-
-        container.Children.Add(grid)
-
-
-# ============================================================
-# SCHEDULE ITEM (DataGrid row model)
-# ============================================================
-
-class ScheduleItem(object):
-    def __init__(self, name, field_count, is_key, sched_id):
-        self.name        = name
-        self.field_count = str(field_count)
-        self.is_key_text = "Yes" if is_key else "No"
-        self.sched_id    = str(sched_id)
-        self.is_checked  = False
-
-
-# ============================================================
-# MAIN WINDOW CLASS
+# MAIN WINDOW
 # ============================================================
 
 class ManaSchedWindow(T3WPFWindow):
-    """
-    WPF host for ManaSched.xaml.
-
-    Schedules tab   - browse/search all schedules in a DataGrid.
-    Excel Link tab  - export/import Revit schedule to/from .xlsx.
-    Duplicator tab  - batch-duplicate schedules with optional view template.
-    """
+    """Excel Tables page + Schedule Data page. Chrome is wired by T3WPFWindow."""
 
     def __init__(self, script_dir, revit_obj):
         T3WPFWindow.__init__(self, _XAML)
         self._script_dir = script_dir
-        self._revit      = revit_obj
-        self._doc        = revit_obj.ActiveUIDocument.Document
+        self._uidoc = revit_obj.ActiveUIDocument
+        self._doc = self._uidoc.Document
 
-        # ---- Shared schedule item list ----
-        self._schedule_items = []    # [ScheduleItem, ...] used by both grids
+        self._table_rows = []
+        self._sched_rows = []
+        self._schedules = []            # [(name, ViewSchedule)]
+        self._change_rows = []
+        self._xl_path = None            # workbook open on the New Table page
+        self._gsheet = None             # its Google Sheets link (path = cache copy)
+        self._source_title = ''         # file stem, or "Google Sheet"
+        self._sheet = None              # its active sheet
+        self._view = None               # xt.Table of the sheet viewer
+        self._choices = []              # range names of the active sheet
+        self._syncing = False           # True while code changes the selection
+        self._form_cache = None         # (key, Table) of the last read range
+        self._range_bounds = None       # (r1, c1, r2, c2) shown in the summary
+        self._keep_range_once = False   # Re-read keeps the range of the same sheet
 
-        # ---- Excel Link state ----
-        self._all_schedules   = []   # [(name, ViewSchedule), ...]
-        self._current_data    = None # dict from _extract_schedule_data
-        self._imported_data   = None # dict from _import_from_xlsx
-        self._pending_changes = []
+        # navigation + primary action
+        self.nav_new.Checked += self._on_nav
+        self.nav_tables.Checked += self._on_nav
+        self.nav_data.Checked += self._on_nav
+        self.btn_primary.Click += self._on_primary
 
-        # ---- Duplicator state ----
-        self._dup_schedules = []     # [(name, ViewSchedule), ...]
-        self._dup_templates = []     # [(name, View|None), ...]
+        # New Table page
+        self.btn_browse.Click += self._on_browse
+        self.btn_open_link.Click += lambda s, e: self._open_source(self.txt_file.Text)
+        self.txt_file.KeyDown += self._on_file_key
+        self.btn_reread.Click += self._on_reread
+        self.dg_sheet.SelectedCellsChanged += self._on_cells_selected
+        self.cmb_range.SelectionChanged += self._on_range_changed
+        self.txt_range.LostFocus += self._on_range_typed
+        self.txt_range.KeyDown += self._on_range_key
+        self.chk_hidden.Click += lambda s, e: self._show_sheet(keep_range=True)
+        self.cmb_kind.SelectionChanged += self._on_kind_changed
+        self.txt_name.TextChanged += lambda s, e: self._update_summary()
+        self.chk_keep_link.Click += lambda s, e: self._update_summary()
 
-        # Wire window chrome
-        self.btn_minimize.Click     += self._minimize
-        self.btn_maximize.Click     += self._maximize
-        self.btn_close_chrome.Click += self._close
+        # Linked Tables page
+        self.tbl_search_box.TextChanged += lambda s, e: self._fill_tables()
+        self.btn_tbl_reload.Click += self._on_tbl_reload
+        self.btn_tbl_unlink.Click += self._on_tbl_unlink
 
-        # Wire sidebar navigation
-        self.nav_excel_link.Click   += self._nav_excel_link_clicked
-        self.nav_duplicator.Click   += self._nav_duplicator_clicked
+        # Schedule Data page
+        self.data_search_box.TextChanged += lambda s, e: self._fill_schedules()
+        self.btn_import.Click += self._on_import
+        self.btn_apply.Click += self._on_apply
 
-        # Wire Excel Link controls
-        self.xl_search_box.TextChanged              += self._on_xl_search
-        self.xl_dg_schedules.SelectionChanged       += self._on_xl_sel_changed
-        self.xl_dg_schedules.PreviewMouseLeftButtonDown += self._dg_force_commit
-        self.xl_select_all_btn.Click                += self._on_xl_select_all
-        self.xl_clear_btn.Click                     += self._on_xl_clear
-        self.btn_preview.Click                += self._on_preview
-        self.btn_export.Click                 += self._on_export
-        self.btn_import.Click                 += self._on_import
-        self.btn_update.Click                 += self._on_update
+        self.enable_bulk_tick(self.dg_tables, "is_checked", on_change=self._count_tables)
+        self.enable_bulk_tick(self.dg_schedules, "is_checked", on_change=self._count_schedules)
+        self.enable_bulk_tick(self.dg_changes, "is_checked", on_change=self._count_changes)
 
-        # Wire Duplicator controls
-        self.dup_search_box.TextChanged              += self._on_dup_search
-        self.dup_dg_schedules.SelectionChanged       += self._on_dup_sel_changed
-        self.dup_dg_schedules.PreviewMouseLeftButtonDown += self._dg_force_commit
-        self.dup_select_all_btn.Click                += self._on_dup_select_all
-        self.dup_clear_btn.Click                     += self._on_dup_clear
-        self.btn_dup_run.Click                       += self._on_dup_run
-
-        # Populate data
-        self._load_all_schedules()
-        self._populate_dup_controls()
-        self._set_status("Ready")
-
-        # Default to Excel Link tab
-        self.tab_main.SelectedItem = self.tab_excel_link
-
+        _combo_fill(self.cmb_kind, [etr.KIND_LABEL[k] for k in KIND_ORDER], 1)
+        self._load_tables()
+        self._load_schedules()
+        self._show_changes([], ["No file imported."])
+        self.tab_main.SelectedItem = self.tab_new
+        self._sync_primary()
 
     # ------------------------------------------------------------------
-    # WINDOW CHROME
+    # SHARED
     # ------------------------------------------------------------------
 
-    def _minimize(self, sender, e):
-        self.WindowState = System.Windows.WindowState.Minimized
+    def _status(self, text):
+        self.txt_statusbar.Text = text
 
-    def _maximize(self, sender, e):
-        if self.WindowState == System.Windows.WindowState.Maximized:
-            self.WindowState = System.Windows.WindowState.Normal
+    def _page(self):
+        if self.nav_tables.IsChecked:
+            return 'tables'
+        if self.nav_data.IsChecked:
+            return 'data'
+        return 'new'
+
+    def _on_nav(self, sender, e):
+        self.tab_main.SelectedItem = {'new': self.tab_new, 'tables': self.tab_tables,
+                                      'data': self.tab_data}[self._page()]
+        self._sync_primary()
+
+    def _sync_primary(self):
+        text, glyph = {'new': ("Create Table", u"\uE710"),
+                       'tables': ("Update Tables", u"\uE72C"),
+                       'data': ("Export to Excel", u"\uE896")}[self._page()]
+        self.txt_primary.Text = text
+        self.ico_primary.Text = glyph
+
+    def _on_primary(self, sender, e):
+        page = self._page()
+        if page == 'new':
+            self._create_table()
+        elif page == 'tables':
+            self._update_tables()
         else:
-            self.WindowState = System.Windows.WindowState.Maximized
+            self._export()
 
-    def _close(self, sender, e):
-        self.Close()
+    def _pick_file(self, title):
+        from Microsoft.Win32 import OpenFileDialog
+        dlg = OpenFileDialog()
+        dlg.Filter = EXCEL_FILTER
+        dlg.Title = title
+        folder = os.path.dirname(self._doc.PathName or '')
+        if folder and os.path.isdir(folder):
+            dlg.InitialDirectory = folder
+        return dlg.FileName if dlg.ShowDialog(self) == True else None   # noqa: E712
 
-    # Aliases so XAML Click="..." attributes also work when pyRevit
-    # routes them to method names matching the XAML attribute value.
-    def minimize_button_clicked(self, sender, e):
-        self._minimize(sender, e)
+    def _save_file(self, default_name):
+        from Microsoft.Win32 import SaveFileDialog
+        dlg = SaveFileDialog()
+        dlg.Filter = "Excel workbook (*.xlsx)|*.xlsx"
+        dlg.DefaultExt = "xlsx"
+        dlg.FileName = default_name
+        folder = os.path.dirname(self._doc.PathName or '')
+        if folder and os.path.isdir(folder):
+            dlg.InitialDirectory = folder
+        return dlg.FileName if dlg.ShowDialog(self) == True else None   # noqa: E712
 
-    def maximize_button_clicked(self, sender, e):
-        self._maximize(sender, e)
+    # ── header select-all (rule 23) ───────────────────────────────────
+    def select_all_dg_tables_clicked(self, sender, e):
+        self.toggle_all_rows(self.dg_tables, "is_checked", sender.IsChecked)
+        self._count_tables()
 
-    def close_button_clicked(self, sender, e):
-        self._close(sender, e)
+    def select_all_dg_schedules_clicked(self, sender, e):
+        self.toggle_all_rows(self.dg_schedules, "is_checked", sender.IsChecked)
+        self._count_schedules()
 
-    # ------------------------------------------------------------------
-    # SIDEBAR NAVIGATION
-    # ------------------------------------------------------------------
-
-    def _nav_excel_link_clicked(self, sender, e):
-        self.tab_main.SelectedItem = self.tab_excel_link
-
-    def _nav_duplicator_clicked(self, sender, e):
-        self.tab_main.SelectedItem = self.tab_duplicator
-
-    # ------------------------------------------------------------------
-    # SHARED HELPER
-    # ------------------------------------------------------------------
-
-    def _dg_force_commit(self, sender, e):
-        """Commit any pending cell edit before processing a new click.
-        This makes the checkbox column respond on the first click
-        rather than requiring a second click to toggle."""
-        try:
-            sender.CommitEdit()
-        except Exception:
-            pass
+    def select_all_dg_changes_clicked(self, sender, e):
+        self.toggle_all_rows(self.dg_changes, "is_checked", sender.IsChecked)
+        self._count_changes()
 
     # ------------------------------------------------------------------
-    # EXCEL LINK — SCHEDULE GRID
+    # EXCEL TABLES — linked list
     # ------------------------------------------------------------------
 
-    def _populate_xl_grid(self, filter_text=""):
-        items = self._schedule_items
-        if filter_text:
-            q = filter_text.lower()
-            items = [i for i in items if q in i.name.lower()]
-        try:
-            self.xl_dg_schedules.Items.Clear()
-            for item in items:
-                self.xl_dg_schedules.Items.Add(item)
-        except Exception:
-            pass
-        self._update_xl_count()
+    def _load_tables(self):
+        self._table_rows = []
+        for view, info in etr.find_linked_views(self._doc):
+            row = TableRow(view, info)
+            row.StatusText, row.Severity, row.detail = etr.check_status(self._doc, info)
+            self._table_rows.append(row)
+        self.tbl_note.Text = etr.storage_note() or TABLES_HINT
+        self._fill_tables()
 
-    def _update_xl_count(self):
-        try:
-            total = self.xl_dg_schedules.Items.Count
-            sel   = sum(1 for i in self._schedule_items if i.is_checked)
-            if sel > 0:
-                self.xl_count_text.Text = "{} / {} selected".format(sel, total)
-            else:
-                self.xl_count_text.Text = "{} schedule(s)".format(total)
-        except Exception:
-            pass
+    def _fill_tables(self):
+        q = (self.tbl_search_box.Text or '').strip().lower()
+        rows = [r for r in self._table_rows
+                if not q or q in r.name.lower() or q in r.source.lower()]
+        self.set_items_source(self.dg_tables, rows)
+        self.tbl_empty.Visibility = _visible(not rows)
+        if self._table_rows and not rows:
+            self.tbl_empty.Text = "No table matches the search."
+        else:
+            self.tbl_empty.Text = ("No Excel tables in this project yet. "
+                                   "Create one on the New Table page.")
+        self._count_tables()
 
-    def _on_xl_search(self, sender, e):
-        self._populate_xl_grid(self.xl_search_box.Text or "")
+    def _count_tables(self):
+        total = len(self._table_rows)
+        changed = sum(1 for r in self._table_rows if r.Severity != "Success")
+        ticked = sum(1 for r in self._table_rows if r.is_checked)
+        parts = ["{} table(s)".format(total)]
+        if changed:
+            parts.append("{} need attention".format(changed))
+        if ticked:
+            parts.append("{} ticked".format(ticked))
+        self.tbl_count_text.Text = " · ".join(parts)
+        self.sync_header_checkbox(self.chk_all_dg_tables, self.dg_tables, "is_checked")
 
-    def _on_xl_sel_changed(self, sender, e):
-        self._update_xl_count()
+    def _ticked_tables(self):
+        return [r for r in self._table_rows if r.is_checked]
 
-    def _on_xl_select_all(self, sender, e):
-        for item in self._schedule_items:
-            item.is_checked = True
-        try:
-            self.xl_dg_schedules.Items.Refresh()
-        except Exception:
-            pass
-        self._update_xl_count()
+    def _view_of(self, row):
+        return self._doc.GetElement(make_eid(row.view_id))
 
-    def _on_xl_clear(self, sender, e):
-        for item in self._schedule_items:
-            item.is_checked = False
-        try:
-            self.xl_dg_schedules.UnselectAll()
-            self.xl_dg_schedules.Items.Refresh()
-        except Exception:
-            pass
-        self._update_xl_count()
+    def _update_tables(self):
+        rows = self._ticked_tables()
+        if not rows:
+            rows = [r for r in self._table_rows
+                    if r.StatusText in ("Excel changed", "Sheet changed")]
+            if not rows:
+                T3Dialog.show_info("Tick the tables to update. Every linked table is "
+                                   "up to date with its Excel file.", "Nothing to Update",
+                                   owner=self)
+                return
+            question = "No table is ticked. Update all {} table(s) whose Excel file changed?".format(len(rows))
+        else:
+            question = "Update {} table(s) from Excel?".format(len(rows))
+        details = ("Drafting views and legends are redrawn in place. Schedules are rebuilt "
+                   "and put back on the same sheets at the same points.\n\n"
+                   + "\n".join(r.name for r in rows[:20]))
+        if not T3Dialog.confirm(question, "Update Excel Tables", ok_text="Update",
+                                details=details, owner=self):
+            return
+        self._run_updates(rows)
 
-    # ------------------------------------------------------------------
-    # DUPLICATOR — SCHEDULE GRID
-    # ------------------------------------------------------------------
-
-    def _populate_dup_grid(self, filter_text=""):
-        items = self._schedule_items
-        if filter_text:
-            q = filter_text.lower()
-            items = [i for i in items if q in i.name.lower()]
-        try:
-            self.dup_dg_schedules.Items.Clear()
-            for item in items:
-                self.dup_dg_schedules.Items.Add(item)
-        except Exception:
-            pass
-        self._update_dup_count()
-
-    def _update_dup_count(self):
-        try:
-            total = self.dup_dg_schedules.Items.Count
-            sel   = sum(1 for i in self._schedule_items if i.is_checked)
-            if sel > 0:
-                self.dup_count_text.Text = "{} / {} selected".format(sel, total)
-            else:
-                self.dup_count_text.Text = "{} schedule(s)".format(total)
-        except Exception:
-            pass
-
-    def _on_dup_search(self, sender, e):
-        self._populate_dup_grid(self.dup_search_box.Text or "")
-
-    def _on_dup_sel_changed(self, sender, e):
-        self._update_dup_count()
-
-    def _on_dup_select_all(self, sender, e):
-        for item in self._schedule_items:
-            item.is_checked = True
-        try:
-            self.dup_dg_schedules.Items.Refresh()
-        except Exception:
-            pass
-        self._update_dup_count()
-
-    def _on_dup_clear(self, sender, e):
-        for item in self._schedule_items:
-            item.is_checked = False
-        try:
-            self.dup_dg_schedules.UnselectAll()
-            self.dup_dg_schedules.Items.Refresh()
-        except Exception:
-            pass
-        self._update_dup_count()
-
-    # ------------------------------------------------------------------
-    # STATUS / INFO HELPERS
-    # ------------------------------------------------------------------
-
-    def _set_status(self, text):
-        try:
-            self.txt_statusbar.Text = text
-        except Exception:
-            pass
-
-    def _set_excel_status(self, text):
-        try:
-            self.txt_excel_status.Text = text
-        except Exception:
-            pass
-
-    def _set_info(self, text):
-        try:
-            self.txt_info.Text = text
-        except Exception:
-            pass
-
-    def _set_progress(self, value, visible=True):
-        try:
-            self.prg_excel.Value      = value
-            self.prg_excel.Visibility = (Visibility.Visible if visible
-                                         else Visibility.Collapsed)
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------
-    # LOAD SCHEDULES (Excel Link tab)
-    # ------------------------------------------------------------------
-
-    def _load_all_schedules(self):
-        """Load all schedules, build ScheduleItem list, populate both grids."""
-        self._all_schedules = _get_all_schedules(self._doc)
-        self._schedule_items = []
-        for name, sch in self._all_schedules:
+    def _run_updates(self, rows, path_override=None):
+        done, problems = 0, []
+        for row in rows:
+            view = self._view_of(row)
+            if view is None:
+                problems.append("'{}': the view no longer exists.".format(row.name))
+                continue
             try:
-                fc = sch.Definition.GetFieldCount()
-            except Exception:
-                fc = 0
-            try:
-                is_key = bool(sch.Definition.IsKeySchedule)
-            except Exception:
-                is_key = False
-            try:
-                sid = _eid_int(sch.Id)
-            except Exception:
-                sid = 0
-            self._schedule_items.append(ScheduleItem(name, fc, is_key, sid))
+                _, warnings = etr.update_table(self._doc, view, row.info, path_override)
+                problems.extend(warnings)
+                done += 1
+            except etr.TableError as ex:
+                problems.append("'{}': {}".format(row.name, ex))
+        self._load_tables()
+        self._status("Updated {} of {} table(s).".format(done, len(rows)))
+        if problems:
+            T3Dialog.show_warning("Updated {} of {} table(s).".format(done, len(rows)),
+                                  "Update Excel Tables", details="\n".join(problems[:30]),
+                                  owner=self)
 
-        self._populate_xl_grid()
-        self._populate_dup_grid()
-
-        n = len(self._all_schedules)
-        self._set_info(
-            "{} schedule(s) in project. Use Ctrl+Click or Shift+Click to select multiple.".format(n)
-        )
-        self._set_status("Loaded {} schedule(s).".format(n))
-
-    # ------------------------------------------------------------------
-    # EXCEL LINK - SELECTION HELPER
-    # ------------------------------------------------------------------
-
-    def _get_selected_schedules(self):
-        """Return list of (name, ViewSchedule) for all checked items."""
-        names = set(item.name for item in self._schedule_items if item.is_checked)
-        if not names:
-            return []
-        return [(n, s) for n, s in self._all_schedules if n in names]
-
-    # ------------------------------------------------------------------
-    # EXCEL LINK - EVENT HANDLERS
-    # ------------------------------------------------------------------
-
-    def _on_preview(self, sender, e):
-        selected = self._get_selected_schedules()
-        if not selected:
-            MessageBox.Show("Please select at least one schedule.", "No Selection",
-                            MessageBoxButton.OK, MessageBoxImage.Warning)
+    def _on_tbl_reload(self, sender, e):
+        rows = self._ticked_tables()
+        if len(rows) != 1:
+            T3Dialog.show_info("Tick exactly one table, then pick the workbook it should "
+                               "read from.", "Reload From", owner=self)
             return
+        path = self._pick_file("Reload '{}' from workbook".format(rows[0].name))
+        if not path:
+            return
+        info = rows[0].info
+        if not T3Dialog.confirm(
+                "Read '{}' from {} (sheet '{}', {}) and update it?".format(
+                    rows[0].name, os.path.basename(path), info.get('sheet'),
+                    info.get('range') or xt.USED_RANGE),
+                "Reload From", ok_text="Reload", owner=self):
+            return
+        self._run_updates(rows, path_override=path)
 
-        keep_fmt = bool(self.chk_keep_formatting.IsChecked)
-        self._set_progress(0, True)
-        self._set_excel_status("Loading preview...")
-
+    def _on_tbl_unlink(self, sender, e):
+        rows = self._ticked_tables()
+        if not rows:
+            T3Dialog.show_info("Tick the tables to unlink.", "Unlink", owner=self)
+            return
+        if not T3Dialog.confirm(
+                "Stop syncing {} table(s)? The drawings stay in the model as static "
+                "copies; only the link to Excel is removed.".format(len(rows)),
+                "Unlink Excel Tables", ok_text="Unlink", owner=self):
+            return
+        views = [v for v in (self._view_of(r) for r in rows) if v is not None]
         try:
-            all_data = []
-            for i, (name, sch) in enumerate(selected):
-                data = _extract_schedule_data(sch, self._doc, keep_formatting=keep_fmt)
-                if data:
-                    all_data.append(data)
-                self._set_progress(int((i+1) * 80.0 / len(selected)))
-
-            if not all_data:
-                self._set_excel_status("No data could be extracted from the selected schedule(s).")
-                self._set_progress(0, False)
-                return
-
-            # Cache for single-schedule change detection
-            if len(all_data) == 1:
-                self._current_data = all_data[0]
-
-            _render_preview(self.ctr_grid, all_data)
-            self._set_progress(100)
-            total_rows = sum(len(d['rows']) for d in all_data)
-            self._set_excel_status(
-                "Preview: {} schedule(s), {} row(s).".format(len(all_data), total_rows)
-            )
-            self._set_status("Preview loaded.")
+            n = etr.unlink_tables(self._doc, views)
         except Exception as ex:
-            self._set_excel_status("Preview error: {}".format(ex))
-        finally:
-            self._set_progress(0, False)
-
-    def _on_export(self, sender, e):
-        selected = self._get_selected_schedules()
-        if not selected:
-            MessageBox.Show("Please select at least one schedule.", "No Selection",
-                            MessageBoxButton.OK, MessageBoxImage.Warning)
+            T3Dialog.show_error("Unlink failed — nothing was changed.", "Unlink",
+                                details=short_error(ex), owner=self)
             return
+        self._load_tables()
+        self._status("Unlinked {} table(s).".format(n))
 
-        default_name = (selected[0][0] if len(selected) == 1 else "Schedules_Export") + '.xlsx'
-        save_path = forms.save_file(file_ext='xlsx', default_name=default_name)
-        if not save_path:
+    # ------------------------------------------------------------------
+    # EXCEL TABLES — new table form
+    # ------------------------------------------------------------------
+
+    def _on_browse(self, sender, e):
+        path = self._pick_file("Pick the Excel workbook")
+        if path:
+            self._open_source(path)
+
+    def _on_file_key(self, sender, e):
+        from System.Windows.Input import Key
+        if e.Key == Key.Return:
+            self._open_source(self.txt_file.Text)
+            e.Handled = True
+
+    def _on_reread(self, sender, e):
+        if self._gsheet:
+            self._open_source(self._gsheet, keep_sheet=self._sheet, keep_range=True)
+        elif self._xl_path:
+            self._open_workbook(self._xl_path, keep_sheet=self._sheet, keep_range=True)
+
+    def _open_source(self, text, keep_sheet=None, keep_range=False):
+        """A local .xlsx path, a Google Sheets link or a .gsheet shortcut."""
+        text = (text or '').strip().strip('"')
+        if not text:
+            T3Dialog.show_info("Browse for an .xlsx workbook, or paste a Google Sheets link "
+                               "in the Workbook box.", "Open Workbook", owner=self)
             return
-
-        keep_fmt = bool(self.chk_keep_formatting.IsChecked)
-        self._set_progress(0, True)
-        self._set_excel_status("Exporting...")
-
-        try:
-            all_data = []
-            for i, (name, sch) in enumerate(selected):
-                data = _extract_schedule_data(sch, self._doc, keep_formatting=keep_fmt)
-                if data:
-                    all_data.append(data)
-                self._set_progress(int((i+1) * 70.0 / len(selected)))
-
-            if not all_data:
-                self._set_excel_status("No data to export.")
-                self._set_progress(0, False)
+        if not gs.is_google(text):
+            if not os.path.isfile(text):
+                T3Dialog.show_warning("'{}' is neither an Excel file on this computer nor a "
+                                      "Google Sheets link.".format(text), "Open Workbook",
+                                      owner=self)
                 return
-
-            _export_to_xlsx(save_path, all_data)
-
-            if len(all_data) == 1:
-                self._current_data = all_data[0]
-
-            self._set_progress(100)
-            self._set_excel_status("Exported {} schedule(s) to: {}".format(
-                len(all_data), os.path.basename(save_path)))
-            self._set_status("Export complete.")
-            MessageBox.Show(
-                "Exported {} schedule(s) successfully.".format(len(all_data)),
-                "Export Complete", MessageBoxButton.OK, MessageBoxImage.Information
-            )
-        except Exception as ex:
-            self._set_excel_status("Export error: {}".format(ex))
-            MessageBox.Show("Export failed:\n\n{}".format(ex), "Error",
-                            MessageBoxButton.OK, MessageBoxImage.Error)
-        finally:
-            self._set_progress(0, False)
-
-    def _on_import(self, sender, e):
-        if sum(1 for i in self._schedule_items if i.is_checked) > 1:
-            MessageBox.Show(
-                "Import only supports a single schedule.\n"
-                "Please select exactly one schedule from the list.",
-                "Single Schedule Required",
-                MessageBoxButton.OK, MessageBoxImage.Warning
-            )
+            self._gsheet = None
+            self._source_title = os.path.splitext(os.path.basename(text))[0]
+            self._open_workbook(text, keep_sheet, keep_range)
             return
-
-        open_path = forms.pick_file(file_ext='xlsx')
-        if not open_path:
-            return
-
-        self._set_excel_status("Importing: {}".format(os.path.basename(open_path)))
-        self._set_progress(20, True)
-
+        self._status("Downloading the Google Sheet...")
         try:
-            data, err = _import_from_xlsx(open_path)
-            if err:
-                self._set_excel_status("Import error: {}".format(err))
-                MessageBox.Show("Import failed:\n\n{}".format(err), "Error",
-                                MessageBoxButton.OK, MessageBoxImage.Error)
-                return
-
-            self._imported_data = data
-
-            # Ensure we have live current data to diff against
-            if not self._current_data:
-                checked = [i for i in self._schedule_items if i.is_checked]
-                if checked:
-                    match = [(n, s) for n, s in self._all_schedules if n == checked[0].name]
-                    if match:
-                        _, sch = match[0]
-                        self._current_data = _extract_schedule_data(
-                            sch, self._doc, keep_formatting=False)
-
-            if not self._current_data:
-                self._set_excel_status(
-                    "Import loaded but no live schedule data available for comparison. "
-                    "Click Preview first, then Import.")
-                self._set_progress(0, False)
-                return
-
-            self._set_progress(60)
-            self._pending_changes = _find_changes(self._current_data, self._imported_data)
-            n = len(self._pending_changes)
-            self.btn_update.IsEnabled = n > 0
-            self._set_progress(100)
-            self._set_excel_status(
-                "Imported: {} row(s), {} change(s) detected.".format(
-                    len(data['rows']), n)
-            )
-            self._set_status("Import complete.")
-        except Exception as ex:
-            self._set_excel_status("Import error: {}".format(ex))
-            MessageBox.Show("Import error:\n\n{}".format(ex), "Error",
-                            MessageBoxButton.OK, MessageBoxImage.Error)
-        finally:
-            self._set_progress(0, False)
-
-    def _on_update(self, sender, e):
-        if not self._pending_changes:
-            MessageBox.Show("No pending changes to apply.", "Info",
-                            MessageBoxButton.OK, MessageBoxImage.Information)
+            path, src = gs.download(text)
+        except gs.GSheetError as ex:
+            self._status("Google Sheet not opened.")
+            T3Dialog.show_error(str(ex), "Cannot Open Google Sheet", owner=self)
             return
+        same = self._gsheet == src['url']
+        self._gsheet = src['url']
+        self._source_title = "Google Sheet"
+        self._open_workbook(path, keep_sheet, keep_range and same)
+        self.txt_file.Text = src['url']
 
-        n = len(self._pending_changes)
-        result = MessageBox.Show(
-            "Apply {} change(s) to the Revit model?".format(n),
-            "Confirm Apply", MessageBoxButton.YesNo, MessageBoxImage.Warning
-        )
-        if result != System.Windows.MessageBoxResult.Yes:
-            return
-
-        self._set_progress(0, True)
-        self._set_excel_status("Applying {} change(s)...".format(n))
-
+    def _open_workbook(self, path, keep_sheet=None, keep_range=False):
         try:
-            success, errors, skipped = _apply_changes(self._pending_changes, self._doc)
-            self._pending_changes = []
-            self.btn_update.IsEnabled = False
-            self._set_progress(100)
-
-            msg = "Applied {} / {} change(s).".format(success, n)
-            if skipped:
-                msg += " {} skipped (element not found).".format(skipped)
-            self._set_excel_status(msg)
-            self._set_status("Update complete.")
-
-            if errors:
-                detail = "\n".join(errors[:20])
-                if len(errors) > 20:
-                    detail += "\n... and {} more".format(len(errors) - 20)
-                MessageBox.Show("Some changes could not be applied:\n\n{}".format(detail),
-                                "Partial Success", MessageBoxButton.OK, MessageBoxImage.Warning)
+            with xt.Workbook(path) as wb:
+                sheets = wb.sheet_names()
+        except xt.XlsxError as ex:
+            T3Dialog.show_error(str(ex), "Cannot Read Workbook", owner=self)
+            return
+        first_open = path != self._xl_path
+        self._xl_path = path
+        self._form_cache = None
+        self.txt_file.Text = path
+        self.btn_reread.IsEnabled = True
+        self._keep_range_once = keep_range and not first_open
+        self.pnl_sheet_tabs.Children.Clear()
+        try:
+            chip = self.FindResource("T3.Chip")
+        except Exception:
+            chip = None
+        target = keep_sheet if keep_sheet in sheets else sheets[0]
+        to_check = None
+        for name in sheets:
+            rb = RadioButton()
+            rb.Content = name
+            rb.GroupName = "xl_sheet_tabs"
+            rb.ToolTip = "Show sheet '{}'".format(name)
+            if chip is not None:
+                rb.Style = chip
+            rb.Checked += self._on_sheet_tab
+            self.pnl_sheet_tabs.Children.Add(rb)
+            if name == target:
+                to_check = rb
+        if to_check is not None:
+            if to_check.IsChecked:
+                self._sheet = target
+                self._show_sheet(keep_range=self._keep_range_once)
             else:
-                MessageBox.Show(msg, "Update Complete",
-                                MessageBoxButton.OK, MessageBoxImage.Information)
-        except Exception as ex:
-            self._set_excel_status("Update error: {}".format(ex))
-            MessageBox.Show("Update failed:\n\n{}".format(ex), "Error",
-                            MessageBoxButton.OK, MessageBoxImage.Error)
-        finally:
-            self._set_progress(0, False)
+                to_check.IsChecked = True             # fires _on_sheet_tab
+        self._status("Workbook: {} ({} sheet(s)).".format(
+            self._source_title or os.path.basename(path), len(sheets)))
 
-    # ------------------------------------------------------------------
-    # DUPLICATOR - POPULATE CONTROLS
-    # ------------------------------------------------------------------
+    def _on_sheet_tab(self, sender, e):
+        name = str(sender.Content)
+        keep = self._keep_range_once and name == self._sheet
+        self._keep_range_once = False
+        self._sheet = name
+        self._show_sheet(keep_range=keep)
 
-    def _populate_dup_controls(self):
-        """Fill dup_dg_schedules, cmb_dup_method, cmb_dup_template."""
-        self._dup_schedules = self._all_schedules  # reuse already-loaded list
-        self._populate_dup_grid()
+    # ── the sheet viewer ─────────────────────────────────────────────
+    def _cell_template(self, j):
+        xaml = (u'<DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">'
+                u'<Border Background="{{Binding b{0}}}">'
+                u'<TextBlock Text="{{Binding t{0}}}" Foreground="{{Binding f{0}}}" '
+                u'FontWeight="{{Binding w{0}}}" FontStyle="{{Binding i{0}}}" '
+                u'TextAlignment="{{Binding a{0}}}" TextTrimming="CharacterEllipsis" '
+                u'Padding="4,0" VerticalAlignment="Center"/></Border></DataTemplate>').format(j)
+        return XamlReader.Parse(xaml)
 
-        self.cmb_dup_method.Items.Clear()
-        for method in ("Duplicate", "As Dependent", "As Independent"):
-            ci = ComboBoxItem()
-            ci.Content = method
-            self.cmb_dup_method.Items.Add(ci)
-        self.cmb_dup_method.SelectedIndex = 0
+    def _row_number_template(self):
+        return XamlReader.Parse(
+            u'<DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation">'
+            u'<TextBlock Text="{Binding rn}" Foreground="{DynamicResource T3.TextMuted}" '
+            u'FontFamily="Consolas" TextAlignment="Right" Padding="0,0,4,0" '
+            u'VerticalAlignment="Center"/></DataTemplate>')
 
-        self.txt_dup_basename.Text = ""
-
-        self._dup_templates = _get_view_templates(self._doc)
-        self.cmb_dup_template.Items.Clear()
-        for name, _ in self._dup_templates:
-            ci = ComboBoxItem()
-            ci.Content = name
-            self.cmb_dup_template.Items.Add(ci)
-        if self._dup_templates:
-            self.cmb_dup_template.SelectedIndex = 0
-
-    # ------------------------------------------------------------------
-    # DUPLICATOR - RUN
-    # ------------------------------------------------------------------
-
-    def _dup_log(self, text):
+    def _theme_text_color(self):
         try:
-            cur = self.txt_dup_log.Text or ""
-            self.txt_dup_log.Text = cur + text + "\n"
+            return self.FindResource("T3.Text").Color.ToString()
         except Exception:
-            pass
+            return "Black"
 
-    def _set_dup_status(self, text):
-        try:
-            self.txt_dup_status.Text = text
-        except Exception:
-            pass
-
-    def _on_dup_run(self, sender, e):
-        # Collect checked schedules
-        sel_names = set(item.name for item in self._schedule_items if item.is_checked)
-        selected_items = [(n, s) for n, s in self._dup_schedules if n in sel_names]
-        if not selected_items:
-            MessageBox.Show("Please select at least one schedule to duplicate.",
-                            "No Selection", MessageBoxButton.OK, MessageBoxImage.Warning)
+    def _show_sheet(self, keep_range=False):
+        """Fill the viewer with the active sheet; keep or reset the range."""
+        if not self._xl_path or not self._sheet:
             return
-
-        # Copy count
-        count_str = (self.txt_dup_count.Text or "1").strip()
+        old_choice = _combo_text(self.cmb_range)
+        old_text = (self.txt_range.Text or '').strip()
         try:
-            copy_count = int(count_str)
-            if copy_count < 1:
+            with xt.Workbook(self._xl_path) as wb:
+                view = wb.read_view(self._sheet, bool(self.chk_hidden.IsChecked),
+                                    VIEW_MAX_ROWS, VIEW_MAX_COLS)
+                self._choices = wb.range_choices(self._sheet)
+        except xt.XlsxError as ex:
+            self._view = None
+            self.dg_sheet.ItemsSource = None
+            self.dg_sheet.Columns.Clear()
+            self.sheet_empty.Text = str(ex)
+            self.sheet_empty.Visibility = Visibility.Visible
+            self.txt_selection.Text = u"—"
+            self._update_summary(error=str(ex))
+            return
+        self._view = view
+        self._build_viewer(view)
+        self.sheet_empty.Visibility = Visibility.Collapsed
+
+        stem = self._source_title or os.path.splitext(os.path.basename(self._xl_path))[0]
+        if not keep_range or not (self.txt_name.Text or '').strip():
+            self.txt_name.Text = u"{} - {}".format(stem, self._sheet)
+
+        self._syncing = True
+        try:
+            labels = [RANGE_SELECTION] + self._choices
+            if keep_range and old_choice in labels:
+                _combo_fill(self.cmb_range, labels, labels.index(old_choice))
+            else:
+                _combo_fill(self.cmb_range, labels, 1)        # Used range
+                old_choice = xt.USED_RANGE
+        finally:
+            self._syncing = False
+        if keep_range and old_choice == RANGE_SELECTION and old_text:
+            self._apply_typed_range(old_text)
+        else:
+            self._apply_choice(old_choice)
+        note = ""
+        if view.clipped:
+            note = " The viewer shows the first {} rows × {} columns; type a range " \
+                   "to import beyond them.".format(VIEW_MAX_ROWS, VIEW_MAX_COLS)
+        self._status(u"Sheet '{}' — used range {}.{}".format(
+            self._sheet, xt.range_text(*view.used_bounds), note))
+
+    def _build_viewer(self, view):
+        grid = self.dg_sheet
+        grid.ItemsSource = None
+        grid.Columns.Clear()
+        dt = DataTable()
+        dt.Columns.Add("rn")
+        dt.Columns.Add("ri")
+        for j in range(view.cols):
+            for key in ('t', 'b', 'f', 'w', 'i', 'a'):
+                dt.Columns.Add("{}{}".format(key, j))
+        fg_default = self._theme_text_color()
+        align = {'left': 'Left', 'center': 'Center', 'right': 'Right'}
+        for i, row in enumerate(view.cells):
+            dr = dt.NewRow()
+            dr["rn"] = str(view.source_rows[i])
+            dr["ri"] = str(i)
+            for j, cell in enumerate(row):
+                dr["t{}".format(j)] = cell.text.replace('\n', ' ')
+                dr["b{}".format(j)] = ("#{:02X}{:02X}{:02X}".format(*cell.fill)
+                                       if cell.fill else "Transparent")
+                col = cell.font.get('color')
+                dr["f{}".format(j)] = ("#{:02X}{:02X}{:02X}".format(*col)
+                                       if col and tuple(col) != (0, 0, 0) else fg_default)
+                dr["w{}".format(j)] = "Bold" if cell.font.get('bold') else "Normal"
+                dr["i{}".format(j)] = "Italic" if cell.font.get('italic') else "Normal"
+                dr["a{}".format(j)] = align.get(cell.halign, 'Left')
+            dt.Rows.Add(dr)
+
+        rn_col = DataGridTemplateColumn()
+        rn_col.Header = "#"
+        rn_col.Width = DataGridLength(44)
+        rn_col.CellTemplate = self._row_number_template()
+        grid.Columns.Add(rn_col)
+        for j, c in enumerate(view.source_cols):
+            col = DataGridTemplateColumn()
+            col.Header = xt.col_letter(c)
+            col.Width = DataGridLength(max(24.0, view.col_widths_in[j] * 96.0))
+            col.CellTemplate = self._cell_template(j)
+            grid.Columns.Add(col)
+        grid.ItemsSource = dt.DefaultView
+
+    # ── selection <-> range ──────────────────────────────────────────
+    def _on_cells_selected(self, sender, e):
+        if self._syncing or self._view is None:
+            return
+        cells = []
+        for info in self.dg_sheet.SelectedCells:
+            try:
+                header = str(info.Column.Header)
+                if header == "#":
+                    continue
+                ri = int(str(info.Item["ri"]))
+                cells.append((self._view.source_rows[ri], xt.col_number(header)))
+            except Exception:
+                continue
+        rng = xt.bounds_of_cells(cells)
+        if not rng:
+            return
+        self._syncing = True
+        try:
+            self.cmb_range.SelectedIndex = 0              # Selected cells
+            self.txt_range.Text = rng
+        finally:
+            self._syncing = False
+        self._show_range(xt.parse_range(rng))
+
+    def _on_range_changed(self, sender, e):
+        if self._syncing:
+            return
+        self._apply_choice(_combo_text(self.cmb_range))
+
+    def _apply_choice(self, choice):
+        if not self._view or not choice:
+            return
+        if choice == RANGE_SELECTION:
+            self._apply_typed_range(self.txt_range.Text)
+            return
+        try:
+            if choice == xt.USED_RANGE:
+                bounds = self._view.used_bounds
+            else:
+                with xt.Workbook(self._xl_path) as wb:
+                    bounds = wb.resolve_range(self._sheet, choice)
+        except xt.XlsxError as ex:
+            self._update_summary(error=str(ex))
+            return
+        self._syncing = True
+        try:
+            self.txt_range.Text = xt.range_text(*bounds)
+        finally:
+            self._syncing = False
+        self._highlight(bounds)
+        self._show_range(bounds)
+
+    def _on_range_key(self, sender, e):
+        from System.Windows.Input import Key
+        if e.Key == Key.Return:
+            self._on_range_typed(sender, e)
+            e.Handled = True
+
+    def _on_range_typed(self, sender, e):
+        if self._syncing or not self._view:
+            return
+        self._syncing = True
+        try:
+            self.cmb_range.SelectedIndex = 0
+        finally:
+            self._syncing = False
+        self._apply_typed_range(self.txt_range.Text)
+
+    def _apply_typed_range(self, text):
+        try:
+            bounds = xt.parse_range(text)
+        except xt.XlsxError as ex:
+            self.txt_selection.Text = u"—"
+            self._update_summary(error=str(ex))
+            return
+        self._syncing = True
+        try:
+            self.txt_range.Text = xt.range_text(*bounds)
+        finally:
+            self._syncing = False
+        self._highlight(bounds)
+        self._show_range(bounds)
+
+    def _highlight(self, bounds):
+        """Select `bounds` in the viewer so the user sees what will be read."""
+        grid, view = self.dg_sheet, self._view
+        r1, c1, r2, c2 = bounds
+        rows = [i for i, r in enumerate(view.source_rows) if r1 <= r <= r2]
+        cols = [col for col in list(grid.Columns)[1:]
+                if c1 <= xt.col_number(str(col.Header)) <= c2]
+        self._syncing = True
+        try:
+            grid.SelectedCells.Clear()
+            if rows and cols and len(rows) * len(cols) <= HIGHLIGHT_MAX_CELLS:
+                items = grid.Items
+                for i in rows:
+                    item = items[i]
+                    for col in cols:
+                        grid.SelectedCells.Add(DataGridCellInfo(item, col))
+            if rows:
+                grid.ScrollIntoView(grid.Items[rows[0]])
+        except Exception:
+            pass
+        finally:
+            self._syncing = False
+
+    def _show_range(self, bounds):
+        r1, c1, r2, c2 = bounds
+        self._range_bounds = bounds
+        self.txt_selection.Text = u"{}  ·  {} × {}".format(
+            xt.range_text(*bounds), r2 - r1 + 1, c2 - c1 + 1)
+        self._update_summary()
+
+    def _on_kind_changed(self, sender, e):
+        self.txt_kind_hint.Text = KIND_HINT.get(self._kind(), '')
+        self._update_summary()
+
+    def _kind(self):
+        i = self.cmb_kind.SelectedIndex
+        return KIND_ORDER[i] if 0 <= i < len(KIND_ORDER) else etr.KIND_DRAFTING
+
+    def _range_for_read(self):
+        """What the link stores: the name of a named range / Excel table (it
+        follows the table when it grows in Excel) or the fixed A1 range."""
+        choice = _combo_text(self.cmb_range)
+        if choice and choice != RANGE_SELECTION:
+            return choice
+        return (self.txt_range.Text or '').strip()
+
+    def _update_summary(self, error=None):
+        if error:
+            self.txt_summary.Text = error
+            return
+        if not self._xl_path or not self._range_bounds:
+            self.txt_summary.Text = "Pick a workbook and the cells to import."
+            return
+        r1, c1, r2, c2 = self._range_bounds
+        choice = _combo_text(self.cmb_range)
+        source = u"{}!{}".format(self._sheet, xt.range_text(r1, c1, r2, c2))
+        if choice and choice not in (RANGE_SELECTION, xt.USED_RANGE):
+            source += u" ('{}')".format(choice)
+        self.txt_summary.Text = u"{} · {} rows × {} columns → {} '{}'{}.".format(
+            source, r2 - r1 + 1, c2 - c1 + 1, etr.KIND_LABEL[self._kind()].lower(),
+            (self.txt_name.Text or '').strip() or "Excel Table",
+            ", linked" if self.chk_keep_link.IsChecked else ", static copy")
+
+    def _read_form_table(self):
+        """(Table, None) or (None, error text) for the current form."""
+        if not self._xl_path or not self._sheet:
+            return None, "Pick an Excel workbook first."
+        rng = self._range_for_read()
+        if not rng:
+            return None, "Drag over the cells to import, or pick a range."
+        hidden = bool(self.chk_hidden.IsChecked)
+        mtime = os.path.getmtime(self._xl_path) if os.path.isfile(self._xl_path) else 0
+        key = (self._xl_path, self._sheet, rng, hidden, mtime)
+        if self._form_cache and self._form_cache[0] == key:
+            return self._form_cache[1], None
+        try:
+            table = xt.read_table(self._xl_path, self._sheet, rng, hidden)
+        except xt.XlsxError as ex:
+            return None, str(ex)
+        self._form_cache = (key, table)
+        return table, None
+
+    def _create_table(self):
+        table, err = self._read_form_table()
+        if err:
+            T3Dialog.show_warning(err, "Create Table", owner=self)
+            return
+        try:
+            scale = float((self.txt_scale.Text or '100').strip()) / 100.0
+            if not 0.1 <= scale <= 10:
                 raise ValueError
         except ValueError:
-            MessageBox.Show("Copy Count must be a positive integer.", "Invalid Input",
-                            MessageBoxButton.OK, MessageBoxImage.Warning)
+            T3Dialog.show_warning("Size % must be a number from 10 to 1000.", "Create Table",
+                                  owner=self)
             return
-
-        # Base name
-        base_name = (self.txt_dup_basename.Text or "").strip()
-
-        # Duplication method
-        method_map = {
-            0: DB.ViewDuplicateOption.Duplicate,
-            1: DB.ViewDuplicateOption.AsDependent,
-            2: DB.ViewDuplicateOption.AsIndependent,
-        }
-        dup_option = method_map.get(self.cmb_dup_method.SelectedIndex,
-                                    DB.ViewDuplicateOption.Duplicate)
-
-        # View template (index 0 = "(None)")
-        tmpl_idx  = self.cmb_dup_template.SelectedIndex
-        tmpl_obj  = None
-        if 0 <= tmpl_idx < len(self._dup_templates):
-            _, tmpl_obj = self._dup_templates[tmpl_idx]
-
-        # Clear log
-        self.txt_dup_log.Text = ""
-        self._set_dup_status("Running...")
-        self._set_status("Duplicating schedules...")
-
-        total_created = 0
-        total_errors  = 0
-
-        try:
-            tg = DB.TransactionGroup(
-                self._doc, "T3Lab: Schedule Manager - Duplicate Schedules")
-            tg.Start()
-
-            for sch_name, sch in selected_items:
-                name_base = base_name if base_name else sch_name + "_Copy"
-                self._dup_log("Duplicating '{}' x{}...".format(sch_name, copy_count))
-
-                for i in range(copy_count):
-                    t = DB.Transaction(self._doc, "T3Lab: Duplicate Schedule")
-                    t.Start()
-                    try:
-                        new_id  = sch.Duplicate(dup_option)
-                        new_sch = self._doc.GetElement(new_id)
-
-                        # Build target name
-                        if copy_count == 1 and len(selected_items) == 1:
-                            target_name = name_base
-                        else:
-                            target_name = "{}_{}".format(name_base, i+1)
-
-                        # Ensure uniqueness
-                        used_name = target_name
-                        suffix    = 1
-                        while suffix <= 50:
-                            try:
-                                new_sch.Name = used_name
-                                break
-                            except Exception:
-                                used_name = "{}_{}".format(target_name, suffix)
-                                suffix += 1
-
-                        # Apply view template
-                        if tmpl_obj:
-                            try:
-                                if tmpl_obj.IsValidViewTemplate(new_sch):
-                                    new_sch.ViewTemplateId = tmpl_obj.Id
-                                else:
-                                    self._dup_log(
-                                        "  [warn] Template not compatible with '{}'".format(
-                                            used_name))
-                            except Exception as tex:
-                                self._dup_log("  [warn] Template apply failed: {}".format(tex))
-
-                        t.Commit()
-                        total_created += 1
-                        self._dup_log("  Created: '{}'".format(used_name))
-
-                    except Exception as ex:
-                        t.RollBack()
-                        total_errors += 1
-                        self._dup_log(
-                            "  [error] Copy {} of '{}': {}".format(i+1, sch_name, ex))
-
-            tg.Assimilate()
-
-        except Exception as ex:
-            self._dup_log("[fatal] {}".format(ex))
-            total_errors += 1
-            try:
-                tg.RollBack()
-            except Exception:
-                pass
-
-        status_msg = "Done: {} created, {} failed.".format(total_created, total_errors)
-        self._set_dup_status(status_msg)
-        self._set_status(status_msg)
-
-        if total_errors == 0:
-            MessageBox.Show(
-                "Duplicated {} schedule(s) successfully.".format(total_created),
-                "Done", MessageBoxButton.OK, MessageBoxImage.Information
-            )
+        kind = self._kind()
+        name = (self.txt_name.Text or '').strip() or "Excel Table"
+        link = bool(self.chk_keep_link.IsChecked)
+        options = {'scale': scale, 'formatting': bool(self.chk_formatting.IsChecked),
+                   'hidden': bool(self.chk_hidden.IsChecked)}
+        size = "{} rows × {} columns".format(table.rows, table.cols)
+        question = "Create {} '{}' from {}!{} ({})?".format(
+            etr.KIND_LABEL[kind].lower(), name, table.sheet,
+            xt.range_text(*table.bounds), size)
+        if not link:
+            details = "Static copy: it will not follow later edits."
+        elif self._gsheet:
+            details = ("It stays linked to the Google Sheet: Update Tables downloads the sheet "
+                       "again and redraws the table.")
         else:
-            MessageBox.Show(
-                "{} schedule(s) created. {} error(s) - see log.".format(
-                    total_created, total_errors),
-                "Completed with Errors",
-                MessageBoxButton.OK, MessageBoxImage.Warning
-            )
+            details = "It stays linked: Update Tables redraws it when the Excel file changes."
+        if table.rows * table.cols > 3000:
+            details += "\n\nLarge range — building it can take a while."
+        if not T3Dialog.confirm(question, "Create Table", ok_text="Create",
+                                details=details, owner=self):
+            return
+        self._status("Building {}...".format(name))
+        try:
+            view = etr.create_table(self._doc, self._xl_path, table, kind, name, options, link,
+                                    gsheet=self._gsheet)
+        except etr.TableError as ex:
+            self._status("Create failed.")
+            T3Dialog.show_error("Could not create the table.", "Create Table",
+                                details=str(ex), owner=self)
+            return
+        self._load_tables()
+        try:
+            self._uidoc.RequestViewChange(view)     # opens it when the dialog closes
+        except Exception:
+            pass
+        self._status("Created {} '{}' — {}{}.".format(
+            etr.KIND_LABEL[kind].lower(), view.Name, size, ", linked" if link else ""))
 
-    # ── Select-all o header cot checkbox ────────────────────────────────
-    # toggle_all_rows() nam trong T3WPFWindow: no chay tren grid.Items nen chi
-    # dong dang hien thi (sau filter/sort) bi doi, dung nhu nguoi dung thay.
+    # ------------------------------------------------------------------
+    # SCHEDULE DATA — schedule list
+    # ------------------------------------------------------------------
 
-    def select_all_xl_dg_schedules_clicked(self, sender, e):
-        """Header checkbox: chon/bo chon moi dong dang hien thi cua xl_dg_schedules."""
-        self.toggle_all_rows(self.xl_dg_schedules, "is_checked", sender.IsChecked)
+    def _load_schedules(self):
+        # Excel-table schedules (New Table page) hold no element rows: keep them out.
+        table_ids = set(r.view_id for r in self._table_rows
+                        if r.info.get('kind') == etr.KIND_SCHEDULE)
+        self._schedules = [(n, s) for n, s in sd.list_schedules(self._doc)
+                           if eid_value(s.Id) not in table_ids]
+        self._sched_rows = [ScheduleRow(n, s) for n, s in self._schedules]
+        self._fill_schedules()
 
-    def select_all_dup_dg_schedules_clicked(self, sender, e):
-        """Header checkbox: chon/bo chon moi dong dang hien thi cua dup_dg_schedules."""
-        self.toggle_all_rows(self.dup_dg_schedules, "is_checked", sender.IsChecked)
+    def _fill_schedules(self):
+        q = (self.data_search_box.Text or '').strip().lower()
+        rows = [r for r in self._sched_rows if not q or q in r.name.lower()]
+        self.set_items_source(self.dg_schedules, rows)
+        self.data_empty.Visibility = _visible(not rows)
+        self._count_schedules()
+
+    def _count_schedules(self):
+        ticked = sum(1 for r in self._sched_rows if r.is_checked)
+        total = len(self._sched_rows)
+        self.data_count_text.Text = ("{} / {} ticked".format(ticked, total) if ticked
+                                     else "{} schedule(s)".format(total))
+        self.sync_header_checkbox(self.chk_all_dg_schedules, self.dg_schedules, "is_checked")
+
+    def _ticked_schedules(self):
+        ids = set(r.sched_id for r in self._sched_rows if r.is_checked)
+        return [(n, s) for n, s in self._schedules if eid_value(s.Id) in ids]
+
+    def _export(self):
+        chosen = self._ticked_schedules()
+        if not chosen:
+            T3Dialog.show_info("Tick the schedules to export.", "Export to Excel", owner=self)
+            return
+        default = (chosen[0][0] if len(chosen) == 1 else "Schedules") + ".xlsx"
+        for ch in '/\\*?[]:"<>|':
+            default = default.replace(ch, '_')
+        path = self._save_file(default)
+        if not path:
+            return
+        self._status("Exporting {} schedule(s)...".format(len(chosen)))
+        try:
+            rows = sd.export_xlsx(self._doc, chosen, path)
+        except (IOError, OSError) as ex:
+            self._status("Export failed.")
+            T3Dialog.show_error("Could not write {}. If it is open in Excel, close it and "
+                                "try again.".format(os.path.basename(path)), "Export to Excel",
+                                details=short_error(ex), owner=self)
+            return
+        except Exception as ex:
+            self._status("Export failed.")
+            T3Dialog.show_error("Export failed.", "Export to Excel", details=short_error(ex),
+                                owner=self)
+            return
+        self._status("Exported {} schedule(s), {} row(s) to {}.".format(
+            len(chosen), rows, os.path.basename(path)))
+        if T3Dialog.confirm("Exported {} schedule(s), {} row(s). Open the file in Excel now?".format(
+                len(chosen), rows), "Export Complete", ok_text="Open in Excel",
+                cancel_text="Not now", details=path, owner=self):
+            try:
+                os.startfile(path)
+            except OSError as ex:
+                T3Dialog.show_warning("Could not open the file.", "Export Complete",
+                                      details=short_error(ex), owner=self)
+
+    # ------------------------------------------------------------------
+    # SCHEDULE DATA — import, review, apply
+    # ------------------------------------------------------------------
+
+    def _on_import(self, sender, e):
+        path = self._pick_file("Pick the edited workbook")
+        if not path:
+            return
+        ticked = self._ticked_schedules()
+        fallback = ticked[0] if len(ticked) == 1 else None
+        self._status("Reading {}...".format(os.path.basename(path)))
+        try:
+            changes, report = sd.read_changes(self._doc, path, self._schedules, fallback)
+        except xt.XlsxError as ex:
+            self._status("Import failed.")
+            T3Dialog.show_error(str(ex), "Import from Excel", owner=self)
+            return
+        self._show_changes(changes, report)
+        self._status("{}: {} change(s) found.".format(os.path.basename(path), len(changes)))
+
+    def _show_changes(self, changes, report):
+        self._change_rows = [ChangeRow(c) for c in changes]
+        self.set_items_source(self.dg_changes, self._change_rows)
+        self.changes_empty.Visibility = _visible(not self._change_rows)
+        if report and not changes and report != ["No file imported."]:
+            self.changes_empty.Text = "No value differs from the model."
+        self.txt_changes_info.Text = "  ".join(report) if report else ""
+        self._count_changes()
+
+    def _count_changes(self):
+        n = sum(1 for r in self._change_rows if r.is_checked)
+        self.btn_apply.IsEnabled = n > 0
+        self.txt_apply.Text = "Apply {} change(s)".format(n) if n else "Apply changes"
+        self.sync_header_checkbox(self.chk_all_dg_changes, self.dg_changes, "is_checked")
+
+    def _on_apply(self, sender, e):
+        rows = [r for r in self._change_rows if r.is_checked]
+        if not rows:
+            return
+        elements = len(set(r.element_id for r in rows))
+        if not T3Dialog.confirm(
+                "Write {} change(s) to {} element(s)? Ctrl+Z undoes all of them in one step.".format(
+                    len(rows), elements),
+                "Apply Excel Changes", ok_text="Apply", owner=self):
+            return
+        done, errors, failed = sd.apply_changes(self._doc, [r.change for r in rows])
+        written = set(id(r.change) for r in rows) - set(id(c) for c in failed)
+        remaining = [r.change for r in self._change_rows if id(r.change) not in written]
+        self._show_changes(remaining, ["Applied {} of {} change(s).".format(done, len(rows))])
+        self._status("Applied {} of {} change(s) to {} element(s).".format(done, len(rows), elements))
+        if errors:
+            T3Dialog.show_warning("{} of {} change(s) could not be written; they stay in the "
+                                  "list.".format(len(rows) - done, len(rows)),
+                                  "Apply Excel Changes", details="\n".join(errors[:30]),
+                                  owner=self)
 
 
 # ============================================================

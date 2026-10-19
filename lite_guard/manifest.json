@@ -71,6 +71,16 @@
       "file": "lib/core/updater.py",
       "pattern": "^GITHUB_REPO\\s*=\\s*['\"]thanhtranarch/T3LabLite['\"]",
       "why": "Check Update must pull from the T3LabLite repo, not t3lab_dev"
+    },
+    {
+      "file": "startup.py",
+      "pattern": "^\\s+state, detail = install_whats_new\\(_revit_handle\\(\\)\\)",
+      "why": "startup.py must arm the once-per-version \"What's new\" popup (lib/core/whats_new.py)"
+    },
+    {
+      "file": "lib/core/updater.py",
+      "pattern": "^from core\\.whats_new import extract_whats_new",
+      "why": "Check Update and the What's new popup share one CHANGELOG parser"
     }
   ],
   "lite_only": [
@@ -82,6 +92,7 @@
     "lib/core/ribbon_retire.py",
     "lib/core/update_schedule.py",
     "lib/core/updater.py",
+    "lib/core/whats_new.py",
     "lib/tracking",
     "lite_guard",
     "version.txt"

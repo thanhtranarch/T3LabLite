@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-NLU Engine
-
-Natural Language Understanding engine for parsing Revit commands.
+"""NLU Engine: bilingual VI/EN intent parsing for Revit commands.
 
 Author: Tran Tien Thanh
 Mail: trantienthanh909@gmail.com
@@ -22,13 +19,8 @@ import unicodedata
 # ─── Diacritics helper ────────────────────────────────────────────────────────
 
 def _strip_diacritics(text):
-    """Remove all combining diacritic marks (works for Vietnamese, etc.).
-
-    NFD does NOT decompose đ/Đ (letter D with stroke — a standalone letter,
-    not base+mark), so they are folded to d/D explicitly. Without this,
-    "được" normalises to "đuoc" and later regex cleaning eats the đ,
-    silently breaking every rule containing "duoc", "dong bo", "doc"...
-    """
+    """Remove combining diacritics. NFD does not decompose đ/Đ, so they are
+    folded to d/D explicitly (else "được" -> "đuoc" and regex cleaning eats the đ)."""
     try:
         nfd = unicodedata.normalize('NFD', text)
         out = ''.join(c for c in nfd if unicodedata.category(c) != 'Mn')
@@ -38,25 +30,21 @@ def _strip_diacritics(text):
 
 
 def _norm(text):
-    """Normalise to ASCII-lower for matching: strip diacritics + lowercase."""
+    """Strip diacritics + lowercase."""
     return _strip_diacritics(text).lower()
 
 
 # ─── Abbreviation / synonym map ───────────────────────────────────────────────
-# Applied AFTER _norm().  Order matters: longer keys first in the replacement
-# loop so "batch out" doesn't eat "batch" before "batch out" is matched.
+# Applied after _norm(), in order: longer keys first.
 
 _ABBREVS = [
     # ── Tool name normalisations ───────────────────────────────────────────────
     # BatchOut
     ("batch out",       "batchout"),
-    (" batcho ",        " batchout "),  # word-boundary padded: "batcho" is a
-                                         # substring PREFIX of "batchout" itself,
-                                         # so an unpadded rule here self-mangles
-                                         # the correct word into "batchoutut"
+    (" batcho ",        " batchout "),  # padded: "batcho" prefixes "batchout"
+                                         # (unpadded -> "batchoutut")
     ("b.out",           "batchout"),
-    # NOTE: the risky bare "bo " -> "batchout " shorthand is intentionally
-    # NOT here — see the end of this list for why.
+    # bare "bo " -> batchout is at the END of this list on purpose
     # ParaSync
     ("para sync",       "parasync"),
     ("dong bo tham so", "parasync"),
@@ -73,10 +61,8 @@ _ABBREVS = [
     (" lfc ",           " loadfamilycloud "),
     # Load Family
     ("load family",     "loadfamily"),
-    (" load fam ",      " loadfamily "),  # word-boundary padded: unpadded "load
-                                           # fam" is a substring PREFIX of "load
-                                           # family" and would mangle it into
-                                           # "loadfamilyily"
+    (" load fam ",      " loadfamily "),  # padded: prefixes "load family"
+                                           # (unpadded -> "loadfamilyily")
     ("tai family",      "loadfamily"),
     ("nap family",      "loadfamily"),
     ("keo family",      "loadfamily"),
@@ -143,8 +129,7 @@ _ABBREVS = [
     ("thu mo ",         "open "),
     ("thu xuat",        "export"),
 
-    # ── Export verbs ──────────────────────────────────────────────────────────
-    # Specific bigrams first (highest priority)
+    # ── Export verbs (specific bigrams first) ─────────────────────────────────
     ("in pdf",          "export pdf"),
     ("in dwg",          "export dwg"),
     ("in dwf",          "export dwf"),
@@ -199,11 +184,9 @@ _ABBREVS = [
     ("image",           "img"),
     ("picture",         "img"),
 
-    # ── "What can you do" capability-query normalisation ─────────────────────
-    # English capability questions are made of nothing but stopwords
-    # ("what", "can", "you", "do") once tokenised, so without this they score
-    # zero on every intent and fall through to the generic "didn't understand"
-    # reply. Collapse the whole phrase to one non-stopword marker up front.
+    # ── "What can you do" capability queries ─────────────────────────────────
+    # All stopwords once tokenised (score zero everywhere), so collapse the
+    # phrase to one non-stopword marker.
     ("what can you do",         "capabilities query"),
     ("what can u do",           "capabilities query"),
     ("what do you do",          "capabilities query"),
@@ -219,15 +202,9 @@ _ABBREVS = [
     ("what are you",            "capabilities query"),
 
     # ── Vietnamese → English capability verbs ────────────────────────────────
-    # The tool catalog is named in English ("DWG Manager", "rename"), so a
-    # Vietnamese ask for the same capability found nothing: "có tool nào quản
-    # lý project không" and "đổi tên view" both answered "chưa có tool".
-    # Placed AFTER the specific phrases above ("quan ly workset" → workset,
-    # "quan ly luoi" → grids), which are consumed first and keep their meaning.
-    # Deliberately verbs only — object nouns are left alone because their
-    # diacritic-folded forms collide ("cua" = door AND the possessive "của",
-    # "san" = floor AND "sản"), and a wrong noun rewrite corrupts whole
-    # sentences instead of just missing a match.
+    # The tool catalog is English-named ("đổi tên view" found no tool). After
+    # the specific phrases above ("quan ly workset"), which win. Verbs only:
+    # folded nouns collide ("cua" = door / "của", "san" = floor / "sản").
     ("quan ly",         "manager"),
     ("quan li",         "manager"),
     ("doi ten",         "rename"),
@@ -250,9 +227,7 @@ _ABBREVS = [
     ("good evening",    "chao"),
     ("good night",      "chao"),
     ("xin chao",        "chao"),
-    # Word-boundary padded: unpadded "alo"/"a lo" mangled every text that
-    # merely CONTAINS the substring — "kiem tra loi" → "kiem trchaoi",
-    # "tra loi", "dialog", "catalog"... (same class of bug as " batcho ")
+    # Padded: unpadded "alo"/"a lo" mangled "kiem tra loi", "dialog", "catalog"
     (" alo ",           " chao "),
     (" a lo ",          " chao "),
     ("hi ban",          "chao"),
@@ -294,25 +269,16 @@ _ABBREVS = [
     ("mo ",             "open "),
     ("mo\n",            "open\n"),
 
-    # ── Bare "bo" -> BatchOut shorthand (LAST on purpose) ─────────────────────
-    # "bo" is dangerously short and collides with real Vietnamese words that
-    # end in "bo" after diacritics are stripped, most importantly "toàn bộ"
-    # ("all") -> "toan bo". Every rule above this point already consumes its
-    # own "bo" first (dong bo/parasync, bo override/resetoverrides, toan bo/
-    # all, tat ca/all, etc.), so by the time this runs, any leftover
-    # standalone "bo" can only be the actual BatchOut shorthand.
+    # ── Bare "bo" -> BatchOut (LAST on purpose) ───────────────────────────────
+    # "bo" collides with folded words ("toàn bộ" -> "toan bo"); every rule above
+    # consumes its own "bo" first, so a leftover "bo" is the BatchOut shorthand.
     ("bo ",             "batchout "),
 ]
 
 
-# Multi-word abbreviations are applied on WORD BOUNDARIES; single-token ones
-# keep plain substring semantics because several are deliberate stems ("image"
-# must also rewrite "images") or already carry their own padding (" batcho ").
-#
-# Without the boundary, a phrase key ate into the next word: "what are you"
-# rewrote the start of "what are your capabilities" and left the nonsense
-# "capabilities queryr capabilities", so the capability frame no longer matched
-# and the question fell through to the LLM.
+# Multi-word keys match on word boundaries ("what are you" ate into "what are
+# your ..." -> "capabilities queryr"); single tokens stay substring because some
+# are stems ("image" -> "images") or carry their own padding (" batcho ").
 _ABBREV_RULES = []
 for _src, _dst in _ABBREVS:
     if ' ' in _src.strip() and _src[-1:].isalnum() and _src[:1].isalnum():
@@ -324,7 +290,6 @@ for _src, _dst in _ABBREVS:
 
 def _expand(text):
     """Apply abbreviation / synonym substitutions to normalised text."""
-    # Pad with spaces to allow boundary matching
     t = " " + text + " "
     for src, dst, is_re in _ABBREV_RULES:
         if is_re:
@@ -346,9 +311,9 @@ _STOPWORDS = {
     "neu", "sau", "truoc", "thi", "ma", "vay", "ay", "oi",
     "rang", "vi", "kia", "nhau", "hon",
     "mot", "hai", "ba", "bon", "nam",        # numbers (sheet count)
-    "muon", "can", "hay", "thu", "giup",     # intent-prefix words (stripped by ABBREVS)
+    "muon", "can", "hay", "thu", "giup",     # intent-prefix words
     "lam", "nho",                             # politeness words
-    # NOTE: "in" is intentionally EXCLUDED — it means "print/export" in Vietnamese
+    # "in" deliberately excluded: Vietnamese "print/export"
     # ── English function words ─────────────────────────────────────────────────
     "the", "an", "to", "for", "of", "at",
     "me", "my", "i", "you", "it", "is", "are", "was", "be",
@@ -361,7 +326,6 @@ _STOPWORDS = {
 
 def _tokenise(text):
     """Return (unigrams, bigrams) as frozensets of normalised strings."""
-    # Keep only letters/digits/spaces
     clean = re.sub(r'[^a-z0-9\s]', ' ', text)
     tokens = [w for w in clean.split() if len(w) >= 2 and w not in _STOPWORDS]
     unigrams = frozenset(tokens)
@@ -372,8 +336,7 @@ def _tokenise(text):
 
 
 # ─── Intent trigger tables ────────────────────────────────────────────────────
-# Each entry: (feature_string, weight)
-# Unigrams and bigrams are checked against the same tables.
+# (feature, weight); unigrams and bigrams share the tables.
 
 _TRIGGERS = {
     "open_batchout": [
@@ -394,9 +357,7 @@ _TRIGGERS = {
         ("dwf",                 5),
         ("all sheet",          10),
         ("print",               8),
-        # "in" as Vietnamese print verb (after stopword fix, it survives tokenisation)
-        ("in",                 10),
-        # "sheet" alone contributes a small boost when present with other cues
+        ("in",                 10),  # Vietnamese print verb
         ("sheet",               4),
     ],
 
@@ -420,18 +381,12 @@ _TRIGGERS = {
         ("open",                2),
     ],
 
-    # NOTE — 2026-07-28: trigger blocks for open_parasync,
-    # open_loadfamily_cloud, open_projectname, open_workset,
-    # open_upperdimtext, open_dimtext, open_resetoverrides and open_grids were
-    # removed. Their pushbuttons no longer exist, and because these triggers
-    # scored high they beat resolve_tool() for the tools that replaced them —
-    # "mo workset" matched open_workset (35) and never reached ManaWorkset.
-    # Only tools with a dedicated launcher belong here; auto-discovered tools
-    # are resolved from the registry by resolve_tool().
+    # Only tools with a dedicated launcher belong here; auto-discovered tools go
+    # through resolve_tool() (2026-07-28: stale open_workset etc. scored 35 and
+    # beat it, so "mo workset" never reached ManaWorkset).
 
     "check_spelling": [
-        # Proofread all Text Notes in the model (diacritics stripped by _norm:
-        # "chính tả" → "chinh ta", "lỗi tiếng anh" → "loi tieng anh")
+        # Proofread all Text Notes in the model
         ("spelling",           30),
         ("spellcheck",         35),
         ("spell check",        35),
@@ -452,27 +407,24 @@ _TRIGGERS = {
     ],
 
     "greet": [
-        # Core greeting words (survive after diacritic strip)
         ("chao",               25),
         ("hello",              25),
         ("hey",                18),
         ("hi",                 20),
         ("howdy",              18),
-        ("alo",                25),    # phone-style "alo" (mapped via ABBREVS)
-        # Bigrams / phrases (matched after ABBREVS expand "xin chao" → "chao")
+        ("alo",                25),
         ("chao ban",           28),
         ("hi ban",             25),
         ("hey ban",            25),
-        ("good morning",       20),    # also handled by ABBREVS
-        # Bare time-of-day greetings must clear the 18 threshold on their own:
-        # at 12, a lone "morning" fell through to the LLM, which once
-        # hallucinated a tool intent that then got permanently mis-learned.
+        ("good morning",       20),
+        # Bare time-of-day words must clear 18 alone (at 12 "morning" went to the
+        # LLM, which hallucinated a tool intent that got mis-learned)
         ("morning",            20),
         ("afternoon",          20),
         ("evening",            20),
         ("yo",                 18),
         ("chao buoi",          25),
-        # Farewell (treat as greet-class conversational)
+        # Farewell
         ("tam biet",           22),
         ("bye",                20),
         ("bai",                18),
@@ -492,11 +444,11 @@ _TRIGGERS = {
         # ── Simple affirmations ───────────────────────────────────────────────
         ("ok",                  8),
         ("oke",                 8),
-        ("ok roi",             22),    # mapped from oke roi / duoc roi / xong roi
-        ("hieu roi",           22),    # mapped from biet roi / ra roi / toi hieu
-        ("dung roi",           22),    # mapped from chinh xac / hop ly
+        ("ok roi",             22),
+        ("hieu roi",           22),
+        ("dung roi",           22),
         ("got it",             18),
-        ("vang",               20),    # yes (polite Vietnamese)
+        ("vang",               20),
         ("yep",                15),
         ("yeah",               15),
         ("alright",            18),
@@ -511,15 +463,15 @@ _TRIGGERS = {
         ("tot lam",            20),
         ("hay qua",            20),
         ("ngon",               18),
-        ("xin",                12),    # (only bigram use: "xin loi", "xin chao" filtered elsewhere)
+        ("xin",                12),
         ("perfect",            20),
         ("great",              18),
         ("nice",               15),
         ("awesome",            18),
         ("wow",                15),
-        ("uu viet",            18),    # excellent
+        ("uu viet",            18),
         # ── State / emotion ───────────────────────────────────────────────────
-        ("ban khoe",           22),    # how are you
+        ("ban khoe",           22),
         ("khoe khong",         22),
         ("ban oi",             15),
         ("met qua",            20),
@@ -541,12 +493,10 @@ _TRIGGERS = {
         ("sao vay ban",        22),
         ("help me",            15),
         # ── Polite filler that doesn't map elsewhere ──────────────────────────
-        ("xin loi",            20),    # sorry/excuse me
+        ("xin loi",            20),
         ("sorry",              15),
         ("pardon",             12),
-        # ── Frustration / insult directed at the assistant ────────────────────
-        # Not tool-related — give an honest, de-escalating reply instead of the
-        # generic "didn't understand" message (see _build_message).
+        # ── Frustration at the assistant (de-escalating reply, _build_message) ─
         ("stupid",             22),
         ("dumb",               20),
         ("useless",            22),
@@ -587,7 +537,7 @@ _TRIGGERS = {
         ("lam sao de xuat",    28),
         ("lam sao de mo",      28),
         # ── "What can you do?" ────────────────────────────────────────────────
-        ("capabilities query", 30),   # normalised from EN phrasing via _ABBREVS
+        ("capabilities query", 30),   # from _ABBREVS
         ("lam duoc gi",        25),
         ("dung duoc gi",       25),
         ("ho tro gi",          25),
@@ -598,7 +548,7 @@ _TRIGGERS = {
         ("ban lam gi",         22),
         ("ban la ai",          25),
         ("ban ten gi",         25),
-        ("may la ai",          22),    # informal "who are you"
+        ("may la ai",          22),
         ("tool nay",           18),
         # ── "Help/guide me" ───────────────────────────────────────────────────
         ("huong dan",          22),
@@ -633,27 +583,22 @@ _TRIGGERS = {
     ],
 }
 
-# Features that penalise an intent when present
 _PENALTIES = {
-    # Explicit "open" kills a naked export_direct
     "export_direct":             [("open", -15), ("mo", -15), ("batchout", -5)],
-    # open_batchout loses if there's no "open" at all (pure export wins)
     "open_batchout":             [("export", -8)],
     "open_batchout_configured":  [("export", -8)],
-    # Create/delete verbs mean the user wants to WRITE notes, not proofread
+    # Create/delete verbs: the user wants to WRITE notes, not proofread
     "check_spelling":            [("tao", -25), ("create", -25), ("them", -20),
                                   ("add", -20), ("xoa", -25), ("delete", -25),
                                   ("draw", -20), ("ve", -20)],
 }
 
-# Minimum score required to accept an intent
 _THRESHOLDS = {
     "open_batchout":             18,
     "export_direct":             18,
     "open_batchout_configured":  25,   # needs both open+batchout+params
     "open_loadfamily":           18,
-    # ≥ 28 so "text note"(12) + "tieng anh"(15) alone can't fire it —
-    # needs a real proofread cue (spelling / chinh ta / loi tieng anh ...)
+    # ≥ 28 so "text note"(12) + "tieng anh"(15) alone can't fire it
     "check_spelling":            28,
     "greet":                     18,
     "chat":                      18,
@@ -662,27 +607,22 @@ _THRESHOLDS = {
 
 
 # ─── Conversational-input gate ────────────────────────────────────────────────
-# Distinguishes pure small talk (greeting / thanks / acknowledgement / emotion)
-# from tool commands. This is the safety gate that keeps the higher layers
-# honest: learned patterns must never be recorded for — or matched against —
-# conversational input, and no tool may be launched from it, regardless of
-# what an LLM hallucinated.
+# Safety gate: small talk is never learned, matched against learned patterns,
+# or allowed to launch a tool, whatever an LLM hallucinated.
 
-# Any of these words present → definitely a command, never small talk.
+# Any of these words present → a command, never small talk.
 _COMMAND_WORDS = {
     "batchout", "parasync", "loadfamily", "loadfamilycloud", "projectname",
     "workset", "dimtext", "upperdimtext", "resetoverrides", "grids", "grid",
     "export", "open", "print", "sheet", "sheets", "family", "luoi", "truc",
     "pdf", "dwg", "dwf", "dgn", "ifc", "nwd", "img", "in",
-    "capabilities", "query",   # normalised capability-question marker
+    "capabilities", "query",   # capability-question marker
     "spelling", "spellcheck", "grammar", "typo", "typos", "textnote",
 }
 
 
 def _build_conversational_words():
-    """Lexicon of small-talk words, derived from the greet/chat trigger tables
-    so it stays in sync, plus bare words those tables only contain inside
-    multi-word phrases."""
+    """Small-talk lexicon, derived from the greet/chat triggers plus extras."""
     words = set()
     for intent in ("greet", "chat"):
         for feat, _w in _TRIGGERS[intent]:
@@ -699,12 +639,8 @@ _CONVERSATIONAL_WORDS = _build_conversational_words()
 
 
 def is_conversational(user_input):
-    """Return True when the input is pure small talk and contains no
-    tool/command keyword (e.g. "morning", "cảm ơn nhé", "ok roi").
-
-    Conservative by design: any command word, any unknown meaningful word,
-    or anything longer than 6 tokens → False (treat as a possible command).
-    """
+    """True for pure small talk ("morning", "cảm ơn nhé"). Conservative: any
+    command word, unknown word, or > 6 tokens → False."""
     if not user_input or not user_input.strip():
         return False
     expanded = _expand(_norm(user_input))
@@ -717,7 +653,7 @@ def is_conversational(user_input):
             return False
     meaningful = [t for t in tokens if t not in _STOPWORDS and len(t) >= 2]
     if not meaningful:
-        return True   # nothing but filler words → chit-chat
+        return True
     return all(t in _CONVERSATIONAL_WORDS for t in meaningful)
 
 
@@ -725,26 +661,20 @@ def is_conversational(user_input):
 
 _FORMATS = ["dwg", "dwf", "dgn", "ifc", "nwd", "img", "pdf"]  # pdf last = default
 
-# Uppercase letters that are NOT format abbreviations
 _FORMAT_LETTERS = {"PDF", "DWG", "DWF", "DGN", "IFC", "NWD", "IMG"}
 
 
 def _extract_slots(raw):
-    """Extract format, filter, and combine from the original (unicode) text.
-
-    Returns dict: {format: str, filter: str, combine: bool}
-    """
+    """Return {format, filter, combine} from the original (unicode) text."""
     normed = _norm(raw)
 
-    # ── format ──────────────────────────────────────────────────────────────
     fmt = "pdf"
     for f in _FORMATS:
         if f in normed.split() or (" " + f) in normed or (f + " ") in normed:
             fmt = f
             break
 
-    # ── sheet-prefix filter (single uppercase letter, not a format name) ────
-    # Priority 1: explicit patterns  "G sheet" / "tờ G" / "G-sheet"
+    # Sheet-prefix filter (one letter, not a format). 1: "G sheet" / "tờ G"
     sheet_filt = ""
     m = re.search(
         r'\b([A-Z])\s*[-–]?\s*(?:sheet|to|to\s|ban\s*ve|sheets)\b',
@@ -758,7 +688,7 @@ def _extract_slots(raw):
         if m and m.group(1).upper() not in _FORMAT_LETTERS:
             sheet_filt = m.group(1).upper()
 
-    # Priority 2: lone single-letter token or pure uppercase sheet prefix
+    # 2: a lone single-letter token
     if not sheet_filt:
         for token in raw.split():
             clean_tok = "".join(c for c in token if c.isalnum())
@@ -768,7 +698,6 @@ def _extract_slots(raw):
                     sheet_filt = tok
                     break
 
-    # ── combine flag ─────────────────────────────────────────────────────────
     combine_kws = ["combine", "merge", "gop", "ghep", "1 file", "mot file"]
     combine = any(k in normed for k in combine_kws)
 
@@ -777,20 +706,14 @@ def _extract_slots(raw):
 
 # ─── Context / pronoun resolution ─────────────────────────────────────────────
 
-# Pronouns that can refer back to the most-recently-mentioned tool.
-# Split by shape because they are matched differently (see _is_pronoun_query):
-# a single word is anaphoric only when NO noun follows it, while these phrases
-# are unambiguous references on their own. The old flat set mixed both and was
-# matched by token intersection, so the multi-word entries could never fire
-# while bare "this"/"that" fired inside ordinary determiner phrases.
+# Pronouns for the last-mentioned tool, split by shape (see _is_pronoun_query):
+# a word is anaphoric only when no noun follows it; a phrase is on its own.
 _PRONOUN_WORDS   = {"no", "it", "that", "this"}
 _PRONOUN_PHRASES = ("cai nay", "cai do", "cai ay", "no ay",
                     "tool nay", "tool do", "tool ay")
 
-# Intent → tool label, for pronoun-resolution messages ("mở nó" → "BatchOut").
-# Only the intents with a dedicated launcher are fixed; every other label comes
-# from the live registry via _tool_label(). The hardcoded rest used to name
-# eight tools that had been deleted from the extension.
+# Intent → label for dedicated launchers only; the rest come from the live
+# registry via _tool_label() (a hardcoded list once named deleted tools).
 _TOOL_LABELS = {
     "open_batchout":            "BatchOut",
     "export_direct":            "BatchOut",
@@ -809,33 +732,14 @@ def _tool_label(intent):
     return intent
 
 
-# NOTE: the old `_tool_keywords()` (joined-name → intent, scanned as substrings
-# over the chat history) was removed — `_last_tool_from_history` now resolves
-# the referent through the catalog resolver instead. See its docstring.
-
-
 # ─── Deterministic tool resolver ─────────────────────────────────────────────
-# Ranks the user's text against EVERY known tool (builtin + auto-discovered)
-# and only answers when one tool clearly wins. This replaces the old
-# first-keyword-substring match, which returned whichever registry entry
-# happened to be iterated first (e.g. "mở mcp control" → CAD to Elements,
-# because a generic keyword matched earlier in the dict).
+# Ranks the text against EVERY known tool and answers only when one clearly wins
+# (a first-substring match once sent "mở mcp control" to CAD to Elements).
 
-# Builtin tools (already covered by _TRIGGERS, listed here so the resolver
-# sees one unified catalog):
-#   (intent, title, joined-name, [name aliases], function description)
-# Aliases cover every name a tool goes by: button folder, XAML file, old
-# names — so "mở export manager" (BatchOut's XAML) opens the right tool.
-# Tools that are NOT auto-discovered because script.py launches them through a
-# dedicated entry point (_SPECIAL_LAUNCHERS). Everything else reaches the
-# resolver via the tool_discovery registry in _tool_catalog() below.
-#
-# 2026-07-28: eight entries were removed from this table (ParaSync,
-# LoadFamilyCloud, ProjectName, Workset, DimText, UpperDimText, ResetOverrides,
-# Grids). Their pushbuttons had been deleted or renamed, but the resolver kept
-# offering them, so the assistant confidently answered "Opening ParaSync..." for
-# a tool that no longer shipped. Do not add a tool here unless it genuinely has
-# a special launcher — an auto-discovered tool needs no entry.
+# Tools with a dedicated launcher (_SPECIAL_LAUNCHERS), not auto-discovered:
+#   (intent, title, joined-name, [aliases: folder, XAML, old names], description)
+# Everything else comes from tool_discovery in _tool_catalog(); add nothing here
+# without a special launcher (2026-07-28: deleted tools kept being "opened").
 _BUILTIN_TOOLS = [
     ("open_batchout", "BatchOut", "batchout",
      ["Batch Out", "Export Manager"],
@@ -845,14 +749,9 @@ _BUILTIN_TOOLS = [
      u"Tải family từ thư viện vào project (load family from library)"),
 ]
 
-# Verbs that signal "open this tool" (post-_expand, so "mở/bật" → open).
-# Vietnamese verbs that CANNOT be globally rewritten to "open" by _ABBREVS
-# (e.g. "chạy" would corrupt the "không chạy được" complaint trigger) are
-# stripped here instead, so "chạy autojoin" still resolves to the tool.
-# NOTE: "dung" is intentionally ABSENT: after diacritics folding it is both
-# "dùng" (use → open verb) and "dựng" (build/model) — keeping it hijacked
-# every modeling request ("dựng model" → "which tool do you want to open?").
-# "dùng X" now falls through to the LLM path, which handles it fine.
+# Open verbs (post-_expand). Verbs _ABBREVS can't rewrite globally ("chạy" would
+# break "không chạy được") live here. "dung" is absent on purpose: folded it is
+# also "dựng" (build), which hijacked every modeling request.
 _OPEN_VERBS = {"open", "launch", "start", "run", "show",
                "chay", "xai"}
 
@@ -870,10 +769,8 @@ def _camel_split(text):
 
 
 def _name_variants(text):
-    """Return (joined_names, word_set) for ONE tool name, covering the raw,
-    camel-split, and _expand()-normalised forms (so "ImageToDrafting" yields
-    words {image, drafting} and also matches input ABBREVS rewrote to
-    "img to drafting")."""
+    """(joined_names, word_set) for ONE name over raw, camel-split and _expand()
+    forms ("ImageToDrafting" also matches "img to drafting")."""
     joined, words = set(), set()
     for base in (text, _camel_split(text)):
         for form in (_norm(base), _expand(_norm(base))):
@@ -886,10 +783,8 @@ def _name_variants(text):
     return joined, words
 
 
-# Words that describe the IMPLEMENTATION, not the capability. Tool docstrings
-# are written for developers ("T3Lab BCF Reader (v2 - pyRevit WPFWindow
-# modeless)"), and every one of those words used to be a matchable capability
-# topic — so "modeless"/"window"/"script" could name a tool to the user.
+# Implementation words in developer docstrings ("pyRevit WPFWindow modeless")
+# that must not match as capability topics.
 _DESC_NOISE = {
     "py", "pyrevit", "ironpython", "wpf", "wpfwindow", "window", "modeless",
     "modal", "script", "dialog", "form", "gui", "ui", "xaml", "class",
@@ -897,17 +792,12 @@ _DESC_NOISE = {
     "dqt", "t3lab", "todo", "wip", "deprecated",
 }
 
-# Prose glue kept OUT of _STOPWORDS on the query side (Vietnamese "in" = print)
-# but meaningless inside an English description ("in-place models", "into").
+# Prose glue not in _STOPWORDS (Vietnamese "in" = print) but noise in descriptions.
 _DESC_PREPS = {"in", "into", "onto", "over", "under", "per", "via", "within"}
 
 
 def _desc_words(desc):
-    """Normalised word set from a function description (for capability Q&A).
-
-    Implementation jargon and prose glue are dropped: a description word is
-    only useful here if it names WHAT the tool does for the user.
-    """
+    """Word set of a description (capability Q&A), minus jargon and prose glue."""
     out = set()
     for w in re.findall(r'[a-z0-9]+', _norm(_camel_split(desc or ''))):
         if (len(w) < 2 or w in _STOPWORDS or w in _DESC_NOISE
@@ -918,9 +808,8 @@ def _desc_words(desc):
 
 
 def _tool_entry(intent, title, names, desc='', panel='', extra_words=None):
-    """Build one catalog entry. `names` is EVERY name the tool goes by
-    (title, button folder, XAML basenames, aliases) — kept as separate
-    variants so exact matching works per-name, plus a word union for fuzzy."""
+    """One catalog entry. `names` = every name the tool goes by (title, folder,
+    XAML, aliases): per-name variants for exact matching, a word union for fuzzy."""
     joined_all, variants, union = set(), [], set()
     for name in names:
         if not name:
@@ -930,27 +819,20 @@ def _tool_entry(intent, title, names, desc='', panel='', extra_words=None):
         if w and frozenset(w) not in variants:
             variants.append(frozenset(w))
         union |= w
-    # Two evidence tiers for capability matching:
-    #   identity = the names the tool goes by + its curated registry keywords
-    #              → a hit here IDENTIFIES the tool
-    #   topic    = words from its description → prose can mention anything, so
-    #              a hit here is only weak evidence
+    # Evidence tiers: identity (names + registry keywords) identifies the tool;
+    # topic (description words) is only weak evidence.
     return {'intent': intent, 'title': title, 'desc': (desc or '').strip(),
             'panel': panel, 'joined': joined_all, 'variants': variants,
             'words': union, 'kw_words': set(extra_words or ()),
             'desc_words': _desc_words(desc)}
 
 
-# Building the catalog runs every tool name through _name_variants/_expand, so
-# it is far too expensive to redo several times per chat turn (resolve_tool,
-# the capability answer and the history referent all need it). Cached against a
-# signature of the live registry, so a rebuilt/renamed registry still refreshes.
+# Too costly to rebuild several times per turn; keyed on a registry signature.
 _CATALOG_CACHE = {"sig": None, "value": None}
 
 
 def _tool_catalog():
-    """Return every known tool — builtin + auto-discovered — with all its
-    names (title / button folder / XAML / aliases) unified per tool."""
+    """Every known tool (builtin + auto-discovered), all names unified per tool."""
     try:
         from Services.tool_discovery import get_registered_tools
         tools = get_registered_tools()
@@ -969,14 +851,11 @@ def _tool_catalog():
         e['joined'].add(joined)
         catalog.append(e)
     for t in tools:
-        # The ampersand-stripped form is a MATCHING name only. Displaying it
-        # printed "Visual   Styles" back at the user for "Visual & Styles".
+        # Ampersand-stripped form is for matching only (displayed "Visual   Styles")
         raw_title = (t.get('title') or '').strip()
         title = raw_title.replace('&amp;', ' ').replace('&', ' ').strip()
         btn   = re.sub(r'\.(push|smart|url)button$', '', t.get('button') or '')
-        # `aliases` carries the RIBBON label when it differs from the script's
-        # __title__ ("Auto Adj Base Offset" vs "Auto Adjust Base Offset") —
-        # the user types what the ribbon shows them.
+        # `aliases` carries the ribbon label when it differs from __title__
         names = ([raw_title, title, btn] + list(t.get('xaml') or [])
                  + list(t.get('aliases') or []))
         kw_words = set()
@@ -996,16 +875,9 @@ def _tool_catalog():
     return catalog
 
 
-# Words that name MUTUALLY EXCLUSIVE things. The fuzzy score below rewards
-# overlap and is blind to conflict: for "create 3d view" vs the tool "Create
-# Plan Views" the shared {create, view} scored 0.67 and "Create Plan Views"
-# came back as the one and only suggestion — 3d and plan cancelled out as
-# merely "unmatched" instead of "these are different drawings". A user asking
-# for a 3D view should be told no tool matches, not handed the plan tool.
-#
-# One group per axis; two words from the SAME group on opposite sides is a
-# contradiction. Words absent from every group are unaffected, so this only
-# ever removes candidates that were already wrong.
+# Mutually exclusive words, one group per axis: query and tool naming different
+# members is a contradiction (fuzzy overlap offered "Create Plan Views" for
+# "create 3d view").
 _CONTRADICTION_GROUPS = [
     frozenset(['3d', 'plan', 'section', 'elevation', 'schedule', 'legend',
                'sheet']),
@@ -1026,20 +898,12 @@ def _contradicts(qset, tool_words):
 
 
 def resolve_tool(user_input, exact_only=False):
-    """Deterministically resolve a tool-open request against the full catalog.
+    """Resolve a tool-open request against the full catalog.
 
-    Returns (match, candidates):
-      match      – {'intent','title',...} when exactly one tool clearly wins
-      candidates – up to 3 plausible tools when the request is ambiguous
-
-    Exact wins are judged on ALL tokens minus open-verbs, KEEPING stopwords —
-    so "workset manager" is exactly Workset Manager, while "mcp control la gi"
-    is NOT exact (the question words survive and block it, letting the help
-    intent handle it). Exact = whole query joins to a tool's joined name
-    ("mcpcontrol", "cadtoelements"), or the token set equals the tool's word
-    set in any order ("manager dwg"). Fuzzy wins need score ≥ 0.75 AND a
-    ≥ 0.2 lead over the runner-up — otherwise the request is reported
-    ambiguous instead of guessed.
+    Returns (match, candidates): match when one tool clearly wins, else up to 3
+    candidates. Exact = all tokens minus open verbs, KEEPING stopwords (so "mcp
+    control la gi" is not exact and goes to help), join to a tool's joined name
+    or equal a name's word set in any order. Fuzzy needs ≥ 0.75 and a ≥ 0.2 lead.
     """
     if not user_input or not user_input.strip():
         return None, []
@@ -1050,7 +914,6 @@ def resolve_tool(user_input, exact_only=False):
         return None, []
     qjoined_all = "".join(tokens_all)
     qset_all    = set(_singularise(w) for w in tokens_all)
-    # Stopword-free set for fuzzy scoring only
     qset = set(_singularise(w) for w in tokens_all if w not in _STOPWORDS)
 
     scored = []
@@ -1067,9 +930,7 @@ def resolve_tool(user_input, exact_only=False):
         if inter:
             cov_tool  = len(inter) / float(len(tool['words']))
             cov_query = len(inter) / float(len(qset))
-            # Fuzzy can reach 1.0 on perfect two-way coverage (e.g. "batchout
-            # là gì" covers the word "batchout" fully) — that is NOT an exact
-            # name hit, so it must stay distinguishable from exact=True.
+            # Fuzzy can reach 1.0 ("batchout là gì") but is still not exact
             scored.append((0.6 * cov_tool + 0.4 * cov_query, False, tool))
 
     if not scored:
@@ -1079,7 +940,7 @@ def resolve_tool(user_input, exact_only=False):
     runner_up = scored[1][0] if len(scored) > 1 else 0.0
 
     if top_exact:
-        # Two DIFFERENT tools both exact (e.g. shared XAML alias) → ambiguous
+        # Two tools both exact (shared XAML alias) → ambiguous
         exact_intents = set(t['intent'] for s, e, t in scored if e)
         if len(exact_intents) > 1:
             return None, [t for s, e, t in scored if e][:3]
@@ -1098,9 +959,7 @@ def _has_open_verb(expanded):
 
 
 # ─── Capability questions ─────────────────────────────────────────────────────
-# "Có tool nào để X không?" / "Do you have a tool for X?" must be answered
-# from the REAL tool catalog — name the matching tools, or say honestly that
-# none exists. Never left to the LLM to invent an answer.
+# "Có tool nào để X không?" is answered from the REAL catalog, never by the LLM.
 
 _CAP_RES = [
     re.compile(r'\bco\s+(?:tool|cong cu|chuc nang|tinh nang|lenh)\b'),
@@ -1112,28 +971,22 @@ _CAP_RES = [
     re.compile(r'\b(?:which|what)\s+tool\b'),
     re.compile(r'\bany\s+tool\b'),
     re.compile(r'\bhave\s+a\s+tool\b'),
-    # Generic "what can you do" (EN forms were collapsed by _ABBREVS)
+    # Generic "what can you do" (EN forms collapsed by _ABBREVS)
     re.compile(r'\bcapabilities query\b'),
     re.compile(r'\blam duoc gi\b'),
     re.compile(r'\bdung duoc gi\b'),
     re.compile(r'\bho tro gi\b'),
     re.compile(r'\bbiet lam gi\b'),
     re.compile(r'\bgiup duoc gi\b'),
-    # Asking for the LIST rather than asking whether one exists. These reach
-    # the same answer — the curated, registry-validated catalog — and missing
-    # them is the expensive failure: the question still gets answered, just by
-    # the LLM from memory, which is exactly how a truncated tool list becomes
-    # a confident claim of full coverage.
+    # Asking for the LIST: missed, the LLM answers from memory with a truncated list
     re.compile(r'\b(?:liet ke|danh sach|list)\s+(?:cac\s+|nhung\s+|the\s+)?'
                r'(?:tool|cong cu|lenh|chuc nang|tinh nang)\b'),
     re.compile(r'\b(?:chuc nang|tinh nang)\s+(?:cua|of)\s+'
                r'(?:assistant|t3lab|extension|ban|you)\b'),
     re.compile(r'\bgioi thieu\s+(?:cac\s+|nhung\s+)?(?:tool|chuc nang|tinh nang)\b'),
     re.compile(r'\b(?:extension|t3lab|assistant)\s+(?:nay\s+)?co\s+gi\b'),
-    # Productive forms the fixed _ABBREVS phrases can't cover ("what ELSE can
-    # you do"). Deliberately anchored on the ability verb: "what can you DO" is
-    # a capability question, "what can you tell me about walls" is not, and
-    # "what DO you think" must stay out of here entirely.
+    # Forms _ABBREVS can't cover ("what ELSE can you do"), anchored on the verb:
+    # not "what can you tell me about walls" / "what do you think"
     re.compile(r'\b(?:what|which)\s+(?:\w+\s+){0,2}(?:can|could)'
                r'\s+(?:you|u|t3lab|this|it)\s+do\b'),
     re.compile(r'\bwhat\s+are\s+your\s+(?:capabilit|feature|function|skill)'),
@@ -1146,52 +999,39 @@ _CAP_RES = [
 ]
 
 # Question boilerplate stripped before matching the FUNCTION words
-# (many of these are already stopwords; listed for safety)
 _CAP_BOILERPLATE = {
     "tool", "cong", "cu", "chuc", "nang", "tinh", "lenh", "nao",
     "have", "there", "which", "what", "any", "capabilities", "query",
     "biet", "ung", "dung", "ban", "assistant", "t3lab", "co", "khong",
     "gi", "giup", "ho", "tro", "lam", "duoc", "thuc", "hien", "does",
     "function", "feature", "help", "the",
+    # Plural / "things" / "else" particles: alone they became the predicate of
+    # "bạn có thể làm được những gì" → "no dedicated tool"
+    "nhung", "cac", "viec", "khac", "nua", "nhi", "con",
 }
 
 # ─── Semantic roles inside a question ────────────────────────────────────────
-# A capability question decomposes as   FRAME( PREDICATE [ SCOPE ] ):
-#   FRAME      "có tool nào để … không", "is there a tool for …", "what can you do"
-#   PREDICATE  the function asked about — "xuất pdf", "load family", "đổi tên"
-#   SCOPE      where it applies — "with this project", "trong model này", "in Revit"
-# Only the PREDICATE may select a tool. SCOPE names the working environment, not
-# an operation, so it must never justify a match on its own: that role confusion
-# is what answered "what can you do with this project" with "Family Loader"
-# (whose doc merely reads "…vào project"), and what made the Vietnamese form
-# ("bạn làm được gì với dự án này") reply "no such tool".
-#
-# Scope is stripped on the QUERY side only. On the TOOL side "model"/"project"
-# stay meaningful (Model Auditor, Project Name) — the asymmetry is deliberate.
+# Capability question = FRAME("có tool nào để … không") PREDICATE("xuất pdf")
+# [SCOPE("with this project")]. Only the PREDICATE may select a tool ("what can
+# you do with this project" once answered "Family Loader"). Scope is stripped on
+# the QUERY side only; for tools "model"/"project" stay meaningful.
 _SCOPE_PHRASES = (
-    # Multi-word scope, stripped before tokenising so a homograph inside them
-    # ("tại" in "hiện tại" vs "tải" = load) can't leak in as a predicate word.
+    # Stripped before tokenising ("tại" in "hiện tại" vs "tải" = load)
     "hien tai", "hien nay", "luc nay", "bay gio", "o day", "trong nay",
     "du an", "right now", "at the moment",
 )
 
 _SCOPE_WORDS = {
-    # environment nouns — the container the work happens in
+    # environment nouns
     "project", "model", "file", "revit", "document", "doc",
     # demonstratives / deixis
     "this", "these", "that", "those", "here", "current",
     "nay", "day", "kia",
 }
 
-# Greeting / politeness openers. A question can be prefixed with small talk
-# ("hi. what can you do?", "chào bạn, có tool nào để xuất pdf không") and those
-# words name no function — but they ARE content words, so without this the lone
-# "hi" survived as the whole predicate of "hi. what can you do?" and the answer
-# became "T3Lab doesn't have a dedicated tool for that yet. Type 'what can you
-# do' to see the full tool list" — for the question the user had just typed.
-# Deliberately narrow: only words that can never name a Revit operation, so
-# real predicates that also appear in the small-talk lexicon ("copy" elements,
-# "viết"/write) keep their meaning here.
+# Greeting / politeness openers (a lone "hi" became the predicate of "hi. what
+# can you do?"). Narrow on purpose: only words that never name an operation
+# ("copy" stays a predicate).
 _SOCIAL_WORDS = {
     "hi", "hii", "hey", "helo", "hello", "hallo", "halo", "howdy", "yo", "sup",
     "hiya", "greetings", "morning", "afternoon", "evening", "night",
@@ -1199,8 +1039,7 @@ _SOCIAL_WORDS = {
     "please", "pls", "sorry", "excuse", "oi", "nhe", "nha", "a", "oke", "okay",
 }
 
-# Determiners — a pronoun followed by one of these (or by a scope noun) is
-# being used as a DETERMINER ("this project"), not as anaphora ("mở nó").
+# A pronoun followed by one of these (or a scope noun) is a determiner, not anaphora.
 _DETERMINERS = {
     "the", "a", "an", "this", "that", "these", "those",
     "my", "our", "your", "its", "cac", "nhung",
@@ -1208,14 +1047,9 @@ _DETERMINERS = {
 
 
 def _predicate_words(expanded):
-    """Content words naming the FUNCTION the user is asking about.
-
-    Strips the question frame, open verbs, stopwords, greetings and the scope
-    phrase from already-`_expand`ed text, so what remains is only what the user
-    wants DONE. An empty result means the question carried no predicate at all
-    — i.e. it is the generic "what can you do?", whatever scope was appended to
-    it and whatever small talk was prefixed to it.
-    """
+    """Content words naming the FUNCTION asked about (frame, open verbs,
+    stopwords, greetings and scope stripped from `_expand`ed text). Empty = the
+    generic "what can you do?"."""
     padded = u" " + u" ".join(
         re.sub(r'[^a-z0-9\s]', ' ', expanded).split()) + u" "
     for phrase in _SCOPE_PHRASES:
@@ -1228,10 +1062,8 @@ def _predicate_words(expanded):
                 or w in _SCOPE_WORDS or w in _OPEN_VERBS
                 or w in _SOCIAL_WORDS):
             continue
-        # "in" is a homograph: Vietnamese "in" = print (a real predicate —
-        # "có tool nào để in sheet không"), English "in" = the preposition that
-        # introduces the scope ("in this model"). It is the preposition exactly
-        # when a determiner or a scope noun follows it.
+        # "in" = Vietnamese print, unless a determiner/scope noun follows
+        # (English preposition: "in this model")
         if w == "in":
             nxt = tokens[i + 1] if i + 1 < len(tokens) else None
             if nxt and (nxt in _DETERMINERS or nxt in _SCOPE_WORDS):
@@ -1248,21 +1080,13 @@ def is_capability_question(expanded):
 
 
 # ─── Practical capability overview (grouped by workflow, verified live) ───────
-# The assistant's real power is acting DIRECTLY on the open model through the
-# MCP tool registry (core/server.py). "What can you do?" is answered from a
-# CURATED, workflow-grouped map with concrete notes — the practical style users
-# expect — but every line is VALIDATED against the live registry at render time:
-#   • a line whose tools are ALL gone is dropped (no advertising dead names —
-#     the drift trap documented in Intelligence/t3lab_agent.py); and
-#   • any registered tool the map doesn't mention is surfaced under "Khác/Other"
-#     so a newly-added tool is never silently hidden.
-# Curated notes were checked against the tool schemas in core/server.py, e.g.
-# purge_unused/delete_element dry_run, export_sheets_pdf `combined`, create_grid
-# auto x_labels/y_labels, split_* geometry preservation, create_point_based host.
+# "What can you do?" = a CURATED map of MCP tools (core/server.py), validated
+# against the live registry at render time: a line whose tools are all gone is
+# dropped (drift trap, Intelligence/t3lab_agent.py); unmapped tools show under
+# "Khác/Other". Notes were checked against the core/server.py schemas.
 
 def _live_tool_names():
-    """Set of MCP tool names currently registered, or an empty set when the
-    registry is unreachable (running outside Revit / offline tests)."""
+    """Registered MCP tool names; empty set when unreachable (offline tests)."""
     try:
         from Intelligence.t3lab_agent import _get_mcp_tools
         return set(t.get("name", "") for t in _get_mcp_tools())
@@ -1289,16 +1113,14 @@ def _user_display_name():
         return u""
 
 
-# Internal/plumbing tools deliberately kept out of the user-facing overview
-# (and out of the "Other" catch-all) — they aren't things a user asks for.
+# Plumbing tools kept out of the overview and its "Other" catch-all.
 _CAP_HIDE = frozenset([
     u"say_hello", u"show_assistant_pane", u"file_watcher_status",
 ])
 
-# Curated capability map. Each section: (emoji, vi_title, en_title, lines).
-# Each line: (names_tuple, vi_markdown, en_markdown). The line renders when the
-# registry is unknown (offline) OR at least one of its names is registered;
-# every name feeds the "covered" set that drives the anti-drift catch-all.
+# Sections: (emoji, vi_title, en_title, lines); line: (names, vi_md, en_md).
+# A line renders offline or when one of its names is registered; every name
+# counts as "covered" for the anti-drift catch-all.
 _CAP_MAP = [
     (u"📖", u"ĐỌC / QUERY", u"READ / QUERY", [
         ((u"ai_element_filter",),
@@ -1412,13 +1234,8 @@ _CAP_MAP = [
 
 
 def _ribbon_tools_section(viet):
-    """Every openable ribbon tool, grouped by its panel.
-
-    Named in full, not counted: "I can open 44 ribbon tools" told the user
-    nothing about WHICH ones, so the only way to find a tool was to guess its
-    name at the prompt. Built from the same live catalog the resolver uses, so
-    the list and what actually opens can never disagree.
-    """
+    """Every openable ribbon tool by panel, named in full (a bare count told the
+    user nothing). Same catalog as the resolver, so the list matches what opens."""
     groups, order = {}, []
     for tool in _tool_catalog():
         panel = (tool.get('panel') or u"").strip() or (u"Khác" if viet else u"Other")
@@ -1438,7 +1255,7 @@ def _ribbon_tools_section(viet):
             if viet else
             u"\n📂 **{} ribbon tools** I can open — type *open <tool name>*:")
     lines = [head.format(total)]
-    # "Core" (BatchOut / Family Loader) first, then panels alphabetically.
+    # "Core" first, then panels alphabetically
     for panel in sorted(order, key=lambda p: (p != u"Core", p.lower())):
         lines.append(u"• **{}** — {}".format(
             panel, u", ".join(sorted(groups[panel], key=lambda s: s.lower()))))
@@ -1446,9 +1263,7 @@ def _ribbon_tools_section(viet):
 
 
 def _capabilities_overview(viet):
-    """Practical, workflow-grouped overview of what the assistant can DO on the
-    live model — curated notes validated against the MCP registry, plus live
-    skills and the full list of openable ribbon tools. See _CAP_MAP."""
+    """Workflow-grouped overview: _CAP_MAP validated live, skills, ribbon tools."""
     live = _live_tool_names()   # empty set when offline → show every line
 
     if viet:
@@ -1464,13 +1279,13 @@ def _capabilities_overview(viet):
         for names, vi_line, en_line in lines:
             covered.update(names)
             if live and not (set(names) & live):
-                continue   # every referenced tool is gone → drop the line
+                continue
             rendered.append(u"• " + (vi_line if viet else en_line))
         if rendered:
             out.append(u"\n{} **{}**\n{}".format(
                 emoji, vi_title if viet else en_title, u"\n".join(rendered)))
 
-    # ── Anti-drift safety net: registered tools the curated map never named ──
+    # ── Anti-drift: registered tools the map never named ──
     if live:
         extra = sorted(live - covered - _CAP_HIDE)
         if extra:
@@ -1479,7 +1294,7 @@ def _capabilities_overview(viet):
                         else u"\n🧩 **Other** (newer tools, not yet grouped): {}"
                         ).format(chips))
 
-    # ── Skills (live from SkillsEngine), personalised if a name is set ───────
+    # ── Skills (SkillsEngine), personalised if a name is set ──
     skills = _live_skills()
     if skills:
         name = _user_display_name()
@@ -1500,7 +1315,7 @@ def _capabilities_overview(viet):
                             else u"• …+{} more: {}").format(len(rest), names))
         out.append(u"\n".join(s_lines))
 
-    # ── Every openable ribbon tool, by panel + quick affordances ─────────────
+    # ── Ribbon tools + quick affordances ──
     ribbon = _ribbon_tools_section(viet)
     if ribbon:
         out.append(ribbon)
@@ -1517,32 +1332,22 @@ def _capabilities_overview(viet):
 def answer_capability_question(user_input, viet):
     """Answer 'do you have a tool for X?' from the real catalog.
 
-    Returns a result dict {intent, params, message, _nlu, _authoritative}.
-    _authoritative tells the pipeline NOT to let an LLM override this —
-    the catalog is the ground truth for what tools exist.
+    Returns {intent, params, message, _nlu, _authoritative}; _authoritative
+    means no LLM may override it.
     """
     expanded = _expand(_norm(user_input))
     pred = _predicate_words(expanded)
 
-    # Frame + scope only, no predicate → the user asked what the assistant can
-    # do AT ALL ("what can you do with this project", "bạn làm được gì với dự
-    # án này") → the full overview, never a keyword guess off the scope noun.
+    # No predicate ("what can you do with this project") → full overview
     if not pred:
         msg = _capabilities_overview(viet)
         return {"intent": "help", "params": {"answer": msg}, "message": msg,
                 "_nlu": True, "_authoritative": True}
 
     # ── Evidence-tiered matching ─────────────────────────────────────────────
-    # An identity hit (tool name / curated keyword) IDENTIFIES a tool; a topic
-    # hit (description prose) is weak — prose can mention anything.
-    #
-    # Each hit is damped by how widely the word is shared: "manager" sits in
-    # 16 of 44 tool names, so "quản lý project" must NOT confidently answer
-    # with the first three managers in the catalog. Note this is the INVERSE of
-    # the old rule, which read a low document frequency as proof of
-    # distinctiveness — on a catalog this small that made "project" (one single
-    # description) look like a precise request. Rarity may only damp evidence
-    # here, never manufacture it.
+    # Identity hits (name / keyword) identify a tool; topic hits (description)
+    # are weak. Each hit is damped by how widely the word is shared ("manager"
+    # is in 16 of 44 names); rarity may only damp evidence, never create it.
     catalog = _tool_catalog()
     df = {}
     for tool in catalog:
@@ -1552,13 +1357,13 @@ def answer_capability_question(user_input, viet):
 
     def rarity(w):
         share = df.get(w, 1) / size
-        if share <= 0.05:                 # names a couple of tools → selective
+        if share <= 0.05:
             return 1.0
         if share <= 0.12:
             return 0.6
         if share <= 0.25:
             return 0.25
-        return 0.05                       # "manager", "element" → says nothing
+        return 0.05
 
     matches, near = [], []
     for tool in catalog:
@@ -1580,18 +1385,14 @@ def answer_capability_question(user_input, viet):
     matches.sort(key=lambda x: -x[0])
     near.sort(key=lambda x: -x[0])
 
-    # Nothing selective survived, yet every predicate word IS in the catalog —
-    # the ask is real but too generic to pin down ("quản lý project"). The
-    # honest answer is the whole overview, not three arbitrary managers and not
-    # "no such tool".
+    # Real but too generic ("quản lý project") → the overview, not "no such tool"
     if not matches and pred and all(w in df and rarity(w) <= 0.05 for w in pred):
         msg = _capabilities_overview(viet)
         return {"intent": "help", "params": {"answer": msg}, "message": msg,
                 "_nlu": True, "_authoritative": True}
 
     if matches:
-        # "bạn có thể mở X không?" — the tool is named outright (identity hit
-        # covering the whole predicate) and an open verb is present → just open.
+        # "bạn có thể mở X không?": named outright + open verb → just open
         top_score, top_is_id, top_cov, top = matches[0]
         if _has_open_verb(expanded) and top_is_id and top_cov >= 0.999:
             msg = (u"Đang mở {}...".format(top['title']) if viet
@@ -1625,20 +1426,14 @@ def answer_capability_question(user_input, viet):
             "_nlu": True, "_authoritative": True}
 
 
-# The assistant's own tool line ("Đang mở BatchOut..." / "Opening BatchOut...").
-# Matched on _norm()-only text (no _expand, which would rewrite "mở" → "open"
-# and mangle the title that follows). What the assistant actually DID is the
-# strongest referent for a later "nó" / "it".
+# The assistant's own "Opening X..." line: the strongest referent for "nó"/"it".
+# Matched on _norm()-only text (_expand would mangle the title).
 _OPENED_LINE_RE = re.compile(r'(?:opening|dang mo)\s+([a-z0-9][a-z0-9 ]*)')
 
 
 def _tool_by_title(text):
     """Catalog entry whose TITLE is exactly `text` (normalised), else None.
-
-    Used for the assistant's own "Opening <title>..." line, where the title is
-    printed verbatim — so it resolves even when two tools share an alias and
-    the generic resolver has to call the name ambiguous.
-    """
+    Resolves "Opening <title>..." even when two tools share an alias."""
     key = u" ".join(_norm(text).split())
     if not key:
         return None
@@ -1649,17 +1444,10 @@ def _tool_by_title(text):
 
 
 def _last_tool_from_history(history):
-    """Intent of the tool the conversation last actually referred to.
-
-    Two sources, most-recent entry first:
-      1. the assistant's own "Opening X..." line — the tool it really launched;
-      2. a message that IS a tool request ("mở dwg management", "batchout"),
-         resolved through the catalog's exact matcher.
-
-    Both require the whole message (minus open verbs) to be about that tool.
-    The old test was a bare substring scan for concatenated names, which bound
-    "nó" to any tool whose name merely appeared inside prose ("thanks for the
-    feedback" → Send Feedback) while missing every spaced name ("DWG Manager").
+    """Intent of the tool the conversation last referred to, newest first: the
+    assistant's "Opening X..." line, or a message that IS a tool request (exact
+    matcher). The whole message must be about the tool (a substring scan bound
+    "thanks for the feedback" to Send Feedback).
     """
     if not history:
         return None
@@ -1667,10 +1455,7 @@ def _last_tool_from_history(history):
         raw = entry.get("content", "") or ""
         content = _norm(raw)
 
-        # "Opening X..." is the assistant announcing what it just launched —
-        # only the assistant's own lines count. A user message that happens to
-        # contain that phrase ("... dang mo dwg management ...") must not be
-        # mistaken for the assistant having opened that tool.
+        # Only the assistant's own "Opening X..." lines count, not a user's
         if entry.get("role") == "assistant":
             m = _OPENED_LINE_RE.search(content)
             if m:
@@ -1689,19 +1474,10 @@ def _last_tool_from_history(history):
 
 
 def _is_pronoun_query(normed_expanded):
-    """True when the input REFERS BACK to the tool just discussed — anaphora
-    ("mở nó", "nó là gì?", "cái này là gì", "what is it") — so the pipeline may
-    resolve it against the conversation history.
+    """True when the input refers back to the last tool ("mở nó", "what is it").
 
-    A pronoun word is only anaphoric when it stands IN PLACE OF the noun. In
-    "what can you do with this project" / "that view is wrong", the same word is
-    a DETERMINER in front of a noun, and resolving it to the last-opened tool
-    silently hijacks a request that was never about that tool. The old check was
-    a bare set intersection, so every sentence containing "this"/"that" was
-    treated as a reference to whatever tool the history last mentioned.
-
-    Also bounded in length: anaphora is short. A long sentence that happens to
-    contain "nó" carries its own subject and does not need the history.
+    A pronoun word counts only in place of a noun, not as a determiner ("this
+    project" would hijack the request); and only in short inputs (≤ 6 tokens).
     """
     tokens = re.sub(r'[^a-z0-9\s]', ' ', normed_expanded).split()
     if not tokens or len(tokens) > 6:
@@ -1715,7 +1491,7 @@ def _is_pronoun_query(normed_expanded):
         if w not in _PRONOUN_WORDS:
             continue
         nxt = tokens[i + 1] if i + 1 < len(tokens) else None
-        # Followed by a content word → determiner ("this project"), not anaphora.
+        # Followed by a content word → determiner
         if nxt and len(nxt) >= 2 and nxt not in _STOPWORDS \
                 and nxt not in _CAP_BOILERPLATE:
             continue
@@ -1726,16 +1502,11 @@ def _is_pronoun_query(normed_expanded):
 # ─── Scoring ──────────────────────────────────────────────────────────────────
 
 def _score(intent, unigrams, bigrams, padded_expanded):
-    """Compute weighted match score for one intent.
+    """Weighted match score for one intent.
 
-    Single-word features are matched against the stopword-filtered unigram
-    set (keeps the existing noise reduction for generic bag-of-words scoring).
-    Multi-word features (2+ words, joined by a space) are matched as a literal
-    phrase against the padded expanded text instead of via the bigram set:
-    many curated phrases here (e.g. "lam duoc gi", "huong dan su dung") are
-    built entirely from short Vietnamese filler words that _tokenise() strips
-    as stopwords, so a bigram/trigram for them could never form otherwise —
-    they would silently never match.
+    Single words match the stopword-filtered unigrams; multi-word features match
+    as literal phrases in the padded text, since many ("lam duoc gi") are all
+    stopwords and could never form a bigram.
     """
     score = 0
     all_features = unigrams | bigrams
@@ -1751,35 +1522,28 @@ def _score(intent, unigrams, bigrams, padded_expanded):
         else:
             matched = feature in all_features
         if matched:
-            score += penalty   # penalty is already negative
+            score += penalty   # already negative
     return score
 
 
 # ─── Disambiguation rules ─────────────────────────────────────────────────────
 
 def _disambiguate(scores, unigrams, bigrams, slots):
-    """Apply domain rules to resolve ambiguous intent scores.
-
-    Returns the final intent string or None.
-    """
+    """Apply domain rules to ambiguous scores; return the intent or None."""
     all_features = unigrams | bigrams
 
-    # ── open_batchout vs open_batchout_configured ────────────────────────────
-    # open_batchout_configured requires batchout + at least one config param
+    # ── open_batchout_configured needs batchout + at least one config param ──
     has_batchout = "batchout" in unigrams
     has_config   = bool(slots["filter"]) or (slots["format"] != "pdf")
 
     if has_batchout and "open" in all_features and has_config:
-        # Promote open_batchout_configured
         scores["open_batchout_configured"] = max(
             scores.get("open_batchout_configured", 0),
             scores.get("open_batchout", 0) + 10
         )
         scores["open_batchout"] -= 10
 
-    # ── export_direct vs open_batchout_configured ────────────────────────────
-    # If there is NO open/mo keyword but there IS an export keyword + batchout,
-    # prefer export_direct over opening batchout configured.
+    # ── export + batchout without open → export_direct ──
     has_open   = "open" in all_features or "mo" in all_features
     has_export = "export" in all_features
 
@@ -1789,10 +1553,7 @@ def _disambiguate(scores, unigrams, bigrams, slots):
             scores.get("open_batchout_configured", 0) + 5
         )
 
-    # ── Boost export_direct when a sheet-filter letter is present ────────────
-    # "in G sheet" → "in"(10)+"sheet"(4)=14 which is just below threshold.
-    # If the slot extractor found a filter letter AND there's any export/print
-    # word, force export_direct to at least meet its threshold.
+    # ── Filter letter + export word → export_direct ("in G sheet" scores 14) ──
     _export_words = {"export", "in", "print", "pdf", "dwg", "dwf", "dgn",
                      "ifc", "nwd", "img", "sheet"}
     if slots.get("filter") and (_export_words & (unigrams | bigrams)):
@@ -1801,7 +1562,6 @@ def _disambiguate(scores, unigrams, bigrams, slots):
             _THRESHOLDS["export_direct"]
         )
 
-    # ── Pick winner ──────────────────────────────────────────────────────────
     if not scores:
         return None
     best_intent = max(scores, key=lambda k: scores[k])
@@ -1815,9 +1575,8 @@ def _disambiguate(scores, unigrams, bigrams, slots):
 
 # ─── Message builder ──────────────────────────────────────────────────────────
 
-# Per-intent canned messages. Only intents WITHOUT a registry entry need one —
-# an auto-discovered tool gets "Đang mở <title>..." / "Opening <title>..."
-# built from its live title in _build_message().
+# Canned messages for intents without a registry entry; auto-discovered tools
+# get "Opening <title>..." in _build_message().
 _MESSAGES_VI = {
     "open_batchout":          u"Đang mở BatchOut...",
     "open_batchout_configured": u"Mở BatchOut đã cấu hình...",
@@ -1856,21 +1615,11 @@ def _is_viet(raw):
 
 
 def _kw_hit(raw_input, normed_raw, keywords):
-    """Whole-word keyword test for the canned chat replies below.
+    """Whole-word keyword test for the canned chat replies.
 
-    These lists used to be tested with a plain `k in normed_raw` substring
-    match, which reads far more text than it should once diacritics are
-    stripped: "tạo 1 phòng ngủ 4x6" became an INSULT ("ngu" inside "ngủ"),
-    "lối đi" became an error report ("loi"), and any word containing "ty"
-    ("quantity") became a thank-you.
-
-    Two rules fix it:
-      * whole words only, never a fragment inside a longer word;
-      * when the user types WITH diacritics, matching is accent-exact — "ngủ"
-        is a bedroom, "ngu" is the insult, and stripping the accent to compare
-        destroys the only thing that tells them apart. Diacritic-stripped
-        matching is kept only for messages typed without accents at all, where
-        it is the sole way to recognise "may ngu the".
+    Accent-exact when the user typed diacritics ("ngủ" = bedroom, "ngu" =
+    insult); folded matching only for unaccented input ("may ngu the").
+    Substring matching once made "phòng ngủ" an insult and "quantity" a thanks.
     """
     low     = (raw_input or u"").lower()
     accents = _is_viet(low)
@@ -1886,21 +1635,16 @@ def _kw_hit(raw_input, normed_raw, keywords):
                     and re.search(pat, normed_raw, re.UNICODE):
                 return True
         except Exception:
-            if kw in normed_raw:            # never fail the turn on a regex
+            if kw in normed_raw:
                 return True
     return False
 
 
-# A reaction ("stupid", "great", "how are you") is a handful of words. A
-# 12-word instruction is a REQUEST that happens to contain one of those words,
-# so the reaction branches below stay out of its way.
+# Longer inputs are requests that merely contain a reaction word.
 _REACTION_MAX_WORDS = 6
 
 
-# ─── Small-talk keyword tables (module-level so classify() + _build_message
-# read the SAME lists) ────────────────────────────────────────────────────────
-# Hoisted out of _build_message so the router can ask "is this an instant-safe
-# small-talk reply?" without duplicating the keyword sets and drifting from them.
+# ─── Small-talk keyword tables (shared by classify() and _build_message) ─────
 _FAREWELL_KWS = ["tam biet", "tạm biệt", "bye", "bai", "bài",
                  "see you", "hen gap", "hẹn gặp", "goodbye"]
 _INSULT_KWS   = ["stupid", "dumb", "useless", "garbage", "trash", "suck",
@@ -1912,26 +1656,21 @@ _ERROR_KWS    = ["loi", "lỗi", "bi hong", "bị hỏng", "khong chay",
 _POSITIVE_KWS = ["tuyet", "tuyệt", "tot", "tốt", "ngon", "perfect",
                  "great", "awesome", "nice"]
 _THANKS_KWS   = ["cam on", "cảm ơn", "thank", "thanks", "tks", "thks"]
-# "How are you?" splits into a POSITIVE state (safe to answer instantly) and a
-# LOW-MOOD state (kept flowing to the LLM for a warmer, empathetic reply — a
-# canned "I'm fine" reads as tone-deaf when the user just said they're tired).
+# "How are you?" is instant; low mood goes to the LLM (a canned reply is tone-deaf).
 _STATE_HOWAREYOU_KWS = ["khoe", "khỏe"]
 _STATE_LOWMOOD_KWS   = ["met", "mệt", "buon", "buồn", "chan", "chán",
                         "sao vay", "sao vậy", "stress"]
 
 
 # ─── English small-talk the trigger tables miss ───────────────────────────────
-# "how are you", "what's up", "you there", "sup"... carry no Vietnamese-centric
-# trigger, so classify() scored them at 0 and fell through to a full LLM turn.
-# Recognised here as instant-safe small talk. Emotional / complaint phrasing is
-# deliberately NOT listed — it keeps going to the LLM.
+# Instant-safe; emotional / complaint phrasing stays with the LLM.
 _EN_SMALLTALK_PHRASES = (
     # how are you
     "how are you", "how are u", "how r u", "how are ya", "how are things",
     "how is it going", "hows it going", "how it going", "hows things",
     "how do you do", "how you doing", "how are you doing", "how ya doing",
     "hows your day", "how is your day", "how have you been", "how you been",
-    # what's up (apostrophe stripped upstream → "what s up")
+    # what's up (apostrophe stripped → "what s up")
     "whats up", "what s up", "what is up", "wassup", "wazzup", "sup",
     "whats good", "whats new", "long time no see",
     # presence / wellbeing checks
@@ -1939,9 +1678,7 @@ _EN_SMALLTALK_PHRASES = (
     "you good", "you ok", "you okay", "u good", "u ok", "are you ok",
     "are you okay", "you alright", "you all right",
 )
-# Trailing fillers a greeting may pick up ("how are you today", "how are you Sun")
-# — stripped before the exact-match test so a name or politeness word does not
-# defeat recognition, without opening the door to matching real commands.
+# Trailing fillers / names peeled before the exact match ("how are you today").
 _EN_SMALLTALK_TAIL = frozenset((
     "today", "now", "then", "mate", "man", "bro", "buddy", "friend", "pal",
     "sir", "dear", "sun", "ban", "a", "ha", "huh", "hey", "hi", "there",
@@ -1955,22 +1692,17 @@ def _fold_plain(text):
 
 
 def _match_english_smalltalk(raw):
-    """Return 'howareyou' when the WHOLE message is English small talk, else None.
-
-    Matches the entire folded message (up to a couple of trailing filler/name
-    words) so a command that merely opens with a greeting is never swallowed.
-    """
+    """'howareyou' when the WHOLE message (minus ≤ 2 filler words) is English
+    small talk, else None — a command opening with a greeting is not swallowed."""
     f = _fold_plain(raw)
     if not f:
         return None
     words = f.split()
-    if len(words) > 7:                         # a request, not a one-liner
+    if len(words) > 7:
         return None
-    # The unpeeled message is tested first, so a genuine two-word phrase
-    # ("you there") is never lost even though a trailing word gets peeled below.
+    # Unpeeled first, so "you there" survives the peeling below
     if f in _EN_SMALLTALK_PHRASES:
         return "howareyou"
-    # Peel up to two trailing filler / name words: "how are you today", "sup man".
     for _ in range(2):
         if len(words) >= 2 and words[-1] in _EN_SMALLTALK_TAIL:
             words = words[:-1]
@@ -1981,20 +1713,13 @@ def _match_english_smalltalk(raw):
     return None
 
 
-# Instant-safe categories: answered from a canned reply even when a provider is
-# online. Everything else in `chat` (insult, error, low mood) still goes to the
-# LLM, per the Hybrid policy.
+# Canned even with a provider online; other `chat` kinds go to the LLM (Hybrid).
 _INSTANT_CHAT_KINDS = frozenset(("farewell", "thanks", "positive", "howareyou"))
 
 
 def _chat_smalltalk_kind(raw_input, normed_raw):
-    """Categorise a `chat`-intent message. Returns a kind string or None.
-
-    Reuses the exact keyword tables _build_message replies from, so the router's
-    "is this instant-safe?" decision can never drift from the reply it produces.
-    Order mirrors _build_message: emotional kinds are tested before the softer
-    ones so "how are you" cannot mask a complaint.
-    """
+    """Kind of a `chat` message, or None. Same tables as _build_message; strong
+    kinds first so "how are you" cannot mask a complaint."""
     _short = len((raw_input or u"").split()) <= _REACTION_MAX_WORDS
     if _short and _kw_hit(raw_input, normed_raw, _FAREWELL_KWS):
         return "farewell"
@@ -2013,7 +1738,6 @@ def _chat_smalltalk_kind(raw_input, normed_raw):
     return None
 
 
-# A little variety so the instant replies don't read like a canned macro.
 _HOWAREYOU_REPLIES_EN = (
     "Doing great, thanks for asking! What can I help you with?",
     "All good here! What would you like to work on?",
@@ -2055,22 +1779,14 @@ def _build_message(intent, slots, viet, raw_input=""):
             part = " {} sheet".format(filt) if filt else ""
             return "Opening BatchOut{} ({})...".format(part, fmt)
 
-    # ── Contextual chat responses ─────────────────────────────────────────────
-    # Reply text for each small-talk kind. _chat_smalltalk_kind() (module level)
-    # owns the CATEGORISATION so the router and this builder agree; this switch
-    # owns only the wording.
+    # ── Chat replies: wording only, _chat_smalltalk_kind() categorises ──
     if intent == "chat":
-        # English "how are you"/"what's up"/"you there" carry no VI keyword —
-        # catch them first so they get the warm state reply, not the fallback.
         if _match_english_smalltalk(raw_input):
             return _howareyou_reply(viet)
         kind = _chat_smalltalk_kind(raw_input, normed_raw)
         if kind == "farewell":
             return (_MESSAGES_VI if viet else _MESSAGES_EN).get("farewell",
                     u"Tạm biệt!" if viet else "Goodbye!")
-        # Frustration / insult directed at the assistant itself — acknowledge
-        # honestly instead of the generic "didn't understand" reply, and point
-        # at a concrete next step (works with or without an LLM connected).
         if kind == "insult":
             if viet:
                 return (u"Xin lỗi vì trải nghiệm chưa tốt! Ở chế độ offline khả năng "
@@ -2092,9 +1808,7 @@ def _build_message(intent, slots, viet, raw_input=""):
             return u"Không có gì! Cần gì cứ hỏi tôi nhé." if viet else "You're welcome! Let me know if you need anything."
         if kind == "howareyou":
             return _howareyou_reply(viet)
-        # Low mood ("mệt quá", "stress") — a canned "I'm fine" is tone-deaf, so
-        # answer with light empathy when offline; online this kind is routed to
-        # the LLM (not marked _instant) for a genuinely warmer reply.
+        # Low mood: light empathy offline; online it goes to the LLM (not _instant)
         if kind == "lowmood":
             if viet:
                 return (u"Nghe bạn nói vậy tôi cũng lo. Nghỉ một chút nhé — "
@@ -2106,9 +1820,7 @@ def _build_message(intent, slots, viet, raw_input=""):
     if intent in table:
         return table[intent]
 
-    # Auto-discovered tools have no canned message — build it from the live
-    # registry title so a newly added pushbutton reads correctly without a
-    # matching entry in the tables above.
+    # Auto-discovered tools: message from the live registry title
     if intent and intent.startswith("open_"):
         label = _tool_label(intent)
         return (u"Đang mở {}...".format(label) if viet
@@ -2120,38 +1832,22 @@ def _build_message(intent, slots, viet, raw_input=""):
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 def classify(user_input, history=None):
-    """Classify user_input and return a result dict, or None if uncertain.
-
-    Args:
-        user_input : raw unicode string from user.
-        history    : list of {role, content} dicts (conversation context).
-
-    Returns:
-        dict  {intent, params, message, _nlu: True} on success.
-        None  if confidence is below threshold.
-    """
+    """Classify user_input → {intent, params, message, _nlu: True}, or None if
+    below threshold. `history` is a list of {role, content} dicts."""
     if not user_input or not user_input.strip():
         return None
 
     viet = _is_viet(user_input)
 
-    # ── Preprocess ───────────────────────────────────────────────────────────
     normed   = _norm(user_input)
     expanded = _expand(normed)
 
-    # ── Capability questions → answered from the real catalog ────────────────
-    # Checked BEFORE anaphora: an explicit capability frame states its own
-    # subject ("what can this do", "cái này làm được gì"), so resolving its
-    # pronoun against the history would open a tool instead of answering.
+    # ── Capability questions: BEFORE anaphora ("cái này làm được gì" has its
+    # own subject; resolving the pronoun would open a tool instead) ──
     if is_capability_question(expanded):
         return answer_capability_question(user_input, viet)
 
-    # ── English small-talk the trigger tables miss (instant, no LLM) ─────────
-    # "how are you", "what's up", "you there"... scored 0 in the VI-centric
-    # trigger tables and fell through to a full LLM turn. Answer them here from
-    # a canned reply and mark _instant so the router skips the model even when a
-    # provider is online. Checked before tool/pronoun resolution because these
-    # phrases are never a tool name or an anaphor.
+    # ── English small-talk the trigger tables miss: _instant, no LLM ─────────
     if _match_english_smalltalk(user_input):
         return {"intent": "chat", "params": {},
                 "message": _howareyou_reply(viet),
@@ -2168,12 +1864,8 @@ def classify(user_input, history=None):
             return {"intent": last_tool, "params": {}, "message": msg,
                     "_nlu": True}
 
-    # ── Exact tool-name hit → deterministic resolver first ───────────────────
-    # A message that IS a tool name (with or without "mở/open") must always
-    # open exactly that tool — the trigger tables below only know the builtin
-    # tools and the LLM guesses. Exactness consumes every token, so commands
-    # with extra words ("mở batchout G sheet pdf" → configured export,
-    # "mcp control là gì" → help) still fall through to normal scoring.
+    # ── Exact tool-name hit opens exactly that tool. Extra words ("mở batchout
+    # G sheet pdf", "mcp control là gì") fall through to scoring ──
     _tool, _ = resolve_tool(user_input, exact_only=True)
     if _tool:
         msg = (u"Đang mở {}...".format(_tool['title']) if viet
@@ -2181,29 +1873,18 @@ def classify(user_input, history=None):
         return {"intent": _tool['intent'], "params": {}, "message": msg,
                 "_nlu": True}
 
-    # ── Tokenise ─────────────────────────────────────────────────────────────
     unigrams, bigrams = _tokenise(expanded)
-    # Punctuation-stripped, whitespace-normalised text for the multi-word
-    # phrase matcher in _score() — must match what _tokenise() sees, or a
-    # trailing "?"/"." blocks the closing word-boundary space and the phrase
-    # never matches (e.g. "what can you do?").
+    # Punctuation-stripped like _tokenise(), else "what can you do?" never matches
     _clean = re.sub(r'[^a-z0-9\s]', ' ', expanded)
     padded_expanded = u" " + u" ".join(_clean.split()) + u" "
 
-    # ── Score every intent ───────────────────────────────────────────────────
     scores = {intent: _score(intent, unigrams, bigrams, padded_expanded)
               for intent in _TRIGGERS}
 
-    # ── Extract slots (needed for disambiguation) ────────────────────────────
     slots = _extract_slots(user_input)
-
-    # ── Disambiguate ─────────────────────────────────────────────────────────
     best = _disambiguate(dict(scores), unigrams, bigrams, slots)
 
-    # ── Ranked tool resolver (offline, no LLM round-trip needed) ─────────────
-    # Nothing in the trigger tables matched — try the full tool catalog with
-    # confidence + margin rules. A clear winner opens; an ambiguous "open X"
-    # asks the user to pick instead of guessing (or letting the LLM guess).
+    # ── No trigger matched: ranked resolver; ambiguous "open X" asks to pick ──
     if best is None:
         _tool, _cands = resolve_tool(user_input)
         if _tool:
@@ -2222,10 +1903,7 @@ def classify(user_input, history=None):
             return {"intent": "chat", "params": {}, "message": msg,
                     "_nlu": True, "_authoritative": True}
 
-    # ── Soft fallback for conversational input that scored nothing ────────────
-    # If classification failed but the input looks conversational (no tool
-    # keywords), return a gentle "I don't understand" as a chat response rather
-    # than None, so the UI can show something helpful instead of silently failing.
+    # ── Soft "didn't understand" for input without tool words ──
     if best is None:
         _tool_words = {
             "batchout", "parasync", "loadfamily", "projectname",
@@ -2233,7 +1911,6 @@ def classify(user_input, history=None):
             "export", "open", "in", "print",
         }
         if not (unigrams & _tool_words):
-            # Purely conversational / unknown
             if viet:
                 msg = (u"Xin lỗi, tôi chưa hiểu ý bạn. Bạn có thể thử:\n"
                        u"• 'mở batchout' / 'xuất pdf G sheet'\n"
@@ -2242,15 +1919,12 @@ def classify(user_input, history=None):
                 msg = ("Sorry, I didn't understand. You can try:\n"
                        "• 'open batchout' / 'export pdf G sheet'\n"
                        "• 'parasync', 'load family', 'workset'...")
-            # _generic_fallback marks this as a placeholder guess, not a real
-            # answer — script.py uses it to avoid masking a clearer "the AI
-            # didn't respond" message behind this same canned text whenever
-            # the LLM call itself times out or errors.
+            # _generic_fallback: placeholder, so script.py can show "the AI
+            # didn't respond" instead when the LLM call fails
             return {"intent": "chat", "params": {}, "message": msg, "_nlu": True,
                     "_generic_fallback": True}
         return None
 
-    # ── Build result ─────────────────────────────────────────────────────────
     params = {}
     if best in ("export_direct", "open_batchout_configured"):
         params = slots
@@ -2260,10 +1934,8 @@ def classify(user_input, history=None):
     message = _build_message(best, slots, viet, raw_input=user_input)
     result = {"intent": best, "params": params, "message": message,
               "_nlu": True}
-    # Mark instant-safe small talk so the router answers it from this canned
-    # reply instead of paying for an LLM turn (the biggest single latency win on
-    # a slow local model). `greet` is always instant; `chat` only for the safe
-    # kinds — complaints / insults / low mood keep flowing to the LLM.
+    # _instant: the router skips the LLM (biggest latency win on slow local
+    # models). `greet` always; `chat` only for _INSTANT_CHAT_KINDS.
     if best == "greet":
         result["_instant"] = True
     elif best == "chat":

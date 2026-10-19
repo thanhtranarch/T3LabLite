@@ -27,7 +27,11 @@ Session JSON (written by T3LabAssistantDialog._archive_current_session):
     {"id": "20260930_141501", "doc_key": "...", "title": "...",
      "timestamp": "2026-09-30 14:15", "message_count": 12,
      "messages": [{"role", "content", "ts"}, ...], "summary": "..."}
-plus, optionally, "pid" (project tag) and "renamed" (title set by the user).
+plus, optionally, "pid" (project tag), "renamed" (title set by the user),
+"updated" (last activity — a resumed chat keeps its id and file), "digest"
+(what the chat asked/produced, shown to later chats) and "session_notes"
+(facts that held for that chat only) — see Intelligence/session_context.py.
+read_session(path) returns one archive whole (search_past_chats).
 
 Pure Python, no Revit/WPF — testable under CPython 3.
 
@@ -184,8 +188,16 @@ def _content_text(content):
 
 
 def _epoch(data, fname, mtime):
-    """Sort key: the session id stamp (seconds), else the file name's stamp,
-    else the minute-resolution timestamp, else the file mtime."""
+    """Sort key: when the chat was last active ("updated", written since a
+    chat keeps one id across resumes), else the session id stamp (seconds),
+    else the file name's stamp, else the minute-resolution timestamp, else
+    the file mtime."""
+    upd = u'{}'.format(data.get('updated') or u'')
+    if upd:
+        try:
+            return time.mktime(time.strptime(upd, '%Y-%m-%d %H:%M:%S'))
+        except (ValueError, OverflowError):
+            pass
     raw = u'{}'.format(data.get('id') or u'')
     m = _FILE_ID_RE.search(fname)
     for stamp in ((raw if _ID_RE.match(raw) else None),
@@ -203,6 +215,30 @@ def _epoch(data, fname, mtime):
         except (ValueError, OverflowError):
             continue
     return mtime
+
+
+def _digest(data, msgs, title):
+    """The archive's stored digest, else one built from its turns (archives
+    written before digests existed)."""
+    stored = u'{}'.format(data.get('digest') or u'').strip()
+    if stored:
+        return stored
+    try:
+        from Intelligence.session_context import make_digest
+        return make_digest(msgs, data.get('summary') or u'', title)
+    except Exception:
+        return u''
+
+
+def read_session(path):
+    """The full JSON of one archived session (dict), or None.
+
+    Only for paths inside a sessions folder this module owns — the
+    search_past_chats tool hands paths it got from list_sessions back here.
+    """
+    if not _is_session_path(path) or not os.path.isfile(path):
+        return None
+    return _read_json(path)
 
 
 def _load_meta(path, pid_from_location):
@@ -237,6 +273,7 @@ def _load_meta(path, pid_from_location):
         'pid': pid_from_location or tagged,
         'message_count': int(data.get('message_count') or len(msgs) or 0),
         'renamed': bool(data.get('renamed')),
+        'digest': _digest(data, msgs, title),
         '_epoch': _epoch(data, fname, st.st_mtime),
     }
     hay = [meta['title'], u'{}'.format(data.get('summary') or u'')]

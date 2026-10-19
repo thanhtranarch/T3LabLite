@@ -24,6 +24,8 @@ Responsibilities:
      runtime is initialized").
   3. Startup engine & runtime mismatch diagnostics.
   4. Retire ribbon folders an update left behind (lib/core/ribbon_retire.py).
+ 4b. "What's new" popup on the first start of each new version
+     (lib/core/whats_new.py, Lite only).
   5. Register the right-click context-menu entry (Revit 2025+).
   6. Self-study idle loop (opt-in).
   7. Start the file-based task watcher (lib/core/file_watcher.py).
@@ -460,6 +462,15 @@ def main():
     try:
         from core.ribbon_retire import retire_old_ribbon_folders, notify_retired
         notify_retired(retire_old_ribbon_folders())
+    except Exception:
+        pass
+
+    # ─── 1b. "What's new" popup, once per version (Lite only) ──────────────────
+    try:
+        from core.whats_new import install as install_whats_new
+        state, detail = install_whats_new(_revit_handle())
+        if state == "failed":
+            _log("What's new popup not shown: %s" % detail)
     except Exception:
         pass
 

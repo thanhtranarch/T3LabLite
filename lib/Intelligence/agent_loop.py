@@ -1,8 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Agent Loop
-
-Provider-agnostic agentic tool-calling loop for the T3Lab Assistant.
+"""Provider-agnostic tool-calling agent loop for the T3Lab Assistant.
 
 Runs on a BACKGROUND thread. Providers that set SUPPORTS_NATIVE_TOOLS expose:
 
@@ -16,11 +13,10 @@ Runs on a BACKGROUND thread. Providers that set SUPPORTS_NATIVE_TOOLS expose:
     agent_tool_results(tool_calls, results)
         -> list of provider-native messages carrying the tool results.
 
-The loop itself never touches WPF or the Revit API directly:
-- UI feedback flows through the `callbacks` dict (caller marshals to UI thread);
-- tool execution goes through the injected `execute_tool(name, args)` callable
-  (script.py passes core.server's _execute_tool, which already marshals write
-  tools onto Revit's main thread via ExternalEvent).
+Never touches WPF or the Revit API: UI feedback goes through `callbacks`
+(caller marshals to the UI thread); tools run via the injected
+`execute_tool(name, args)` (core.server's _execute_tool, which marshals write
+tools onto Revit's main thread via ExternalEvent).
 
 Author: Tran Tien Thanh
 Mail: trantienthanh909@gmail.com
@@ -37,59 +33,166 @@ import time
 
 from core import jsonsafe
 from Intelligence.tool_schema import (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME,
+                                      PAST_CHATS_TOOL_NAME,
                                       is_file_output_only, is_model_modifying)
+
+# Pseudo-tools the pane runs itself (launcher, memory file, archived chats);
+# none touches the model.
+_LOCAL_PSEUDO_TOOLS = (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME, PAST_CHATS_TOOL_NAME)
 
 
 # ─── Result truncation ─────────────────────────────────────────────────────────
-# Tool results are fed back to the model; huge payloads (element dumps) blow the
-# context. Keep the JSON fed to the model bounded — the UI card shows the full
-# result separately.
+# Bound the JSON fed back to the model; the UI card shows the full result.
 _MAX_RESULT_CHARS = 4000
 
 
 def _json_safe(obj):
     """Recursively coerce byte strings to unicode. Never raises.
 
-    A Revit/OS string that arrives as Windows code-page bytes is the one
-    input json's encoder cannot handle — it decodes byte strings as UTF-8 —
-    and under IronPython 2.7 the `u"{}".format(...)` fallback below fails on
-    exactly the same bytes, so the guard guarded nothing.
-
-    Delegates to core.jsonsafe so this rule has ONE implementation: a private
-    second copy is how the MCP server path ended up without it, and the miss
-    took down tools/list and every non-ASCII view name.
+    Code-page bytes from Revit/OS break json (decodes as UTF-8) and the
+    IronPython `u"{}".format` fallback alike. Delegates to core.jsonsafe so
+    there is ONE implementation (a private copy once left the MCP server path
+    without it and broke tools/list on non-ASCII view names).
     """
     return jsonsafe.coerce(obj)
 
 
-def _result_to_json(result):
+def _dumps(obj):
     try:
-        s = json.dumps(_json_safe(result), ensure_ascii=False)
+        return json.dumps(_json_safe(obj), ensure_ascii=False)
     except Exception:
         try:
-            s = u"{}".format(_json_safe(result))
+            return u"{}".format(_json_safe(obj))
         except Exception:
-            s = u"<unserializable {}>".format(type(result).__name__)
-    if len(s) > _MAX_RESULT_CHARS:
-        s = s[:_MAX_RESULT_CHARS] + u"... [truncated {} chars]".format(len(s) - _MAX_RESULT_CHARS)
-    return s
+            return u"<unserializable {}>".format(type(obj).__name__)
+
+
+def _shrink_result(result, limit, path=None):
+    """Fit `result` into `limit` chars without cutting JSON mid-string.
+
+    1. Dict: halve its longest list fields until it fits, reporting
+       `omitted_items` ({field: dropped count}); scalars like `total_count`
+       survive (Working rule 10: numbers come from tools).
+    2. Fallback (huge scalar, list root): wrap as
+       {"truncated", "chars", "preview", "full_result_path"}.
+    `path` = saved full copy (result_store) or None. Returns (text, was_truncated).
+    """
+    s = _dumps(result)
+    if len(s) <= limit:
+        return s, False
+    if isinstance(result, dict):
+        trimmed = dict(result)
+        omitted = {}
+        lists = [(k, v) for k, v in trimmed.items()
+                 if isinstance(v, (list, tuple)) and len(v) > 1]
+        lists.sort(key=lambda kv: -len(_dumps(kv[1])))
+        for k, v in lists:
+            v = list(v)
+            while len(v) > 1 and len(_dumps(trimmed)) > limit:
+                keep = max(1, len(v) // 2)
+                omitted[k] = omitted.get(k, 0) + (len(v) - keep)
+                v = v[:keep]
+                trimmed[k] = v
+            if len(_dumps(trimmed)) <= limit:
+                break
+        if omitted:
+            trimmed["truncated"] = True
+            trimmed["omitted_items"] = omitted
+            if path:
+                trimmed["full_result_path"] = path
+            s2 = _dumps(trimmed)
+            if len(s2) <= limit:
+                return s2, True
+    head = max(200, limit - 300)
+    wrap = {"truncated": True, "chars": len(s), "preview": s[:head]}
+    if path:
+        wrap["full_result_path"] = path
+    return _dumps(wrap), True
+
+
+# ─── In-turn compaction of old tool results ───────────────────────────────────
+# Tool results older than the last KEEP_LAST are folded to a stub, in batches
+# (once per KEEP_LAST iterations) so the cached prefix breaks once per window.
+# Only for providers without server-side context editing: Claude sends
+# context_management instead (5.5 models reject client-edited history with
+# preserved thinking).
+_FOLD_KEEP_LAST = 6
+_FOLD_MIN_CHARS = 200
+_FOLD_STUB = u"[omitted: earlier tool result, {} chars — re-run the tool if you need it]"
+
+
+def _is_tool_result_msg(m):
+    if not isinstance(m, dict):
+        return False
+    if m.get("role") == "tool":                       # OpenAI / Ollama shape
+        return True
+    c = m.get("content")
+    return (m.get("role") == "user" and isinstance(c, list) and
+            any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c))
+
+
+def _fold_text(text):
+    if isinstance(text, (u"".__class__, "".__class__)) and \
+            len(text) > _FOLD_MIN_CHARS and not text.startswith(u"[omitted:"):
+        return _FOLD_STUB.format(len(text)), True
+    return text, False
+
+
+def _fold_old_tool_results(messages, keep_last=_FOLD_KEEP_LAST):
+    """Stub all but the last `keep_last` tool results, in place; returns the
+    count folded. Assistant/thinking/tool_use blocks are never touched."""
+    idxs = [i for i, m in enumerate(messages) if _is_tool_result_msg(m)]
+    old = idxs[:-keep_last] if keep_last > 0 else idxs
+    folded = 0
+    for i in old:
+        m = messages[i]
+        if m.get("role") == "tool":
+            m["content"], did = _fold_text(m.get("content"))
+            folded += int(did)
+            continue
+        new_content = []
+        for blk in m.get("content") or []:
+            if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                blk = dict(blk)
+                blk["content"], did = _fold_text(blk.get("content"))
+                folded += int(did)
+            new_content.append(blk)
+        m["content"] = new_content
+    return folded
+
+
+def _should_fold(iteration, keep_last=_FOLD_KEEP_LAST):
+    """True on iterations keep_last+1, 2*keep_last+1, ..."""
+    return iteration > keep_last and (iteration - 1) % keep_last == 0
+
+
+def _result_to_json(result, limit=_MAX_RESULT_CHARS, spill=None, tool=None):
+    """Bounded result JSON for the model; on overflow `spill(tool, result)`
+    saves the full copy first so the shrunken JSON can point at it."""
+    s = _dumps(result)
+    if len(s) <= limit:
+        return s
+    path = None
+    if spill is not None:
+        try:
+            path = spill(tool, result)
+        except Exception:
+            path = None
+    text, _ = _shrink_result(result, limit, path)
+    return text
 
 
 # ─── Parameter-error self-correction ───────────────────────────────────────────
-# A small local model routinely calls a real tool with a wrong or missing
-# argument, gets a terse error back, and repeats the same call. Attaching the
-# tool's expected schema TO the error result gives it what it needs to fix the
-# call on the next turn. Bounded per run so a pathological loop can't balloon the
-# context, and each tool is hinted at most once.
+# Small local models repeat a call with bad args; the tool's schema is attached
+# to the error result. Bounded per run, at most once per tool.
 _MAX_PARAM_HINTS = 3
 
 
 def _param_hint(tools, name):
-    """Compact 'expected parameters' line for `name` from the tool list, or u''.
+    """Compact 'expected parameters' line for `name`, or u''.
 
-    Handles both shapes in play: Anthropic (`input_schema`) and OpenAI/Ollama
-    (`function.parameters`). Names each property with required/optional and any
-    enum, so a model that guessed the arguments can correct them.
+    Reads Anthropic (`input_schema`) and OpenAI/Ollama (`function.parameters`)
+    shapes.
     """
     schema = None
     for t in tools or []:
@@ -123,18 +226,13 @@ def _param_hint(tools, name):
 
 
 # ─── Phantom tool calls ────────────────────────────────────────────────────────
-# A model that writes {"name": "...", "parameters": {...}} as chat text is
-# trying to call a tool. When the name is real the loop executes it
-# (_text_tool_call → known); when it isn't, the blob is a dead end that must
-# never be shown as the answer — the model gets one correction per retry.
+# A {"name", "parameters"} blob in chat text is a tool call: executed if the
+# name is real (_text_tool_call), else never shown — one correction per retry.
 _MAX_PHANTOM_RETRIES = 2
 
 # ─── Announced-but-not-performed turns ────────────────────────────────────────
-# A model that replies "Đang liệt kê các mức trong dự án…" and calls nothing
-# has not answered — it has narrated. The loop used to accept any text-only
-# reply as final, so "list levels" ended on that sentence and no level ever
-# reached the user. Worse than the missing answer: on a data question, prose
-# produced with zero read tools is ungrounded by construction.
+# "Đang liệt kê các mức…" with no tool call is narration, not an answer (once
+# ended "list levels" with no level shown); zero-tool prose is ungrounded.
 _MAX_ANNOUNCE_NUDGES = 1
 
 _ANNOUNCE_PATTERNS = (
@@ -160,8 +258,7 @@ _ANNOUNCE_FIXUP = (
 def _announces_work(text):
     """True when `text` promises an action instead of delivering one.
 
-    Deliberately narrow: a question is a clarification (legitimate), and a
-    long reply is an answer. Only a short, forward-looking sentence counts.
+    Narrow: a question or a long reply never counts.
     """
     if not text:
         return False
@@ -173,18 +270,14 @@ def _announces_work(text):
     for p in _ANNOUNCE_PATTERNS:
         if p in folded:
             return True
-    # "Đang liệt kê các mức trong dự án..." — a trailing ellipsis on a short
-    # line is the same promise without any of the phrasings above.
+    # A trailing ellipsis on a short line is the same promise.
     return body.endswith(u'...') or body.endswith(u'…')
 
 
 # ── "Taught the user to do it by hand" guard ─────────────────────────────────
-# _announces_work only catches the SHORT forward-looking promise ("Đang xử
-# lý..."); it returns False above 220 characters. The commonest real failure is
-# the opposite shape: a long, confident tutorial telling the user which Revit
-# buttons to click — for "tô đỏ tường" the model produced a numbered walkthrough
-# of a "Bulk Set Parameter" dialog that does not exist. To the user that is a
-# refusal with extra steps: they asked the assistant to DO the work.
+# The long counterpart of _announces_work: a tutorial of Revit clicks instead of
+# doing the work (for "tô đỏ tường" it walked through a nonexistent "Bulk Set
+# Parameter" dialog) is a refusal with extra steps.
 _HOWTO_MARKERS = (
     # Vietnamese (diacritics folded before matching)
     'huong dan', 'cac buoc', 'buoc 1', 'tung buoc', 'ban co the su dung',
@@ -196,7 +289,7 @@ _HOWTO_MARKERS = (
     'dialog box', 'from the menu', 'select the tool',
 )
 
-# The user ASKED for instructions — then a walkthrough is the right answer.
+# The user ASKED for instructions: a walkthrough is then right.
 _ASKS_HOWTO = (
     'lam the nao', 'lam sao', 'cach ', 'huong dan toi', 'chi toi cach',
     'how do i', 'how to', 'how can i', 'what are the steps', 'explain how',
@@ -222,12 +315,10 @@ def _asks_for_instructions(text):
 
 
 def _instructs_instead_of_acting(text, user_text=None):
-    """True when the reply is a do-it-yourself walkthrough.
+    """True when the reply is a do-it-yourself walkthrough (any length).
 
-    Length is NOT a disqualifier here — that is exactly what distinguishes this
-    from _announces_work. Two independent signals are required so a passing
-    mention ("click Reload in pyRevit") cannot trip it: a how-to marker AND
-    either a numbered list or a second marker.
+    Needs a how-to marker AND a numbered list or second marker, so a passing
+    mention ("click Reload in pyRevit") cannot trip it.
     """
     if not text or _asks_for_instructions(user_text):
         return False
@@ -254,8 +345,7 @@ _PHANTOM_FIXUP = (
 def _find_json_blob(text):
     """(obj, start, end) for the outermost {...} in `text`, else None.
 
-    Fenced blocks are skipped on purpose: ```json ...``` is the model SHOWING
-    json because the user asked to see it, not miscalling a tool.
+    Fenced ```json``` is skipped: that is the model SHOWING json on request.
     """
     if not text or u"{" not in text or u"```" in text:
         return None
@@ -272,10 +362,8 @@ def _find_json_blob(text):
 def _tool_call_shape(obj):
     """(name, args) if `obj` is a tool call written as JSON, else None.
 
-    Accepts the Anthropic ({"name","parameters"|"input"}), OpenAI
-    ({"function": {"name","arguments"}}) and legacy T3Lab
-    ({"intent","params"}) spellings — a model that falls out of native
-    tool-calling reproduces whichever one it was trained on.
+    Accepts Anthropic ({"name","parameters"|"input"}), OpenAI
+    ({"function": {"name","arguments"}}) and legacy T3Lab ({"intent","params"}).
     """
     if not isinstance(obj, dict):
         return None
@@ -294,9 +382,8 @@ def _tool_call_shape(obj):
     return (name, args) if name else None
 
 
-# Keys a JSON tool call may carry. Anything else in the object means the model
-# is returning DATA that merely happens to have a "name" field (a level, a
-# family type...), which must never be mistaken for a call.
+# Keys a JSON tool call may carry; any other key means DATA with a "name"
+# field (a level, a family type...), not a call.
 _CALL_KEYS = frozenset((
     "name", "tool", "intent", "function", "type", "id",
     "parameters", "arguments", "params", "input",
@@ -312,16 +399,11 @@ def _only_call_keys(obj):
 
 
 def is_bare_tool_call_text(content):
-    """True when `content` is nothing but a tool call written as JSON text —
-    no prose around it, e.g.
+    """True when `content` is only a tool call written as JSON text, e.g.
+    {"name": "apply_playbook", "parameters": {...}}.
 
-        {"name": "apply_playbook", "parameters": {"playbook_name": "lod-standard"}}
-
-    AgentLoop suppresses these before they reach the chat now, but saved
-    transcripts written before that fix still carry them. Used by the
-    Assistant's history loader to prune them: replayed into the model's
-    context they are a worked example of answering with a fake tool call,
-    which is exactly the behaviour being fixed.
+    The Assistant's history loader prunes these from old transcripts: replayed,
+    they teach the model to answer with a fake tool call.
     """
     if not content:
         return False
@@ -338,11 +420,8 @@ def is_bare_tool_call_text(content):
 
 
 def _call_key(name, args):
-    """Canonical identity of one tool call, for the duplicate guard.
-
-    Shared by the guard itself and by the read-batching prefetch so the two
-    can never disagree about what counts as "already done".
-    """
+    """Canonical identity of one tool call (duplicate guard + read prefetch
+    share it, so they agree on "already done")."""
     try:
         return (name, json.dumps(_json_safe(args), sort_keys=True,
                                  ensure_ascii=False))
@@ -353,26 +432,19 @@ def _call_key(name, args):
             return (name, u"<unkeyable>")
 
 
-def _sanitize_history(history, limit=None):
+def _sanitize_history(history, limit=None, budget_tokens=None):
     """Reduce persisted chat history to plain-text user/assistant messages.
 
-    The window size comes from Intelligence.conversation.HISTORY_LIMIT. It was
-    hardcoded to 24 here while script._add_to_history truncated to 16, so this
-    limit never actually bound and the extra continuity it claimed to give
-    could not happen. One constant now, and turns that fall past it are folded
-    into a rolling summary rather than dropped.
-
-    It stays affordable: Claude re-reads the transcript prefix from the prompt
-    cache, and Ollama's num_ctx is sized to fit the actual payload per request.
+    Trimmed by token budget, not a fixed count: `budget_tokens` is that of the
+    provider ACTUALLY answering (from AgentLoop.run), so switching to a smaller
+    model mid-session cannot overflow it (the dialog folds the rest into the
+    rolling summary, Intelligence.conversation). `limit` = explicit message count.
     """
-    if limit is None:
-        try:
-            from Intelligence.conversation import HISTORY_LIMIT
-            limit = HISTORY_LIMIT
-        except Exception:
-            limit = 24
+    hist = list(history or [])
+    if limit:
+        hist = hist[-limit:]
     out = []
-    for h in (history or [])[-limit:]:
+    for h in hist:
         role    = h.get("role", "")
         content = h.get("content", "")
         if role not in ("user", "assistant"):
@@ -383,6 +455,12 @@ def _sanitize_history(history, limit=None):
             content = u"\n".join(parts)
         if content:
             out.append({"role": role, "content": content})
+    if budget_tokens:
+        try:
+            from Intelligence.context_budget import fit_messages
+            out, _dropped = fit_messages(out, budget_tokens)
+        except Exception:
+            pass
     # Provider APIs reject a transcript that starts with an assistant turn.
     while out and out[0]["role"] == "assistant":
         out.pop(0)
@@ -390,16 +468,10 @@ def _sanitize_history(history, limit=None):
 
 
 # ─── Tool gate: who has to approve a call before it runs ──────────────────────
-# ONE policy for every path that executes a tool on the user's behalf — the
-# native AgentLoop callback and the legacy JSON-intent loop in the Assistant
-# pane both ask the same ToolGate. They used to disagree: the native path
-# confirmed destructive tools and forced the first purge to a dry run, while
-# the legacy path ran every call straight through srv._execute_tool, and the
-# "Ask before edits" switch was only a sentence in the system prompt that
-# nothing in code enforced.
-#
-# The gate only DECIDES. Showing the approval card and blocking on it is the
-# window's job (it needs WPF); this half is pure so it can be tested.
+# ONE policy for every path that runs a tool for the user: native AgentLoop and
+# the pane's legacy JSON-intent loop both ask ToolGate (they once disagreed, and
+# "Ask before edits" was enforced only by the prompt). The gate only DECIDES;
+# the approval card is the window's job, so this half is pure and testable.
 
 GATE_RUN         = 'run'           # execute now, nobody is asked
 GATE_DESTRUCTIVE = 'destructive'   # always confirm, in every action mode
@@ -407,10 +479,8 @@ GATE_EDIT        = 'edit'          # "Ask before edits" is on: confirm first
 
 ACTION_MODES = ('auto', 'confirm')
 
-# Calls that only REPORT although the tool itself can write. A purge dry run
-# lists what it would delete and touches nothing, so "Ask before edits" has
-# nothing to ask about — and the first purge of every request is forced into
-# exactly that dry run below.
+# Calls that only REPORT although the tool can write (a purge dry run touches
+# nothing; ToolGate.prepare forces the first purge into one).
 _REPORT_ONLY_CALLS = {
     'purge_unused': ('dry_run', True),
 }
@@ -431,19 +501,14 @@ class ToolGate(object):
     """Pre-execution policy for ONE user request.
 
     action_mode:       'auto' | 'confirm' (settings agents.action_mode).
-    is_destructive:    callable(name, args) -> bool — core.server's
-                       T3LabAIServer.is_destructive, where the dangerous
-                       tools are declared next to their definitions.
-    is_modifying:      callable(name) -> bool. Defaults to
-                       tool_schema.is_model_modifying (unknown names count as
-                       modifying: the unclassified tool is the surprising one).
-    preapproved_edits: True while an approved multi-step plan runs — the user
-                       already said yes to its edits on the plan card, so
-                       "Ask before edits" does not ask again per call.
-                       Destructive calls still confirm one by one.
+    is_destructive:    callable(name, args) -> bool
+                       (core.server T3LabAIServer.is_destructive).
+    is_modifying:      callable(name) -> bool; default
+                       tool_schema.is_model_modifying (unknown = modifying).
+    preapproved_edits: True while an approved plan runs (edits were OK'd on
+                       the plan card); destructive calls still confirm.
 
-    Fails CLOSED: a classifier that raises turns the call into a
-    confirmation, never into a silent run.
+    Fails CLOSED: a classifier that raises means confirm, never a silent run.
     """
 
     def __init__(self, action_mode='auto', is_destructive=None,
@@ -457,10 +522,8 @@ class ToolGate(object):
 
     def verdict(self, name, args=None):
         """GATE_RUN | GATE_DESTRUCTIVE | GATE_EDIT for one call. No side
-        effects — safe to ask about a call that will never run."""
-        if not name or name in (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME):
-            # Local pseudo-tools: the launcher opens a window AFTER the turn,
-            # the memory tool writes a fact file. Neither touches the model.
+        effects."""
+        if not name or name in _LOCAL_PSEUDO_TOOLS:
             return GATE_RUN
         args = args or {}
         if self._is_destructive is not None:
@@ -472,15 +535,14 @@ class ToolGate(object):
         if (self.action_mode == 'confirm' and not self.preapproved_edits
                 and self.modifies(name, args)
                 and not is_file_output_only(name)):
-            # Exports only write a new file — "Ask before edits" is about the
-            # model, so they run (tool_schema.FILE_OUTPUT_TOOL_NAMES).
+            # Exports only write a new file and run anyway
+            # (tool_schema.FILE_OUTPUT_TOOL_NAMES).
             return GATE_EDIT
         return GATE_RUN
 
     def modifies(self, name, args=None):
-        """True when this call can change the model or write a file
-        (whatever the action mode says about asking first)."""
-        if not name or name in (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME):
+        """True when this call can change the model or write a file."""
+        if not name or name in _LOCAL_PSEUDO_TOOLS:
             return False
         if _is_report_only(name, args or {}):
             return False
@@ -492,10 +554,8 @@ class ToolGate(object):
     def prepare(self, name, args):
         """(args, verdict) for a call that is ABOUT to run.
 
-        The first purge_unused of a request is always rewritten to a dry run
-        — the model reports what would go, the user decides, and only a
-        second, explicit call can delete (and that one is destructive, so it
-        confirms).
+        The first purge_unused of a request is forced to a dry run; only a
+        second, explicit (destructive, so confirmed) call can delete.
         """
         args = dict(args or {})
         if name == 'purge_unused' and not self._purge_seen:
@@ -517,8 +577,7 @@ def tool_def_name(tool):
 
 def read_only_tools(tools, is_modifying=None):
     """`tools` minus every definition that can change the model or write a
-    file. For background read tasks, which have no approval card to stop at:
-    a tool they cannot see is a tool they cannot call."""
+    file (background read tasks have no approval card)."""
     is_modifying = is_modifying or is_model_modifying
     out = []
     for t in tools or []:
@@ -541,12 +600,11 @@ def declined_result(name):
 # ─── One answer from the UI thread to a waiting worker ────────────────────────
 
 class PendingDecision(object):
-    """A one-shot decision the UI thread hands to a blocked worker thread.
+    """A one-shot decision the UI thread hands to a blocked worker thread
+    (plan / confirm cards).
 
-    The approval cards (plan card, confirm card) block the routing worker
-    while the user reads them. FIRST decision wins: a Run click that lands a
-    moment after Stop must not resurrect a request the user already
-    cancelled, and a timeout must not be overturned by a late click.
+    FIRST decision wins: a Run click just after Stop, or a late click after a
+    timeout, must not overturn it.
     """
 
     STOPPED = 'stopped'
@@ -558,8 +616,7 @@ class PendingDecision(object):
         self._value = None
 
     def decide(self, value):
-        """Record `value` unless something was decided already. Returns True
-        when THIS call made the decision."""
+        """Record `value` unless already decided; True if THIS call decided."""
         with self._lock:
             if self._evt.is_set():
                 return False
@@ -575,12 +632,9 @@ class PendingDecision(object):
         return self._evt.is_set()
 
     def wait(self, timeout_sec, should_abort=None, poll=0.25):
-        """Block until decided, aborted (STOPPED) or timed out (EXPIRED).
-
-        `should_abort` is polled between waits — the window passes its Stop
-        flag, so pressing Stop releases a card that is still on screen.
-        Returns the decided value.
-        """
+        """Block until decided, aborted (STOPPED) or timed out (EXPIRED);
+        returns the value. `should_abort` (the window's Stop flag) is polled
+        between waits."""
         deadline = time.time() + max(0.0, float(timeout_sec or 0))
         while not self._evt.is_set():
             if should_abort is not None:
@@ -604,13 +658,17 @@ class AgentLoop(object):
     def __init__(self, provider, execute_tool, tools, callbacks=None,
                  max_iterations=10, max_tokens=1500, time_budget_sec=240,
                  turn_timer=None, execute_tools_batch=None,
-                 is_write_tool=None):
+                 is_write_tool=None, result_chars=None, spill_result=None,
+                 compact_results=False):
         self._provider       = provider
         self._execute_tool   = execute_tool
         self._tools          = tools
-        # Optional read-batching seam. Both must be supplied for it to engage;
-        # without them every call goes through execute_tool one at a time,
-        # exactly as before.
+        # Client-side folding (_fold_old_tool_results); off for Claude.
+        self._compact        = bool(compact_results)
+        # Per-result cap (cloud 32k, local 4k) + full-copy seam (_result_to_json).
+        self._result_chars   = int(result_chars or _MAX_RESULT_CHARS)
+        self._spill          = spill_result
+        # Optional read-batching seam; engages only when both are supplied.
         self._execute_batch  = execute_tools_batch
         self._is_write_tool  = is_write_tool
         self._cb             = callbacks or {}
@@ -618,24 +676,44 @@ class AgentLoop(object):
         self._max_tokens     = max_tokens
         self._time_budget    = time_budget_sec
         self._cancelled      = False
-        # Optional Intelligence.telemetry.TurnTimer. None = no accounting;
-        # every use below is guarded so the loop runs identically without it.
+        # User-wait seconds, excluded from the budget (pause() / resume()).
+        self._paused_total   = 0.0
+        self._paused_since   = None
+        # Optional Intelligence.telemetry.TurnTimer; every use is guarded.
         self._timer          = turn_timer
 
     # ── Cancellation ──────────────────────────────────────────────────────────
 
     def cancel(self):
-        """Request a stop. The current model turn / tool finishes, then the
-        loop ends — a Transaction mid-flight cannot be safely aborted."""
+        """Request a stop after the current model turn / tool (a Transaction
+        mid-flight cannot be safely aborted)."""
         self._cancelled = True
 
     def is_cancelled(self):
         return self._cancelled
 
+    # ── Time budget ───────────────────────────────────────────────────────────
+
+    def pause(self):
+        """Stop the budget clock while a confirm card waits for the user."""
+        if self._paused_since is None:
+            self._paused_since = time.time()
+
+    def resume(self):
+        if self._paused_since is not None:
+            self._paused_total += time.time() - self._paused_since
+            self._paused_since = None
+
+    def _elapsed(self, started):
+        """Budget seconds used so far, user-wait time excluded."""
+        paused = self._paused_total
+        if self._paused_since is not None:
+            paused += time.time() - self._paused_since
+        return (time.time() - started) - paused
+
     def _guard_tripped(self):
-        """True when the optional guard_check callback reports the request
-        context is no longer valid (e.g. the user switched Revit documents
-        mid-request — writing on would edit the wrong model)."""
+        """True when the optional guard_check callback says the context is
+        stale (e.g. the user switched Revit documents mid-request)."""
         guard = self._cb.get("guard_check")
         if guard is None:
             return False
@@ -656,12 +734,16 @@ class AgentLoop(object):
 
     # ── Telemetry (optional, never raises into the loop) ──────────────────────
 
-    def _note_usage(self, usage):
-        """Accumulate one model call's token usage onto the turn timer."""
-        if self._timer is None or not usage:
+    def _note_usage(self, usage, model=None):
+        """Add one call's token usage to the turn timer and record the model
+        the provider really used (may differ from the badge) for pricing."""
+        if self._timer is None:
             return
         try:
-            self._timer.add_usage(usage)
+            if model:
+                self._timer.model = u"{}".format(model)
+            if usage:
+                self._timer.add_usage(usage)
         except Exception:
             pass
 
@@ -677,16 +759,10 @@ class AgentLoop(object):
     # ── Read batching ─────────────────────────────────────────────────────────
 
     def leading_read_run(self, calls, done_calls=None):
-        """Indices of the LEADING run of batchable read-only calls.
+        """Indices of the LEADING run of batchable read-only calls ([] if < 2).
 
-        Stops at the first call that is not a plain read — a write, the
-        terminal launcher, the locally-executed memory tool, or a duplicate
-        the loop will refuse anyway. Stopping there is what preserves
-        read-after-write ordering: a read placed after a write must see the
-        model as the write left it, so it can never be hoisted into the batch.
-
-        A run of one is not worth a batch; the caller falls back to the
-        sequential path.
+        Stops at the first write, pseudo-tool or duplicate, which preserves
+        read-after-write ordering.
         """
         if self._execute_batch is None or self._is_write_tool is None:
             return []
@@ -694,7 +770,7 @@ class AgentLoop(object):
         idxs = []
         for i, tc in enumerate(calls or []):
             name = tc.get("name", "")
-            if not name or name in (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME):
+            if not name or name in _LOCAL_PSEUDO_TOOLS:
                 break
             try:
                 if self._is_write_tool(name):
@@ -707,14 +783,10 @@ class AgentLoop(object):
         return idxs if len(idxs) > 1 else []
 
     def _prefetch_reads(self, calls, done_calls):
-        """Execute the leading read run in ONE Revit round-trip.
+        """Execute the leading read run in ONE Revit round-trip; {index: result}.
 
-        Returns {index: result}. Results are handed back to the normal
-        sequential loop below, which still emits on_tool_start/on_tool_done
-        per call and still applies its guards — only the crossing is shared,
-        so the UI and the transcript are indistinguishable from before.
-
-        Any failure falls back silently to per-call execution.
+        The sequential loop still emits per-call events and applies its guards;
+        only the crossing is shared. Any failure falls back to per-call runs.
         """
         idxs = self.leading_read_run(calls, done_calls)
         if not idxs:
@@ -733,8 +805,7 @@ class AgentLoop(object):
     # ── Text tool-call rescue ─────────────────────────────────────────────────
 
     def _registered_tool_names(self):
-        """Tool names from the provider-native schema list (Anthropic uses
-        {"name": ...}, OpenAI-style wraps it in {"function": {"name": ...}})."""
+        """Tool names from the provider-native schema list."""
         names = set()
         for t in (self._tools or []):
             try:
@@ -746,17 +817,12 @@ class AgentLoop(object):
         return names
 
     def _text_tool_call(self, text):
-        """A tool call the model wrote as chat text instead of a native
-        tool_call block. Local models drift into JSON-in-prose like
-        {"name": "get_material_quantities", "parameters": {...}} after
-        seeing a tool error; hosted ones do it when a /slash skill puts a
-        playbook in the system prompt and they try to "call" the playbook.
+        """A tool call written as chat text instead of a native block (local
+        models after a tool error; hosted ones "calling" a /slash playbook).
 
-        Returns {"name", "args", "prose", "known"} or None. `prose` is the
-        message with the blob removed — the blob itself is never something
-        the user should read, whether or not the tool turns out to be real.
-        `known` says whether the name is a registered tool: True → execute
-        it, False → phantom, correct the model instead.
+        Returns {"name", "args", "prose", "known"} or None. `prose` = text with
+        the blob removed (never shown); `known` = registered tool (execute) vs
+        phantom (correct the model).
         """
         found = _find_json_blob(text)
         if not found:
@@ -767,14 +833,31 @@ class AgentLoop(object):
             return None
         name, args = shape
         known = name in self._registered_tool_names()
-        # An unregistered name is weak evidence on its own, so require the
-        # object to carry ONLY tool-call keys before suppressing it.
+        # Unregistered name: suppress only if the object has ONLY call keys.
         if not known and not _only_call_keys(obj):
             return None
         return {"name": name, "args": args, "known": known,
                 "prose": (text[:start] + u" " + text[end:]).strip()}
 
     # ── Main loop ─────────────────────────────────────────────────────────────
+
+    def add_tools(self, tools):
+        """Make more tools callable from the next round (find_tools on a
+        provider without tool_reference); returns the names added."""
+        have = set()
+        for t in (self._tools or []):
+            if isinstance(t, dict):
+                have.add(t.get("name") or (t.get("function") or {}).get("name"))
+        added = []
+        for t in tools or []:
+            if not isinstance(t, dict):
+                continue
+            n = t.get("name") or (t.get("function") or {}).get("name")
+            if n and n not in have:
+                self._tools = list(self._tools or []) + [t]
+                have.add(n)
+                added.append(n)
+        return added
 
     def run(self, history, system_prompt, user_content):
         """Execute the agentic loop. Blocking — call from a worker thread.
@@ -786,7 +869,19 @@ class AgentLoop(object):
              "launch_intent": <str|None>,   # open_t3lab_tool target, terminal
              "iterations": int, "tool_runs": int}
         """
-        messages = _sanitize_history(history)
+        # History gets the window LEFT after the fixed part (system prompt +
+        # tools: ~6k–18k tokens locally); recorded so the dialog folds to it.
+        try:
+            from Intelligence import context_budget as _cb
+            _fixed = _cb.request_overhead(system_prompt, self._tools)
+            _cb.note_overhead(getattr(self._provider, 'NAME', u''), _fixed)
+            _budget = _cb.history_budget_for(
+                self._provider,
+                overhead=_fixed + _cb.message_tokens({'content': user_content}),
+                reply_tokens=self._max_tokens)
+        except Exception:
+            _budget = None
+        messages = _sanitize_history(history, budget_tokens=_budget)
         messages.append({"role": "user", "content": user_content})
 
         started    = time.time()
@@ -805,16 +900,21 @@ class AgentLoop(object):
                 return self._finish("cancelled", last_text, None, iteration, tool_runs)
             if self._guard_tripped():
                 return self._finish("doc_changed", last_text, None, iteration, tool_runs)
-            if (time.time() - started) > self._time_budget:
+            if self._elapsed(started) > self._time_budget:
                 return self._finish("timeout", last_text, None, iteration, tool_runs)
 
-            # Track whether this turn actually streamed deltas so blocking
-            # providers still surface their text through on_text_delta once.
+            # Blocking providers (no deltas) still emit on_text_delta once.
             turn = {"streamed": False}
 
             def _on_delta(chunk, _turn=turn):
                 _turn["streamed"] = True
                 self._emit("on_text_delta", chunk)
+
+            if self._compact and _should_fold(iteration):
+                try:
+                    _fold_old_tool_results(messages)
+                except Exception:
+                    pass
 
             try:
                 resp = self._provider.chat_agent(
@@ -824,20 +924,17 @@ class AgentLoop(object):
                 resp = None
 
             if resp is None:
-                # First turn failing = provider never answered; later turns
-                # failing still leave earlier text/tool work worth reporting.
+                # Later turns failing still leave earlier work worth reporting.
                 status = "failed" if iteration == 1 else "done"
                 return self._finish(status, last_text, None, iteration, tool_runs)
 
-            self._note_usage(resp.get("usage"))
+            self._note_usage(resp.get("usage"), resp.get("model"))
 
             text  = (resp.get("text") or u"").strip()
             calls = resp.get("tool_calls") or []
 
-            # Model wrote the tool call as JSON text instead of a native
-            # tool_call block. Either way the blob is not an answer, so it is
-            # stripped from what the user sees; a registered name is then
-            # executed anyway rather than ending the turn on a dead blob.
+            # Tool call written as JSON text: strip the blob from the reply;
+            # a registered name is executed anyway.
             rescued = False
             phantom  = None
             if not calls and text:
@@ -851,29 +948,22 @@ class AgentLoop(object):
                     phantom = _tc
                     text    = _tc["prose"]
 
-            # Phantom: the name isn't a tool at all (`apply_playbook` is the
-            # recurring one — /slash injects a playbook and the model tries
-            # to "call" it). Correct the model and let it try again. Bounded,
-            # because a model that still does this after two corrections will
-            # not stop on the third; falling through then leaves an empty
-            # turn, which script.py already routes to the legacy JSON-intent
-            # path where a visible reply is guaranteed.
+            # Phantom (usually `apply_playbook` from a /slash skill): correct
+            # and retry, bounded; falling through leaves an empty turn, which
+            # script.py routes to the legacy JSON-intent path.
             if phantom is not None and phantom_retries < _MAX_PHANTOM_RETRIES:
                 phantom_retries += 1
                 if text:
                     last_text = text
-                # An open live bubble already streamed the blob — empty text
-                # drops that bubble, real text replaces its content.
+                # Replaces (or, if empty, drops) the bubble that streamed the blob.
                 self._emit("on_turn_text", text, False)
                 messages.append(resp["assistant_msg"])
                 messages.append({"role": "user",
                                  "content": _PHANTOM_FIXUP.format(phantom["name"])})
                 continue
 
-            # Narrated instead of acted: no tool call anywhere in this run and
-            # a reply that only promises one. Nudge once, then let it stand —
-            # a model that still narrates after a correction will not stop on
-            # the third try, and its text is at least visible.
+            # Narrated instead of acted (no tool in this run): nudge once,
+            # then let the text stand.
             if (not calls and tool_runs == 0
                     and announce_nudges < _MAX_ANNOUNCE_NUDGES
                     and _announces_work(text)):
@@ -884,9 +974,7 @@ class AgentLoop(object):
                 messages.append({"role": "user", "content": _ANNOUNCE_FIXUP})
                 continue
 
-            # Taught the user to click through Revit instead of doing the work.
-            # Same budget as the announce nudge and same reasoning: correct it
-            # once, then let the text stand rather than loop.
+            # Taught Revit clicks instead of acting: shares the nudge budget.
             if (not calls and tool_runs == 0
                     and announce_nudges < _MAX_ANNOUNCE_NUDGES
                     and _instructs_instead_of_acting(text, user_content)):
@@ -903,8 +991,7 @@ class AgentLoop(object):
                     self._emit("on_text_delta", text)
                 self._emit("on_turn_text", text, not calls)
             elif rescued or phantom is not None:
-                # The turn was nothing BUT the blob. Drop the live bubble that
-                # streamed it instead of leaving the raw JSON on screen.
+                # The turn was only the blob: drop its live bubble.
                 self._emit("on_turn_text", u"", False)
 
             messages.append(resp["assistant_msg"])
@@ -913,13 +1000,9 @@ class AgentLoop(object):
                 return self._finish("done", last_text, None, iteration, tool_runs)
 
             # ── Execute tool calls sequentially (Revit is single-threaded) ──
-            # One exception: the LEADING run of read-only calls is fetched in a
-            # single crossing to Revit's main thread first (each crossing costs
-            # an ExternalEvent raise plus a wait for Revit to go idle, and the
-            # model routinely asks for several reads at once). The loop below
-            # is otherwise untouched — it still emits a card per call and still
-            # applies every guard; it just consumes the prefetched result
-            # instead of paying for its own round-trip.
+            # except the LEADING read run, prefetched in one crossing (each
+            # costs an ExternalEvent raise + wait for idle); cards and guards
+            # below are unchanged.
             prefetched    = self._prefetch_reads(calls, done_calls)
             results       = []
             launch_intent = None
@@ -935,8 +1018,7 @@ class AgentLoop(object):
                     break
 
                 if name == LAUNCHER_TOOL_NAME:
-                    # Terminal: the window opens on the UI thread AFTER the
-                    # loop ends (ShowDialog would otherwise block the loop).
+                    # Terminal: the window opens AFTER the loop (ShowDialog blocks).
                     launch_intent = args.get("tool_intent") or ""
                     results.append({"success": True,
                                     "note": "T3Lab tool window will open now."})
@@ -947,10 +1029,8 @@ class AgentLoop(object):
                                     "note": "User stopped the request."})
                     break
 
-                # Deterministic duplicate guard: identical (name, args) that
-                # already succeeded in THIS run is never executed again — the
-                # model gets an error result telling it to move on, and no
-                # tool card ever reaches the UI for the repeat.
+                # Duplicate guard: an identical call that succeeded in THIS run
+                # is never re-run (error result, no tool card).
                 call_key = _call_key(name, args)
                 if call_key in done_calls:
                     results.append({
@@ -964,7 +1044,6 @@ class AgentLoop(object):
                 self._emit("on_tool_start", name, args, iteration)
                 t0 = time.time()
                 if _idx in prefetched:
-                    # Already fetched in the shared read round-trip above.
                     res = prefetched[_idx]
                 else:
                     self._note_roundtrip(1)
@@ -976,8 +1055,7 @@ class AgentLoop(object):
                     res = {"result": res}
                 dt = time.time() - t0
                 ok = "error" not in res
-                # Hand a small model the tool's schema alongside the error so it
-                # can fix a wrong/missing argument instead of repeating the call.
+                # Attach the tool schema to the error (see _MAX_PARAM_HINTS).
                 if not ok and name not in hinted and len(hinted) < _MAX_PARAM_HINTS:
                     _ph = _param_hint(self._tools, name)
                     if _ph:
@@ -999,16 +1077,13 @@ class AgentLoop(object):
                 return self._finish("cancelled", last_text, None,
                                     iteration, tool_runs)
 
-            # Feed results back in the provider's native format — serialized
-            # and truncated here so no provider ever pushes a huge element
-            # dump into the model context.
+            # Feed results back in the provider's native format, bounded here.
             try:
-                res_strs = [_result_to_json(r) for r in results]
+                res_strs = [_result_to_json(r, self._result_chars, self._spill,
+                                            c.get("name"))
+                            for c, r in zip(calls, results)]
                 if rescued:
-                    # A rescued call has no native tool_call block in the
-                    # transcript, so provider tool-result messages would
-                    # reference an unknown id — feed the result back as plain
-                    # user text instead (accepted by every provider).
+                    # No native tool_call block to reference: plain user text.
                     messages.append({
                         "role": "user",
                         "content": u"Tool `{}` returned: {}\nContinue the "
@@ -1042,8 +1117,7 @@ class AgentLoop(object):
 
 
 # ─── System prompt (native tool-calling mode) ──────────────────────────────────
-# Unlike the legacy JSON-intent prompt, this one carries NO tool schemas (they
-# travel through the API `tools` parameter) and does NOT force JSON output.
+# No tool schemas (they go in the API `tools` param) and no forced JSON output.
 
 _AGENT_PROMPT = u"""You are T3Lab Assistant, an AI agent embedded in Autodesk Revit via the T3Lab pyRevit extension. You can read and modify the live Revit model through the tools provided.
 
@@ -1069,6 +1143,7 @@ For a multi-step request, decide the full tool sequence BEFORE the first call an
 - NEVER FERRY IDS. To act on the elements a filter found, re-call it with `store_as="sel"` and pass `element_ids=["@sel"]` to the acting tool — the whole matched set, uncapped, at the cost of one word. Ids belong in the reply only when the user asked for specific ones.
 - COUNTS COME FROM `group_by`, NOT FROM ROWS. "How many…", "thống kê", any breakdown: call `ai_element_filter` with `group_by` (e.g. `["name","level"]`, `["workset"]`) and read the `summary` counts. Never fetch 1000 element rows to count them.
 - Trim what you do list: `fields=["id"]` returns a bare id array; add only the fields you will actually use.
+- A result with `truncated: true` was cut to fit: `omitted_items` says how many rows were dropped per field and `full_result_path` names the saved full copy. Narrow the query (`fields`, `group_by`, `limit`/`offset`, `store_as`) instead of asking for the file.
 - Do not re-query data that is already in this conversation (earlier tool results, the context block in the latest user message) unless the model may have changed since.
 - Never call a tool "just to check" after a success result already told you the outcome; verify with a read tool only after LARGE modifications (20+ elements) or when a result looks suspicious.
 
@@ -1110,10 +1185,8 @@ The latest user message carries a "Current Revit context" block (active view, se
 """
 
 
-# Compact few-shot for LOCAL models on the DEFAULT (no-specialist) path.
-# Cloud models follow the prose rules above reliably; small local models pick
-# the right tool far more often when shown a couple of concrete traces. The
-# per-specialist paths carry their own few-shot; this fills the general path.
+# Few-shot for LOCAL models on the default (no-specialist) path; small models
+# pick tools far better with concrete traces. Specialists carry their own.
 _LOCAL_GENERAL_FEWSHOT = u"""
 ## Examples (follow this tool-calling style)
 User: "có bao nhiêu cửa?" -> call ai_element_filter(category="Doors"); read total_count; reply "Model có 84 cửa."
@@ -1127,9 +1200,7 @@ Rules shown above still apply: query before you modify, numbers come from tool f
 """
 
 
-# Language directives. The prompt used to hardcode "Always reply in English,
-# regardless of the language the user writes in", which disagreed with the UI
-# the moment the assistant's own strings went back to following the user.
+# Language directives; must match the language the UI renders.
 _LANG_EN = (u"Always reply in English, regardless of the language the user "
             u"writes in. ")
 _LANG_VI = (u"Always reply in Vietnamese, regardless of the language the user "
@@ -1141,22 +1212,12 @@ _LANG_AUTO = (u"Reply in the SAME language the user wrote in — Vietnamese in, 
 def build_agent_system_prompt(revit_context=u"", local=False, lang="auto"):
     """STATIC system prompt for the native tool-calling agent path.
 
-    Static is the point. The live Revit context used to be interpolated into
-    this string, which made the whole system block change on every turn (the
-    active view and selection are re-read by a 2-second timer). Since the
-    system block is one prompt-cache breakpoint — and `messages` sit after it
-    in the cache prefix — a system block that never repeats meant the cache
-    never hit across turns and the entire prompt was re-processed each time.
-    The volatile half now travels with the user turn: see
-    build_context_block() and Intelligence/telemetry.py for the measurement.
-
-    `revit_context` is accepted and ignored, so old callers keep working;
-    passing it no longer has any effect on the returned prompt.
-
-    local=True appends a compact few-shot trace — small local models select
-    tools far more accurately from concrete examples than from prose alone.
-    lang is 'auto' | 'vi' | 'en' and must match what the UI itself renders,
-    so the model's prose and the assistant's own strings agree.
+    Static so the prompt cache hits across turns (the system block is a cache
+    breakpoint before `messages`); live state goes with the user turn via
+    build_context_block() (measured in Intelligence/telemetry.py).
+    `revit_context` is accepted and ignored, for old callers.
+    local=True appends the few-shot traces; lang is 'auto' | 'vi' | 'en' and
+    must match what the UI renders.
     """
     language = {'vi': _LANG_VI, 'en': _LANG_EN}.get(lang, _LANG_AUTO)
     prompt = _AGENT_PROMPT.format(language=language)
@@ -1169,15 +1230,11 @@ def build_agent_system_prompt(revit_context=u"", local=False, lang="auto"):
 # ─── Portable teacher exemplars (few-shot distilled from teaching) ───────────────
 
 def teacher_exemplar_block():
-    """The committed teacher-exemplar few-shot block, prefixed with a blank line,
-    or u"" when there are none.
+    """Teacher-exemplar few-shot block (leading newline), or u"". Never raises.
 
-    These come from lib/Intelligence/config/teacher_exemplars.json — a git-tracked
-    file — so a plain local model (qwen3:14b) on ANY machine answers in the taught
-    style without a re-train (the weight-level fine-tune is not portable). Static
-    for the session, so the cached system prefix still hits across turns. Local
-    models only, mirroring _LOCAL_GENERAL_FEWSHOT / SpecialistSpec.few_shot.
-    Never raises.
+    From git-tracked lib/Intelligence/config/teacher_exemplars.json, so any
+    machine's local model (qwen3:14b) gets the taught style without the
+    non-portable fine-tune. Static per session (cache-safe); local models only.
     """
     try:
         from Intelligence.learning import exemplars as _ex
@@ -1187,29 +1244,19 @@ def teacher_exemplar_block():
         return u""
 
 
-# Fence around the volatile block so the model can tell live state from the
-# user's own words, and so the block can be stripped back off a stored turn.
+# Fences live state off from the user's words; strip_context_block removes it.
 CONTEXT_FENCE_OPEN  = u"<<<T3LAB_LIVE_CONTEXT"
 CONTEXT_FENCE_CLOSE = u"T3LAB_LIVE_CONTEXT>>>"
 
 
 def build_context_block(revit_context=u"", knowledge_ref=u"",
                         analysis_hint=u""):
-    """The VOLATILE half of the prompt, to prepend to the current user turn.
+    """The VOLATILE half of the prompt, to prepend to the current user turn
+    (kept out of the cached system block).
 
-    Everything in here changes from turn to turn — the active view, the
-    selection, knowledge excerpts retrieved for this specific question, and the
-    language analysis of this specific message — which is exactly why it must
-    not sit in the cached system block.
-
-    `analysis_hint` is `Intelligence.language.Utterance.to_prompt_hint()`: a
-    few lines naming the facts a model reads least reliably out of a
-    Vietnamese sentence — whether it was a prohibition, how wide the scope is,
-    which Revit categories were actually named, whether the operation needs
-    confirming. It goes LAST, closest to the user's own words.
-
-    Returns u"" when there is nothing live to report, so an ordinary turn
-    carries no extra tokens at all.
+    `analysis_hint` = `Intelligence.language.Utterance.to_prompt_hint()`
+    (prohibition, scope, named categories, confirm need); goes LAST, closest
+    to the user's words. Returns u"" when there is nothing live.
     """
     parts = []
     ctx = (revit_context or u"").strip()
@@ -1229,12 +1276,9 @@ def build_context_block(revit_context=u"", knowledge_ref=u"",
 
 
 def apply_context_block(user_content, context_block):
-    """Prepend `context_block` to a turn's user content.
-
-    Handles both content shapes the providers accept: a plain string, and the
-    Anthropic block list used when an attachment carries images (see
-    rag_processor.build_vision_content_blocks). In the list case the text goes
-    into a leading text block so image blocks keep their own positions.
+    """Prepend `context_block` to a turn's user content: a string, or the
+    Anthropic block list used for images (rag_processor.build_vision_content_blocks),
+    where it becomes a leading text block.
     """
     if not context_block:
         return user_content
@@ -1244,12 +1288,8 @@ def apply_context_block(user_content, context_block):
 
 
 def strip_context_block(text):
-    """Remove any live-context fence from `text`.
-
-    History is stored from the raw user text, so this is belt-and-braces: it
-    keeps a stray fenced block from being replayed as if it were still current
-    if a caller ever persists the decorated content.
-    """
+    """Remove any live-context fence from `text` (belt-and-braces: history
+    stores the raw user text)."""
     if not text or CONTEXT_FENCE_OPEN not in text:
         return text
     out = []

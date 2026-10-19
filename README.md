@@ -160,7 +160,7 @@ Reinforce rectangular beams, columns and pad footings from a preset: beam bottom
 - **ManaSelect** — smart selection manager with 4 modes: Quick Select (filter by parameter value or text), Select Similar (by type, family, or category), Select on Sheets (locate title blocks and CAD imports), and a Quick Filters sidebar.
 
 #### manaData (ManaSched · ManaPara · ManaContains)
-- **ManaSched** — export schedule data to Excel with formatting preserved, import updated values back into schedule rows, and duplicate schedules.
+- **ManaSched** — import an Excel or Google Sheets range as a schedule, drafting view or legend with its formatting and keep it linked (Update Tables); export schedule values to Excel, edit, review every change and apply in one undo step.
 - **ManaPara** — Parameter Manager — transfer parameter values between elements by rule, assign Text Note content to element parameters via spatial overlap, and write schedule values into filled region parameters.
 - **ManaContains** — find elements contained in Rooms, Areas, Spaces, Zones, Masses, or Scope Boxes. Assign parameter values to contained elements from their container, or aggregate element data back into the container.
 

@@ -81,6 +81,11 @@ class LLMRouter(object):
         # overlap; without a lock, one thread's cache write can race another
         # thread's cache read/iteration over the same dict.
         self._status_lock   = threading.Lock()
+        # Bumped on every provider/model change. The router is shared by
+        # every window in the Revit session (the docked Assistant pane, the
+        # ribbon's LLMs Setting dialog, ...), so a change made in one must be
+        # noticed by the others — see get_state_version().
+        self._state_version = 0
         self._initialized   = True
 
         self._load_providers()
@@ -193,6 +198,7 @@ class LLMRouter(object):
             if self._status_cache and name in self._status_cache and model:
                 self._status_cache[name]["model"] = model
 
+        self._bump_state()
         return True
 
     def set_model(self, provider_name, model_name):
@@ -222,8 +228,21 @@ class LLMRouter(object):
             with self._status_lock:
                 if self._status_cache and provider_name in self._status_cache:
                     self._status_cache[provider_name]["model"] = model_name
+            self._bump_state()
 
         return ok
+
+    def _bump_state(self):
+        with self._status_lock:
+            self._state_version = getattr(self, '_state_version', 0) + 1
+
+    def get_state_version(self):
+        """Counter that changes whenever the active provider or a provider's
+        model changes. Cheap — UI code compares it to the value it last
+        rendered to know when its provider chip has gone stale (e.g. the
+        provider was switched from the ribbon's LLMs Setting while the docked
+        Assistant pane stayed open)."""
+        return getattr(self, '_state_version', 0)
 
 
     def get_provider(self, name):
@@ -536,6 +555,14 @@ class LLMRouter(object):
             short = model.split("/")[-1] if "/" in model else model
             return short[:14] if short else "LM Studio"
         if name == "claude":
+            # Auto model switch: the model is picked per turn, so naming one
+            # here would be wrong most of the time.
+            try:
+                from Intelligence import model_tier
+                if model_tier.is_enabled(name):
+                    return "Claude · Auto"
+            except Exception:
+                pass
             # Shorten the model name for display
             if "haiku" in model:
                 return "Haiku"

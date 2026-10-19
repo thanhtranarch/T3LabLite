@@ -1,0 +1,797 @@
+{
+ "_comment": "Curated Vietnamese titles + search keywords for the Tool Hub catalog. Keys are slugs (MCP tool names, or lower-case ribbon folder names). Read by dev/sync_toolhub.py. Diacritics are optional in keywords: search folds them (toolhub.fold / vi_text.tokenize).",
+ "add_view_to_sheet": {
+  "title_vi": "Đặt view lên sheet",
+  "keywords": [
+   "đặt view lên sheet",
+   "place view",
+   "viewport"
+  ]
+ },
+ "ai_element_filter": {
+  "title_vi": "Lọc đối tượng theo điều kiện",
+  "keywords": [
+   "lọc",
+   "tìm đối tượng",
+   "filter elements",
+   "query"
+  ]
+ },
+ "analyze_model_statistics": {
+  "title_vi": "Thống kê mô hình",
+  "keywords": [
+   "thống kê",
+   "đếm đối tượng",
+   "statistics",
+   "count"
+  ]
+ },
+ "analyze_point_cloud": {
+  "title_vi": "Phân tích point cloud",
+  "keywords": [
+   "đám mây điểm",
+   "scan",
+   "point cloud"
+  ]
+ },
+ "apply_view_template": {
+  "title_vi": "Áp view template",
+  "keywords": [
+   "áp template",
+   "view template"
+  ]
+ },
+ "audit_model": {
+  "title_vi": "Kiểm tra mô hình",
+  "keywords": [
+   "kiểm tra",
+   "audit",
+   "model check",
+   "qa"
+  ]
+ },
+ "bulk_set_parameter": {
+  "title_vi": "Gán tham số hàng loạt",
+  "keywords": [
+   "gán tham số",
+   "điền thông số",
+   "set parameter",
+   "hàng loạt"
+  ]
+ },
+ "check_bad_geometry": {
+  "title_vi": "Kiểm tra hình học lỗi",
+  "keywords": [
+   "hình học lỗi",
+   "geometry error"
+  ]
+ },
+ "close_document": {
+  "title_vi": "Đóng file Revit",
+  "keywords": [
+   "đóng file",
+   "close"
+  ]
+ },
+ "color_elements": {
+  "title_vi": "Tô màu đối tượng theo tham số",
+  "keywords": [
+   "tô màu",
+   "màu theo tham số",
+   "color by parameter"
+  ]
+ },
+ "copy_elements": {
+  "title_vi": "Sao chép đối tượng",
+  "keywords": [
+   "copy",
+   "sao chép",
+   "nhân bản"
+  ]
+ },
+ "create_detail_annotation": {
+  "title_vi": "Tạo ghi chú chi tiết",
+  "keywords": [
+   "detail line",
+   "ghi chú",
+   "annotation"
+  ]
+ },
+ "create_dimension": {
+  "title_vi": "Tạo kích thước",
+  "keywords": [
+   "đo kích thước",
+   "dim",
+   "dimension"
+  ]
+ },
+ "create_grid": {
+  "title_vi": "Tạo lưới trục",
+  "keywords": [
+   "lưới trục",
+   "trục",
+   "grid"
+  ]
+ },
+ "create_level": {
+  "title_vi": "Tạo cao độ",
+  "keywords": [
+   "cao độ",
+   "tầng",
+   "level"
+  ]
+ },
+ "create_line_based_element": {
+  "title_vi": "Tạo đối tượng theo đường",
+  "keywords": [
+   "dầm",
+   "line based"
+  ]
+ },
+ "create_point_based_element": {
+  "title_vi": "Đặt đối tượng theo điểm",
+  "keywords": [
+   "đặt family",
+   "cột",
+   "point based"
+  ]
+ },
+ "create_project_parameter": {
+  "title_vi": "Tạo project parameter",
+  "keywords": [
+   "tham số dự án",
+   "shared parameter"
+  ]
+ },
+ "create_room": {
+  "title_vi": "Tạo phòng",
+  "keywords": [
+   "phòng",
+   "room"
+  ]
+ },
+ "create_schedule": {
+  "title_vi": "Tạo bảng thống kê",
+  "keywords": [
+   "bảng thống kê",
+   "schedule",
+   "khối lượng"
+  ]
+ },
+ "create_sheet": {
+  "title_vi": "Tạo sheet",
+  "keywords": [
+   "tạo bản vẽ",
+   "sheet",
+   "khung tên"
+  ]
+ },
+ "create_structural_framing_system": {
+  "title_vi": "Tạo hệ dầm kết cấu",
+  "keywords": [
+   "hệ dầm",
+   "framing"
+  ]
+ },
+ "create_surface_based_element": {
+  "title_vi": "Đặt đối tượng trên mặt",
+  "keywords": [
+   "face based",
+   "surface"
+  ]
+ },
+ "create_text_note": {
+  "title_vi": "Tạo ghi chú chữ",
+  "keywords": [
+   "text note",
+   "ghi chú",
+   "chữ"
+  ]
+ },
+ "create_view": {
+  "title_vi": "Tạo view",
+  "keywords": [
+   "mặt bằng",
+   "mặt cắt",
+   "3d",
+   "view"
+  ]
+ },
+ "create_view_filter": {
+  "title_vi": "Tạo view filter",
+  "keywords": [
+   "bộ lọc view",
+   "filter"
+  ]
+ },
+ "create_workset": {
+  "title_vi": "Tạo workset",
+  "keywords": [
+   "workset"
+  ]
+ },
+ "delete_element": {
+  "title_vi": "Xoá đối tượng",
+  "keywords": [
+   "xoá",
+   "xóa",
+   "delete"
+  ]
+ },
+ "duplicate_view": {
+  "title_vi": "Nhân bản view",
+  "keywords": [
+   "duplicate",
+   "nhân bản view"
+  ]
+ },
+ "edit_elements": {
+  "title_vi": "Sửa đối tượng (mirror, đổi type, group)",
+  "keywords": [
+   "mirror",
+   "đổi type",
+   "group",
+   "ungroup"
+  ]
+ },
+ "export_dwg": {
+  "title_vi": "Xuất DWG",
+  "keywords": [
+   "xuất cad",
+   "dwg",
+   "export"
+  ]
+ },
+ "export_image": {
+  "title_vi": "Xuất ảnh",
+  "keywords": [
+   "ảnh",
+   "png",
+   "jpg",
+   "image"
+  ]
+ },
+ "export_model": {
+  "title_vi": "Xuất mô hình (IFC, NWC)",
+  "keywords": [
+   "ifc",
+   "nwc",
+   "navisworks"
+  ]
+ },
+ "export_room_data": {
+  "title_vi": "Xuất dữ liệu phòng",
+  "keywords": [
+   "dữ liệu phòng",
+   "room data",
+   "excel"
+  ]
+ },
+ "export_sheets_pdf": {
+  "title_vi": "Xuất PDF sheet",
+  "keywords": [
+   "in pdf",
+   "xuất pdf",
+   "pdf"
+  ]
+ },
+ "famigen_create_family": {
+  "title_vi": "Tạo family tự động",
+  "keywords": [
+   "tạo family",
+   "family"
+  ]
+ },
+ "get_all_parameters": {
+  "title_vi": "Xem tất cả tham số",
+  "keywords": [
+   "tham số",
+   "parameters"
+  ]
+ },
+ "get_available_family_types": {
+  "title_vi": "Liệt kê family type",
+  "keywords": [
+   "family type",
+   "loại"
+  ]
+ },
+ "get_current_view_elements": {
+  "title_vi": "Đối tượng trong view hiện tại",
+  "keywords": [
+   "view hiện tại",
+   "elements in view"
+  ]
+ },
+ "get_current_view_info": {
+  "title_vi": "Thông tin view hiện tại",
+  "keywords": [
+   "view hiện tại"
+  ]
+ },
+ "get_element_bounding_box": {
+  "title_vi": "Hộp bao đối tượng",
+  "keywords": [
+   "bounding box",
+   "kích thước"
+  ]
+ },
+ "get_elements_by_level": {
+  "title_vi": "Đối tượng theo tầng",
+  "keywords": [
+   "theo tầng",
+   "level"
+  ]
+ },
+ "get_material_quantities": {
+  "title_vi": "Khối lượng vật liệu",
+  "keywords": [
+   "khối lượng",
+   "vật liệu",
+   "takeoff"
+  ]
+ },
+ "get_model_health": {
+  "title_vi": "Sức khoẻ mô hình",
+  "keywords": [
+   "sức khỏe",
+   "health",
+   "kích thước file"
+  ]
+ },
+ "get_model_warnings": {
+  "title_vi": "Cảnh báo mô hình",
+  "keywords": [
+   "cảnh báo",
+   "warning",
+   "lỗi"
+  ]
+ },
+ "get_parameter": {
+  "title_vi": "Đọc tham số",
+  "keywords": [
+   "tham số",
+   "parameter"
+  ]
+ },
+ "get_revit_context": {
+  "title_vi": "Ngữ cảnh Revit hiện tại",
+  "keywords": [
+   "context",
+   "đang mở"
+  ]
+ },
+ "get_schedule_data": {
+  "title_vi": "Đọc bảng thống kê",
+  "keywords": [
+   "schedule",
+   "bảng thống kê"
+  ]
+ },
+ "join_geometry": {
+  "title_vi": "Nối hình học",
+  "keywords": [
+   "join",
+   "nối",
+   "giao nhau"
+  ]
+ },
+ "list_levels": {
+  "title_vi": "Liệt kê cao độ",
+  "keywords": [
+   "cao độ",
+   "tầng",
+   "levels"
+  ]
+ },
+ "list_open_documents": {
+  "title_vi": "File đang mở",
+  "keywords": [
+   "file đang mở",
+   "documents"
+  ]
+ },
+ "list_recent_documents": {
+  "title_vi": "File mở gần đây",
+  "keywords": [
+   "gần đây",
+   "recent"
+  ]
+ },
+ "list_worksets": {
+  "title_vi": "Liệt kê workset",
+  "keywords": [
+   "workset"
+  ]
+ },
+ "load_family": {
+  "title_vi": "Nạp family",
+  "keywords": [
+   "load family",
+   "nạp family"
+  ]
+ },
+ "manage_document": {
+  "title_vi": "Lưu / sync file",
+  "keywords": [
+   "lưu",
+   "save as",
+   "sync with central"
+  ]
+ },
+ "manage_links": {
+  "title_vi": "Quản lý link",
+  "keywords": [
+   "link revit",
+   "link cad",
+   "reload"
+  ]
+ },
+ "manage_material": {
+  "title_vi": "Quản lý vật liệu",
+  "keywords": [
+   "vật liệu",
+   "material"
+  ]
+ },
+ "manage_revision": {
+  "title_vi": "Quản lý revision",
+  "keywords": [
+   "revision",
+   "phiên bản"
+  ]
+ },
+ "manage_sheet": {
+  "title_vi": "Quản lý sheet",
+  "keywords": [
+   "sheet",
+   "bản vẽ"
+  ]
+ },
+ "manage_view": {
+  "title_vi": "Chỉnh view (scale, detail level, crop)",
+  "keywords": [
+   "tỉ lệ",
+   "scale",
+   "crop",
+   "detail level"
+  ]
+ },
+ "manage_view_template": {
+  "title_vi": "Quản lý view template",
+  "keywords": [
+   "view template"
+  ]
+ },
+ "move_elements": {
+  "title_vi": "Di chuyển đối tượng",
+  "keywords": [
+   "di chuyển",
+   "move",
+   "dời"
+  ]
+ },
+ "open_document": {
+  "title_vi": "Mở file Revit",
+  "keywords": [
+   "mở file",
+   "open"
+  ]
+ },
+ "operate_element": {
+  "title_vi": "Ẩn / cô lập / ghim đối tượng",
+  "keywords": [
+   "ẩn",
+   "cô lập",
+   "ghim",
+   "pin",
+   "hide",
+   "isolate",
+   "halftone"
+  ]
+ },
+ "place_views_on_sheets": {
+  "title_vi": "Đặt nhiều view lên sheet",
+  "keywords": [
+   "đặt view",
+   "sheet"
+  ]
+ },
+ "place_wall": {
+  "title_vi": "Vẽ tường",
+  "keywords": [
+   "tường",
+   "wall",
+   "dựng tường"
+  ]
+ },
+ "purge_unused": {
+  "title_vi": "Dọn đối tượng thừa",
+  "keywords": [
+   "purge",
+   "dọn file",
+   "giảm dung lượng"
+  ]
+ },
+ "rename_element": {
+  "title_vi": "Đổi tên",
+  "keywords": [
+   "đổi tên",
+   "rename"
+  ]
+ },
+ "revit_get_active_view": {
+  "title_vi": "View đang mở",
+  "keywords": [
+   "view hiện tại"
+  ]
+ },
+ "revit_get_element_info": {
+  "title_vi": "Thông tin đối tượng",
+  "keywords": [
+   "thông tin",
+   "element info"
+  ]
+ },
+ "revit_get_project_info": {
+  "title_vi": "Thông tin dự án",
+  "keywords": [
+   "project info",
+   "dự án"
+  ]
+ },
+ "revit_get_selected_elements": {
+  "title_vi": "Đối tượng đang chọn",
+  "keywords": [
+   "đang chọn",
+   "selection"
+  ]
+ },
+ "revit_list_sheets": {
+  "title_vi": "Liệt kê sheet",
+  "keywords": [
+   "danh sách sheet",
+   "sheets"
+  ]
+ },
+ "revit_list_views": {
+  "title_vi": "Liệt kê view",
+  "keywords": [
+   "danh sách view",
+   "views"
+  ]
+ },
+ "revit_override_color": {
+  "title_vi": "Tô màu đối tượng trong view",
+  "keywords": [
+   "tô màu",
+   "tô đỏ",
+   "đổi màu",
+   "override color",
+   "graphics"
+  ]
+ },
+ "room_to_floor": {
+  "title_vi": "Tạo sàn từ phòng",
+  "keywords": [
+   "sàn",
+   "floor",
+   "phòng"
+  ]
+ },
+ "rotate_element": {
+  "title_vi": "Xoay đối tượng",
+  "keywords": [
+   "xoay",
+   "rotate"
+  ]
+ },
+ "select_elements": {
+  "title_vi": "Chọn đối tượng",
+  "keywords": [
+   "chọn",
+   "select"
+  ]
+ },
+ "send_code_to_revit": {
+  "title_vi": "Chạy code Python trong Revit",
+  "keywords": [
+   "chạy code",
+   "python",
+   "script"
+  ]
+ },
+ "set_active_view": {
+  "title_vi": "Chuyển view",
+  "keywords": [
+   "mở view",
+   "chuyển view"
+  ]
+ },
+ "set_element_workset": {
+  "title_vi": "Gán workset",
+  "keywords": [
+   "workset"
+  ]
+ },
+ "set_parameter": {
+  "title_vi": "Gán tham số",
+  "keywords": [
+   "gán tham số",
+   "điền",
+   "set parameter"
+  ]
+ },
+ "split_curve": {
+  "title_vi": "Cắt đường",
+  "keywords": [
+   "cắt",
+   "split"
+  ]
+ },
+ "split_element": {
+  "title_vi": "Cắt đối tượng",
+  "keywords": [
+   "cắt tường",
+   "cắt cột",
+   "split"
+  ]
+ },
+ "switch_active_document": {
+  "title_vi": "Chuyển file đang làm",
+  "keywords": [
+   "chuyển file"
+  ]
+ },
+ "tag_all_rooms": {
+  "title_vi": "Tag tất cả phòng",
+  "keywords": [
+   "tag phòng",
+   "room tag"
+  ]
+ },
+ "tag_all_walls": {
+  "title_vi": "Tag tất cả tường",
+  "keywords": [
+   "tag tường",
+   "wall tag"
+  ]
+ },
+ "tag_elements": {
+  "title_vi": "Tag đối tượng",
+  "keywords": [
+   "tag",
+   "gắn nhãn"
+  ]
+ },
+ "autodimension": {
+  "title_vi": "Tự động đo kích thước",
+  "keywords": [
+   "dim tự động",
+   "kích thước"
+  ]
+ },
+ "autojoin": {
+  "title_vi": "Tự động join",
+  "keywords": [
+   "join",
+   "nối"
+  ]
+ },
+ "batchout": {
+  "title_vi": "Xuất hàng loạt (PDF, DWG, IFC)",
+  "keywords": [
+   "in pdf",
+   "xuất dwg",
+   "batch export"
+  ]
+ },
+ "batchlink": {
+  "title_vi": "Link hàng loạt",
+  "keywords": [
+   "link revit",
+   "batch link"
+  ]
+ },
+ "cadtoelements": {
+  "title_vi": "CAD sang đối tượng",
+  "keywords": [
+   "cad",
+   "dwg",
+   "dựng mô hình từ cad"
+  ]
+ },
+ "datumsync": {
+  "title_vi": "Đồng bộ trục và cao độ",
+  "keywords": [
+   "trục",
+   "grid",
+   "bubble"
+  ]
+ },
+ "famitransfer": {
+  "title_vi": "Chuyển family giữa các file",
+  "keywords": [
+   "copy family",
+   "family"
+  ]
+ },
+ "managroup": {
+  "title_vi": "Quản lý group",
+  "keywords": [
+   "group"
+  ]
+ },
+ "manasheets": {
+  "title_vi": "Quản lý sheet",
+  "keywords": [
+   "sheet",
+   "bản vẽ"
+  ]
+ },
+ "manaviews": {
+  "title_vi": "Quản lý view",
+  "keywords": [
+   "view",
+   "view template"
+  ]
+ },
+ "manaworkset": {
+  "title_vi": "Quản lý workset",
+  "keywords": [
+   "workset"
+  ]
+ },
+ "modelauditor": {
+  "title_vi": "Kiểm tra mô hình",
+  "keywords": [
+   "audit",
+   "cảnh báo",
+   "in-place"
+  ]
+ },
+ "rebarwizard": {
+  "title_vi": "Đặt thép tự động",
+  "keywords": [
+   "cốt thép",
+   "rebar",
+   "thép dầm",
+   "thép cột"
+  ]
+ },
+ "rebarcheck": {
+  "title_vi": "Kiểm tra cốt thép",
+  "keywords": [
+   "cốt thép",
+   "rebar"
+  ]
+ },
+ "roomtofloor": {
+  "title_vi": "Tạo sàn từ phòng",
+  "keywords": [
+   "sàn",
+   "phòng"
+  ]
+ },
+ "splitelements": {
+  "title_vi": "Cắt đối tượng theo cao độ",
+  "keywords": [
+   "cắt tường",
+   "cắt cột"
+  ]
+ },
+ "viewtemplatetransfer": {
+  "title_vi": "Chuyển view template",
+  "keywords": [
+   "view template"
+  ]
+ },
+ "pointcloud": {
+  "title_vi": "Scan-to-BIM",
+  "keywords": [
+   "point cloud",
+   "scan",
+   "đám mây điểm"
+  ]
+ }
+}

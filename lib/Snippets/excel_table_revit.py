@@ -726,6 +726,7 @@ def _fill_header(doc, vs, table, layout, formatting, scale, styles):
     except Exception:
         default_size = None
 
+    span = {(a, b): (c, d) for (a, b, c, d) in table.merges}
     merged_inner = set()
     for (a, b, c, d) in table.merges:
         for r in range(a, c + 1):
@@ -776,11 +777,12 @@ def _fill_header(doc, vs, table, layout, formatting, scale, styles):
             if formatting:
                 pairs.append(('BackgroundColor', 'BackgroundColor',
                               _color(cell.fill or (255, 255, 255))))
+                edges = xt.cell_borders(layout, r, c, *span.get((r, c), (r, c)))
                 for side, opt, prop in (('top', 'BorderTopLineStyle', 'BorderTopLineStyle'),
                                         ('bottom', 'BorderBottomLineStyle', 'BorderBottomLineStyle'),
                                         ('left', 'BorderLeftLineStyle', 'BorderLeftLineStyle'),
                                         ('right', 'BorderRightLineStyle', 'BorderRightLineStyle')):
-                    b = cell.borders.get(side)
+                    b = edges.get(side)
                     gs = styles.line_style(b[0], b[1]) if b else invisible
                     if gs is not None:
                         pairs.append((opt, prop, gs.Id))

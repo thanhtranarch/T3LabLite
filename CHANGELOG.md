@@ -28,6 +28,9 @@ Releasing a new version:
 - **File task watcher** (`task.json` / `task.py`) no longer starts on its own: it runs code with no token. Click **Start Watcher** once to turn it on for later sessions. A task file left from before is never run.
 - **Usage tracking** no longer sends code, secrets or full paths (paths go as the file name only). README now lists it under Network Traffic.
 
+### Removed
+- **MCP point cloud tools** (`list_point_clouds`, `analyze_point_cloud`, `detect_point_cloud_elements`): no AI app called them since usage tracking began. Scan-to-BIM stays in the **Point Cloud to Model** button.
+
 ### Fixed
 - **MCP:** the port set in MCP Control is used again (48884–48894); the Manual Config snippet is valid JSON and matches the app setup; `tools/list` no longer waits behind a slow tool call; a call that timed out says whether it may still finish; failed tools are flagged `isError`; Claude no longer needs a restart when Revit created the token after it.
 - **ManaSched:** text cells with Excel's Accounting format no longer show a stray `_(` … `_)` around the text in Revit. `[Red]`-style colour codes and `\` escapes in text formats are no longer printed either.

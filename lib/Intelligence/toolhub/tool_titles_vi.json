@@ -26,14 +26,6 @@
    "count"
   ]
  },
- "analyze_point_cloud": {
-  "title_vi": "Phân tích point cloud",
-  "keywords": [
-   "đám mây điểm",
-   "scan",
-   "point cloud"
-  ]
- },
  "apply_view_template": {
   "title_vi": "Áp view template",
   "keywords": [

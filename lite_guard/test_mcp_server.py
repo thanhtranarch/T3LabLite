@@ -204,6 +204,15 @@ class RegistryTests(unittest.TestCase):
         self.assertIn('run_batch', s._WRITE_TOOLS)
         self.assertIn('run_batch', tool_schema.LOCAL_HIDDEN_TOOLS)
 
+    def test_point_cloud_tools_are_gone(self):
+        # Removed 2026-10-20: no MCP client called them; the ribbon wizard stays.
+        s = _server()
+        for name in ('list_point_clouds', 'analyze_point_cloud', 'detect_point_cloud_elements'):
+            self.assertNotIn(name, s._tools)
+            self.assertNotIn(name, s._WRITE_TOOLS)
+            self.assertNotIn(name, READ_ONLY)
+            self.assertNotIn(name, bridge.LARGE_RESULT_TOOLS)
+
     def test_destructive_hint_tools_are_real(self):
         s = _server()
         self.assertEqual(sorted(mp.DESTRUCTIVE_HINT_TOOLS - set(s._tools)), [])

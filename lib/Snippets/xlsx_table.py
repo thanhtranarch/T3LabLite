@@ -276,6 +276,29 @@ def _general(value):
     return text
 
 
+def _literal_text(section, text=''):
+    """A non-numeric section as Excel shows it; unquoted '@' becomes `text`.
+    `_x` pads with a space and `*x` (fill) is dropped, as in _literal_parts
+    (2026-10-20: accounting `_(@_)` printed "_(TEXT_)" in Revit)."""
+    out, i = [], 0
+    section = _strip_brackets(section)
+    while i < len(section):
+        ch = section[i]
+        if ch == '"':
+            j = section.find('"', i + 1)
+            j = len(section) if j < 0 else j
+            out.append(section[i + 1:j])
+            i = j + 1
+            continue
+        if ch in '\\_*' and i + 1 < len(section):
+            out.append({'\\': section[i + 1], '_': ' ', '*': ''}[ch])
+            i += 2
+            continue
+        out.append(text if ch == '@' else ch)
+        i += 1
+    return ''.join(out)
+
+
 def _literal_parts(section):
     """Split a numeric section into (prefix, number pattern, suffix) literals."""
     i = 0
@@ -461,8 +484,7 @@ def format_value(value, fmt_code, date1904=False):
         return ''
     if 'general' in _unquoted(section).lower():
         idx = section.lower().find('general')
-        lit = lambda s: re.sub(r'"([^"]*)"', r'\1', s)    # noqa: E731
-        return lit(section[:idx]) + _general(value) + lit(section[idx + 7:])
+        return _literal_text(section[:idx]) + _general(value) + _literal_text(section[idx + 7:])
     if section.strip() == '@':
         return _general(value)
     if _is_date_format(section):
@@ -474,10 +496,9 @@ def format_text(text, fmt_code):
     """Text cells use the 4th section (or '@' placeholder) when there is one."""
     sections = _split_sections(fmt_code or 'General')
     section = sections[3] if len(sections) >= 4 else (sections[0] if '@' in sections[0] else None)
-    if not section or '@' not in section:
+    if not section or '@' not in _unquoted(section):
         return text
-    out = re.sub(r'"([^"]*)"', r'\1', section)
-    return out.replace('@', text)
+    return _literal_text(section, text)
 
 
 # ════════════════════════════════════════════════════════════════════

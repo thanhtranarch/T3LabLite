@@ -19,6 +19,9 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+- **ManaSched:** text cells with Excel's Accounting format no longer show a stray `_(` … `_)` around the text in Revit. `[Red]`-style colour codes and `\` escapes in text formats are no longer printed either.
+
 ## [2.1.0] - 2026-10-19
 
 ManaSched v2 and the latest T3Lab Assistant, copied from `t3lab-revit-api`, plus the PDF Markup split button.

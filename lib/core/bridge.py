@@ -64,7 +64,7 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-BRIDGE_VERSION = '2.4.0'
+BRIDGE_VERSION = '2.5.0'
 
 PORT_MIN, PORT_MAX = 48884, 48894
 PROBE_TIMEOUT = 1.0    # /health probe per port (run in parallel)
@@ -198,8 +198,14 @@ def _save_cached_tools(tools):
         pass
 
 
-def _post_mcp(port, request, token, timeout=CALL_TIMEOUT):
-    """Forward one JSON-RPC request dict to an instance; returns parsed reply."""
+# Token read again from disk after a 401. The bridge starts with the client
+# (Claude Desktop ...), often before Revit ever ran on this machine, so the
+# token file may not exist yet at launch -- without this every call failed
+# with 401 until the client was restarted.
+_LATEST_TOKEN = ['']
+
+
+def _post_once(port, request, token, timeout):
     # 127.0.0.1, NOT localhost: on Windows "localhost" resolves to ::1 first
     # and the IPv6 connect attempt takes ~2s to fail before falling back to
     # IPv4 — adding a flat 2s to EVERY tool call (the server binds IPv4 only).
@@ -211,6 +217,21 @@ def _post_mcp(port, request, token, timeout=CALL_TIMEOUT):
         f"http://127.0.0.1:{port}/mcp", data=data, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode('utf-8'))
+
+
+def _post_mcp(port, request, token, timeout=CALL_TIMEOUT):
+    """Forward one JSON-RPC request dict to an instance; returns parsed reply."""
+    token = _LATEST_TOKEN[0] or token
+    try:
+        return _post_once(port, request, token, timeout)
+    except urllib.error.HTTPError as e:
+        if e.code != 401:
+            raise
+        fresh = _read_token()
+        if not fresh or fresh == token:
+            raise
+        _LATEST_TOKEN[0] = fresh
+        return _post_once(port, request, fresh, timeout)
 
 
 def _is_conn_refused(exc):

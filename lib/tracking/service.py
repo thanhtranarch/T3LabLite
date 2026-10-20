@@ -11,6 +11,9 @@ Data is sent asynchronously in a background thread to the T3Lab Space backend
 
 Privacy & Reliability:
   - Anonymized user/machine hash (SHA-256) -- no sensitive PII collected.
+  - MCP arguments are redacted before they leave the machine: code
+    (send_code_to_revit) and secrets are never sent, file/folder paths only
+    as the file name (see redact_arguments).
   - Zero-latency: never blocks Revit UI or MCP execution.
   - Fail-safe: all network exceptions are caught and silenced.
   - Opt-out: set "tracking_enabled": false in %APPDATA%/T3LabAI/mcp_paths.json.
@@ -41,6 +44,48 @@ except ImportError:
         urlopen = None
 
 DEFAULT_TRACKING_URL = "https://t3lab.space/api/revit/tracking"
+
+# Argument keys whose values never leave the machine.
+_CODE_KEYS = ("code", "script")
+_SECRET_HINTS = ("password", "passwd", "token", "secret", "api_key", "apikey")
+# Keys holding a path: only the last part (file or folder name) is sent, so
+# Windows user names and client folder structures stay local.
+_PATH_HINTS = ("path", "folder", "directory", "dir", "file")
+
+
+def _last_path_part(text):
+    parts = [p for p in text.replace("\\", "/").split("/") if p]
+    return parts[-1] if parts else ""
+
+
+def _redact_value(key, value):
+    k = (key or "").lower()
+    if k in _CODE_KEYS:
+        text = value if isinstance(value, str) else str(value or "")
+        return "(code not sent, {} lines)".format(len(text.splitlines()) or 1)
+    if any(h in k for h in _SECRET_HINTS):
+        return "(not sent)"
+    if any(h in k for h in _PATH_HINTS):
+        if isinstance(value, str):
+            return _last_path_part(value)
+        if isinstance(value, (list, tuple)):
+            return [_last_path_part(v) if isinstance(v, str) else v for v in value]
+    return value
+
+
+def redact_arguments(arguments):
+    """Copy of an MCP arguments dict that is safe to send (see above).
+    Nested steps (run_batch) are redacted the same way."""
+    if not isinstance(arguments, dict):
+        return {}
+    out = {}
+    for k, v in arguments.items():
+        if k == "steps" and isinstance(v, list):
+            out[k] = [dict(s, arguments=redact_arguments(s.get("arguments")))
+                      if isinstance(s, dict) else s for s in v]
+        else:
+            out[k] = _redact_value(k, v)
+    return out
 
 
 class TelemetryService(object):
@@ -128,10 +173,7 @@ class TelemetryService(object):
 
         # 2. Code execution tool
         if tool_name == "send_code_to_revit":
-            code = str(arguments.get("code") or arguments.get("script") or "").strip()
-            first_line = code.split("\n")[0].strip() if code else ""
-            if first_line:
-                return "Chạy code IronPython: {}".format(first_line[:120])
+            # The code itself is never sent (redact_arguments).
             return "Thực thi mã tùy biến qua Revit API"
 
         # 3. Model construction tools
@@ -212,6 +254,7 @@ class TelemetryService(object):
                 status = "error"
                 err_msg = str(result.get("error") or "Execution failed")
 
+        arguments = redact_arguments(arguments)
         purpose = cls.extract_mcp_purpose(tool_name, arguments)
 
         # Clean sanitized details payload

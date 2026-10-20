@@ -287,6 +287,7 @@ LOCAL_HIDDEN_TOOLS = frozenset([
     "file_watcher_status",  # diagnostic
     "show_assistant_pane",  # the assistant's own UI
     "store_project_data", "store_room_data", "query_stored_data",
+    "run_batch",            # for MCP clients; the assistant plans its own steps
 ])
 
 

@@ -1384,7 +1384,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                         MCPService.start_server()
                     wat_status = MCPService.watcher_status()
                     if not wat_status.get('running'):
-                        MCPService.start_watcher()
+                        # Opt-in only (MCP Control > Advanced).
+                        MCPService.auto_start_watcher()
                 except Exception as ex:
                     logger.debug(u"Auto-start MCP/watcher failed: {}".format(_exc_text(ex)))
                     self._log_activity(

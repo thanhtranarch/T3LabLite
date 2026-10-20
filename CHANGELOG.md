@@ -19,7 +19,17 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Added
+- **MCP security (MCP Control → Advanced → Security):** read-only mode for AI apps; Revit asks Yes/No before an AI app deletes, purges, ungroups, syncs, saves as or closes without saving; `send_code_to_revit` shows the code and asks first (or can be turned off). The T3Lab Assistant is not affected.
+- **MCP `run_batch` tool:** several edits run as one Revit undo step and are all rolled back if one fails.
+- **MCP:** tools are listed with `readOnlyHint` / `destructiveHint` annotations; `ping` and protocol versions up to 2025-06-18.
+
+### Changed
+- **File task watcher** (`task.json` / `task.py`) no longer starts on its own: it runs code with no token. Click **Start Watcher** once to turn it on for later sessions. A task file left from before is never run.
+- **Usage tracking** no longer sends code, secrets or full paths (paths go as the file name only). README now lists it under Network Traffic.
+
 ### Fixed
+- **MCP:** the port set in MCP Control is used again (48884–48894); the Manual Config snippet is valid JSON and matches the app setup; `tools/list` no longer waits behind a slow tool call; a call that timed out says whether it may still finish; failed tools are flagged `isError`; Claude no longer needs a restart when Revit created the token after it.
 - **ManaSched:** text cells with Excel's Accounting format no longer show a stray `_(` … `_)` around the text in Revit. `[Red]`-style colour codes and `\` escapes in text formats are no longer printed either.
 - **ManaSched:** Excel / Google Sheets cell borders now show in a schedule. Grid lines stay on (Revit hides every header border when they are off), borders use the line style's category id, and a line Excel saved on only one of two neighbouring cells (e.g. a header row's bottom border) reaches both.
 

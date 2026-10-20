@@ -60,7 +60,7 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
 - **Spell check** — proofread every Text Note in the model or just the active view.
 
 #### Settings (pulldown)
-- **MCP Control** — start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit. Configure host, port, and authentication settings.
+- **MCP Control** — start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit, connect Claude Desktop / Codex / Antigravity in one click, pick the port (48884–48894) and set what AI apps may do (read-only mode, confirmations, code execution — see [MCP security](#mcp-security)).
 - **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, DeepSeek, Ollama, LM Studio), model, API key or local server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs.
 - **Feedback** — send feedback or suggestions to the T3Lab team directly from Revit.
 - **ManaTabs** — hide or show Revit ribbon tabs to reduce clutter.
@@ -196,8 +196,9 @@ Supports combined PDF, custom naming patterns, sheet ordering, and revision trac
 
 ### Network Traffic
 
-Every connection is either **user-initiated** or the once-a-day update check,
-which can be switched off (see [Staying up to date](#staying-up-to-date)).
+Every connection is **user-initiated**, the weekly update check, or anonymous
+usage tracking. Both of the last two can be switched off (see
+[Staying up to date](#staying-up-to-date) and the table below).
 
 | Component | Destination | When |
 |---|---|---|
@@ -205,10 +206,29 @@ which can be switched off (see [Staying up to date](#staying-up-to-date)).
 | T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `api.deepseek.com` — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
 | Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
 | Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |
-| MCP Server | `localhost:8080` (host/port configurable) | Only while the MCP server is running |
+| MCP Server | `127.0.0.1:48884`–`48894` only (never reachable from the network), bearer token from `%APPDATA%\T3LabAI\mcp_token.txt` | Only while the MCP server is running |
+| Usage tracking | `t3lab.space/api/revit/tracking` — anonymous machine hash, Revit version, document name, ribbon button or MCP tool name with its purpose and arguments. Code, secrets and full paths are never sent (paths go as the file name only) | Revit start, ribbon click, MCP tool call — unless `"tracking_enabled": false` in `%APPDATA%\T3LabAI\mcp_paths.json` |
 | ManaFami (Cloud) | User-configured Vercel URL in `~/.t3lab/family_loader_config.json` | User opens the cloud family catalogue |
 | Feedback | None — opens a `mailto:` link in the default email client | User sends feedback |
 | Cloud Links | `acc.autodesk.com` / `health.autodesk.com` / `status.bluebeam.com` / `pdf.t3lab.space` | Opens in the default browser on click |
 
 API keys, chat history, projects, attachments and the knowledge index stay on
 the machine under `%APPDATA%\T3LabAI`.
+
+### MCP security
+
+These rules apply to AI apps connected through MCP (Claude Desktop, Codex,
+Cursor, ...). The T3Lab Assistant has its own "Ask before edits" setting.
+Change them in **MCP Control → Advanced → Security**, or in
+`%APPDATA%\T3LabAI\mcp_paths.json`. They apply from the next tool call.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `mcp_read_only` | `false` | `true`: AI apps only see and call tools that change neither the model nor any file |
+| `mcp_confirm_destructive` | `true` | Revit asks Yes/No before delete, purge, ungroup, deleting a view template or link, save as, sync, close without saving, or a `run_batch` that contains any of these. No is the default answer |
+| `mcp_code_execution` | `"ask"` | `send_code_to_revit`: `"off"` hides and refuses it, `"ask"` shows the code in Revit and asks each time, `"allow"` runs it without asking |
+| `auto_start_file_watcher` | `false` | The file task watcher (`~/T3Lab_AI_Data/task.json`) runs code with no token, so it only starts with Revit after you click **Start Watcher** once |
+
+Tools are listed with MCP annotations (`readOnlyHint`, `destructiveHint`), so
+clients that support them can ask before edits too. `run_batch` runs several
+edits as one Revit undo step and rolls them all back if one fails.

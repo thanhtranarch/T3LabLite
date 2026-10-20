@@ -893,6 +893,48 @@ class MCPService(object):
             return state, 'Could not save the setting to mcp_paths.json'
         return state, None
 
+    # ── Security policy for external MCP clients ──────────────────────────────
+
+    @staticmethod
+    def mcp_policy():
+        """Current external-client policy: read_only, confirm_destructive,
+        code_execution ('off' | 'ask' | 'allow'). See core/mcp_policy.py."""
+        _ensure_lib_in_path()
+        from core import mcp_policy
+        return mcp_policy.load_policy()
+
+    @staticmethod
+    def set_mcp_policy(read_only=None, confirm_destructive=None,
+                       code_execution=None):
+        """
+        Persist one or more policy fields. Applies to the next tool call; no
+        restart needed.
+
+        Returns:
+            (policy: dict, error_message: str|None) — the policy as stored
+            afterwards, so a failed write reports the old values.
+        """
+        _ensure_lib_in_path()
+        from core import mcp_policy
+        try:
+            mcp_policy.save_policy(read_only=read_only,
+                                   confirm_destructive=confirm_destructive,
+                                   code_execution=code_execution)
+        except Exception as ex:
+            return mcp_policy.load_policy(), str(ex)
+        stored = mcp_policy.load_policy()
+        wanted = {'read_only': read_only,
+                  'confirm_destructive': confirm_destructive,
+                  'code_execution': code_execution}
+        for key, value in wanted.items():
+            if value is None:
+                continue
+            expected = (u'{}'.format(value).strip().lower()
+                        if key == 'code_execution' else bool(value))
+            if stored.get(key) != expected:
+                return stored, 'Could not save the setting to mcp_paths.json'
+        return stored, None
+
     # ── Open documents ─────────────────────────────────────────────────────────
 
     @staticmethod
@@ -1020,6 +1062,20 @@ class MCPService(object):
             return False, str(ex)
 
     @staticmethod
+    def auto_start_watcher():
+        """
+        Start the file task watcher only if the user opted in
+        ("auto_start_file_watcher" in mcp_paths.json). For automatic starts.
+
+        Returns:
+            (started: bool, error_message: str|None)
+        """
+        try:
+            return bool(_get_watcher().start_if_enabled()), None
+        except Exception as ex:
+            return False, str(ex)
+
+    @staticmethod
     def toggle_watcher():
         """
         Start watcher if stopped, stop it if running.
@@ -1030,11 +1086,21 @@ class MCPService(object):
         status = MCPService.watcher_status()
         if status.get('error'):
             return 'unknown', status['error']
+        # The button is the user's opt-in (or opt-out) for later Revit
+        # sessions too: the watcher never starts on its own otherwise.
+        try:
+            from core.file_watcher import set_auto_start
+        except Exception:
+            set_auto_start = None
         if status['running']:
             ok, err = MCPService.stop_watcher()
+            if ok and set_auto_start:
+                set_auto_start(False)
             return ('stopped' if ok else 'running'), err
         else:
             ok, err = MCPService.start_watcher()
+            if ok and set_auto_start:
+                set_auto_start(True)
             return ('running' if ok else 'stopped'), err
 
     # ── Config & paths ─────────────────────────────────────────────────────────
@@ -1102,20 +1168,18 @@ class MCPService(object):
             return _codex_block(_find_python_executable(), bridge, port).rstrip('\n')
 
         python = _find_python_executable().replace('\\', '/')
-        return (
-            '{\n'
-            '  "mcpServers": {\n'
-            '    "' + MCP_SERVER_NAME + '": {\n'
-            '      "type": "stdio",\n'
-            '      "command": "' + python + '",\n'
-            '      "args": [\n'
-            '        "' + bridge + '",\n'
-            '        "' + str(port) + '"\n'
-            '      ]\n'
-            '    }\n'
-            '  }\n'
-            '}'
-        )
+        # The same entry configure_client() writes (-E and an empty
+        # PYTHONPATH keep pyRevit's paths out of the bridge's Python), built
+        # with a JSON encoder: pasted by hand, a raw Windows path such as
+        # C:\Users\... was invalid JSON.
+        snippet = {'mcpServers': {
+            MCP_SERVER_NAME: _server_entry(python, bridge, port)}}
+        try:
+            from core import jsonsafe
+            return jsonsafe.dumps(snippet, indent=2)
+        except Exception:
+            import json as _json
+            return _json.dumps(snippet, indent=2)
 
     @staticmethod
     def data_dir():

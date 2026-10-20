@@ -28,7 +28,7 @@ Responsibilities:
      (lib/core/whats_new.py, Lite only).
   5. Register the right-click context-menu entry (Revit 2025+).
   6. Self-study idle loop (opt-in).
-  7. Start the file-based task watcher (lib/core/file_watcher.py).
+  7. Start the file-based task watcher (lib/core/file_watcher.py) if opted in.
   8. Deploy the MCP bridge to %APPDATA%/T3LabAI/bridge.py and auto-start the
      MCP server (lib/Services/mcp_service.py).
   9. Run the once-a-week update check against GitHub (lib/core/updater.py).
@@ -544,7 +544,8 @@ def main():
     # ─── 7. Start file-based task watcher ──────────────────────────────────────
     try:
         from core.file_watcher import get_task_watcher
-        get_task_watcher().start()
+        # Opt-in only: it runs task files with no token (see file_watcher.py).
+        get_task_watcher().start_if_enabled()
     except Exception:
         pass
 

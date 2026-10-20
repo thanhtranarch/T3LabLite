@@ -21,6 +21,7 @@ import uuid
 import io
 
 from core import jsonsafe
+from core import mcp_policy
 
 try:
     import queue as _queue_mod            # CPython 3
@@ -177,7 +178,7 @@ class _ToolTask(object):
     fallback grace period expires.
     """
 
-    def __init__(self, tool_name, arguments):
+    def __init__(self, tool_name, arguments, confirm=None):
         self.tool_name = tool_name
         self.arguments = arguments
         self.result = None
@@ -185,6 +186,12 @@ class _ToolTask(object):
         self.done = threading.Event()
         self._claim_lock = threading.Lock()
         self._claimed_by = None
+        # (main_instruction, content, expanded) when an external MCP call
+        # needs a "Yes" in Revit first (core.mcp_policy.check_call). Asked on
+        # the UI thread, right before the tool runs.
+        self.confirm = confirm
+        self.awaiting_user = False
+        self._caller_gone = False
 
     def claim(self, who):
         with self._claim_lock:
@@ -192,6 +199,65 @@ class _ToolTask(object):
                 self._claimed_by = who
                 return True
             return False
+
+    @property
+    def claimed_by(self):
+        return self._claimed_by
+
+    def give_up(self):
+        """The caller stopped waiting. Returns True when the task had not
+        started running yet (unclaimed, or still on the confirmation dialog),
+        so it is guaranteed never to run."""
+        with self._claim_lock:
+            self._caller_gone = True
+            if self._claimed_by is None:
+                self._claimed_by = 'abandoned'
+                return True
+            return self.awaiting_user
+
+    def proceed_after_confirm(self):
+        """UI thread, after the user clicked Yes: False when the caller has
+        already given up, so an answer that comes too late never runs."""
+        with self._claim_lock:
+            self.awaiting_user = False
+            return not self._caller_gone
+
+
+def _ask_user_to_confirm(task):
+    """Show the Revit Yes/No dialog for an external call that needs consent.
+
+    UI thread only (called from MCPExternalEventHandler.Execute). Returns
+    None when the user said Yes and the caller is still waiting, otherwise
+    the result dict to hand back instead of running the tool. No is the
+    default button, and any failure to show the dialog counts as No.
+    """
+    main, content, expanded = task.confirm
+    with task._claim_lock:
+        task.awaiting_user = True
+    approved = False
+    try:
+        from Autodesk.Revit.UI import (TaskDialog, TaskDialogCommonButtons,
+                                       TaskDialogResult)
+        dlg = TaskDialog('T3Lab MCP')
+        dlg.TitleAutoPrefix = False
+        dlg.MainInstruction = main
+        dlg.MainContent = content
+        if expanded:
+            dlg.ExpandedContent = expanded
+        dlg.CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No
+        dlg.DefaultButton = TaskDialogResult.No
+        approved = dlg.Show() == TaskDialogResult.Yes
+    except Exception:
+        approved = False
+    still_waiting = task.proceed_after_confirm()
+    if not approved:
+        return {'error': ('The user declined {} in Revit, so it was not run. '
+                          'Do not retry it unless the user asks.'.format(task.tool_name)),
+                'declined_by_user': True, 'tool': task.tool_name}
+    if not still_waiting:
+        return {'error': 'Confirmed too late: the request had already timed out, so it was not run.',
+                'tool': task.tool_name}
+    return None
 
 
 try:
@@ -228,6 +294,13 @@ try:
                     break
                 if not task.claim('ui'):
                     continue  # read fallback or timeout already consumed it
+                if getattr(task, 'confirm', None):
+                    refusal = _ask_user_to_confirm(task)
+                    if refusal is not None:
+                        task.result = refusal
+                        task.exception = None
+                        task.done.set()
+                        continue
                 is_write = task.tool_name in self.server._WRITE_TOOLS
                 if is_write:
                     self.server._write_in_progress = True
@@ -294,6 +367,10 @@ class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 # entirely.
 _MCP_REQUEST_LOCK = threading.Lock()
 
+# The port range every T3Lab server and bridge.py agree on.
+PORT_MIN = 48884
+PORT_MAX = 48894
+
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
     """HTTP Request Handler for MCP Protocol"""
@@ -311,6 +388,11 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        if body is None:
+            # 202 for a notification: no body at all (Streamable HTTP spec).
+            self.send_header('Content-Length', 0)
+            self.end_headers()
+            return
         if isinstance(body, str):
             body = body.encode('utf-8')
         self.send_header('Content-Length', len(body))
@@ -388,13 +470,20 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        # DNS-rebinding guard: a web page must never drive Revit. Native
+        # clients (bridge.py) send no Origin header at all.
+        if not mcp_policy.origin_allowed(self.headers.get('Origin')):
+            self._send_json({'error': 'Forbidden origin'}, 403)
+            return
+
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
 
         try:
             request = json.loads(body) if body else {}
         except ValueError:      # IronPython 2.7 has no json.JSONDecodeError
-            self._send_json({'error': 'Invalid JSON'}, 400)
+            self._send_json({'jsonrpc': '2.0', 'id': None,
+                             'error': {'code': -32700, 'message': 'Parse error: invalid JSON'}}, 400)
             return
 
         if path == '/message' or path == '/mcp':
@@ -406,48 +495,56 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
     def _handle_mcp_message(self, request):
         """Handle MCP JSON-RPC message.
 
-        Serialized through _MCP_REQUEST_LOCK: the HTTP server is threaded
-        (so /health never starves behind a slow call), but tool execution
-        must stay one-at-a-time — concurrent Revit API access off the main
-        thread can crash Revit natively.
+        tools/call is serialized through _MCP_REQUEST_LOCK: the HTTP server is
+        threaded (so /health never starves behind a slow call), but tool
+        execution must stay one-at-a-time — concurrent Revit API access off
+        the main thread can crash Revit natively. initialize / ping /
+        tools/list never touch Revit and answer without the lock.
         """
+        if not isinstance(request, dict):
+            # JSON-RPC batches were dropped from MCP in 2025-06-18.
+            self._send_json({'jsonrpc': '2.0', 'id': None,
+                             'error': {'code': -32600,
+                                       'message': 'Invalid Request: send one JSON-RPC object per POST'}}, 400)
+            return
+        if not self._authorized(request):
+            return
+        if 'id' not in request:
+            # A notification gets no JSON-RPC response. The server keeps no
+            # session state, so notifications/initialized needs no handling.
+            self._send_response(202, 'application/json', None)
+            return
+        if request.get('method', '') in mcp_policy.LOCK_FREE_METHODS:
+            self._handle_mcp_message_locked(request)
+            return
         with _MCP_REQUEST_LOCK:
             self._handle_mcp_message_locked(request)
+
+    def _authorized(self, request):
+        """Reject anything that doesn't carry the shared-secret token (see
+        T3LabAIServer._get_or_create_token). Without this, any local process
+        could reach tools/call — including send_code_to_revit, which executes
+        arbitrary IronPython with full Revit API access."""
+        server = self.server.mcp_server
+        if mcp_policy.token_matches(self.headers.get('Authorization', ''),
+                                    server._token):
+            return True
+        if 'id' not in request:
+            self._send_json({'status': 'unauthorized'}, 401)
+        else:
+            self._send_json({
+                'jsonrpc': '2.0',
+                'id': request.get('id'),
+                'error': {'code': -32001, 'message': 'Unauthorized: missing or invalid token'}
+            }, 401)
+        return False
 
     def _handle_mcp_message_locked(self, request):
         server = self.server.mcp_server
 
         method = request.get('method', '')
-        params = request.get('params', {})
+        params = request.get('params') or {}
         request_id = request.get('id')
-
-        # ── Auth ────────────────────────────────────────────────────────
-        # Reject anything that doesn't carry the shared-secret token (see
-        # T3LabAIServer._get_or_create_token). Without this, any local
-        # process could reach tools/call — including send_code_to_revit,
-        # which executes arbitrary IronPython with full Revit API access.
-        expected = 'Bearer ' + server._token
-        if self.headers.get('Authorization', '') != expected:
-            if 'id' not in request:
-                self._send_json({'status': 'unauthorized'}, 401)
-            else:
-                self._send_json({
-                    'jsonrpc': '2.0',
-                    'id': request_id,
-                    'error': {'code': -32001, 'message': 'Unauthorized: missing or invalid token'}
-                }, 401)
-            return
-
-        # If it's a notification (no 'id' in request), do not send JSON-RPC response
-        if 'id' not in request:
-            try:
-                if method == 'notifications/initialized':
-                    # Handle initialized notification if needed
-                    pass
-            except Exception:
-                pass
-            self._send_json({'status': 'ok'})
-            return
 
         response = {
             'jsonrpc': '2.0',
@@ -457,6 +554,8 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         try:
             if method == 'initialize':
                 response['result'] = server._handle_initialize(params)
+            elif method == 'ping':
+                response['result'] = {}
             elif method == 'tools/list':
                 response['result'] = server._handle_tools_list()
             elif method == 'tools/call':
@@ -1072,72 +1171,6 @@ class T3LabAIServer(object):
                 'name': 'analyze_model_statistics',
                 'description': 'Analyze model complexity with element counts by category and warnings summary',
                 'inputSchema': {'type': 'object', 'properties': {}, 'required': []}
-            },
-            # ── Point cloud (Scan-to-BIM) — read-only, Revit main thread only ─
-            'list_point_clouds': {
-                'name': 'list_point_clouds',
-                'description': ('List the point clouds (ReCap .rcp/.rcs) in the active document: element id, '
-                                 'name, file path, bounding box in mm and size in m. Call this first, then '
-                                 'analyze_point_cloud or detect_point_cloud_elements with the id.'),
-                'inputSchema': {'type': 'object', 'properties': {}, 'required': []}
-            },
-            'analyze_point_cloud': {
-                'name': 'analyze_point_cloud',
-                'description': ('Sample a point cloud and summarize it: sampled extents, size and footprint '
-                                 'area; the horizontal planes in the scan (floor / ceiling / slab candidates, '
-                                 'elevation in mm); and a level check — for every project Level, the nearest '
-                                 'scan plane and the offset in mm (status "matches scan" within tolerance_mm). '
-                                 'Read-only. Use it for "do our levels match the scan?", floor-to-floor heights '
-                                 'and scan extents. Counts describe the sample, not the full scan.'),
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'point_cloud_id': {'type': 'integer',
-                                           'description': 'Element id from list_point_clouds. Optional when the document has exactly one point cloud.'},
-                        'max_points': {'type': 'integer',
-                                       'description': 'Sample size (default 20000, max 100000). Larger is slower, not much more accurate.'},
-                        'level_name': {'type': 'string',
-                                       'description': 'Analyze only the band from this Level up to the next Level (or +4 m).'},
-                        'region_mm': {'type': 'object',
-                                      'description': 'Analyze only this box in project coordinates: {"min": [x, y, z], "max": [x, y, z]} in mm.'},
-                        'tolerance_mm': {'type': 'number',
-                                         'description': 'Level-to-plane offset still reported as "matches scan" (default 25).'}
-                    },
-                    'required': []
-                }
-            },
-            'detect_point_cloud_elements': {
-                'name': 'detect_point_cloud_elements',
-                'description': ('Detect building elements in a point cloud (Scan-to-BIM) and return them as '
-                                 'proposed geometry in mm: walls (start/end, thickness, base Z), floors and '
-                                 'ceilings (outline, elevation), doors and windows (insertion point, size, host '
-                                 'wall), columns (centre, size, Z range), stairs and roof planes — each with its '
-                                 'level and a confidence %. Read-only: NOTHING is created. To model the results '
-                                 'call place_wall / create_* tools, or open the Point Cloud to Model tool. MEP '
-                                 '(ducts, pipes, equipment) is out of scope.'),
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'point_cloud_id': {'type': 'integer',
-                                           'description': 'Element id from list_point_clouds. Optional when the document has exactly one point cloud.'},
-                        'elements': {'type': 'array',
-                                     'items': {'type': 'string',
-                                               'enum': ['walls', 'floors', 'ceilings', 'doors', 'windows',
-                                                        'columns', 'stairs', 'roof']},
-                                     'description': 'Kinds to detect (default: all).'},
-                        'max_points': {'type': 'integer',
-                                       'description': 'Sample size (default 20000, max 100000).'},
-                        'level_name': {'type': 'string',
-                                       'description': 'Detect only between this Level and the next one (or +4 m).'},
-                        'region_mm': {'type': 'object',
-                                      'description': 'Detect only inside this box in project coordinates: {"min": [x, y, z], "max": [x, y, z]} in mm.'},
-                        'min_wall_length_mm': {'type': 'number',
-                                               'description': 'Shortest wall reported (default 500).'},
-                        'limit_per_type': {'type': 'integer',
-                                           'description': 'Most detections listed per kind, highest confidence first (default 100). counts always holds the full totals.'}
-                    },
-                    'required': []
-                }
             },
             # ── Create tools ──────────────────────────────────────────────────
             'create_point_based_element': {
@@ -1835,6 +1868,46 @@ class T3LabAIServer(object):
                         }
                     },
                     'required': ['data_type']
+                }
+            },
+            # ── Batch: several edits = one undo step ──────────────────────────
+            'run_batch': {
+                'name': 'run_batch',
+                'description': ('Run several T3Lab tools in order as ONE Revit undo step (one TransactionGroup). '
+                                'With atomic=true (default) the whole batch is rolled back if any step fails, so '
+                                'the model is never left half-done. Use it for multi-step edits ("create 3 levels '
+                                'and a grid", "filter walls, then set a parameter on @handle"). Steps may be model '
+                                'edits or element reads; NOT exports, save/sync, open/close/switch document, view '
+                                'activation, selection, FamiGen, send_code_to_revit or another run_batch. '
+                                'Max 50 steps.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'steps': {
+                            'type': 'array',
+                            'minItems': 1,
+                            'maxItems': 50,
+                            'description': 'Tool calls to run, in order',
+                            'items': {
+                                'type': 'object',
+                                'properties': {
+                                    'name': {'type': 'string', 'description': 'Tool name, e.g. "create_level"'},
+                                    'arguments': {'type': 'object', 'description': 'That tool\'s arguments'}
+                                },
+                                'required': ['name']
+                            }
+                        },
+                        'atomic': {
+                            'type': 'boolean',
+                            'description': ('true (default): undo every step when one fails. false: keep the '
+                                            'steps that worked and report the failures.')
+                        },
+                        'undo_name': {
+                            'type': 'string',
+                            'description': 'Name shown in Revit\'s Undo list (default "T3Lab AI batch")'
+                        }
+                    },
+                    'required': ['steps']
                 }
             },
             # ── Utility tools ─────────────────────────────────────────────────
@@ -2813,10 +2886,11 @@ class T3LabAIServer(object):
 
     def _handle_initialize(self, params):
         """Handle MCP initialize request"""
+        requested = (params or {}).get('protocolVersion')
         return {
-            'protocolVersion': '2024-11-05',
+            'protocolVersion': mcp_policy.negotiate_protocol(requested),
             'capabilities': {
-                'tools': {}
+                'tools': {'listChanged': False}
             },
             'serverInfo': {
                 'name': 'T3LabAI Revit MCP Server',
@@ -2824,10 +2898,63 @@ class T3LabAIServer(object):
             }
         }
 
+    @staticmethod
+    def _read_only_tool_names():
+        """Tools that change neither the model nor any file — the single
+        classification the Assistant uses too (Intelligence.tool_schema).
+        Empty when it cannot be imported: read-only mode then fails closed."""
+        try:
+            from Intelligence.tool_schema import READ_ONLY_TOOL_NAMES
+            return READ_ONLY_TOOL_NAMES
+        except Exception:
+            return frozenset()
+
     def _handle_tools_list(self):
-        """Handle tools/list request"""
+        """Handle tools/list request: the tools this machine's MCP policy lets
+        external clients use, each with readOnly/destructive annotations."""
+        policy = mcp_policy.load_policy()
+        read_only = self._read_only_tool_names()
         return {
-            'tools': list(self._tools.values())
+            'tools': [mcp_policy.list_entry(tool, read_only)
+                      for name, tool in sorted(self._tools.items())
+                      if mcp_policy.tool_visible(name, policy, read_only)]
+        }
+
+    def _external_policy_check(self, tool_name, arguments):
+        """(decision, message, confirm) for one external tools/call — see
+        core.mcp_policy.check_call. `confirm` is the dialog text when the
+        user has to approve the call in Revit first."""
+        policy = mcp_policy.load_policy()
+        try:
+            destructive = self.is_destructive(tool_name, arguments)
+        except Exception:
+            destructive = True
+        decision, message = mcp_policy.check_call(
+            tool_name, policy, self._read_only_tool_names(), destructive)
+        confirm = None
+        if decision == 'confirm':
+            confirm = mcp_policy.confirm_text(tool_name, arguments)
+            if not self._external_event:
+                # No UI thread to ask on: never run it unasked.
+                decision, message = 'block', (
+                    '{} needs the user to confirm it in Revit, but the Revit '
+                    'ExternalEvent is not ready. Open the T3Lab Assistant once, '
+                    'then retry.'.format(tool_name))
+        return decision, message, confirm
+
+    @staticmethod
+    def _tool_call_result(result):
+        """tools/call result for one tool result dict."""
+        return {
+            'content': [{
+                'type': 'text',
+                # jsonsafe, not json.dumps: a single Revit name with an
+                # accent (a view called "Café Kitchen - Section") made the
+                # whole tool call fail with "'unknown' codec can't decode
+                # byte 0xe9" — IronPython's ensure_ascii escaper again.
+                'text': jsonsafe.dumps(result, indent=2)
+            }],
+            'isError': mcp_policy.is_error_result(result),
         }
 
     def _handle_tool_call(self, params):
@@ -2856,22 +2983,26 @@ class T3LabAIServer(object):
                 'isError': True
             }
 
+        if not isinstance(arguments, dict):
+            arguments = {}
+
         # Execute tool and return result
         t_start = time.time()
         try:
-            result = self._execute_tool(tool_name, arguments)
+            # Read-only mode, code execution and destructive-call consent for
+            # EXTERNAL clients (core.mcp_policy). The Assistant has its own
+            # gate and never comes through here.
+            decision, message, confirm = self._external_policy_check(
+                tool_name, arguments)
+            if decision == 'block':
+                result = {'error': message, 'blocked_by_policy': True,
+                          'tool': tool_name}
+            else:
+                result = self._execute_tool(tool_name, arguments,
+                                            confirm=confirm)
             self._teach_record_step(tool_name, arguments, result)
             _record_mcp_telemetry(tool_name, arguments, result, t_start)
-            return {
-                'content': [{
-                    'type': 'text',
-                    # jsonsafe, not json.dumps: a single Revit name with an
-                    # accent (a view called "Café Kitchen - Section") made the
-                    # whole tool call fail with "'unknown' codec can't decode
-                    # byte 0xe9" — IronPython's ensure_ascii escaper again.
-                    'text': jsonsafe.dumps(result, indent=2)
-                }]
-            }
+            return self._tool_call_result(result)
         except Exception as e:
             self._teach_record_step(
                 tool_name, arguments, {'error': str(e), 'tool': tool_name})
@@ -3225,11 +3356,6 @@ class T3LabAIServer(object):
         # down. Never let it fall back onto the HTTP worker thread. It opens
         # no transaction of its own.
         'check_bad_geometry',
-        # Same reason: PointCloudInstance.GetPoints runs inside the ReCap
-        # engine, and an off-thread or oversized query has hard-crashed Revit
-        # (AccessViolation in AdskRcPointCloudEngine.dll). Read-only — listed
-        # in Intelligence.tool_schema.READ_ONLY_TOOL_NAMES.
-        'analyze_point_cloud', 'detect_point_cloud_elements',
         'color_elements', 'tag_all_walls', 'tag_all_rooms', 'move_elements',
         'copy_elements', 'rotate_element', 'create_view', 'set_active_view',
         'rename_element', 'create_sheet', 'add_view_to_sheet', 'create_text_note',
@@ -3246,6 +3372,8 @@ class T3LabAIServer(object):
         # These call UIApplication.OpenAndActivateDocument / Document.Close,
         # which throw "outside of API context" from the HTTP worker thread.
         'switch_active_document', 'open_document', 'close_document',
+        # Opens a TransactionGroup and runs every step inside ONE Execute.
+        'run_batch',
         # Internal pseudo-tools (agent request TransactionGroup) — NOT in the
         # public registry, but they open/close a TransactionGroup so they must
         # run on the Revit main thread like any other write tool.
@@ -3293,6 +3421,17 @@ class T3LabAIServer(object):
         # (Face.Triangulate is the documented access-violation path).
         if tool_name == 'check_bad_geometry' and bool(args.get('deep_probe')):
             return True
+        # Closing without save=true throws away unsaved work.
+        if tool_name == 'close_document' and not bool(args.get('save')):
+            return True
+        # A batch is as dangerous as its most dangerous step.
+        if tool_name == 'run_batch':
+            for step in args.get('steps') or []:
+                if not isinstance(step, dict):
+                    continue
+                if self.is_destructive(step.get('name', ''),
+                                       step.get('arguments') or {}):
+                    return True
         return False
 
     # Tools that never touch the target document — they must keep working
@@ -3646,17 +3785,144 @@ class T3LabAIServer(object):
         except Exception:
             pass
 
-    def _execute_tool(self, tool_name, arguments):
-        """Execute a Revit tool in a thread-safe manner using External Events."""
+    # ── run_batch ─────────────────────────────────────────────────────────────
+    # Steps a batch may contain: model edits that open their own Transaction,
+    # plus element reads (so a step can see what an earlier one made). Left
+    # out on purpose: anything that saves, exports, opens/closes/switches a
+    # document or changes the active view or selection (not allowed while a
+    # transaction phase is open), shows a window (FamiGen, say_hello), hits
+    # the point-cloud engine, runs arbitrary code, or nests another batch.
+    _BATCH_STEP_TOOLS = frozenset([
+        # Create
+        'create_level', 'create_grid', 'place_wall', 'create_room',
+        'create_point_based_element', 'create_line_based_element',
+        'create_surface_based_element', 'create_structural_framing_system',
+        'create_view', 'duplicate_view', 'create_sheet', 'add_view_to_sheet',
+        'place_views_on_sheets', 'create_schedule', 'create_view_filter',
+        'create_project_parameter', 'room_to_floor',
+        # Annotate
+        'create_text_note', 'create_dimension', 'create_detail_annotation',
+        'tag_elements', 'tag_all_walls', 'tag_all_rooms',
+        # Modify
+        'set_parameter', 'bulk_set_parameter', 'rename_element',
+        'move_elements', 'copy_elements', 'rotate_element',
+        'edit_elements', 'delete_element', 'operate_element',
+        'color_elements', 'revit_override_color', 'apply_view_template',
+        'set_element_workset', 'split_curve', 'split_element', 'join_geometry',
+        # Read
+        'ai_element_filter', 'get_parameter', 'get_all_parameters',
+        'get_elements_by_level', 'get_current_view_info',
+        'get_current_view_elements', 'get_element_bounding_box',
+        'get_available_family_types', 'list_levels', 'list_worksets',
+        'revit_get_element_info', 'revit_get_selected_elements',
+        'revit_get_active_view', 'revit_list_views', 'revit_list_sheets',
+    ])
+    _BATCH_MAX_STEPS = 50
+
+    def _batch_problem(self, arguments):
+        """Error dict when the batch cannot run as given, else None. Checked
+        before the TransactionGroup opens, so a typo costs nothing."""
+        steps = arguments.get('steps')
+        if not isinstance(steps, list) or not steps:
+            return {'error': 'run_batch needs a non-empty "steps" list.', 'tool': 'run_batch'}
+        if len(steps) > self._BATCH_MAX_STEPS:
+            return {'error': 'run_batch takes at most {} steps ({} given). Split it.'.format(
+                self._BATCH_MAX_STEPS, len(steps)), 'tool': 'run_batch'}
+        for i, step in enumerate(steps):
+            where = 'Step {}'.format(i + 1)
+            if not isinstance(step, dict) or not step.get('name'):
+                return {'error': '{} needs a "name".'.format(where), 'tool': 'run_batch'}
+            extra = sorted(k for k in step if k not in ('name', 'arguments'))
+            if extra:
+                return {'error': '{} has unknown keys: {}. Put tool arguments under "arguments".'.format(
+                    where, ', '.join(extra)), 'tool': 'run_batch'}
+            name = step['name']
+            if name not in self._BATCH_STEP_TOOLS or name not in self._tools:
+                return {'error': '{}: {} cannot run inside run_batch.'.format(where, name),
+                        'allowed_tools': sorted(self._BATCH_STEP_TOOLS & set(self._tools)),
+                        'tool': 'run_batch'}
+            args = step.get('arguments')
+            if args is not None and not isinstance(args, dict):
+                return {'error': '{}: "arguments" must be an object.'.format(where), 'tool': 'run_batch'}
+            rejected = self._reject_unknown_arguments(name, args or {})
+            if rejected is not None:
+                rejected['error'] = '{}: {}'.format(where, rejected['error'])
+                rejected['tool'] = 'run_batch'
+                return rejected
+        return None
+
+    def _run_batch(self, doc, arguments, uiapp=None):
+        """Run the steps on THIS thread (Revit's main thread, inside the
+        ExternalEvent that called us) within one TransactionGroup: one undo
+        entry, rolled back as a whole when atomic and a step fails."""
+        problem = self._batch_problem(arguments)
+        if problem is not None:
+            return problem
+        steps = arguments['steps']
+        atomic = arguments.get('atomic', True) is not False
+        undo_name = u'{}'.format(arguments.get('undo_name') or u'T3Lab AI batch')[:120]
+
+        from Autodesk.Revit.DB import TransactionGroup
+        group = TransactionGroup(doc, undo_name)
+        results, failed = [], []
+        group.Start()
+        try:
+            for i, step in enumerate(steps):
+                name = step['name']
+                try:
+                    res = self._execute_tool_in_context(
+                        name, dict(step.get('arguments') or {}), uiapp=uiapp)
+                except Exception as e:
+                    res = {'error': str(e)}
+                ok = not mcp_policy.is_error_result(res)
+                results.append({'step': i + 1, 'name': name, 'ok': ok, 'result': res})
+                if not ok:
+                    failed.append(i + 1)
+                    if atomic:
+                        break
+            if failed and atomic:
+                group.RollBack()
+                return {'success': False,
+                        'error': 'Step {} ({}) failed, so the whole batch was undone.'.format(
+                            failed[0], steps[failed[0] - 1]['name']),
+                        'rolled_back': True, 'steps': results}
+            group.Assimilate()
+        except Exception as e:
+            try:
+                if group.HasStarted() and not group.HasEnded():
+                    group.RollBack()
+            except Exception:
+                pass
+            return {'success': False, 'error': 'Batch aborted and undone: {}'.format(e),
+                    'rolled_back': True, 'steps': results}
+        out = {'success': not failed, 'undo_name': undo_name,
+               'steps_run': len(results), 'steps': results}
+        if failed:
+            out['error'] = 'Steps {} failed; the other steps were kept (atomic=false).'.format(
+                ', '.join(str(n) for n in failed))
+        return out
+
+    def _execute_tool(self, tool_name, arguments, confirm=None):
+        """Execute a Revit tool in a thread-safe manner using External Events.
+
+        `confirm` (external MCP calls only, see _external_policy_check) makes
+        the UI thread ask the user in a Revit dialog before the tool runs.
+        """
         rejected = self._reject_unknown_arguments(tool_name, arguments)
         if rejected is not None:
             return rejected
+        if confirm and not self._external_event:
+            return {'error': ('{} needs the user to confirm it in Revit, but the '
+                              'Revit ExternalEvent is not ready.'.format(tool_name)),
+                    'tool': tool_name}
         if self._external_event:
-            task = _ToolTask(tool_name, arguments)
+            task = _ToolTask(tool_name, arguments, confirm=confirm)
             self._event_handler.tasks.put(task)
             self._external_event.Raise()
 
-            is_write = tool_name in self._WRITE_TOOLS
+            # A call that needs consent must never take the read fallback:
+            # the dialog can only be shown on the UI thread.
+            is_write = tool_name in self._WRITE_TOOLS or bool(confirm)
             # Wait for main UI thread execution. Large write operations
             # (framing systems, PDF export, bulk deletes) legitimately take
             # far longer than 10s, so allow up to 120s before giving up.
@@ -3681,10 +3947,24 @@ class T3LabAIServer(object):
                         return {'error': str(e), 'tool': tool_name}
                 finished = task.done.wait(120)
             if not finished:
-                # If still unclaimed, mark it consumed so the UI thread skips
-                # it when the event finally fires after this timeout report.
-                task.claim('abandoned')
-                return {'error': 'Execution timed out waiting for Revit thread context', 'tool': tool_name}
+                # Mark the caller gone: a task that has not started (or is
+                # still on its confirmation dialog) is then guaranteed never
+                # to run. One already running on the UI thread cannot be
+                # stopped — say so, or the caller retries a write that is
+                # about to land.
+                if task.give_up():
+                    if task.awaiting_user:
+                        return {'error': ('No answer to the confirmation dialog in Revit '
+                                          'within 120 s, so {} was NOT run.'.format(tool_name)),
+                                'tool': tool_name}
+                    return {'error': ('Revit was busy for 120 s (a dialog or command '
+                                      'is open?), so {} was NOT run. Retry once Revit '
+                                      'is idle.'.format(tool_name)),
+                            'tool': tool_name}
+                return {'error': ('{} is still running in Revit after 120 s and may '
+                                  'still finish. Check the model before retrying — '
+                                  'do not run it again blindly.'.format(tool_name)),
+                        'still_running': True, 'tool': tool_name}
             if task.exception:
                 return {'error': str(task.exception), 'tool': tool_name}
             return task.result
@@ -3710,176 +3990,6 @@ class T3LabAIServer(object):
                 return self._execute_tool_in_context(tool_name, arguments)
             except Exception as e:
                 return {'error': str(e), 'tool': tool_name}
-
-    # ── Point cloud tools ──────────────────────────────────────────────────
-    # list_point_clouds / analyze_point_cloud / detect_point_cloud_elements.
-    # The analysis itself lives in Services/point_cloud_analysis.py — the same
-    # tiled extraction and detectors the Point Cloud to Model wizard runs. The
-    # two sampling tools are in _WRITE_TOOLS so they only ever run on Revit's
-    # main thread (GetPoints off-thread can take Revit down); none of the
-    # three opens a transaction.
-
-    def _point_cloud_tool(self, doc, tool_name, arguments):
-        from Autodesk.Revit.DB import (FilteredElementCollector, Level,
-                                       PointCloudInstance, XYZ)
-        from Snippets._compat import eid_value
-        from Services import point_cloud_analysis as pca
-
-        clouds = list(FilteredElementCollector(doc).OfClass(PointCloudInstance).ToElements())
-        if tool_name == 'list_point_clouds':
-            view = doc.ActiveView
-            return {'count': len(clouds),
-                    'point_clouds': [self._describe_point_cloud(doc, pc, view) for pc in clouds],
-                    'hint': ('No point cloud in this document — link one with Insert > Point Cloud.'
-                             if not clouds else None)}
-
-        pc, err = self._pick_point_cloud(clouds, arguments.get('point_cloud_id'), eid_value)
-        if err:
-            return err
-
-        levels = []
-        for lv in FilteredElementCollector(doc).OfClass(Level).ToElements():
-            try:
-                elev = lv.ProjectElevation    # internal origin, like the points
-            except Exception:
-                elev = lv.Elevation
-            levels.append((lv.Name, elev))
-
-        region, err = self._point_cloud_region(pc, arguments, levels)
-        if err:
-            return err
-        budget = pca.clamp_point_budget(arguments.get('max_points'))
-        if region is None:
-            pts = pca.extract_full_cloud(pc, budget)
-        else:
-            (x0, y0, z0), (x1, y1, z1) = region
-            center = XYZ((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0)
-            pts = pca.extract_full_cloud_from_region(
-                pc, center, abs(x1 - x0) / 2.0, abs(y1 - y0) / 2.0,
-                abs(z1 - z0) / 2.0, budget)
-        source = {'point_cloud_id': eid_value(pc.Id), 'name': pc.Name,
-                  'region_mm': (None if region is None else
-                                {'min': [pca._mm(v) for v in region[0]],
-                                 'max': [pca._mm(v) for v in region[1]]}),
-                  'requested_points': budget}
-        if not pts:
-            return {'error': ('No points came back from the point cloud. Check that it is '
-                              'loaded and visible, and that region_mm / level_name overlaps it.'),
-                    'source': source, 'tool': tool_name}
-
-        if tool_name == 'analyze_point_cloud':
-            tol = arguments.get('tolerance_mm')
-            out = pca.analyze_points(pts, levels=levels,
-                                     tolerance_mm=25.0 if tol is None else float(tol))
-            out['source'] = source
-            return out
-
-        elements = arguments.get('elements') or list(pca.DETECTABLE)
-        unknown = [e for e in elements if e not in pca.DETECTABLE]
-        if unknown:
-            return {'error': 'Unknown element kinds: {}.'.format(', '.join(unknown)),
-                    'accepted': list(pca.DETECTABLE), 'tool': tool_name}
-        analyzer = pca.PointCloudAnalyzer(pts, doc=doc)
-        results = analyzer.run(pca.detection_settings(
-            elements, arguments.get('min_wall_length_mm')))
-        out = pca.summarize_detections(results, elements,
-                                       arguments.get('limit_per_type') or 100)
-        out['sampled_points'] = len(pts)
-        out['source'] = source
-        out['note'] = ('Proposed geometry only — nothing was created. Coordinates are '
-                       'project internal coordinates in mm (what place_wall / create_* expect '
-                       'after converting units). Confidence is the detector\'s own estimate; '
-                       'check low-confidence items against the scan before modelling them.')
-        return out
-
-    def _describe_point_cloud(self, doc, pc, view):
-        from Snippets._compat import eid_value
-        from Services.point_cloud_analysis import _mm
-        info = {'id': eid_value(pc.Id), 'name': pc.Name}
-        try:
-            ptype = doc.GetElement(pc.GetTypeId())
-            info['type_name'] = ptype.Name if ptype is not None else None
-        except Exception:
-            info['type_name'] = None
-        try:
-            from Autodesk.Revit.DB import ExternalFileUtils, ModelPathUtils
-            ref = ExternalFileUtils.GetExternalFileReference(doc, pc.GetTypeId())
-            info['path'] = ModelPathUtils.ConvertModelPathToUserVisiblePath(ref.GetAbsolutePath())
-            info['status'] = str(ref.GetLinkedFileStatus())
-        except Exception:
-            info['path'] = None
-        try:
-            bb = pc.get_BoundingBox(None)
-            lo = [bb.Min.X, bb.Min.Y, bb.Min.Z]
-            hi = [bb.Max.X, bb.Max.Y, bb.Max.Z]
-            info['bounding_box_mm'] = {'min': [_mm(v) for v in lo], 'max': [_mm(v) for v in hi]}
-            info['size_m'] = [round((hi[i] - lo[i]) * 0.3048, 2) for i in range(3)]
-        except Exception:
-            info['bounding_box_mm'] = None
-        try:
-            info['pinned'] = bool(pc.Pinned)
-        except Exception:
-            pass
-        try:
-            info['hidden_in_active_view'] = bool(pc.IsHidden(view)) if view is not None else None
-        except Exception:
-            pass
-        try:
-            scans = list(pc.GetScans())
-            info['scan_count'] = len(scans)
-        except Exception:
-            pass
-        return info
-
-    def _pick_point_cloud(self, clouds, wanted_id, eid_value):
-        """The PointCloudInstance to analyze, or (None, error dict)."""
-        if not clouds:
-            return None, {'error': ('There is no point cloud in the active document. '
-                                    'Link one with Insert > Point Cloud, then retry.')}
-        if wanted_id is None:
-            if len(clouds) == 1:
-                return clouds[0], None
-            return None, {'error': ('This document has {} point clouds — pass point_cloud_id.'
-                                    .format(len(clouds))),
-                          'point_clouds': [{'id': eid_value(c.Id), 'name': c.Name} for c in clouds]}
-        for c in clouds:
-            if eid_value(c.Id) == int(wanted_id):
-                return c, None
-        return None, {'error': 'No point cloud with id {}.'.format(wanted_id),
-                      'point_clouds': [{'id': eid_value(c.Id), 'name': c.Name} for c in clouds]}
-
-    def _point_cloud_region(self, pc, arguments, levels):
-        """Optional sub-box in feet: ((x0, y0, z0), (x1, y1, z1)) or None.
-
-        region_mm wins; level_name gives the cloud's XY extent between that
-        Level and the next one up (or +4 m above the top Level).
-        """
-        region = arguments.get('region_mm')
-        if region:
-            try:
-                lo = [float(v) / 304.8 for v in region['min']]
-                hi = [float(v) / 304.8 for v in region['max']]
-                assert len(lo) == 3 and len(hi) == 3
-            except Exception:
-                return None, {'error': ('region_mm must be {"min": [x, y, z], "max": [x, y, z]} '
-                                        'in millimetres.')}
-            return (tuple(min(a, b) for a, b in zip(lo, hi)),
-                    tuple(max(a, b) for a, b in zip(lo, hi))), None
-        name = arguments.get('level_name')
-        if not name:
-            return None, None
-        ordered = sorted(levels, key=lambda lv: lv[1])
-        idx = next((i for i, lv in enumerate(ordered)
-                    if lv[0].strip().lower() == str(name).strip().lower()), None)
-        if idx is None:
-            return None, {'error': 'No Level named "{}".'.format(name),
-                          'levels': [lv[0] for lv in ordered]}
-        z0 = ordered[idx][1]
-        z1 = ordered[idx + 1][1] if idx + 1 < len(ordered) else z0 + 4000.0 / 304.8
-        bb = pc.get_BoundingBox(None)
-        if bb is None:
-            return None, {'error': 'The point cloud has no bounding box (is it loaded?).'}
-        return ((bb.Min.X, bb.Min.Y, z0), (bb.Max.X, bb.Max.Y, z1)), None
 
     # ── Shared tool helpers ────────────────────────────────────────────────
 
@@ -4858,6 +4968,11 @@ class T3LabAIServer(object):
                              'group cannot outlive the ExternalEvent that '
                              'opened it. Each tool commits its own '
                              'transaction.')}
+
+        # What B4 could not do across several Executes, run_batch does inside
+        # ONE: the group opens and closes in this same Execute.
+        if tool_name == 'run_batch':
+            return self._run_batch(doc, arguments, uiapp)
 
         if tool_name == 'revit_get_active_view':
             view = doc.ActiveView
@@ -5903,18 +6018,6 @@ class T3LabAIServer(object):
                 'total_views': total_views,
                 'project': doc.ProjectInformation.Name,
             }
-
-        # ── point cloud tools (Services/point_cloud_analysis.py) ────────────
-        # One branch per tool: dev/test_tool_registry.py maps every registered
-        # tool to its own `elif tool_name == ...` line.
-        elif tool_name == 'list_point_clouds':
-            return self._point_cloud_tool(doc, tool_name, arguments)
-
-        elif tool_name == 'analyze_point_cloud':
-            return self._point_cloud_tool(doc, tool_name, arguments)
-
-        elif tool_name == 'detect_point_cloud_elements':
-            return self._point_cloud_tool(doc, tool_name, arguments)
 
         # ── create_point_based_element ───────────────────────────────────────
         elif tool_name == 'create_point_based_element':
@@ -10906,10 +11009,21 @@ class T3LabAIServer(object):
         # a zombie socket left by a killed Revit fails the bind with 10048
         # (or WSAEACCES 10013) even though nothing answers on the port; the
         # walk just moves on. The real bind is the only free-vs-taken test.
+        # The port set in MCP Control (server.port) is tried first; the rest
+        # of the range follows. Outside the range it is ignored: bridge.py
+        # only scans 48884-48894 when it looks for a Revit to fail over to.
+        try:
+            preferred = int(self._port)
+        except Exception:
+            preferred = PORT_MIN
+        if not PORT_MIN <= preferred <= PORT_MAX:
+            preferred = PORT_MIN
+        port_order = [preferred] + [p for p in range(PORT_MIN, PORT_MAX + 1)
+                                    if p != preferred]
+
         def bind_first_free():
             bind_error = None
-            port = 48884
-            while port <= 48894:
+            for port in port_order:
                 if not has_listener(port):
                     try:
                         # 127.0.0.1 explicitly — binding 'localhost' leaves
@@ -10921,7 +11035,6 @@ class T3LabAIServer(object):
                                 port, None)
                     except Exception as e:
                         bind_error = e
-                port += 1
             return None, None, bind_error
 
         http_server, port, bind_error = bind_first_free()
@@ -10938,7 +11051,7 @@ class T3LabAIServer(object):
             http_server, port, bind_error = bind_first_free()
         if http_server is None:
             self._start_error = bind_error
-            msg = "No usable port in range 48884-48894"
+            msg = "No usable port in range {}-{}".format(PORT_MIN, PORT_MAX)
             if bind_error is not None:
                 msg += " (last bind error: {})".format(bind_error)
             raise Exception(msg)

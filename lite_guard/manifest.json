@@ -81,6 +81,41 @@
       "file": "lib/core/updater.py",
       "pattern": "^from core\\.whats_new import extract_whats_new",
       "why": "Check Update and the What's new popup share one CHANGELOG parser"
+    },
+    {
+      "file": "lib/core/mcp_policy.py",
+      "pattern": "^def check_call\\(",
+      "why": "MCP security policy for external clients (read-only mode, consent, code execution)"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^\\s+decision, message, confirm = self\\._external_policy_check\\(",
+      "why": "_handle_tool_call() must run every external MCP call through core.mcp_policy, or destructive tools and send_code_to_revit run unasked"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^\\s+refusal = _ask_user_to_confirm\\(task\\)",
+      "why": "the ExternalEvent handler must ask in Revit before a call that needs consent"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^\\s+if mcp_policy\\.tool_visible\\(name, policy, read_only\\)",
+      "why": "tools/list must hide what the MCP policy does not allow"
+    },
+    {
+      "file": "lib/core/file_watcher.py",
+      "pattern": "^\\s+def start_if_enabled\\(",
+      "why": "the file task watcher runs code with no token, so it may only auto-start when opted in"
+    },
+    {
+      "file": "startup.py",
+      "pattern": "^\\s+get_task_watcher\\(\\)\\.start_if_enabled\\(\\)",
+      "why": "startup.py must not start the file task watcher unless the user opted in"
+    },
+    {
+      "file": "lib/tracking/service.py",
+      "pattern": "^\\s+arguments = redact_arguments\\(arguments\\)",
+      "why": "MCP telemetry must never send code, secrets or full paths"
     }
   ],
   "lite_only": [

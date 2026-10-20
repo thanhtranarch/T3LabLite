@@ -37,6 +37,15 @@ The watcher supports BOTH modes simultaneously:
   • JSON mode  (task.json  ↔ result.json)  — preferred; carries task_id
   • Simple mode (task.py   ↔ result.txt)   — for direct script testing
 
+Off by default
+--------------
+Anything that can write a file in the data folder can run code in Revit
+through this watcher -- no token, unlike the MCP server. So it only starts
+on its own when "auto_start_file_watcher": true is set in mcp_paths.json
+(MCP Control > Advanced > Start Watcher sets it; Stop clears it). A task
+file that was already there when the watcher starts is never run: only
+tasks written after start() count.
+
 In-Revit code context
 ---------------------
 Executed code receives these names:
@@ -69,6 +78,26 @@ TASK_FILE      = os.path.join(T3LAB_DATA_DIR, 'task.json')
 RESULT_FILE    = os.path.join(T3LAB_DATA_DIR, 'result.json')
 TASK_PY_FILE   = os.path.join(T3LAB_DATA_DIR, 'task.py')
 RESULT_TXT     = os.path.join(T3LAB_DATA_DIR, 'result.txt')
+
+AUTO_START_KEY = 'auto_start_file_watcher'
+
+
+def auto_start_enabled():
+    """True when the user opted in to starting the watcher with Revit."""
+    try:
+        from core import paths as _p
+        return (_p.load_settings() or {}).get(AUTO_START_KEY) is True
+    except Exception:
+        return False
+
+
+def set_auto_start(enabled):
+    """Remember whether the watcher starts with Revit / the Assistant."""
+    try:
+        from core import paths as _p
+        _p.set_setting(AUTO_START_KEY, bool(enabled))
+    except Exception:
+        pass
 
 # ── Optional Revit UI imports ───────────────────────────────────────────────────
 HAS_REVIT_UI = False
@@ -260,15 +289,42 @@ class TaskFileWatcher(object):
             except Exception:
                 pass  # fallback: no ExternalEvent (no Revit UI context yet)
 
+        # Baseline: a task left over from earlier is NOT run when the watcher
+        # (re)starts -- only a task written from now on.
+        self._last_task_id  = self._current_task_id()
+        self._last_py_mtime = self._current_py_mtime()
+
         self._running = True
         self._thread  = threading.Thread(target=self._watch_loop)
         self._thread.daemon = True
         self._thread.start()
         return True
 
+    def start_if_enabled(self):
+        """Start only when the user opted in (auto_start_file_watcher).
+        Used by the automatic starts (startup.py, the T3Lab Assistant)."""
+        if not auto_start_enabled():
+            return False
+        return self.start()
+
     def stop(self):
         """Stop the watcher thread."""
         self._running = False
+
+    @staticmethod
+    def _current_task_id():
+        try:
+            with open(TASK_FILE, 'r') as f:
+                return json.load(f).get('task_id')
+        except Exception:
+            return None
+
+    @staticmethod
+    def _current_py_mtime():
+        try:
+            return os.path.getmtime(TASK_PY_FILE)
+        except OSError:
+            return None
 
     @property
     def is_running(self):
@@ -368,6 +424,19 @@ class TaskFileWatcher(object):
         task_id  = task.get('task_id', '')
         code     = task.get('code', '')
         is_plain = task.get('_plain', False)
+        if HAS_REVIT_UI:
+            # Inside Revit this method runs on the watcher's own thread, and
+            # Revit API calls off the main thread can take Revit down. Only a
+            # bare test run (no Revit) may execute directly.
+            self._write_result(
+                task_id,
+                error=('The Revit ExternalEvent is not available, so the task '
+                       'was not run (it would have run off Revit\'s main '
+                       'thread). Restart the watcher from MCP Control and '
+                       'write the task again.'),
+                plain=is_plain)
+            self._done_event.set()
+            return
         try:
             from pyrevit import revit
             if getattr(revit, 'doc', None) is None:

@@ -3,7 +3,8 @@
 # Also runs the weekly auto-update tests (lite_guard/test_update_schedule.py)
 # and the old-ribbon-folder cleanup tests (lite_guard/test_ribbon_retire.py)
 # and the split-button memory tests (lite_guard/test_ribbon_memory.py)
-# and the once-per-version What's new popup tests (lite_guard/test_whats_new.py).
+# and the once-per-version What's new popup tests (lite_guard/test_whats_new.py)
+# and the MCP server / bridge / security policy tests (lite_guard/test_mcp_server.py).
 name: Lite guard
 
 on:
@@ -26,3 +27,5 @@ jobs:
         run: python3 lite_guard/test_ribbon_memory.py
       - name: Test the What's new popup
         run: python3 lite_guard/test_whats_new.py
+      - name: Test the MCP server, bridge and security policy
+        run: python3 lite_guard/test_mcp_server.py

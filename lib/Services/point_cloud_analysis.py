@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-Point cloud analysis engine — shared by the Point Cloud to Model wizard
-(GUI/PointCloudDialog.py) and the MCP server's point cloud tools
-(core/server.py: list_point_clouds, analyze_point_cloud,
-detect_point_cloud_elements).
+Point cloud analysis engine for the Point Cloud to Model wizard
+(GUI/PointCloudDialog.py).
 
-Moved out of the dialog 2026-10-02 so the MCP tools run exactly the same
-extraction safeguards and detectors as the wizard. No WPF and no pyRevit
+Moved out of the dialog 2026-10-02 for the MCP point cloud tools, which were
+removed again 2026-10-20 (no MCP client had called them since tracking began
+on 2026-10-03; the wizard is what people use). No WPF and no pyRevit
 forms here. The Revit API names are imported when Revit is present; under
 plain CPython (dev/test_pointcloud_detect.py) they are None and the test
 injects stubs.
 
-THREADING: every GetPoints call must run on Revit's main thread. The MCP
-server routes these tools through its ExternalEvent and never through its
-HTTP-thread read fallback — an oversized or off-thread query has hard-crashed
-the ReCap engine (native AccessViolation, journal 0xe0434352).
+THREADING: every GetPoints call must run on Revit's main thread — an
+oversized or off-thread query has hard-crashed the ReCap engine (native
+AccessViolation, journal 0xe0434352). Anyone wiring this back into the MCP
+server must route it through the ExternalEvent (core/server.py _WRITE_TOOLS),
+never through the HTTP-thread read fallback.
 """
 
 import math

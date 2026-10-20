@@ -287,6 +287,7 @@ LOCAL_HIDDEN_TOOLS = frozenset([
     "file_watcher_status",  # diagnostic
     "show_assistant_pane",  # the assistant's own UI
     "store_project_data", "store_room_data", "query_stored_data",
+    "run_batch",            # for MCP clients; the assistant plans its own steps
 ])
 
 
@@ -321,8 +322,6 @@ READ_ONLY_TOOL_NAMES = frozenset([
     "list_worksets", "query_stored_data", "revit_get_active_view",
     "revit_get_element_info", "revit_get_project_info",
     "revit_get_selected_elements", "revit_list_sheets", "revit_list_views",
-    # Point cloud (Scan-to-BIM): sampling and detection return proposals only.
-    "list_point_clouds", "analyze_point_cloud", "detect_point_cloud_elements",
     # Navigation / highlighting — changes the view, never the file
     "select_elements", "set_active_view", "switch_active_document",
     # Diagnostics and the assistant's own UI

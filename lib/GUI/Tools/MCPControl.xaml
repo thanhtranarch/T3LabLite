@@ -2019,15 +2019,35 @@
                                          Style="{StaticResource T3.TextBox.Mono}"
                                          TextAlignment="Center"/>
                                 <TextBlock Grid.Column="1" x:Name="port_hint_label"
-                                           Text="Default 48884. Stop the server to change it, then click Update for each connected app."
+                                           Text="48884 to 48894 (default 48884). Stop the server to change it, then click Update for each connected app."
                                            Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="12,0,0,0"/>
                             </Grid>
 
                             <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
 
+                            <!-- Security: what connected AI apps (Claude, Codex, Cursor ...) may do.
+                                 Applies from the next tool call. The T3Lab Assistant has its own
+                                 "Ask before edits" setting and is not affected. -->
+                            <TextBlock Text="SECURITY" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                            <CheckBox x:Name="read_only_toggle" Style="{StaticResource T3.CheckBox}"
+                                      Content="Read-only: AI apps can read the model but not change it"/>
+                            <TextBlock Text="Hides every tool that edits the model or writes files."
+                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,4,0,12"/>
+                            <CheckBox x:Name="confirm_destructive_toggle" Style="{StaticResource T3.CheckBox}"
+                                      Content="Ask in Revit before an AI app deletes, purges, syncs or closes without saving"/>
+                            <TextBlock Text="Revit shows the exact request. No is the default answer."
+                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,4,0,12"/>
+                            <CheckBox x:Name="code_exec_toggle" Style="{StaticResource T3.CheckBox}"
+                                      Content="Let AI apps run Python code in Revit"/>
+                            <TextBlock x:Name="code_exec_hint_label"
+                                       Text="Revit shows the code and asks before each run."
+                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,4,0,0"/>
+
+                            <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
+
                             <!-- File task watcher -->
                             <TextBlock Text="FILE TASK WATCHER" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                            <TextBlock Text="Server-free option: runs task.json files from the data folder."
+                            <TextBlock Text="Server-free option: runs task.json files from the data folder. Off by default: any program that can write there can run code in Revit. Start Watcher also turns it on for the next Revit sessions."
                                        Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,8"/>
                             <Grid Margin="0,0,0,8">
                                 <Grid.ColumnDefinitions>

@@ -9,7 +9,8 @@ Layout — three tabs, ordered by who needs them:
   Setup         the three steps every user follows, in order: start the
                 server, connect an AI app, ask it about the active model.
   Manual Config paste-it-yourself entry for apps not listed in Setup.
-  Advanced      auto-start, port, file task watcher, teaching capture.
+  Advanced      auto-start, port, security (read-only, confirmations, code
+                execution), file task watcher, teaching capture.
 The footer always states how ready the whole chain is. It has no button:
 Start/Stop Server sits in Step 1 and the title-bar X closes the window, so a
 footer "Start Server" / "Done" only repeated them.
@@ -281,6 +282,18 @@ class MCPControlWindow(T3WPFWindow):
         if self.port_tb:
             self.port_tb.TextChanged += self._on_port_changed
 
+        # Advanced tab · security (core/mcp_policy.py)
+        self._read_only_toggle   = self.FindName('read_only_toggle')
+        self._confirm_toggle     = self.FindName('confirm_destructive_toggle')
+        self._code_exec_toggle   = self.FindName('code_exec_toggle')
+        self._code_exec_hint     = self.FindName('code_exec_hint_label')
+        if self._read_only_toggle:
+            self._read_only_toggle.Click += self._on_read_only_toggle
+        if self._confirm_toggle:
+            self._confirm_toggle.Click += self._on_confirm_toggle
+        if self._code_exec_toggle:
+            self._code_exec_toggle.Click += self._on_code_exec_toggle
+
         # Advanced tab · file watcher
         self._watcher_indicator = self.FindName('watcher_indicator')
         self._watcher_label     = self.FindName('watcher_label')
@@ -345,7 +358,8 @@ class MCPControlWindow(T3WPFWindow):
             port = int(self.port_tb.Text.strip()) if self.port_tb else None
         except Exception:
             return None
-        if port is None or not (1024 <= port <= 65535):
+        # bridge.py only looks for Revit inside this range.
+        if port is None or not (48884 <= port <= 48894):
             return None
         return port
 
@@ -370,6 +384,7 @@ class MCPControlWindow(T3WPFWindow):
                               ('server',      self._refresh_server),
                               ('documents',   self._refresh_documents),
                               ('AI clients',  self._refresh_clients),
+                              ('security',    self._refresh_security),
                               ('watcher',     self._refresh_watcher),
                               ('teaching',    self._refresh_teaching)):
             try:
@@ -666,7 +681,7 @@ class MCPControlWindow(T3WPFWindow):
             text = self.port_tb.Text.strip() if self.port_tb else ''
             self._port_hint.Text = (
                 self._port_hint_default if self._current_port() is not None
-                else '"{}" is not a valid port — enter a number from 1024 to 65535.'.format(text))
+                else '"{}" is not a valid port — enter a number from 48884 to 48894.'.format(text))
         self._refresh_snippet()
 
     def _on_copy(self, sender, e):
@@ -699,6 +714,55 @@ class MCPControlWindow(T3WPFWindow):
         ok, err = MCPService.open_data_dir()
         if not ok:
             logger.error('Could not open data dir: {}'.format(err))
+
+    # ── Security ───────────────────────────────────────────────────────────────
+
+    _CODE_HINTS = {
+        'off':   'Off: AI apps do not see the code tool at all.',
+        'ask':   'Revit shows the code and asks before each run.',
+        'allow': 'Runs without asking ("mcp_code_execution": "allow" in mcp_paths.json).',
+    }
+
+    def _refresh_security(self):
+        toggles = (self._read_only_toggle, self._confirm_toggle,
+                   self._code_exec_toggle)
+        if not HAS_SERVICE:
+            for t in toggles:
+                if t is not None:
+                    t.IsEnabled = False
+            return
+        policy = MCPService.mcp_policy()
+        if self._read_only_toggle is not None:
+            self._read_only_toggle.IsChecked = bool(policy.get('read_only'))
+        if self._confirm_toggle is not None:
+            self._confirm_toggle.IsChecked = bool(policy.get('confirm_destructive'))
+        mode = policy.get('code_execution') or 'ask'
+        if self._code_exec_toggle is not None:
+            self._code_exec_toggle.IsChecked = mode != 'off'
+        if self._code_exec_hint is not None:
+            self._code_exec_hint.Text = self._CODE_HINTS.get(mode, '')
+
+    def _save_security(self, **fields):
+        if not HAS_SERVICE:
+            return
+        _policy, err = MCPService.set_mcp_policy(**fields)
+        if err:
+            logger.error('Security setting error: {}'.format(err))
+        self._refresh_security()
+
+    def _on_read_only_toggle(self, sender, e):
+        self._save_security(read_only=bool(self._read_only_toggle.IsChecked))
+
+    def _on_confirm_toggle(self, sender, e):
+        self._save_security(confirm_destructive=bool(self._confirm_toggle.IsChecked))
+
+    def _on_code_exec_toggle(self, sender, e):
+        if not bool(self._code_exec_toggle.IsChecked):
+            self._save_security(code_execution='off')
+            return
+        # Turning it back on means "ask"; an "allow" set by hand is kept.
+        current = MCPService.mcp_policy().get('code_execution') if HAS_SERVICE else 'ask'
+        self._save_security(code_execution='allow' if current == 'allow' else 'ask')
 
     # ── Teaching capture ────────────────────────────────────────────────────────
 

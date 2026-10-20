@@ -21,6 +21,7 @@ Releasing a new version:
 
 ### Fixed
 - **ManaSched:** text cells with Excel's Accounting format no longer show a stray `_(` … `_)` around the text in Revit. `[Red]`-style colour codes and `\` escapes in text formats are no longer printed either.
+- **ManaSched:** Excel / Google Sheets borders now show up in a schedule even when Excel saved the line on only one of the two cells that share it (e.g. a bottom border on a header row). Before, the cell on the other side drew `<Invisible lines>` over it.
 
 ## [2.1.0] - 2026-10-19
 

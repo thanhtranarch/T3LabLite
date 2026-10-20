@@ -1102,6 +1102,8 @@ class Layout(object):
     fills           — [(x, y, w, h, (r, g, b))]
     segments        — [((x1, y1), (x2, y2), weight, (r, g, b))] merged collinear
     texts           — [{'x','y','w','h','text','font','halign','valign','wrap','r','c'}]
+    h_edges         — {(row line, col): (weight, rgb)} drawn borders (formatting on)
+    v_edges         — {(col line, row): (weight, rgb)}
     """
 
     def __init__(self):
@@ -1111,6 +1113,28 @@ class Layout(object):
         self.fills = []
         self.segments = []
         self.texts = []
+        self.h_edges = {}
+        self.v_edges = {}
+
+
+def cell_borders(lay, r1, c1, r2, c2):
+    """{side: (weight, rgb)} of the cell r1,c1..r2,c2 from the shared grid edges.
+
+    Excel often stores a line on one side only (row 1 bottom, not row 2 top);
+    the schedule renderer sets every side of every cell, so both neighbours
+    must get the same edge or one paints <Invisible lines> over it. A side
+    along a merge takes its heaviest segment (a Revit cell has one style).
+    """
+    def heaviest(edges):
+        edges = [e for e in edges if e]
+        return max(edges, key=lambda e: e[0]) if edges else None
+    out = {
+        'top': heaviest(lay.h_edges.get((r1, c)) for c in range(c1, c2 + 1)),
+        'bottom': heaviest(lay.h_edges.get((r2 + 1, c)) for c in range(c1, c2 + 1)),
+        'left': heaviest(lay.v_edges.get((c1, r)) for r in range(r1, r2 + 1)),
+        'right': heaviest(lay.v_edges.get((c2 + 1, r)) for r in range(r1, r2 + 1)),
+    }
+    return {side: b for side, b in out.items() if b}
 
 
 def build_layout(table, scale=1.0, formatting=True):
@@ -1229,6 +1253,7 @@ def build_layout(table, scale=1.0, formatting=True):
             b = heavier(left, right)
             if b:
                 v_edges[(j, r)] = b
+    lay.h_edges, lay.v_edges = h_edges, v_edges
 
     # merge collinear runs with the same style into one segment
     for i in range(table.rows + 1):

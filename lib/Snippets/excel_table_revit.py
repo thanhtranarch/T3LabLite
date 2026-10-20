@@ -663,7 +663,9 @@ def _new_header_schedule(doc, name, total_width_ft):
     _try(d, 'ShowHeaders', False)
     _try(d, 'ShowGrandTotal', False)
     _try(d, 'IsItemized', True)
-    _try(d, 'ShowGridLines', False)
+    # Grid lines off hides every header cell border too; with formatting on each
+    # cell sets all four sides itself, <Invisible lines> where Excel has none
+    _try(d, 'ShowGridLines', True)
     try:
         d.AddFilter(DB.ScheduleFilter(field.FieldId, DB.ScheduleFilterType.Equal, NO_ROWS_TOKEN))
     except Exception:
@@ -759,8 +761,6 @@ def _fill_header(doc, vs, table, layout, formatting, scale, styles):
             try:
                 if not hdr.AllowOverrideCellStyle(row, col):
                     continue
-                st = hdr.GetTableCellStyle(row, col)
-                opts = st.GetCellStyleOverrideOptions()
             except Exception:
                 continue
             font = cell.font if formatting else xt.DEFAULT_FONT
@@ -774,30 +774,51 @@ def _fill_header(doc, vs, table, layout, formatting, scale, styles):
                 ('HorizontalAlignment', 'FontHorizontalAlignment', h_map.get(cell.halign)),
                 ('VerticalAlignment', 'FontVerticalAlignment', v_map.get(cell.valign)),
             ]
+            borders = []                        # (TableCellStyle property, GraphicsStyle)
             if formatting:
                 pairs.append(('BackgroundColor', 'BackgroundColor',
                               _color(cell.fill or (255, 255, 255))))
                 edges = xt.cell_borders(layout, r, c, *span.get((r, c), (r, c)))
-                for side, opt, prop in (('top', 'BorderTopLineStyle', 'BorderTopLineStyle'),
-                                        ('bottom', 'BorderBottomLineStyle', 'BorderBottomLineStyle'),
-                                        ('left', 'BorderLeftLineStyle', 'BorderLeftLineStyle'),
-                                        ('right', 'BorderRightLineStyle', 'BorderRightLineStyle')):
+                for side, prop in (('top', 'BorderTopLineStyle'), ('bottom', 'BorderBottomLineStyle'),
+                                   ('left', 'BorderLeftLineStyle'), ('right', 'BorderRightLineStyle')):
                     b = edges.get(side)
                     gs = styles.line_style(b[0], b[1]) if b else invisible
                     if gs is not None:
-                        pairs.append((opt, prop, gs.Id))
-            for opt_name, prop, value in pairs:
-                if value is None:
+                        borders.append((prop, gs))
+            # the documented GraphicsStyle id is the fallback, so a rejected id
+            # never costs the cell its fonts and fill
+            for line_id in (_line_category_id, lambda g: g.Id):
+                try:
+                    st = hdr.GetTableCellStyle(row, col)
+                    opts = st.GetCellStyleOverrideOptions()
+                except Exception:
+                    break
+                rejected = False
+                for opt_name, prop, value in pairs + [(p, p, line_id(g)) for p, g in borders]:
+                    if value is None:
+                        continue
+                    if _try(st, prop, value):
+                        _try(opts, opt_name, True)
+                    elif prop.startswith('Border'):
+                        rejected = True
+                if rejected and line_id is _line_category_id:
                     continue
-                if _try(st, prop, value):
-                    _try(opts, opt_name, True)
-            try:
-                st.SetCellStyleOverrideOptions(opts)
-                hdr.SetCellStyle(row, col, st)
-                styled += 1
-            except Exception:
-                pass
+                try:
+                    st.SetCellStyleOverrideOptions(opts)
+                    hdr.SetCellStyle(row, col, st)
+                    styled += 1
+                    break
+                except Exception:
+                    pass
     return styled
+
+
+def _line_category_id(gs):
+    """Border id for a header cell: the line style's category, not the
+    GraphicsStyle the API docs name (2026-10-20: no schedule border showed in
+    Revit; accepted fix in the Revit API forum thread "Schedule borders")."""
+    cat = getattr(gs, 'GraphicsStyleCategory', None)
+    return cat.Id if cat is not None else gs.Id
 
 
 def _sheet_placements(doc, schedule_id):

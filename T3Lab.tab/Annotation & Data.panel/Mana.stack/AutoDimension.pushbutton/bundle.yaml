@@ -1,0 +1,7 @@
+title: "Auto\nDimension"
+tooltip: Automatically create dimension chains for selected elements.
+description: |
+  Auto Dimension: automatically create dimension chains for walls, columns,
+  doors, lifts and grids in the active or a chosen view.
+
+author: Tran Tien Thanh

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- con lan son: dau lan la signal -->
+  <path d="M20 8h6v7H16v3M14 18h4v10h-4z" stroke="#000000"/>
+  <rect x="6" y="5" width="14" height="6" rx="2" stroke="#EA680C"/>
+</svg>

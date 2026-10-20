@@ -1,0 +1,6 @@
+title: "Reference"
+tooltip: "Bring 2D sources in: images, property lines, text notes"
+layout:
+  - ImageToDrafting
+  - PropertyLine
+  - Text to Element

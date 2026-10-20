@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- luoi gach so le trong khung; mot vien gach la signal -->
+  <rect x="4" y="4" width="24" height="24" rx="2" stroke="#000000"/>
+  <path d="M4 12h24M4 20h24M14 4v8M9 12v8M21 12v8M14 20v8" stroke="#666666"/>
+  <rect x="10" y="13" width="10" height="6" fill="#EA680C"/>
+</svg>

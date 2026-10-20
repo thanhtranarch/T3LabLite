@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- sheet ho goc + dong chu (ink-2); mui ten xuat la signal -->
+  <path d="M21 15V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v20a2 2 0 0 0 2 2h8" stroke="#000000"/>
+  <path d="M9 10h8M9 15h5" stroke="#666666"/>
+  <path d="M20 20l8 8M28 21v7h-7" stroke="#EA680C"/>
+</svg>

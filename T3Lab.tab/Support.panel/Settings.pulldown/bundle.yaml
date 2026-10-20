@@ -1,0 +1,10 @@
+title: "Settings"
+tooltip: "T3Lab settings: Feedback, MCP Control, LLMs Setting, Mana Tabs, Ribbon Names, BG Theme, Check Update"
+layout:
+  - Feedback
+  - MCPControl
+  - LLMsSetting
+  - ManaTabs
+  - Ribbon Names
+  - BG Theme
+  - CheckUpdate

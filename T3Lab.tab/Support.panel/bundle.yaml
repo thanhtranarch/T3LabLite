@@ -1,0 +1,8 @@
+title: "Support"
+background:
+  title: "#46E07B00"
+layout:
+
+  - CloudLinks
+  - T3LabAssistant
+  - Settings

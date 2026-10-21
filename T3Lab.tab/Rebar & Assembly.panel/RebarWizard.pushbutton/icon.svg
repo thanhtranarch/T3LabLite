@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- mat cat dam + dai (ink-2); 4 thanh thep duoc tao la signal -->
+  <rect x="4" y="4" width="24" height="24" rx="2" stroke="#000000"/>
+  <rect x="8" y="8" width="16" height="16" rx="2" stroke="#666666"/>
+  <path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M19 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M11 20a1 1 0 1 0 2 0a1 1 0 1 0 -2 0M19 20a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" stroke="#EA680C"/>
+</svg>

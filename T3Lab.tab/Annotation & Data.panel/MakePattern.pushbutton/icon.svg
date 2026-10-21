@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- khung + hatch 45 do (ink-2); dau cong tao pattern la signal -->
+  <path d="M22 14V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8" stroke="#000000"/>
+  <path d="M8 12l4-4M8 18l10-10M14 18l4-4" stroke="#666666"/>
+  <path d="M24 20v8M20 24h8" stroke="#EA680C"/>
+</svg>

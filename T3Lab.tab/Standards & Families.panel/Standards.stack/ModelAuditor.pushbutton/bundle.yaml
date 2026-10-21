@@ -1,0 +1,8 @@
+title: "Model\nAuditor"
+tooltip: "Model health score, warning management and unused-item purge. The health scan starts on open."
+description: |
+  Health: scans on open — weighted score over 17 metrics, trend against the last run
+  Warnings: group, inspect, select in model and resolve duplicate-instance warnings
+  Smart Purge: scan 25 categories of unused items and delete the ones you tick
+author: "Tran Tien Thanh"
+version: "2.1.0"

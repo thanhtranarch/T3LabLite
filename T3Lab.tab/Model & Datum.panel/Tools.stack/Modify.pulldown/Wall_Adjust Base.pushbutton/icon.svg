@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- tuong + level day (ink-2); mui ten offset la signal -->
+  <rect x="6" y="4" width="10" height="18" rx="2" stroke="#000000"/>
+  <path d="M4 27h24" stroke="#666666"/>
+  <path d="M23 8v14M20 11l3-3 3 3M20 19l3 3 3-3" stroke="#EA680C"/>
+</svg>

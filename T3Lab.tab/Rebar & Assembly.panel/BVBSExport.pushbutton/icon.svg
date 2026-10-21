@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- thanh thep be (crank) + vach may (ink-2); mui ten xuat la signal -->
+  <path d="M4 22h3a4 4 0 0 0 4-4v-6a4 4 0 0 1 4-4h13" stroke="#000000"/>
+  <path d="M4 27h10" stroke="#666666"/>
+  <path d="M20 20l8 8M28 21v7h-7" stroke="#EA680C"/>
+</svg>

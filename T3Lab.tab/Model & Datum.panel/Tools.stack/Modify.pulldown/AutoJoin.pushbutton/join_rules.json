@@ -1,0 +1,10 @@
+[
+  {
+    "join_with": "Walls", 
+    "priority": "Walls"
+  }, 
+  {
+    "join_with": "Structural Columns", 
+    "priority": "Structural Framing"
+  }
+]

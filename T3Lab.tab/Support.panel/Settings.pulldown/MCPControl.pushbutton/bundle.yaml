@@ -1,0 +1,9 @@
+title: "MCP\nControl"
+tooltip: "Connect AI apps (Claude Desktop, ChatGPT Codex, Antigravity) to Revit through the T3Lab MCP server."
+description: |
+  Setup: start the server, connect your AI app, check the active model
+  Manual Config: copy the MCP entry for any other AI app
+  Advanced: auto-start, port, file task watcher, teaching capture
+  Enables Claude AI (and other MCP clients) to interact directly with Revit
+author: "Tran Tien Thanh"
+version: "1.1.0"

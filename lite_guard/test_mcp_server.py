@@ -8,6 +8,8 @@ Covers what an external AI app (Claude Desktop, Codex ... via bridge.py) can
 reach:
   - core/mcp_policy.py: read-only mode, code execution, destructive-call
     consent, annotations, isError, Origin and token checks
+  - core/call_summary.py: the "what this call does" text of the Revit
+    confirmation (code purpose and findings, per-tool summaries)
   - core/server.py: the real HTTP handler on a local port (auth, -32700,
     202 for notifications, ping, tools/list without the request lock),
     tools/list filtering, tools/call blocking, run_batch validation
@@ -47,6 +49,7 @@ if LIB not in sys.path:
     sys.path.insert(0, LIB)
 
 from core import mcp_policy as mp      # noqa: E402
+from core import call_summary as cs    # noqa: E402
 from core import paths                 # noqa: E402
 from core import server as srv_mod     # noqa: E402
 from core import bridge                # noqa: E402
@@ -171,12 +174,41 @@ class PolicyTests(unittest.TestCase):
     def test_confirm_text_shows_code(self):
         main, content, expanded = mp.confirm_text('send_code_to_revit',
                                                   {'code': 'x = 1\ny = 2'})
-        self.assertIn('Python', main)
-        self.assertIn('2 line', content)
+        self.assertIn('AI code', main)
+        self.assertIn('Python code', content)
+        self.assertNotIn('line(s)', content)
         self.assertEqual(expanded, 'x = 1\ny = 2')
         _main, _content, long_expanded = mp.confirm_text(
             'send_code_to_revit', {'code': 'a' * 5000})
         self.assertIn('more characters not shown', long_expanded)
+
+    def test_confirm_text_says_what_the_code_does(self):
+        code = ('t = Transaction(doc, "Clean up")\nt.Start()\n'
+                'doc.Delete(ids)\nt.Commit()\n')
+        main, content, _expanded = mp.confirm_text(
+            'send_code_to_revit',
+            {'code': code, 'description': 'Delete unused CAD imports'})
+        self.assertEqual(main, 'Run AI code in Revit: Delete unused CAD imports?')
+        self.assertIn('stated by the AI', content)
+        # The AI's words are the headline; the code's own actions stay listed.
+        self.assertIn('Deletes elements', content)
+        self.assertIn('"Clean up"', content)
+        main, content, _expanded = mp.confirm_text('send_code_to_revit', {'code': code})
+        self.assertEqual(main, 'Run AI code in Revit: Clean up?')
+        self.assertIn('transaction name', content)
+
+    def test_confirm_text_says_what_a_tool_does(self):
+        main, content, expanded = mp.confirm_text(
+            'delete_element', {'element_ids': [11, 12, 13]})
+        self.assertEqual(main, 'Delete 3 elements (id 11, 12, 13)?')
+        self.assertIn('deleted too', content)
+        self.assertIn('Tool: delete_element', expanded)
+        main, content, _expanded = mp.confirm_text('run_batch', {'steps': [
+            {'name': 'create_level', 'arguments': {'name': 'L3'}},
+            {'name': 'delete_element', 'arguments': {'element_ids': [9]}}]})
+        self.assertIn('Run 2 steps', main)
+        self.assertIn('1. Create level', content)
+        self.assertIn('2. Delete 1 element (id 9)', content)
 
     def test_save_policy_round_trip(self):
         try:
@@ -188,6 +220,94 @@ class PolicyTests(unittest.TestCase):
                 mp.save_policy(code_execution='sometimes')
         finally:
             _clear_policy()
+
+
+class CallSummaryTests(unittest.TestCase):
+
+    def test_code_findings(self):
+        code = '\n'.join([
+            '# doc.Delete(old) -- a comment is not code',
+            'walls = FilteredElementCollector(doc).OfCategory('
+            'BuiltInCategory.OST_StructuralColumns).ToElements()',
+            't = Transaction(doc, "Mark columns")',
+            't.Start()',
+            'for w in walls:',
+            '    w.LookupParameter("Comments").Set("checked")',
+            'sheet = ViewSheet.Create(doc, tb_id)',
+            'line = Line.CreateBound(a, b)',
+            't.Commit()',
+            'f = open("c:/temp/log.txt", "w")',
+            'f.close()',
+            'sw = StreamWriter(path); sw.Close()',
+        ])
+        found = cs.code_findings(code)
+        self.assertEqual(found['transactions'], ['Mark columns'])
+        self.assertNotIn('Deletes elements', found['actions'])
+        self.assertNotIn('Closes a document', found['actions'], 'writer.Close() is a file')
+        self.assertIn('Changes parameter values', found['actions'])
+        self.assertEqual(found['creates'], ['ViewSheet'], 'Line is geometry, not an element')
+        self.assertEqual(found['categories'], ['Structural Columns'])
+        self.assertEqual(found['parameters'], ['Comments'])
+        self.assertEqual(found['outside'], ['writes files on disk'])
+        self.assertFalse(found['read_only'])
+        lines = cs.describe_code({'code': code})['findings']
+        self.assertIn('Changes parameter values (Comments)', lines)
+        self.assertIn('Creates: ViewSheet', lines)
+        self.assertIn('Works on: Structural Columns', lines)
+        self.assertIn('Outside Revit: writes files on disk', lines)
+
+    def test_code_headline_sources(self):
+        code = 't = Transaction(doc, "T3Lab AI")\nt.Start()\ndoc.Delete(ids)\nt.Commit()'
+        info = cs.describe_code({'code': code, 'description': '  Remove old CAD.  '})
+        self.assertEqual((info['headline'], info['source']), ('Remove old CAD', cs.SOURCE_AI))
+        # A generic transaction name says nothing: fall back to the code.
+        info = cs.describe_code({'code': code})
+        self.assertEqual(info['source'], cs.SOURCE_CODE)
+        self.assertTrue(info['headline'].startswith('Deletes elements'))
+        info = cs.describe_code({'code': 'result = [w.Name for w in FilteredElementCollector('
+                                         'doc).OfClass(Wall)]'})
+        self.assertEqual(info['headline'], 'Reads Wall')
+        self.assertIn('No transaction found: it should only read the model', info['findings'])
+        info = cs.describe_code({'code': 'doc.SaveAs(p)\nwb.Save()'})
+        self.assertIn('Saves the model under a new name', info['findings'])
+        self.assertNotIn('Saves the model', info['findings'], 'wb.Save() is Excel')
+        self.assertFalse(cs.code_findings('doc.SaveAs(p)')['read_only'])
+
+    def test_tool_summaries(self):
+        cases = [
+            ('delete_element', {'element_ids': list(range(1, 9))},
+             'Delete 8 elements (id 1, 2, 3, 4, 5 +3 more)'),
+            ('edit_elements', {'operation': 'ungroup', 'category': 'Model Groups'},
+             'Ungroup all Model Groups in the active view'),
+            ('manage_view_template', {'operation': 'delete', 'template_name': 'A-Plan'},
+             'Delete view template "A-Plan"'),
+            ('manage_links', {'operation': 'delete', 'link_names': ['ARC.rvt']},
+             'Delete link: ARC.rvt'),
+            ('manage_document', {'operation': 'sync_with_central', 'comment': 'daily'},
+             'Sync with central, comment "daily"'),
+            ('purge_unused', {'dry_run': False},
+             'Delete every unused family type and view template'),
+            ('close_document', {'path_or_title': 'Tower A'},
+             'Close "Tower A" without saving'),
+            ('bulk_set_parameter', {'category': 'Doors', 'parameter_name': 'Mark',
+                                    'value': 'D1'},
+             'Set Mark = "D1" on all Doors'),
+            ('create_level', {'name': 'L3', 'elevation': 9},
+             'Create level — elevation: 9, name: L3'),
+        ]
+        for name, args, expected in cases:
+            self.assertEqual(cs.summarize(name, args)[0], expected, name)
+
+    def test_never_raises(self):
+        for name, args in (('delete_element', None), ('run_batch', {'steps': 'x'}),
+                           ('send_code_to_revit', {'code': None}), (None, [1])):
+            headline, details = cs.summarize(name, args)
+            self.assertIsInstance(details, list)
+
+    def test_send_code_schema_asks_for_a_purpose(self):
+        schema = _server()._tools['send_code_to_revit']['inputSchema']
+        self.assertIn('description', schema['properties'])
+        self.assertIn('description', schema['required'])
 
 
 class RegistryTests(unittest.TestCase):
@@ -304,7 +424,8 @@ class ToolCallTests(unittest.TestCase):
             self.s._external_event = None
         (name1, _a1, confirm1), (name2, _a2, confirm2) = self.calls
         self.assertEqual(name1, 'delete_element')
-        self.assertTrue(confirm1 and 'delete_element' in confirm1[0])
+        self.assertTrue(confirm1 and 'Delete 1 element' in confirm1[0])
+        self.assertIn('delete_element', confirm1[2])
         self.assertIsNone(confirm2)
 
     def test_confirm_can_be_turned_off(self):

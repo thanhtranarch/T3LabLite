@@ -1,9 +1,8 @@
 title: "Wall\nCut Profile"
-tooltip: "Cut wall profiles or create openings based on intersecting linked model elements."
+tooltip: "Create openings where ducts, pipes, cable trays, beams or columns cross walls - from this model, plus any linked models you tick."
 description: |
-  Scans all linked models for elements intersecting host walls
-  Creates void openings or sketch-based profile cuts
-  Supports linked structural members, MEP penetrations, and floors
-  Preview intersections before committing changes
+  Scans this model, and the linked models you tick when Include linked models is on
+  Places a wall-hosted opening family or a rectangular wall opening at each crossing
+  Target walls: every wall in the current view, or only the walls you pick
 author: "T3Lab"
-version: "1.0.0"
+version: "1.1.0"

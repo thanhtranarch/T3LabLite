@@ -1,12 +1,13 @@
 #! python3
 # -*- coding: utf-8 -*-
-"""Wall Profile Cut from Linked Elements
-Creates openings in walls based on intersecting elements from linked models.
+"""Wall Profile Cut & Openings
+Creates openings in walls where elements of this model, or of the linked
+models the user ticks, cross them.
 """
 
 __title__ = "Wall\nCut Profile"
 __author__ = "T3Lab"
-__doc__ = "Cut wall profiles or create openings based on linked element intersections."
+__doc__ = "Create wall openings where elements of this model or ticked linked models cross walls."
 
 import os
 import sys

@@ -127,7 +127,7 @@ Scan-to-BIM wizard that auto-detects Walls, Floors, Ceilings, Doors, Windows, Co
 **Modify**
 - **Auto Join** — automatically join intersecting elements by category rules (Shift+Click for quick join).
 - **Split Elements** — split Walls, Columns, or Floors at selected levels, preserving parameters.
-- **Wall Cut Profile** — cut wall profiles or create openings based on intersecting linked model elements.
+- **Wall Cut Profile** — create wall openings where ducts, pipes, cable trays, beams or columns cross walls, from the open model plus any linked models you tick.
 - **DatumSync** — synchronize grid lines, levels, and reference planes across views. Align 2D/3D extents, datum bubbles, and visibility between a source view and target views to maintain clean documentation.
 - **Auto Adjust Base Offset** — recalculate Base Offset when changing Base Constraint so elements keep their absolute elevation.
 

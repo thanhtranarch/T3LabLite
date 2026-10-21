@@ -8,7 +8,7 @@ The in-app T3Lab Assistant does not come through here. It calls
 T3LabAIServer._execute_tool directly and has its own gate (ToolGate in
 Intelligence/agent_loop.py), so nothing below changes the Assistant.
 
-Plain Python, no Revit import: lite_guard/test_mcp_policy.py runs it on CI.
+Plain Python, no Revit import: lite_guard/test_mcp_server.py runs it on CI.
 
 Settings (in %APPDATA%\\T3LabAI\\mcp_paths.json, also set from MCP Control >
 Advanced > Security):
@@ -27,6 +27,8 @@ Advanced > Security):
 from __future__ import unicode_literals
 
 import json
+
+from core import call_summary
 
 # Newest first. initialize answers with the client's version when it is one
 # of these, otherwise with the newest one -- the spec's negotiation rule.
@@ -223,32 +225,57 @@ def _args_text(arguments):
         return u'{}'.format(arguments)
 
 
+_CODE_SOURCE_NOTE = {
+    call_summary.SOURCE_AI: u'(Purpose as stated by the AI.)',
+    call_summary.SOURCE_TRANSACTION: u'(Purpose taken from the transaction '
+                                     u'name in the code.)',
+    call_summary.SOURCE_CODE: u'(The AI gave no purpose; this is T3Lab\'s '
+                              u'reading of the code.)',
+}
+
+
+def _bullets(lines, limit=12):
+    shown = [u'• {}'.format(line) for line in lines[:limit]]
+    if len(lines) > limit:
+        shown.append(u'• ... {} more'.format(len(lines) - limit))
+    return u'\n'.join(shown)
+
+
 def confirm_text(tool_name, arguments, client=None):
-    """(main_instruction, content, expanded) for the Revit confirmation."""
+    """(main_instruction, content, expanded) for the Revit confirmation.
+
+    Says WHAT the call does (core.call_summary): for code, its purpose and
+    what T3Lab found in it -- not how many lines it has.
+    """
     who = client or u'An AI app connected through MCP'
     arguments = arguments if isinstance(arguments, dict) else {}
     if tool_name in CODE_TOOLS:
-        code = arguments.get('code') or u''
-        lines = len(code.splitlines()) or 1
-        return (u'Run AI-written Python code in Revit?',
-                u'{} wants to run {} line(s) of IronPython with full access to '
-                u'the open model. Click "Show details" to read the code. '
-                u'Run it only if you trust what it does.'.format(who, lines),
-                _clip(code))
+        info = call_summary.describe_code(arguments)
+        content = [u'{} wants to run Python code with full access to the '
+                   u'open model.'.format(who),
+                   _CODE_SOURCE_NOTE.get(info['source'], u'')]
+        if info['findings']:
+            content += [u'', u'Found in the code by T3Lab:',
+                        _bullets(info['findings'])]
+        content += [u'', u'Click "Show details" to read the code. Run it only '
+                         u'if you trust what it does.']
+        return (u'Run AI code in Revit: {}?'.format(info['headline']),
+                u'\n'.join(content),
+                _clip(arguments.get('code') or u''))
+    headline, details = call_summary.summarize(tool_name, arguments)
+    expanded = _clip(u'Tool: {}\n{}'.format(tool_name, _args_text(arguments)))
     if tool_name == 'run_batch':
-        steps = arguments.get('steps') or []
-        names = [u'{}. {}'.format(i + 1, (s or {}).get('name', u'?'))
-                 for i, s in enumerate(steps) if isinstance(s, dict)]
-        return (u'Run {} AI steps that include a delete or other destructive '
-                u'change?'.format(len(names)),
+        return (u'{}, including a delete or other destructive change?'.format(
+                    headline),
                 u'{} wants to run these steps as one undo step:\n{}'.format(
-                    who, _clip(u'\n'.join(names), 600)),
-                _clip(_args_text(arguments)))
-    return (u'Allow the AI to run {}?'.format(tool_name),
-            u'{} wants to run {} on the open model. This can delete or '
-            u'overwrite work. Click "Show details" to see the exact '
-            u'request.'.format(who, tool_name),
-            _clip(_args_text(arguments)))
+                    who, _clip(u'\n'.join(details), 600)),
+                expanded)
+    content = u'{} wants to do this on the open model.'.format(who)
+    if details:
+        content += u'\n\n' + _bullets(details)
+    content += (u'\n\nThis can delete or overwrite work. Click "Show details" '
+                u'to see the exact request.')
+    return u'{}?'.format(headline), content, expanded
 
 
 def origin_allowed(origin):

@@ -618,6 +618,19 @@ def _json_text(obj, sort_keys=False):
         return u"<unserializable {}>".format(type(obj).__name__)
 
 
+def _call_summary(name, args):
+    """(headline, details): what a tool call does, in words — never raises.
+
+    The tool cards show this instead of raw JSON (and send_code_to_revit's
+    code); see core.call_summary.
+    """
+    try:
+        from core.call_summary import summarize
+        return summarize(name, args)
+    except Exception:
+        return (u"{}".format(name), [])
+
+
 def _provider_usable(provider):
     """True when `provider` is worth calling for a real chat turn.
 
@@ -10164,9 +10177,9 @@ class T3LabAssistantWindow(T3WPFWindow):
         running = group.get('running')
         if running:
             group['label'].Text = (
-                u"Đang chạy `{}`… ({} tool)".format(running, group['total'])
+                u"Đang chạy: {}… ({} tool)".format(running, group['total'])
                 if _ui_viet() else
-                u"Running `{}`… ({} tools)".format(running, group['total']))
+                u"Running: {}… ({} tools)".format(running, group['total']))
             return
         done = group['total'] - group['failed']
         parts = [u"{} tool".format(done) if _ui_viet()
@@ -10227,14 +10240,12 @@ class T3LabAssistantWindow(T3WPFWindow):
             head.Children.Add(dur)
             panel.Children.Add(head)
 
-            try:
-                args_s = json.dumps(args, ensure_ascii=False)
-            except Exception:
-                args_s = u"{}".format(args)
-            if len(args_s) > 160:
-                args_s = args_s[:160] + u"…"
+            # What the call does ("Delete 3 elements (id …)", the purpose of
+            # a code run), not its JSON; the exact request is the tooltip.
+            headline, _details = _call_summary(name, args)
             args_tb = TextBlock()
-            args_tb.Text         = args_s
+            args_tb.Text         = headline
+            args_tb.ToolTip      = _json_text(args)[:4000]
             args_tb.FontSize     = 11
             _bind_fg(args_tb, 'Muted')
             args_tb.TextWrapping = TextWrapping.Wrap
@@ -10265,7 +10276,8 @@ class T3LabAssistantWindow(T3WPFWindow):
                 card.Margin          = Thickness(0, 0, 0, 8)
                 group['body'].Children.Add(card)
                 group['total']  += 1
-                group['running'] = name
+                group['running'] = (headline if len(headline) <= 70
+                                    else headline[:69] + u"…")
                 self._refresh_tool_group_label(group)
             else:
                 self.chat_history_panel.Children.Add(card)
@@ -10855,12 +10867,11 @@ class T3LabAssistantWindow(T3WPFWindow):
         from System.Windows.Media import SolidColorBrush, Color, FontFamily
         from System.Windows.Input import Cursors
 
-        try:
-            args_s = json.dumps(args, ensure_ascii=False)
-        except Exception:
-            args_s = u"{}".format(args)
-        if len(args_s) > 200:
-            args_s = args_s[:200] + u"…"
+        # What the call does, then the tool name; the exact request (for
+        # send_code_to_revit, the code) is the tooltip.
+        headline, details = _call_summary(name, args)
+        summary = headline + u"".join(u"\n• {}".format(d) for d in details[:8])
+        args_tip = u"{} — {}".format(name, _json_text(args)[:4000])
 
         destructive = (kind == 'destructive')
         card = Border()
@@ -10891,7 +10902,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             # MDL2 glyph in its own run ("⚠" in the body font = emoji/tofu).
             self._add_icon_run(head, _ICON_WARNING, (185, 28, 28), size=12)
             head.Inlines.Add(Run(u"Confirm destructive action"))
-            body.Text = u"`{}` — {}".format(name, args_s)
+            body.Text = u"{}\n`{}`".format(summary, name)
             # Fixed ink: the card stays light red in BOTH themes on purpose,
             # and token text (BotText #E4E4E4 in dark) would vanish on it.
             body.Foreground      = SolidColorBrush(Color.FromRgb(63, 63, 63))     # #3F3F3F
@@ -10927,10 +10938,10 @@ class T3LabAssistantWindow(T3WPFWindow):
             _bind_fg(head, 'Ink')
             self._add_icon_run(head, _ICON_EDIT, _trgb('Accent'), size=12)
             head.Inlines.Add(Run(u"Approve this model change"))
+            body.Inlines.Add(Run(summary + u"\n"))
             _tool = Run(name)
             _tool.FontFamily = FontFamily(u"Consolas")
             body.Inlines.Add(_tool)
-            body.Inlines.Add(Run(u" — {}".format(args_s)))
             _bind_fg(body, 'Ink')
             note = TextBlock()
             note.Text = (u"Ask before edits is on — nothing changes until you "
@@ -10947,6 +10958,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 u"Cancel", tooltip=u"Skip this call — the assistant is told "
                                    u"you declined")
 
+        body.ToolTip = args_tip
         panel.Children.Add(head)
         panel.Children.Add(body)
         if not destructive:

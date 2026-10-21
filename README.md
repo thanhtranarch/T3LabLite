@@ -226,8 +226,15 @@ Change them in **MCP Control → Advanced → Security**, or in
 |---|---|---|
 | `mcp_read_only` | `false` | `true`: AI apps only see and call tools that change neither the model nor any file |
 | `mcp_confirm_destructive` | `true` | Revit asks Yes/No before delete, purge, ungroup, deleting a view template or link, save as, sync, close without saving, or a `run_batch` that contains any of these. No is the default answer |
-| `mcp_code_execution` | `"ask"` | `send_code_to_revit`: `"off"` hides and refuses it, `"ask"` shows the code in Revit and asks each time, `"allow"` runs it without asking |
+| `mcp_code_execution` | `"ask"` | `send_code_to_revit`: `"off"` hides and refuses it, `"ask"` asks in Revit each time, `"allow"` runs it without asking |
 | `auto_start_file_watcher` | `false` | The file task watcher (`~/T3Lab_AI_Data/task.json`) runs code with no token, so it only starts with Revit after you click **Start Watcher** once |
+
+The Revit question says what the call does, e.g. *Delete 3 elements (id 101,
+102, 103)?* For `send_code_to_revit` it shows the purpose the AI gives in the
+`description` argument, and under it what T3Lab finds in the code itself:
+deletes, parameter changes, created elements, categories, transaction names,
+and file, network or program access. The AI cannot hide those by wording its
+description differently. **Show details** shows the full code.
 
 Tools are listed with MCP annotations (`readOnlyHint`, `destructiveHint`), so
 clients that support them can ask before edits too. `run_batch` runs several

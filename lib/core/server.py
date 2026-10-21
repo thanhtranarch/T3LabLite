@@ -1924,9 +1924,16 @@ class T3LabAIServer(object):
                             'description': ('IronPython 2.7 code to execute. Has access to doc, uidoc, app, and the variables '
                                             '`result` / `output` (a list). Assign your answer to `result` or output.append(...) — '
                                             'do NOT print for display and do NOT show any dialog/window.')
+                        },
+                        'description': {
+                            'type': 'string',
+                            'description': ('One short sentence, in the user\'s language, saying what the code does to the '
+                                            'model, e.g. "Add prefix A- to the numbers of 24 sheets" or "Count walls per level '
+                                            '(read only)". Revit shows it to the user when asking to run the code — name the '
+                                            'change, not the code size.')
                         }
                     },
-                    'required': ['code']
+                    'required': ['code', 'description']
                 }
             },
             'say_hello': {

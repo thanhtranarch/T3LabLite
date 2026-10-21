@@ -8,8 +8,9 @@ WPF Dialog for working with Revit links (.rvt), in four tabs:
                       type, path type and pin state; Reload (footer),
                       Reload From, Unload, Pin / Unpin, Overlay / Attachment
                       and Remove on the checked links.
-* **Link Models**   — browse a folder, filter backups, batch link models,
-                      optionally each onto its own (new) workset.
+* **Link Models**   — batch link models, optionally each onto its own (new)
+                      workset, from a folder on disk / server or from
+                      Autodesk Docs (cloud links; see ``Snippets/_cloud_links.py``).
 * **Link Workset**  — move the link instances of THIS model onto a workset of
                       this model (optionally their link types too). The
                       WORKSET cell is edited inline (or staged for every
@@ -19,9 +20,12 @@ WPF Dialog for working with Revit links (.rvt), in four tabs:
                       Pending/applied/failed state: ``GUI/BatchLinkWorksets.py``.
 * **View Display**  — set how each link draws in the active view:
                       By Host View / By Linked View / Custom, plus visibility
-                      and halftone.
+                      and halftone. The Model / Annotation / Analytical /
+                      Import category tabs have no API, so they are copied
+                      from a view template ("Copy to This View").
 
-Revit API work lives in ``Snippets/_links.py``; this module is UI only.
+Revit API work lives in ``Snippets/_links.py`` and ``Snippets/_cloud_links.py``;
+this module is UI only.
 
 Part of T3Lab Extension.
 Author: T3Lab
@@ -69,6 +73,7 @@ from GUI.WPF_Base import T3WPFWindow, to_items_source
 from GUI.T3Dialog import confirm as t3_confirm
 
 from Snippets import _links
+from Snippets import _cloud_links as _cloud
 from Snippets._compat import disposing
 
 from GUI.BatchLinkWorksets import _Row, LinkWorksetRow
@@ -86,6 +91,24 @@ TAB_DISPLAY = 3
 # the model's own worksets.
 LINK_WS_ACTIVE = 0
 LINK_WS_PER_LINK = 1
+
+# Link Models grid columns shown / hidden by source (BatchLink.xaml order).
+COL_FOLDER = 2
+COL_SIZE = 3
+COL_DATE = 4
+
+BACKUP_PATTERN = re.compile(r'\.\d{3,4}\.rvt$', re.IGNORECASE)
+
+FOLDER_EMPTY = ("No Revit (.rvt) files found.\n"
+                "Select a folder containing Revit projects to begin.")
+CLOUD_HOST_EMPTY = ("Cloud links need a cloud model to link into.\n"
+                    "This model is saved on disk: open it from Autodesk Docs (or save it "
+                    "there), or link from a folder.")
+CLOUD_EMPTY = ("No cloud model known here yet.\n"
+               u"Link or open a model from Autodesk Docs once in Revit "
+               u"(Insert \u203a Link Revit \u203a Autodesk Docs), then press Refresh.")
+CLOUD_HOST_STATUS = ("This model is saved on disk — Revit links cloud models only into "
+                     "a cloud model.")
 
 PRIMARY_LABELS = {
     TAB_MANAGE: "Reload",
@@ -124,19 +147,31 @@ class WarningSwallower(IFailuresPreprocessor):
 # ── ROW ITEMS ────────────────────────────────────────────────────────────────
 
 class RevitModelItem(_Row):
-    """A discovered .rvt file on disk, waiting to be linked."""
+    """A .rvt file on disk, or an Autodesk Docs model, waiting to be linked."""
 
     def __init__(self, full_path, file_name, file_size, modified_time,
-                 status_text="Ready", severity="Success", is_selected=True, is_enabled=True):
+                 status_text="Ready", severity="Success", is_selected=True, is_enabled=True,
+                 folder=u"", tip=u"", cloud=None):
         _Row.__init__(self, status_text, severity, is_selected, is_enabled)
         self.full_path = full_path
         self.file_name = file_name
         self.file_size = file_size
         self.modified_time = modified_time
+        self.folder = folder
+        self.tip = tip
+        self.cloud = cloud      # _cloud_links.CloudModel in Autodesk Docs mode
 
     @property
     def FileName(self):
         return self.file_name
+
+    @property
+    def Folder(self):
+        return self.folder or u"—"
+
+    @property
+    def RowTip(self):
+        return self.tip or self.full_path or self.file_name
 
     @property
     def FileSize(self):
@@ -224,6 +259,32 @@ class LinkManageRow(_Row):
         return self.record.instance_count
 
 
+def cloud_model_item(candidate):
+    """Link Models row of a _cloud_links.CloudCandidate."""
+    model = candidate.model
+    return RevitModelItem(
+        full_path=model.display_path if model is not None else candidate.local_path,
+        file_name=candidate.name, file_size=0, modified_time=0,
+        status_text=candidate.status, severity=candidate.severity,
+        is_selected=candidate.checked, is_enabled=candidate.selectable,
+        folder=candidate.location, tip=candidate.tip, cloud=model)
+
+
+def list_rvt_files(folder, include_subfolders, ignore_backups):
+    """Paths of the .rvt models in folder (no ~$ lock files, optionally no backups)."""
+    if include_subfolders:
+        paths = (os.path.join(root, f) for root, _, files in os.walk(folder) for f in files)
+    else:
+        paths = (os.path.join(folder, f) for f in os.listdir(folder))
+    for full_path in paths:
+        file_name = os.path.basename(full_path)
+        if not file_name.lower().endswith('.rvt') or file_name.startswith('~$'):
+            continue
+        if ignore_backups and BACKUP_PATTERN.search(file_name):
+            continue
+        yield full_path
+
+
 def manage_tally(rows):
     """Count strip of the Manage Links tab."""
     total = len(rows)
@@ -271,6 +332,15 @@ class BatchLinkDialog(T3WPFWindow):
         self._is_busy = False
         self._active_tab = TAB_LINK
 
+        # Link Models source: folder on disk / server, or Autodesk Docs
+        self._source_cloud = False
+        self._suspend_source_event = True
+        self._suspend_path_event = False
+        self._folder_texts = {False: u"", True: u""}   # each source keeps its folder
+        self._path_type_index = 0
+        self._cloud_catalog = None     # _cloud_links.CloudCatalog, built on first use
+        self._link_stale = False       # Link Models waits for its tab to scan
+
         # Manage Links tab state
         self._mng_rows = []
         self._mng_filtered = []
@@ -286,6 +356,7 @@ class BatchLinkDialog(T3WPFWindow):
         self._disp_filtered = []
         self._disp_focus = None
         self._disp_views = []          # [(id_int, label)] for the focused link
+        self._disp_templates = []      # [(id_int, name)] templates that control link display
         self._suspend_mode_event = True
 
         self._load_logo()
@@ -294,6 +365,7 @@ class BatchLinkDialog(T3WPFWindow):
         self._init_display_options()
         self._init_initial_path()
         self._suspend_mode_event = False
+        self._suspend_source_event = False
 
         self._install_ws_cell_editor()
         self.Closing += self._on_closing
@@ -302,6 +374,8 @@ class BatchLinkDialog(T3WPFWindow):
         # on Link Models, where the first link is made.
         if self.doc is not None and _links.collect_links(self.doc):
             self.chip_tab_manage.IsChecked = True
+        if self._active_tab == TAB_LINK and self._link_stale:
+            self._scan()
 
     # ── SETUP ────────────────────────────────────────────────────────────────
 
@@ -411,8 +485,17 @@ class BatchLinkDialog(T3WPFWindow):
         if not initial_dir:
             initial_dir = os.path.expanduser("~\\Documents")
 
-        self.tb_folder_path.Text = initial_dir
-        self._scan_folder()
+        # A cloud model links its neighbours from the cloud: linking their
+        # Desktop Connector copies leaves Absolute E:\DC\... links that break
+        # on every other PC.
+        self._folder_texts[False] = initial_dir
+        self._source_cloud = _cloud.is_cloud_doc(self.doc)
+        (self.rb_source_cloud if self._source_cloud else self.rb_source_folder).IsChecked = True
+        self._apply_source_mode()
+        if self._source_cloud:
+            self._link_stale = True    # the cloud cache read waits for the tab
+        else:
+            self._scan()
 
     # ── SHARED HELPERS ───────────────────────────────────────────────────────
 
@@ -467,7 +550,48 @@ class BatchLinkDialog(T3WPFWindow):
             self.btn_primary.Content = PRIMARY_LABELS.get(self._active_tab, "Apply")
             self.btn_primary.IsEnabled = not self._is_busy
 
-    # ── TAB 1: FOLDER SCAN ───────────────────────────────────────────────────
+    # ── TAB 1: SOURCE (FOLDER / AUTODESK DOCS) ──────────────────────────────
+
+    def _apply_source_mode(self):
+        """Show the Link Models controls of the current source."""
+        cloud = self._source_cloud
+        self._suspend_path_event = True
+        try:
+            self.tb_folder_path.Text = self._folder_texts.get(cloud, u"")
+        finally:
+            self._suspend_path_event = False
+        self.lbl_source_folder.Text = ("DESKTOP CONNECTOR FOLDER (OPTIONAL)" if cloud
+                                       else "SOURCE FOLDER")
+        self.lbl_cloud_hint.Visibility = Visibility.Visible if cloud else Visibility.Collapsed
+        # Revit stores every cloud link as path type Cloud.
+        self.cb_path_type.ItemsSource = to_items_source(
+            ["Cloud"] if cloud else ["Absolute", "Relative"])
+        self.cb_path_type.SelectedIndex = 0 if cloud else self._path_type_index
+        self.cb_path_type.IsEnabled = not cloud
+        self._sync_columns()
+
+    def _sync_columns(self):
+        """FOLDER shows in cloud mode and with subfolders; size / date only on disk."""
+        cloud = self._source_cloud
+        try:
+            columns = self.grid_files.Columns
+            columns[COL_FOLDER].Header = "AUTODESK DOCS FOLDER" if cloud else "FOLDER"
+            columns[COL_FOLDER].Visibility = (
+                Visibility.Visible if cloud or self.chk_subfolders.IsChecked
+                else Visibility.Collapsed)
+            for index in (COL_SIZE, COL_DATE):
+                columns[index].Visibility = (Visibility.Collapsed if cloud
+                                             else Visibility.Visible)
+        except Exception:
+            pass
+
+    def _scan(self):
+        """Re-list the Link Models grid from the current source."""
+        self._link_stale = False
+        if self._source_cloud:
+            self._scan_cloud()
+        else:
+            self._scan_folder()
 
     def _scan_folder(self):
         """Scan the selected folder for .rvt files."""
@@ -482,7 +606,6 @@ class BatchLinkDialog(T3WPFWindow):
 
         include_subfolders = bool(self.chk_subfolders.IsChecked)
         ignore_backups = bool(self.chk_ignore_backups.IsChecked)
-        backup_pattern = re.compile(r'\.\d{3,4}\.rvt$', re.IGNORECASE)
 
         existing_paths, existing_names = _links.existing_link_keys(self.doc)
 
@@ -495,27 +618,8 @@ class BatchLinkDialog(T3WPFWindow):
                 pass
 
         try:
-            if include_subfolders:
-                file_generator = (
-                    os.path.join(root, f)
-                    for root, _, files in os.walk(folder)
-                    for f in files
-                )
-            else:
-                file_generator = (
-                    os.path.join(folder, f)
-                    for f in os.listdir(folder)
-                )
-
-            for full_path in file_generator:
-                if not full_path.lower().endswith('.rvt'):
-                    continue
+            for full_path in list_rvt_files(folder, include_subfolders, ignore_backups):
                 file_name = os.path.basename(full_path)
-                if file_name.startswith('~$'):
-                    continue
-                if ignore_backups and backup_pattern.search(file_name):
-                    continue
-
                 try:
                     stat = os.stat(full_path)
                     f_size = stat.st_size
@@ -534,6 +638,7 @@ class BatchLinkDialog(T3WPFWindow):
                 else:
                     status, severity, is_sel, is_enabled = "Ready", "Success", True, True
 
+                relative = os.path.relpath(os.path.dirname(full_path), folder)
                 self._all_files.append(RevitModelItem(
                     full_path=full_path,
                     file_name=file_name,
@@ -542,14 +647,70 @@ class BatchLinkDialog(T3WPFWindow):
                     status_text=status,
                     severity=severity,
                     is_selected=is_sel,
-                    is_enabled=is_enabled
+                    is_enabled=is_enabled,
+                    folder=u"" if relative == "." else relative
                 ))
 
         except Exception as ex:
             self._set_status("Error reading folder: {}".format(str(ex)[:60]))
 
-        self._all_files.sort(key=lambda x: x.FileName.lower())
+        self._all_files.sort(key=lambda x: (x.folder.lower(), x.FileName.lower()))
         self._apply_filter()
+
+    def _ensure_cloud_catalog(self):
+        """The cloud models known on this PC, read once (Refresh reads again)."""
+        if self._cloud_catalog is None:
+            def step(index, total):
+                self._step_busy("Reading Revit's cloud cache", "", index, total)
+
+            self._begin_busy("Finding cloud models")
+            try:
+                self._cloud_catalog = _cloud.collect_known_models(self.doc, progress=step)
+            finally:
+                self._end_busy("{} cloud model{} known on this PC".format(
+                    len(self._cloud_catalog or ()),
+                    "" if len(self._cloud_catalog or ()) == 1 else "s"))
+        return self._cloud_catalog
+
+    def _scan_cloud(self):
+        """List Autodesk Docs models: the known ones, narrowed to a Desktop
+        Connector folder when one is picked, plus the .rvt files in it."""
+        self._all_files = []
+        if not _cloud.is_cloud_doc(self.doc):
+            self._apply_filter()
+            self._set_status(CLOUD_HOST_STATUS)
+            return
+
+        catalog = self._ensure_cloud_catalog()
+        folder = self.tb_folder_path.Text.strip()
+        include_subfolders = bool(self.chk_subfolders.IsChecked)
+        parts, dc_files, note = None, [], ""
+        if folder:
+            parts = _cloud.desktop_connector_parts(folder)
+            if parts is None:
+                note = ("Not a Desktop Connector folder — showing every cloud model "
+                        "Revit knows. Pick a folder under ...\\ACCDocs\\hub\\project.")
+            elif os.path.isdir(folder):
+                try:
+                    dc_files = list(list_rvt_files(
+                        folder, include_subfolders, bool(self.chk_ignore_backups.IsChecked)))
+                except Exception as ex:
+                    note = "Error reading folder: {}".format(str(ex)[:60])
+
+        self._all_files = [cloud_model_item(c) for c in _cloud.cloud_candidates(
+            catalog, dc_files, parts, recursive=include_subfolders)]
+        self._apply_filter()
+        if note:
+            self._set_status(note)
+
+    def _link_empty_text(self, query):
+        if query and self._all_files:
+            return u"No model matches \u201c{}\u201d.".format(query)
+        if not self._source_cloud:
+            return FOLDER_EMPTY
+        if not _cloud.is_cloud_doc(self.doc):
+            return CLOUD_HOST_EMPTY
+        return CLOUD_EMPTY
 
     def _apply_filter(self):
         """Apply the search filter to the discovered models and refresh the grid."""
@@ -557,21 +718,30 @@ class BatchLinkDialog(T3WPFWindow):
         if not query:
             self._filtered_files = list(self._all_files)
         else:
-            self._filtered_files = [f for f in self._all_files if query in f.FileName.lower()]
+            self._filtered_files = [f for f in self._all_files
+                                    if query in f.FileName.lower() or query in f.folder.lower()]
 
         self.grid_files.ItemsSource = to_items_source(self._filtered_files)
         has_items = len(self._filtered_files) > 0
+        self.txt_empty.Text = self._link_empty_text(query)
         self.txt_empty.Visibility = Visibility.Collapsed if has_items else Visibility.Visible
 
         total_found = len(self._all_files)
         showing = len(self._filtered_files)
+        noun = "cloud models" if self._source_cloud else "models"
         if query:
-            self.lbl_file_count.Text = "Showing {} / {} models".format(showing, total_found)
+            self.lbl_file_count.Text = "Showing {} / {} {}".format(showing, total_found, noun)
         else:
-            self.lbl_file_count.Text = "{} models found".format(total_found)
-        already = sum(1 for f in self._all_files if f.StatusText == "Already Linked")
-        self.lbl_file_hint.Text = ("{} already linked — skipped unless you check them".format(already)
-                                   if already else "")
+            self.lbl_file_count.Text = "{} {} found".format(total_found, noun)
+        hints = []
+        already = sum(1 for f in self._all_files
+                      if f.StatusText in ("Already Linked", _cloud.STATUS_AS_FILE))
+        if already:
+            hints.append("{} already linked — skipped unless you check them".format(already))
+        unknown = sum(1 for f in self._all_files if f.StatusText == _cloud.STATUS_UNKNOWN)
+        if unknown:
+            hints.append("{} without a cloud ID — hover a row for the fix".format(unknown))
+        self.lbl_file_hint.Text = u" · ".join(hints)
 
         self._update_counts()
 
@@ -582,7 +752,8 @@ class BatchLinkDialog(T3WPFWindow):
         if self._active_tab == TAB_LINK and not self._is_busy:
             self.btn_primary.Content = ("Link 1 Model" if selected_count == 1
                                        else "Link {} Models".format(selected_count))
-            self._set_status("Ready — {} models selected".format(selected_count))
+            self._set_status("Ready — {} {} selected".format(
+                selected_count, "cloud models" if self._source_cloud else "models"))
 
         self._sync_header_checkbox(self.chk_header, self._filtered_files)
 
@@ -908,6 +1079,11 @@ class BatchLinkDialog(T3WPFWindow):
         self._disp_focus = None
         view = self._active_view()
 
+        locked_by = self._sync_view_template_lock(view)
+        self._load_disp_templates(view)
+        if locked_by:
+            self.btn_disp_copy_template.IsEnabled = False
+
         if view is None:
             self.lbl_disp_scope.Text = "No active view"
             self.grid_disp_links.ItemsSource = to_items_source([])
@@ -941,6 +1117,49 @@ class BatchLinkDialog(T3WPFWindow):
             self.grid_disp_links.SelectedItem = first
             if self._disp_focus is not first:
                 self._focus_display_row(first)
+
+    def _sync_view_template_lock(self, view):
+        """Warn when the view's own template dictates its link display.
+
+        Neither Apply Display Settings nor Copy to This View can change it
+        then — Revit greys the same settings out in V/G.
+        """
+        locked = _links.view_template_locking_links(view)
+        if locked is None:
+            self.banner_view_template.Visibility = Visibility.Collapsed
+            return None
+        name = _links.element_name(locked)
+        self.lbl_view_template.Text = (
+            u'View template "{}" controls the RVT link display of this view, so the '
+            u"display settings here cannot change it. Edit the links in that template "
+            u"(V/G Overrides RVT Links › Edit), or clear its Include box. Visibility "
+            u"and halftone still work.").format(name)
+        self.banner_view_template.Visibility = Visibility.Visible
+        return name
+
+    def _load_disp_templates(self, view):
+        """Fill the template picker with templates that control link display."""
+        previous = None
+        index = self.cb_disp_template.SelectedIndex
+        if 0 <= index < len(self._disp_templates):
+            previous = self._disp_templates[index][0]
+
+        self._disp_templates = _links.get_link_templates(view)
+        if self._disp_templates:
+            labels = [name for _tid, name in self._disp_templates]
+        else:
+            labels = ["No view template with V/G Overrides RVT Links ticked fits this view"]
+        self.cb_disp_template.ItemsSource = to_items_source(labels)
+
+        selected = 0
+        for i, (tid, _name) in enumerate(self._disp_templates):
+            if tid == previous:
+                selected = i
+                break
+        self.cb_disp_template.SelectedIndex = selected
+        has_any = bool(self._disp_templates)
+        self.cb_disp_template.IsEnabled = has_any
+        self.btn_disp_copy_template.IsEnabled = has_any
 
     def _apply_disp_filter(self):
         query = self.tb_disp_filter.Text.strip().lower()
@@ -1061,8 +1280,13 @@ class BatchLinkDialog(T3WPFWindow):
         mode_index = max(0, self.cb_disp_mode.SelectedIndex)
         view_label = self._selected_view_label()
         api_ok = _links.display_api_available()
+        # A view template that controls RVT Links overwrites whatever is
+        # written here: skip the display write, still do visibility/halftone.
+        locked_by = self._sync_view_template_lock(view)
+        if not api_ok:
+            locked_by = None    # before 2025 no display write happens to skip
 
-        if api_ok and mode_index == 1 and not view_label:
+        if api_ok and not locked_by and mode_index == 1 and not view_label:
             self._set_status("Pick a view inside the link before using By Linked View.")
             return
 
@@ -1080,6 +1304,7 @@ class BatchLinkDialog(T3WPFWindow):
         total = len(targets)
         succeeded = 0
         failed = 0
+        skipped = 0
 
         transaction = Transaction(self.doc, "Batch Link — link display settings")
         try:
@@ -1101,7 +1326,10 @@ class BatchLinkDialog(T3WPFWindow):
                         ok = False
                         messages.append(ht_msg)
 
-                if api_ok:
+                display_skipped = False
+                if locked_by:
+                    display_skipped = True
+                elif api_ok:
                     linked_view_id = -1
                     view_resolved = True
                     if mode_index in (1, 2):
@@ -1121,7 +1349,11 @@ class BatchLinkDialog(T3WPFWindow):
                             ok = False
                             messages.append(disp_msg)
 
-                if ok:
+                if ok and display_skipped:
+                    skipped += 1
+                    row.StatusText = "Template-locked"
+                    row.Severity = "Warning"
+                elif ok:
                     succeeded += 1
                     row.StatusText = "Applied"
                     row.Severity = "Success"
@@ -1140,6 +1372,11 @@ class BatchLinkDialog(T3WPFWindow):
             return
 
         self._refresh_disp_rows(view, targets)
+        if locked_by:
+            self._end_busy(u'Visibility and halftone written for {} link{}, {} failed; display '
+                           u'settings skipped — view template "{}" controls them.'.format(
+                               skipped, "" if skipped == 1 else "s", failed, locked_by))
+            return
         self._end_busy("Display applied: {} link{} updated, {} failed".format(
             succeeded, "" if succeeded == 1 else "s", failed))
 
@@ -1286,10 +1523,16 @@ class BatchLinkDialog(T3WPFWindow):
 
     def _link_models(self):
         """Execute batch linking of the selected Revit models."""
-        selected_items = [f for f in self._all_files if f.IsSelected and f.IsEnabled]
+        cloud = self._source_cloud
+        selected_items = [f for f in self._all_files if f.IsSelected and f.IsEnabled
+                          and (f.cloud is not None or not cloud)]
         if not selected_items:
             self._set_status("Please select at least one Revit model to link.")
             return
+        if cloud and not _cloud.is_cloud_doc(self.doc):
+            self._set_status(CLOUD_HOST_STATUS)
+            return
+        catalog = self._ensure_cloud_catalog() if cloud else None
 
         pin_links = bool(self.chk_pin.IsChecked)
         skip_existing = bool(self.chk_skip_existing.IsChecked)
@@ -1324,8 +1567,13 @@ class BatchLinkDialog(T3WPFWindow):
 
                 norm_path = os.path.normpath(item.full_path).lower()
                 clean_name = item.FileName.lower()
+                if cloud:
+                    already = (item.cloud.model_guid in catalog.linked_guids
+                               or clean_name in catalog.local_link_names)
+                else:
+                    already = norm_path in existing_paths or clean_name in existing_names
 
-                if skip_existing and (norm_path in existing_paths or clean_name in existing_names):
+                if skip_existing and already:
                     item.StatusText = "Skipped"
                     item.Severity = "Warning"
                     skipped_count += 1
@@ -1339,8 +1587,14 @@ class BatchLinkDialog(T3WPFWindow):
                     fail_opts.SetClearAfterRollback(True)
                     t.SetFailureHandlingOptions(fail_opts)
 
-                    model_path = ModelPathUtils.ConvertUserVisiblePathToModelPath(item.full_path)
-                    link_opts = RevitLinkOptions(is_relative)
+                    if cloud:
+                        model_path = _cloud.cloud_model_path(
+                            item.cloud, catalog.region_for(item.cloud))
+                        link_opts = RevitLinkOptions(False)
+                    else:
+                        model_path = ModelPathUtils.ConvertUserVisiblePathToModelPath(
+                            item.full_path)
+                        link_opts = RevitLinkOptions(is_relative)
                     load_result = RevitLinkType.Create(self.doc, model_path, link_opts)
 
                     if load_result and (
@@ -1376,6 +1630,8 @@ class BatchLinkDialog(T3WPFWindow):
                             success_count += 1
                             existing_paths.add(norm_path)
                             existing_names.add(clean_name)
+                            if cloud:
+                                catalog.linked_guids.add(item.cloud.model_guid)
                         else:
                             t.RollBack()
                             item.StatusText = "Invalid Type"
@@ -1457,7 +1713,10 @@ class BatchLinkDialog(T3WPFWindow):
         if index == TAB_MANAGE:
             self._load_manage_rows()
         elif index == TAB_LINK:
-            self._update_counts()
+            if self._link_stale:
+                self._scan()
+            else:
+                self._update_counts()
         elif index == TAB_WORKSETS:
             # Coming back with staged changes keeps them; otherwise re-read so
             # links added on the Link Models tab show up.
@@ -1532,6 +1791,64 @@ class BatchLinkDialog(T3WPFWindow):
         path = dlg.FileName
         self._mng_run("Reloading from a new path", rows,
                       lambda r: _links.reload_link_from(r.record.link_type, path))
+
+    def mng_to_cloud_clicked(self, sender, e):
+        """Re-point the checked disk / Desktop Connector links to their Autodesk
+        Docs model: same type, instances and worksets, path type Cloud."""
+        if self._is_busy:
+            return
+        if not _cloud.is_cloud_doc(self.doc):
+            self._set_status("Switch to Cloud needs this model in Autodesk Docs — Revit "
+                             "links cloud models only into a cloud model.")
+            return
+        rows = [r for r in self._mng_targets() if not r.record.is_cloud]
+        if not rows:
+            self._set_status("Check the disk / Desktop Connector links to switch — "
+                             "cloud links are cloud already.")
+            return
+
+        catalog = self._ensure_cloud_catalog()
+        plan = dict((_links.eid_int(r.record.type_id), _cloud.match_link(catalog, r.record.path))
+                    for r in rows)
+        ready = [r for r in rows if plan[_links.eid_int(r.record.type_id)][0] is not None]
+        if not ready:
+            reason = plan[_links.eid_int(rows[0].record.type_id)][1]
+            self._set_status(u"No cloud model found for {}: {}".format(
+                rows[0].LinkName if len(rows) == 1 else "the checked links", reason)[:220])
+            return
+
+        n = len(ready)
+        noun = "link" if n == 1 else "links"
+        lines = [u"  {}  →  {}".format(
+            r.LinkName, plan[_links.eid_int(r.record.type_id)][0].display_path)
+            for r in ready[:12]]
+        details = (u"Each link keeps its type, placed instances, pin and worksets, and loads "
+                   u"from Autodesk Docs instead. Revit clears the undo history, like "
+                   u"Reload From.\n\n" + u"\n".join(lines) + (u"\n  ..." if n > 12 else u""))
+        missing = len(rows) - n
+        if missing:
+            details += u"\n\n{} checked link{} with no known cloud model stay{} as {}.".format(
+                missing, "" if missing == 1 else "s", "s" if missing == 1 else "",
+                "it is" if missing == 1 else "they are")
+        if not t3_confirm(u"Switch {} {} to Autodesk Docs?".format(n, noun),
+                          title="Switch to Cloud",
+                          ok_text=u"Switch {} {}".format(n, noun.capitalize()),
+                          details=details, owner=self):
+            return
+
+        def switch(row):
+            model, _reason = plan[_links.eid_int(row.record.type_id)]
+            if model is None:
+                return False, "No cloud model found"
+            return _links.reload_link_from_model_path(
+                row.record.link_type,
+                _cloud.cloud_model_path(model, catalog.region_for(model)),
+                "Switched to cloud")
+
+        self._mng_run("Switching links to cloud", rows, switch)
+        # The links changed: Link Models re-reads them on its next visit.
+        self._cloud_catalog = None
+        self._link_stale = True
 
     def mng_unload_clicked(self, sender, e):
         if self._is_busy:
@@ -1621,32 +1938,59 @@ class BatchLinkDialog(T3WPFWindow):
 
     # ── EVENT HANDLERS: TAB 1 ────────────────────────────────────────────────
 
+    def source_mode_checked(self, sender, e):
+        """Folder on disk ↔ Autodesk Docs; each source keeps its own folder."""
+        if getattr(self, '_suspend_source_event', True) or self._is_busy:
+            return
+        cloud = (str(sender.Tag) == "cloud")
+        if cloud == self._source_cloud:
+            return
+        self._folder_texts[self._source_cloud] = self.tb_folder_path.Text.strip()
+        if not self._source_cloud:
+            self._path_type_index = max(0, self.cb_path_type.SelectedIndex)
+        self._source_cloud = cloud
+        self._apply_source_mode()
+        self._scan()
+
     def browse_folder_clicked(self, sender, e):
         dlg = FolderBrowserDialog()
-        dlg.Description = "Select folder containing Revit models (.rvt) to link"
+        dlg.Description = ("Select a Desktop Connector folder (ACCDocs > hub > project > "
+                           "Project Files > ...)" if self._source_cloud
+                           else "Select folder containing Revit models (.rvt) to link")
         if os.path.isdir(self.tb_folder_path.Text.strip()):
             dlg.SelectedPath = self.tb_folder_path.Text.strip()
 
         if _show_dialog_owned(self, dlg) == DialogResult.OK:
-            self.tb_folder_path.Text = dlg.SelectedPath
-            self._scan_folder()
+            self._suspend_path_event = True
+            try:
+                self.tb_folder_path.Text = dlg.SelectedPath
+            finally:
+                self._suspend_path_event = False
+            self._scan()
 
     def folder_path_changed(self, sender, e):
+        if self._suspend_path_event:
+            return
         path = self.tb_folder_path.Text.strip()
-        if os.path.isdir(path):
-            self._scan_folder()
+        # Cloud mode lists every known model while the box is empty.
+        if os.path.isdir(path) or (self._source_cloud and not path):
+            self._scan()
 
     def subfolders_toggled(self, sender, e):
-        self._scan_folder()
+        self._sync_columns()
+        self._scan()
 
     def ignore_backups_toggled(self, sender, e):
-        self._scan_folder()
+        self._scan()
 
     def filter_text_changed(self, sender, e):
         self._apply_filter()
 
     def rescan_clicked(self, sender, e):
-        self._scan_folder()
+        if self._is_busy:
+            return
+        self._cloud_catalog = None      # Refresh re-reads the cloud models too
+        self._scan()
 
     def link_workset_changed(self, sender, e):
         self._sync_link_ws_prefix()
@@ -1760,11 +2104,18 @@ class BatchLinkDialog(T3WPFWindow):
         self._sync_custom_panel()
 
     def preset_model_clicked(self, sender, e):
-        """Model only — the link follows this view (no link annotations)."""
+        """Model only — the closest the API gets: By Host View.
+
+        Link tags, dimensions and text only come through a linked view, so
+        they stay off. Linked grids and levels follow this view's categories:
+        only the Annotation Categories tab hides them, and that tab is only
+        reachable through a view template (Copy to This View).
+        """
         self.cb_disp_mode.SelectedIndex = 0
         self.chk_disp_visible.IsChecked = True
         self._sync_custom_panel()
-        self._set_status("Preset: By Host View — link draws with this view's model categories.")
+        self._set_status("Preset: By Host View — no link tags or dimensions; linked grids and "
+                         "levels still show (hide them: Copy to This View).")
 
     def preset_annotation_clicked(self, sender, e):
         """Model + Annotation — the link follows one of its own views."""
@@ -1783,7 +2134,60 @@ class BatchLinkDialog(T3WPFWindow):
         if self.cb_disp_view.SelectedIndex < 0 and self._disp_views:
             self.cb_disp_view.SelectedIndex = 0
         self._sync_custom_panel()
-        self._set_status("Preset: Custom — set each aspect below, then apply.")
+        self._set_status("Preset: Custom — set each aspect, then apply. Model/annotation "
+                         "category tabs: Copy to This View.")
+
+    def disp_copy_template_clicked(self, sender, e):
+        """Copy a template's whole RVT link display — category tabs included —
+        onto the active view. The one API route to "Show annotation categories"."""
+        if self._is_busy:
+            return
+        view = self._active_view()
+        if view is None:
+            self._set_status("No active view — open a view before copying link display.")
+            return
+        index = self.cb_disp_template.SelectedIndex
+        if index < 0 or index >= len(self._disp_templates):
+            self._set_status("No view template to copy from — tick Include for V/G Overrides "
+                             "RVT Links in a template that fits this view, then Refresh.")
+            return
+
+        template_id, template_name = self._disp_templates[index]
+        template = self.doc.GetElement(_links.new_element_id(template_id))
+        view_name = _links.element_name(view)
+        count = len(self._disp_rows)
+        noun = "link" if count == 1 else "links"
+        if not t3_confirm(u'Copy the link display of "{}" to this view?'.format(template_name),
+                          title="Copy Link Display",
+                          ok_text="Copy Link Display",
+                          details=(u'All {} {} in "{}" take the template\'s RVT Links settings, '
+                                   u"including the Model, Annotation, Analytical and Import "
+                                   u"category tabs. Other view settings and this view's own "
+                                   u"template stay as they are. One Ctrl+Z undoes it.").format(
+                                       count, noun, view_name),
+                          owner=self):
+            return
+
+        ok, message = False, ""
+        try:
+            with disposing(Transaction(self.doc, "Batch Link — copy link display from template")) as transaction:
+                transaction.Start()
+                ok, message = _links.copy_link_display_from_template(view, template)
+                if not ok:
+                    transaction.RollBack()
+                else:
+                    status = transaction.Commit()
+                    if status != TransactionStatus.Committed:
+                        ok, message = False, "Revit did not commit the change ({})".format(status)
+        except Exception as ex:
+            ok, message = False, str(ex).split("\n")[0]
+
+        self._load_display_rows()
+        if ok:
+            self._set_status(u'Link display copied from "{}" to {} {} in this view.'.format(
+                template_name, count, noun))
+        else:
+            self._set_status(u"Link display not copied: {}".format(message[:90]))
 
     def _pump_events(self):
         self._do_events()

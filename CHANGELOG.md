@@ -30,6 +30,7 @@ Releasing a new version:
 - **MCP confirmations say what the AI is doing, not how much code it sends:** `send_code_to_revit` now asks in Revit with the purpose of the code, e.g. *Run AI code in Revit: Add prefix A- to sheet numbers?*, and lists what T3Lab finds in the code: deletes, parameter changes, created elements, categories, transaction names, and file or network access. It no longer shows "N line(s) of IronPython". Other confirmations name the change too (*Delete 3 elements (id …)?*, *Close "Tower A" without saving?*). AI apps now send a one-line `description` with their code. In the T3Lab Assistant, tool cards and approval cards show the same summary instead of raw JSON.
 - **File task watcher** (`task.json` / `task.py`) no longer starts on its own: it runs code with no token. Click **Start Watcher** once to turn it on for later sessions. A task file left from before is never run.
 - **Usage tracking** no longer sends code, secrets or full paths (paths go as the file name only). README now lists it under Network Traffic.
+- **Wall Cut Profile:** new window in the T3 layout. Openings now come from elements of the open model; tick **Include linked models** to add Revit links, and tick as many links as you need (all are ticked at first, **Pick Links** picks them in the view). With it off, links are not used.
 
 ### Removed
 - **MCP point cloud tools** (`list_point_clouds`, `analyze_point_cloud`, `detect_point_cloud_elements`): no AI app called them since usage tracking began. Scan-to-BIM stays in the **Point Cloud to Model** button.

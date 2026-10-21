@@ -3,7 +3,7 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Wall Profile Cut &amp; Openings"
-        Width="580" Height="580" MinWidth="540" MinHeight="520"
+        Width="560" Height="560" MinWidth="520" MinHeight="460"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" AllowsTransparency="True"
         Background="Transparent"
@@ -1715,154 +1715,195 @@
         </ResourceDictionary>
     </Window.Resources>
 
-    <Border BorderBrush="{StaticResource T3.BorderStrong}" BorderThickness="1" CornerRadius="{StaticResource T3.R.Window}" ClipToBounds="True" Background="{DynamicResource T3.Canvas}">
+    <!-- P1 · parameter form · size M -->
+    <Border BorderBrush="{StaticResource T3.BorderStrong}" BorderThickness="1"
+            CornerRadius="{StaticResource T3.R.Window}" ClipToBounds="True" Background="{DynamicResource T3.Surface}">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="48"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="48"/>
             </Grid.RowDefinitions>
 
-            <!-- ══════════════════ ROW 0: TITLE BAR ══════════════════ -->
-            <Border Grid.Row="0" Style="{StaticResource T3.TitleBar}">
+            <!-- ══════════ ROW 0 · TITLE BAR ══════════ -->
+            <Border Grid.Row="0" x:Name="title_bar" Style="{StaticResource T3.TitleBar}">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-
-                    <StackPanel Grid.Column="0" Orientation="Vertical" VerticalAlignment="Center" Margin="16,0,0,0"
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
                                 shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                        <TextBlock Text="Wall Profile Cut &amp; Openings" Style="{StaticResource T3.Title}"/>
-                        <TextBlock Text="Create openings from intersecting linked MEP and Structure" Style="{StaticResource T3.Subtitle}"/>
+                        <Image x:Name="logo_image" Height="28" Margin="0,0,12,0"
+                               VerticalAlignment="Center"
+                               RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <StackPanel Orientation="Vertical" VerticalAlignment="Center">
+                            <TextBlock Text="Wall Profile Cut &amp; Openings" Style="{StaticResource T3.Title}"/>
+                            <TextBlock Text="Create openings where MEP and structure cross walls"
+                                       Style="{StaticResource T3.Subtitle}"/>
+                        </StackPanel>
                     </StackPanel>
-
-                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
                                 shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                        <Button x:Name="win_minimize" Style="{StaticResource T3.WinCtrl}" Click="win_minimize_clicked">
+                        <Button x:Name="btn_minimize" Style="{StaticResource T3.WinCtrl}" ToolTip="Minimize"
+                                Click="minimize_button_clicked">
                             <TextBlock Text="&#xE921;" Style="{StaticResource T3.Icon}"/>
                         </Button>
-                        <Button x:Name="win_close" Style="{StaticResource T3.WinClose}" Click="win_close_clicked" IsCancel="True">
+                        <Button x:Name="btn_close" Style="{StaticResource T3.WinClose}" ToolTip="Close"
+                                Click="close_button_clicked" IsCancel="True">
                             <TextBlock Text="&#xE8BB;" Style="{StaticResource T3.Icon}"/>
                         </Button>
                     </StackPanel>
                 </Grid>
             </Border>
 
-            <!-- ══════════════════ ROW 1: MAIN BODY ══════════════════ -->
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="16,12">
+            <!-- ══════════ ROW 1 · FORM ══════════ -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          Padding="16,16,12,16">
                 <StackPanel>
-                    <!-- Card 1: Linked Model -->
-                    <Border Style="{StaticResource T3.Panel}" Padding="16,12" Margin="0,0,0,12">
-                        <StackPanel>
-                            <TextBlock Text="LINKED MODEL" Style="{StaticResource T3.Label}"/>
-                            <Grid Margin="0,8,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <ComboBox x:Name="cmb_links" Style="{StaticResource T3.ComboBox}"
-                                          SelectionChanged="cmb_links_changed"/>
-                                <Button x:Name="btn_pick_link" Grid.Column="1" Content="Pick in 3D"
-                                        Style="{StaticResource T3.Button.Secondary}" Margin="8,0,0,0"
-                                        Click="btn_pick_link_clicked"/>
+                    <!-- Section 1 · where the cutting elements come from -->
+                    <TextBlock Text="SOURCE MODELS" Style="{StaticResource T3.Label}"/>
+                    <Separator Style="{StaticResource T3.Rule}" Margin="0,4,0,8"/>
+                    <TextBlock x:Name="txt_host_model" Text="This model is always scanned"
+                               Style="{StaticResource T3.Caption}" TextTrimming="CharacterEllipsis"
+                               Margin="0,0,0,8"/>
+                    <CheckBox x:Name="chk_include_links" Content="Include linked models"
+                              Style="{StaticResource T3.CheckBox}"
+                              Checked="include_links_changed" Unchecked="include_links_changed"
+                              ToolTip="Also scan the Revit links you tick below. Off: only elements of this model are used."/>
+
+                    <!-- Shown only while Include linked models is ticked -->
+                    <StackPanel x:Name="pnl_link_area" Margin="24,8,0,0" Visibility="Collapsed">
+                        <!-- One CheckBox per loaded link, built in WallCutProfileDialog._fill_link_boxes -->
+                        <Border Style="{StaticResource T3.Panel}" Padding="0" ClipToBounds="True" MaxHeight="96">
+                            <Grid>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled" Padding="12,8,8,4">
+                                    <StackPanel x:Name="pnl_links"
+                                                ToolTip="Linked models to scan - tick one or more"/>
+                                </ScrollViewer>
+                                <TextBlock x:Name="txt_links_empty" Style="{StaticResource T3.Empty}"
+                                           Margin="16,8" Visibility="Collapsed"
+                                           Text="No loaded Revit links. Load one in Manage › Manage Links, then reopen this tool."/>
                             </Grid>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Card 2: Walls -->
-                    <Border Style="{StaticResource T3.Panel}" Padding="16,12" Margin="0,0,0,12">
-                        <StackPanel>
-                            <TextBlock Text="TARGET WALLS" Style="{StaticResource T3.Label}"/>
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,4">
-                                <RadioButton x:Name="rb_walls_view" Content="All Walls in Current View"
-                                             Style="{StaticResource T3.RadioButton}" IsChecked="True" Margin="0,0,16,0"/>
-                                <RadioButton x:Name="rb_walls_sel" Content="Selected Walls Only"
-                                             Style="{StaticResource T3.RadioButton}"/>
-                            </StackPanel>
-                            <Grid Margin="0,4,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="txt_wall_status" Text="Ready to scan active view"
-                                           Style="{StaticResource T3.Body.Secondary}" VerticalAlignment="Center"/>
-                                <Button x:Name="btn_pick_walls" Grid.Column="1" Content="Pick Walls"
-                                        Style="{StaticResource T3.Button.Secondary}" Click="btn_pick_walls_clicked"/>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Card 3: Intersecting Categories -->
-                    <Border Style="{StaticResource T3.Panel}" Padding="16,12" Margin="0,0,0,12">
-                        <StackPanel>
-                            <TextBlock Text="INTERSECTING LINK CATEGORIES" Style="{StaticResource T3.Label}"/>
-                            <WrapPanel Margin="0,8,0,0">
-                                <CheckBox x:Name="chk_ducts" Content="Ducts" IsChecked="True"
-                                          Style="{StaticResource T3.CheckBox}" Margin="0,0,16,8"/>
-                                <CheckBox x:Name="chk_pipes" Content="Pipes" IsChecked="True"
-                                          Style="{StaticResource T3.CheckBox}" Margin="0,0,16,8"/>
-                                <CheckBox x:Name="chk_trays" Content="Cable Trays" IsChecked="True"
-                                          Style="{StaticResource T3.CheckBox}" Margin="0,0,16,8"/>
-                                <CheckBox x:Name="chk_framing" Content="Structural Beams" IsChecked="True"
-                                          Style="{StaticResource T3.CheckBox}" Margin="0,0,16,8"/>
-                                <CheckBox x:Name="chk_columns" Content="Columns" IsChecked="False"
-                                          Style="{StaticResource T3.CheckBox}" Margin="0,0,16,8"/>
-                            </WrapPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Card 4: Cut Method & Clearance -->
-                    <Border Style="{StaticResource T3.Panel}" Padding="16,12">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                        </Border>
+                        <Grid Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="140"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-
-                            <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,12,8">
-                                <TextBlock Text="CREATION METHOD" Style="{StaticResource T3.Label}"/>
-                                <ComboBox x:Name="cmb_method" Style="{StaticResource T3.ComboBox}" Margin="0,8,0,0"
-                                          SelectionChanged="cmb_method_changed"/>
-                            </StackPanel>
-
-                            <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,8">
-                                <TextBlock x:Name="lbl_offset" Text="CLEARANCE (MM)" Style="{StaticResource T3.Label}"/>
-                                <TextBox x:Name="txt_offset" Text="25" Style="{StaticResource T3.TextBox}" Margin="0,8,0,0"/>
-                            </StackPanel>
-
-                            <StackPanel x:Name="panel_family" Grid.Row="1" Grid.ColumnSpan="2" Margin="0,4,0,0">
-                                <TextBlock Text="OPENING VOID FAMILY" Style="{StaticResource T3.Label}"/>
-                                <ComboBox x:Name="cmb_families" Style="{StaticResource T3.ComboBox}" Margin="0,8,0,0"/>
-                            </StackPanel>
+                            <TextBlock x:Name="txt_link_count" Text="0 of 0 linked models ticked"
+                                       Style="{StaticResource T3.Caption}" TextTrimming="CharacterEllipsis"/>
+                            <Button x:Name="btn_pick_links" Grid.Column="1" Style="{StaticResource T3.Button.Secondary}"
+                                    Click="btn_pick_links_clicked"
+                                    ToolTip="Pick linked models in the active view - exactly the ones you pick get ticked">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE7C9;" Style="{StaticResource T3.Icon.Lead}"/>
+                                    <TextBlock Text="Pick Links" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
                         </Grid>
-                    </Border>
+                    </StackPanel>
+
+                    <!-- Section 2 · walls that receive the openings -->
+                    <TextBlock Text="TARGET WALLS" Style="{StaticResource T3.Label}" Margin="0,16,0,0"/>
+                    <Separator Style="{StaticResource T3.Rule}" Margin="0,4,0,8"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <WrapPanel>
+                                <RadioButton x:Name="rb_walls_view" GroupName="wall_scope"
+                                             Content="All walls in current view" IsChecked="True"
+                                             Style="{StaticResource T3.RadioButton}" Margin="0,0,16,0"
+                                             Checked="wall_scope_changed"/>
+                                <RadioButton x:Name="rb_walls_sel" GroupName="wall_scope"
+                                             Content="Picked walls only"
+                                             Style="{StaticResource T3.RadioButton}"
+                                             Checked="wall_scope_changed"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="txt_wall_status" Text="No walls picked yet"
+                                       Style="{StaticResource T3.Caption}" Margin="0,4,0,0"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                        <Button x:Name="btn_pick_walls" Grid.Column="1" Style="{StaticResource T3.Button.Secondary}"
+                                Margin="12,0,0,0" Click="btn_pick_walls_clicked"
+                                ToolTip="Pick the walls to cut in the active view, then click Finish">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE7C9;" Style="{StaticResource T3.Icon.Lead}"/>
+                                <TextBlock Text="Pick Walls" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+
+                    <!-- Section 3 · element categories that cut the walls -->
+                    <TextBlock Text="INTERSECTING CATEGORIES" Style="{StaticResource T3.Label}" Margin="0,16,0,0"/>
+                    <Separator Style="{StaticResource T3.Rule}" Margin="0,4,0,8"/>
+                    <WrapPanel>
+                        <CheckBox x:Name="chk_ducts" Content="Ducts" IsChecked="True"
+                                  Style="{StaticResource T3.CheckBox}" Margin="0,0,16,4"/>
+                        <CheckBox x:Name="chk_pipes" Content="Pipes" IsChecked="True"
+                                  Style="{StaticResource T3.CheckBox}" Margin="0,0,16,4"/>
+                        <CheckBox x:Name="chk_trays" Content="Cable Trays" IsChecked="True"
+                                  Style="{StaticResource T3.CheckBox}" Margin="0,0,16,4"/>
+                        <CheckBox x:Name="chk_framing" Content="Structural Beams" IsChecked="True"
+                                  Style="{StaticResource T3.CheckBox}" Margin="0,0,16,4"/>
+                        <CheckBox x:Name="chk_columns" Content="Columns" IsChecked="False"
+                                  Style="{StaticResource T3.CheckBox}" Margin="0,0,0,4"/>
+                    </WrapPanel>
+
+                    <!-- Section 4 · how the openings are made -->
+                    <TextBlock Text="OPENINGS" Style="{StaticResource T3.Label}" Margin="0,12,0,0"/>
+                    <Separator Style="{StaticResource T3.Rule}" Margin="0,4,0,8"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="16"/>
+                            <ColumnDefinition Width="140"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="CREATION METHOD" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                            <ComboBox x:Name="cmb_method" Style="{StaticResource T3.ComboBox}"
+                                      ItemContainerStyle="{StaticResource T3.ComboBoxItem}"
+                                      SelectionChanged="cmb_method_changed"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock x:Name="lbl_offset" Text="CLEARANCE (MM)" Style="{StaticResource T3.Caption}"
+                                       Margin="0,0,0,4"/>
+                            <TextBox x:Name="txt_offset" Text="25" Style="{StaticResource T3.TextBox.Mono}"
+                                     ToolTip="Gap around each element. A bare number is in project units; 25 mm or 1&quot; also work."/>
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel x:Name="panel_family" Margin="0,12,0,0">
+                        <TextBlock Text="OPENING FAMILY" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                        <ComboBox x:Name="cmb_families" Style="{StaticResource T3.ComboBox}"
+                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}"
+                                  ToolTip="Wall-hosted family placed at each crossing"/>
+                    </StackPanel>
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- ══════════════════ ROW 2: FOOTER BAR ══════════════════ -->
+            <!-- ══════════ ROW 2 · FOOTER ══════════
+                 No Cancel here: the title-bar X (IsCancel) is the one control that only closes. -->
             <Border Grid.Row="2" Style="{StaticResource T3.FooterBar}">
                 <Grid>
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Style="{StaticResource T3.Copyright}"/>
-                        <Border Width="1" Height="16" Margin="12,0" Background="{StaticResource T3.Border}"/>
-                        <TextBlock x:Name="txt_status" Text="Ready" Style="{StaticResource T3.Body.Secondary}"/>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="1" Orientation="Horizontal">
-                        <Button x:Name="btn_apply" Content="Create Openings" Style="{StaticResource T3.Button.Primary}"
-                                IsDefault="True" Click="btn_apply_clicked"/>
-                    </StackPanel>
+                    <TextBlock Grid.Column="0" Style="{StaticResource T3.Copyright}" VerticalAlignment="Center"/>
+                    <Border Grid.Column="1" Width="1" Height="14" Margin="12,0"
+                            Background="{StaticResource T3.Border}" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="2" x:Name="txt_status" Text="Ready"
+                               Style="{StaticResource T3.Body.Secondary}" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+                    <Button Grid.Column="3" x:Name="btn_apply" Content="Create Openings"
+                            Style="{StaticResource T3.Button.Primary}" Margin="16,0,0,0"
+                            IsDefault="True" Click="btn_apply_clicked"/>
                 </Grid>
             </Border>
         </Grid>

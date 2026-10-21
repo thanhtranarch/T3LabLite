@@ -92,7 +92,7 @@ Quick links to Autodesk Forma and the Autodesk Health dashboard, plus **PDF Mark
 #### Managers (ManaLoca · ManaGroup · BatchLink)
 - **ManaLoca** — list the elements of the active view or a level and edit their XYZ coordinates in a data grid, committed in one transaction. The window stays open while you work.
 - **ManaGroup** — manage Revit Model Groups and Detail Groups: list group types and placed instances, count references, and audit unused group definitions.
-- **BatchLink** — manage Revit and CAD link paths in bulk: verify link statuses, repath missing links, reload links across documents, and audit external dependencies.
+- **BatchLink** — manage Revit links (status, reload, unload, pin, remove, Switch to Cloud), batch-link models from a folder or from Autodesk Docs as cloud links, set the workset each link sits on, and control per-view link display.
 
 #### ManaFami
 Family manager. Batch Operations lists families, system types, model groups or assemblies; find and replace, add a prefix or suffix and change case, review every staged change in the grid, then apply it in one undoable step. Family Loader loads new families from a local folder (or a cloud catalogue you configure) into the project.

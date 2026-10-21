@@ -20,6 +20,8 @@ Releasing a new version:
 ## [Unreleased]
 
 ### Added
+- **Batch Link — link from Autodesk Docs:** Link Models links cloud models straight from Autodesk Docs (path type Cloud), never their Desktop Connector copy — the default when the open model is a cloud model. A Desktop Connector folder narrows the list. **Manage Links → Switch to Cloud** re-points disk / Desktop Connector links to the same cloud model, keeping placement and worksets.
+- **Batch Link — View Display → Copy to This View:** copies a view template's RVT link display, Model and Annotation category tabs included, onto the active view, and warns when the view's own template controls its link display.
 - **MCP security (MCP Control → Advanced → Security):** read-only mode for AI apps; Revit asks Yes/No before an AI app deletes, purges, ungroups, syncs, saves as or closes without saving; `send_code_to_revit` shows the code and asks first (or can be turned off). The T3Lab Assistant is not affected.
 - **MCP `run_batch` tool:** several edits run as one Revit undo step and are all rolled back if one fails.
 - **MCP:** tools are listed with `readOnlyHint` / `destructiveHint` annotations; `ping` and protocol versions up to 2025-06-18.

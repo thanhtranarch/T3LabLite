@@ -18,6 +18,11 @@ RevitLinkGraphicsSettings and View.Get/Set/RemoveLinkOverrides only exist from
 Revit 2025 onwards; every display-settings helper here degrades gracefully on
 older releases (see display_api_available()).
 
+The Model / Annotation / Analytical / Import category tabs of RVT Link Display
+Settings (e.g. "Show annotation categories in this view") have NO API member
+in Revit 2024 - 2027. The only route to them is a view template's
+"V/G Overrides RVT Links" block — see copy_link_display_from_template().
+
 Part of T3Lab Extension.
 """
 
@@ -387,6 +392,18 @@ def reload_link_from(link_type, file_path):
         model_path = ModelPathUtils.ConvertUserVisiblePathToModelPath(file_path)
         config = WorksetConfiguration(WorksetConfigurationOption.OpenAllWorksets)
         return _load_result(link_type.LoadFrom(model_path, config), "Reloaded from new path")
+    except Exception as ex:
+        return False, str(ex).split("\n")[0]
+
+
+def reload_link_from_model_path(link_type, model_path, ok_text="Reloaded"):
+    """Point a link at a ModelPath (disk, server or cloud), keeping the worksets
+    it had open. NO transaction open."""
+    if link_type is None:
+        return False, "Link no longer exists"
+    try:
+        # config None = the same worksets as before (LoadFrom docs).
+        return _load_result(link_type.LoadFrom(model_path, None), ok_text)
     except Exception as ex:
         return False, str(ex).split("\n")[0]
 
@@ -940,6 +957,142 @@ def set_link_display(view, link_record, mode_index, linked_view_id=-1, aspects=N
         for target in targets:
             view.SetLinkOverrides(target, settings)
         return True, DISPLAY_MODES[mode_index]
+    except Exception as ex:
+        return False, str(ex).split("\n")[0]
+
+
+# -- LINK DISPLAY FROM A VIEW TEMPLATE ---------------------------------------
+#
+# RevitLinkGraphicsSettings (2024 - 2027) only covers the Basics tab of RVT
+# Link Display Settings. The Model, Annotation, Analytical and Import category
+# tabs — "Show annotation categories in this view", hiding the linked grids —
+# cannot be read or written (checked against the 2025, 2026 and 2027 API
+# reference). A view template carries the WHOLE link display block, tabs
+# included, in its "V/G Overrides RVT Links" parameter: Autodesk's own way to
+# hide linked annotations in many views. So the reachable route is: set the
+# tabs once in a template, then move only that parameter onto a view.
+
+def rvt_links_param_id():
+    """ElementId of the "V/G Overrides RVT Links" template parameter, or None."""
+    bip = getattr(BuiltInParameter, 'VIS_GRAPHICS_RVT_LINKS', None)
+    if bip is None:
+        return None
+    try:
+        return ElementId(bip)
+    except Exception:
+        return None
+
+
+def _has_id(ids, element_id):
+    target = eid_int(element_id)
+    return any(eid_int(i) == target for i in (ids or []))
+
+
+def template_controls_links(template):
+    """True when template has "V/G Overrides RVT Links" ticked (Include)."""
+    param_id = rvt_links_param_id()
+    if template is None or param_id is None:
+        return False
+    try:
+        return (_has_id(template.GetTemplateParameterIds(), param_id)
+                and not _has_id(template.GetNonControlledTemplateParameterIds(), param_id))
+    except Exception:
+        return False
+
+
+def view_template_locking_links(view):
+    """The view template that dictates this view's link display, or None.
+
+    While it does, the view's own link settings cannot change — not from the
+    Revit dialog and not from SetLinkOverrides.
+    """
+    if view is None:
+        return None
+    try:
+        template_id = view.ViewTemplateId
+        if template_id is None or eid_int(template_id) < 0:
+            return None
+        template = view.Document.GetElement(template_id)
+    except Exception:
+        return None
+    return template if template_controls_links(template) else None
+
+
+def get_link_templates(view):
+    """View templates that control link display and fit view: [(id_int, name)].
+
+    Templates that leave "V/G Overrides RVT Links" unticked are left out on
+    purpose: copying from one would tick it for a moment, and every other view
+    using that template would take its link display too.
+    """
+    templates = []
+    if view is None:
+        return templates
+    try:
+        for candidate in FilteredElementCollector(view.Document).OfClass(View):
+            try:
+                if not candidate.IsTemplate or not template_controls_links(candidate):
+                    continue
+                if not view.IsValidViewTemplate(candidate.Id):
+                    continue
+                templates.append((eid_int(candidate.Id), element_name(candidate)))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    templates.sort(key=lambda x: x[1].lower())
+    return templates
+
+
+def _net_ids(ids):
+    out = NetList[ElementId]()
+    for element_id in ids:
+        out.Add(element_id)
+    return out
+
+
+def copy_link_display_from_template(view, template):
+    """Give view the RVT link display of template, category tabs included.
+
+    Only "V/G Overrides RVT Links" moves: for the length of the call the
+    template controls nothing else, it is assigned to the view (Revit writes
+    the controlled block), then the view gets its own template back and the
+    template its Include boxes back. A removed template leaves its values on
+    the view, so the link display stays. Views already using the template are
+    not changed: they hold its link display already (it is ticked) and every
+    other parameter returns to the same locked value.
+
+    Caller owns the transaction and must roll it back when this fails.
+    Returns (ok, message).
+    """
+    param_id = rvt_links_param_id()
+    if param_id is None:
+        return False, "This Revit build has no V/G Overrides RVT Links parameter"
+    if view is None or template is None:
+        return False, "No view or template"
+
+    locked = view_template_locking_links(view)
+    if locked is not None:
+        return False, u'View template "{}" already controls link display'.format(
+            element_name(locked))
+    if not template_controls_links(template):
+        return False, "The template does not include V/G Overrides RVT Links"
+
+    try:
+        if not view.IsValidViewTemplate(template.Id):
+            return False, "The template does not fit this view type"
+        doc = view.Document
+        restore_ids = _net_ids(template.GetNonControlledTemplateParameterIds())
+        others = _net_ids([pid for pid in template.GetTemplateParameterIds()
+                           if eid_int(pid) != eid_int(param_id)])
+        own_template_id = view.ViewTemplateId
+
+        template.SetNonControlledTemplateParameterIds(others)
+        view.ViewTemplateId = template.Id
+        doc.Regenerate()
+        view.ViewTemplateId = own_template_id
+        template.SetNonControlledTemplateParameterIds(restore_ids)
+        return True, "Copied"
     except Exception as ex:
         return False, str(ex).split("\n")[0]
 

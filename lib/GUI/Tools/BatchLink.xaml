@@ -6,7 +6,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         mc:Ignorable="d"
         Title="Batch Link Models"
-        Width="1080" Height="720" MinWidth="1000" MinHeight="660"
+        Width="1080" Height="780" MinWidth="1000" MinHeight="700"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" AllowsTransparency="True"
         Background="Transparent"
@@ -1932,6 +1932,10 @@
                                                 Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
                                                 ToolTip="Point ONE link at another .rvt file and load it"
                                                 Click="mng_reload_from_clicked"/>
+                                        <Button x:Name="btn_mng_to_cloud" Content="Switch to Cloud"
+                                                Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
+                                                ToolTip="Re-point the checked disk / Desktop Connector links to the same model in Autodesk Docs (path type Cloud)"
+                                                Click="mng_to_cloud_clicked"/>
                                         <Button x:Name="btn_mng_unload" Content="Unload"
                                                 Style="{StaticResource T3.Button.Secondary}"
                                                 ToolTip="Unload the checked links for everyone (Reload brings them back)"
@@ -1968,7 +1972,7 @@
                                     </Button>
                                 </Grid>
                                 <TextBlock Style="{StaticResource T3.Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
-                                           Text="No link checked = the highlighted row. Reload (footer), Reload From and Unload clear Revit's undo history, exactly like Revit's own Manage Links. Pin, reference type and Remove are one Ctrl+Z each."/>
+                                           Text="No link checked = the highlighted row. Reload (footer), Reload From, Switch to Cloud and Unload clear Revit's undo history, exactly like Revit's own Manage Links. Pin, reference type and Remove are one Ctrl+Z each."/>
                             </StackPanel>
                         </Border>
                     </Grid>
@@ -1984,9 +1988,24 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- HEADER: SOURCE FOLDER -->
+                        <!-- HEADER: SOURCE (folder on disk / Autodesk Docs) -->
                         <StackPanel Grid.Row="0" Margin="0,0,0,12">
-                            <TextBlock Text="SOURCE FOLDER" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="LINK FROM" Style="{StaticResource T3.Label}"
+                                           VerticalAlignment="Center" Margin="0,0,16,0"/>
+                                <RadioButton x:Name="rb_source_folder" Content="Folder on disk or server"
+                                             GroupName="bl_source" Style="{StaticResource T3.RadioButton}"
+                                             IsChecked="True" Margin="0,0,16,0" Tag="folder"
+                                             ToolTip="Link the .rvt files of a folder by their file path"
+                                             Checked="source_mode_checked"/>
+                                <RadioButton x:Name="rb_source_cloud" Content="Autodesk Docs (cloud)"
+                                             GroupName="bl_source" Style="{StaticResource T3.RadioButton}"
+                                             Tag="cloud"
+                                             ToolTip="Link cloud models from Autodesk Docs (path type Cloud), never their Desktop Connector copy"
+                                             Checked="source_mode_checked"/>
+                            </StackPanel>
+                            <TextBlock x:Name="lbl_source_folder" Text="SOURCE FOLDER"
+                                       Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
@@ -2008,6 +2027,9 @@
                                           Style="{StaticResource T3.CheckBox}" IsChecked="True"
                                           Click="ignore_backups_toggled"/>
                             </StackPanel>
+                            <TextBlock x:Name="lbl_cloud_hint" Style="{StaticResource T3.Caption}"
+                                       TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"
+                                       Text="The Revit API cannot browse Autodesk Docs, so this lists the cloud models Revit already knows on this PC: this model's links, the links inside them, cloud models open in Revit and Revit's cloud cache. A Desktop Connector folder (...\ACCDocs\hub\project\Project Files\...) narrows the list to that folder and adds the files in it. Every model is linked from Autodesk Docs, never from the local copy."/>
                         </StackPanel>
 
                         <!-- TOOLBAR -->
@@ -2054,6 +2076,11 @@
                                               HorizontalScrollBarVisibility="Disabled"
                                               SelectionMode="Extended"
                                               SelectionUnit="FullRow">
+                                        <DataGrid.RowStyle>
+                                            <Style TargetType="DataGridRow" BasedOn="{StaticResource T3.DataGridRow}">
+                                                <Setter Property="ToolTip" Value="{Binding RowTip}"/>
+                                            </Style>
+                                        </DataGrid.RowStyle>
                                         <DataGrid.Columns>
                                             <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
                                                                     HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
@@ -2078,6 +2105,9 @@
                                             </DataGridTemplateColumn>
 
                                             <DataGridTextColumn Header="FILE NAME" Width="*" Binding="{Binding FileName}"/>
+                                            <!-- Columns 2-4 are shown / hidden by source: COL_FOLDER, COL_SIZE, COL_DATE in BatchLinkDialog.py -->
+                                            <DataGridTextColumn Header="FOLDER" Width="300" Binding="{Binding Folder}"
+                                                                ElementStyle="{StaticResource T3.Cell.Muted}"/>
                                             <DataGridTextColumn Header="SIZE" Width="90" Binding="{Binding FileSize}"
                                                                 ElementStyle="{StaticResource T3.Cell.Number}"/>
                                             <DataGridTextColumn Header="DATE MODIFIED" Width="140" Binding="{Binding ModifiedFormatted}"
@@ -2403,13 +2433,21 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- HEADER: API BANNER (Revit 2024 and older) -->
-                        <Border Grid.Row="0" x:Name="banner_no_api" Visibility="Collapsed"
-                                Style="{StaticResource T3.Callout.Warning}" Margin="0,0,0,12">
-                            <TextBlock x:Name="lbl_no_api" TextWrapping="Wrap"
-                                       Style="{StaticResource T3.Body.Secondary}"
-                                       Text="Link display settings need Revit 2025 or newer. Visibility and halftone still work here."/>
-                        </Border>
+                        <!-- HEADER: API BANNER (Revit 2024 and older) + VIEW TEMPLATE LOCK -->
+                        <StackPanel Grid.Row="0">
+                            <Border x:Name="banner_no_api" Visibility="Collapsed"
+                                    Style="{StaticResource T3.Callout.Warning}" Margin="0,0,0,12">
+                                <TextBlock x:Name="lbl_no_api" TextWrapping="Wrap"
+                                           Style="{StaticResource T3.Body.Secondary}"
+                                           Text="Link display settings need Revit 2025 or newer. Visibility and halftone still work here."/>
+                            </Border>
+                            <Border x:Name="banner_view_template" Visibility="Collapsed"
+                                    Style="{StaticResource T3.Callout.Warning}" Margin="0,0,0,12">
+                                <TextBlock x:Name="lbl_view_template" TextWrapping="Wrap"
+                                           Style="{StaticResource T3.Body.Secondary}"
+                                           Text="The view template of this view controls its RVT link display."/>
+                            </Border>
+                        </StackPanel>
 
                         <!-- TOOLBAR -->
                         <Grid Grid.Row="1" Margin="0,0,0,8">
@@ -2524,7 +2562,7 @@
                                                    VerticalAlignment="Center" Margin="0,0,8,0"/>
                                         <Button x:Name="btn_preset_model" Content="Model only"
                                                 Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
-                                                ToolTip="By Host View — the link draws with this view's model categories, its annotations stay hidden"
+                                                ToolTip="By Host View — the link's model follows this view and its tags, dimensions and text are not drawn. Linked grids and levels still show: to hide them, copy a view template's link display (bottom row)"
                                                 Click="preset_model_clicked"/>
                                         <Button x:Name="btn_preset_annotation" Content="Model + Annotation"
                                                 Style="{StaticResource T3.Button.Secondary}" Margin="0,0,8,0"
@@ -2627,6 +2665,29 @@
                                         </Grid>
                                     </StackPanel>
                                 </Border>
+
+                                <!-- CATEGORY TABS: the Revit API has no member for the Model /
+                                     Annotation / Analytical / Import tabs, a view template does. -->
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="16"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="Model / Annotation / Analytical / Import category tabs — copied from a view template (the Revit API cannot set them per link)"
+                                                   Style="{StaticResource T3.Caption}" Margin="0,0,0,4"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="Revit's API cannot switch the category tabs of RVT Link Display Settings, e.g. 'Show annotation categories in this view' or linked grids. Set them once in a view template: View Templates › V/G Overrides RVT Links (Include ticked) › Edit › Display Settings › Custom. Then copy that template's link display to this view here."/>
+                                        <ComboBox x:Name="cb_disp_template" Style="{StaticResource T3.ComboBox}"
+                                                  ItemContainerStyle="{StaticResource T3.ComboBoxItem}"
+                                                  ToolTip="View templates with V/G Overrides RVT Links ticked that fit this view"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="2" x:Name="btn_disp_copy_template" Content="Copy to This View"
+                                            Style="{StaticResource T3.Button.Secondary}" VerticalAlignment="Bottom"
+                                            ToolTip="Give every link in this view the template's RVT Links display, category tabs included. Only that one setting moves; one Ctrl+Z undoes it"
+                                            Click="disp_copy_template_clicked"/>
+                                </Grid>
                             </StackPanel>
                         </Border>
                     </Grid>

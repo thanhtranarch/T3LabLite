@@ -52,7 +52,7 @@ Tools that process many elements — Model Auditor, ManaSheets, ManaViews, Sheet
 #### T3Lab Assistant
 The AI assistant, in Revit. Ask about the model or tell it what to change, in Vietnamese or English — it calls real Revit tools, opens T3Lab tools for you, and by default presents a plan and waits for your confirmation before changing the model (deletes always ask). It opens from the **T3Lab Assistant** button on this panel as a window, docks as a native Revit pane beside Properties / Project Browser, and is also in the right-click menu (Revit 2025+).
 
-- **Skills** — reusable instruction packs that activate on what you ask, 25 built in (ISO 19650 naming, LOD, worksets, QA checklist, BEP, COBie handover, clash coordination, sheet & annotation standards, …). Type `/skill-name` to force one, or install more from a GitHub repo — Claude's `SKILL.md` format is read as-is.
+- **Skills** — reusable instruction packs that activate on what you ask, 33 built in (ISO 19650 naming, LOD, worksets, QA checklist, BEP, COBie handover, clash coordination, sheet & annotation standards, construction wiki and drawing-completion rules, …). Type `/skill-name` to force one, or install more from a GitHub repo — Claude's `SKILL.md` format is read as-is.
 - **Knowledge (RAG)** — index folders of PDF / TXT / MD and get answers with citations. Keyword search works offline; semantic search is optional and runs on a local Ollama embedding model.
 - **Projects** — per-project chat history, custom instructions, default model, knowledge folders, remembered facts, and daily scheduled prompts.
 - **Context & attachments** — the assistant sees the active view and current selection, and accepts attached files and images.
@@ -239,3 +239,23 @@ description differently. **Show details** shows the full code.
 Tools are listed with MCP annotations (`readOnlyHint`, `destructiveHint`), so
 clients that support them can ask before edits too. `run_batch` runs several
 edits as one Revit undo step and rolls them all back if one fails.
+
+### MCP construction wiki & drawing rules
+
+AI apps get the same skill library as the T3Lab Assistant through the
+read-only `t3lab_wiki` tool (`list`, `search`, `read`), and the MCP
+`initialize` answer tells them to read the drawing rules before they create,
+annotate, complete or issue drawings. Pages (in Vietnamese):
+
+| Page | What it covers |
+|---|---|
+| `drawing-completion-rules` | When a sheet counts as done, the read → plan → fix → check workflow with T3Lab tools, and what the tools cannot do (tags are not de-duplicated, `create_dimension` takes grids only) |
+| `architectural-drawing-rules` · `structural-drawing-rules` · `mep-drawing-rules` | What each drawing type must show: plans, ceilings, elevations, sections, details; foundation / framing plans, rebar notation, bar schedule; plumbing, HVAC, electrical, fire protection |
+| `drawing-issue-checklist` | Read-only check before an issue: numbering, drawing index, title blocks, revisions, cross references |
+| `drawing-conventions` · `drawing-set-structure` · `construction-glossary` | Paper sizes, scales, line weights, text heights, symbols, title block; design stages and sheet order; Vietnamese–English–Revit terms |
+
+Your own pages in `%APPDATA%\T3LabAI\skills` and the active project's
+`skills` folder are listed next to the built-in ones, and AI apps are told
+that a project BEP wins over the generic examples in the built-in pages.
+Pages switched off in **LLMs Setting → Skills** are hidden from AI apps as
+well.

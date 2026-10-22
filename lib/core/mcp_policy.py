@@ -72,6 +72,32 @@ LOCK_FREE_METHODS = frozenset(['initialize', 'ping', 'tools/list'])
 # How much of the code / arguments the confirmation dialog shows.
 _CONFIRM_TEXT_LIMIT = 1800
 
+# `instructions` of the initialize result (MCP 2025-03-26+; older clients
+# ignore the field). Clients that support it (Claude Desktop, Claude Code) put
+# it in the model's system prompt, so this is how an AI app learns that the
+# drawing rules exist before its first tool call. bridge.py answers initialize
+# itself and keeps a copy (it cannot import lib/); lite_guard/test_mcp_server.py
+# checks the two stay identical.
+SERVER_INSTRUCTIONS = (
+    'T3Lab drives the Revit model open on this machine.\n'
+    'Drawings (sheets, views, dimensions, tags, notes, revisions, PDF/DWG '
+    'issue):\n'
+    '1. Before you create, annotate, complete or issue drawings, read the rules '
+    'with t3lab_wiki: page "drawing-completion-rules" first, then the page for '
+    'the drawing type (architectural-drawing-rules, structural-drawing-rules, '
+    'mep-drawing-rules), and "drawing-issue-checklist" before an issue. They '
+    'say what a finished sheet must show and which tools to use.\n'
+    '2. t3lab_wiki also holds construction knowledge (scales, line weights, '
+    'symbols, title block, rebar notation, design stages, Vietnamese-English '
+    'terms): search it instead of guessing.\n'
+    '3. The project\'s own BEP / standard wins over the wiki. Never invent '
+    'project codes, sheet numbers or revision codes: follow what the model '
+    'already shows and say you inferred it.\n'
+    '4. Read before you write: list what exists, show the plan with targets and '
+    'counts before a batch change, then check the result with a read tool.\n'
+    '5. Report what was done and what was not, with element ids, in the '
+    'user\'s language.')
+
 
 def negotiate_protocol(requested):
     """The protocol version to answer `initialize` with."""

@@ -328,6 +328,8 @@ READ_ONLY_TOOL_NAMES = frozenset([
     "file_watcher_status", "say_hello", "show_assistant_pane",
     # Catalog search (server: text for MCP clients; assistant: its own copy)
     "find_tools",
+    # Construction wiki + drawing rules for MCP clients (core/mcp_wiki.py)
+    "t3lab_wiki",
     # FamiGen: the contract, and a proposal shown in the review window - the
     # model is untouched until famigen_create_family (not listed: it saves an
     # .rfa and can load it into the project).
@@ -405,6 +407,9 @@ _EXTERNAL_ONLY_TOOLS = frozenset([
     # brings its own (tool_reference on Claude), so the name must not appear
     # twice in tools[].
     'find_tools',
+    # The same pages reach the assistant as injected skills (SkillsEngine);
+    # a tool for them too would only cost a turn.
+    't3lab_wiki',
 ])
 
 

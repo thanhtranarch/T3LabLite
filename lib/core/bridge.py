@@ -64,7 +64,7 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-BRIDGE_VERSION = '2.5.0'
+BRIDGE_VERSION = '2.6.0'
 
 PORT_MIN, PORT_MAX = 48884, 48894
 PROBE_TIMEOUT = 1.0    # /health probe per port (run in parallel)
@@ -111,6 +111,30 @@ LARGE_RESULT_TOOLS = (
 # the client's requested revision here is safe.
 SUPPORTED_PROTOCOLS = ('2025-06-18', '2025-03-26', '2024-11-05')
 DEFAULT_PROTOCOL = '2024-11-05'
+
+# `instructions` of the initialize result: points the AI app at the drawing
+# rules (t3lab_wiki) before its first tool call. A copy of
+# core.mcp_policy.SERVER_INSTRUCTIONS -- this file is deployed on its own and
+# cannot import lib/. lite_guard/test_mcp_server.py keeps the two identical.
+SERVER_INSTRUCTIONS = (
+    'T3Lab drives the Revit model open on this machine.\n'
+    'Drawings (sheets, views, dimensions, tags, notes, revisions, PDF/DWG '
+    'issue):\n'
+    '1. Before you create, annotate, complete or issue drawings, read the rules '
+    'with t3lab_wiki: page "drawing-completion-rules" first, then the page for '
+    'the drawing type (architectural-drawing-rules, structural-drawing-rules, '
+    'mep-drawing-rules), and "drawing-issue-checklist" before an issue. They '
+    'say what a finished sheet must show and which tools to use.\n'
+    '2. t3lab_wiki also holds construction knowledge (scales, line weights, '
+    'symbols, title block, rebar notation, design stages, Vietnamese-English '
+    'terms): search it instead of guessing.\n'
+    '3. The project\'s own BEP / standard wins over the wiki. Never invent '
+    'project codes, sheet numbers or revision codes: follow what the model '
+    'already shows and say you inferred it.\n'
+    '4. Read before you write: list what exists, show the plan with targets and '
+    'counts before a batch change, then check the result with a read tool.\n'
+    '5. Report what was done and what was not, with element ids, in the '
+    'user\'s language.')
 
 # Tools implemented by the bridge itself (multi-instance control lives here —
 # a server inside one Revit process cannot see the other processes). Injected
@@ -608,6 +632,7 @@ def _handle_initialize_local(request):
             'capabilities': {'tools': {}},
             'serverInfo': {'name': 'T3Lab Revit MCP Server',
                            'version': BRIDGE_VERSION},
+            'instructions': SERVER_INSTRUCTIONS,
         },
     }
 

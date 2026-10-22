@@ -116,6 +116,26 @@
       "file": "lib/tracking/service.py",
       "pattern": "^\\s+arguments = redact_arguments\\(arguments\\)",
       "why": "MCP telemetry must never send code, secrets or full paths"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^\\s+mcp_wiki\\.TOOL_NAME: mcp_wiki\\.TOOL_SCHEMA,",
+      "why": "the MCP server must register t3lab_wiki, or AI apps never see the construction wiki and drawing rules (lib/core/mcp_wiki.py)"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^\\s+'instructions': mcp_policy\\.SERVER_INSTRUCTIONS,",
+      "why": "initialize must tell AI apps to read the drawing rules (t3lab_wiki) before drawing work"
+    },
+    {
+      "file": "lib/core/bridge.py",
+      "pattern": "^\\s+'instructions': SERVER_INSTRUCTIONS,",
+      "why": "the bridge answers initialize itself, so it must send the same instructions as the server"
+    },
+    {
+      "file": "lib/Intelligence/skills/drawing-completion-rules.md",
+      "pattern": "^name: drawing-completion-rules$",
+      "why": "the MCP instructions and the t3lab_wiki description send AI apps to this page first"
     }
   ],
   "lite_only": [
@@ -124,6 +144,7 @@
     "CHANGELOG.md",
     "README.md",
     "extension.json",
+    "lib/core/mcp_wiki.py",
     "lib/core/ribbon_retire.py",
     "lib/core/update_schedule.py",
     "lib/core/updater.py",

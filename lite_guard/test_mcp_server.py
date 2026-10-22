@@ -14,6 +14,8 @@ reach:
     202 for notifications, ping, tools/list without the request lock),
     tools/list filtering, tools/call blocking, run_batch validation
   - core/bridge.py: re-reading the token after a 401
+  - core/mcp_wiki.py + Intelligence/skills/: the t3lab_wiki tool (construction
+    wiki and drawing rules) and the initialize instructions pointing at it
   - core/file_watcher.py: off by default, never runs an old task file
   - tracking/service.py: code, secrets and full paths are not sent
 
@@ -23,6 +25,7 @@ are not exercised; the Revit side must be checked in Revit.
 Plain CPython 3, standard library only. CI runs it next to guard.py
 (.github/workflows/lite-guard.yml).
 """
+import io
 import json
 import os
 import shutil
@@ -49,6 +52,7 @@ if LIB not in sys.path:
     sys.path.insert(0, LIB)
 
 from core import mcp_policy as mp      # noqa: E402
+from core import mcp_wiki              # noqa: E402
 from core import call_summary as cs    # noqa: E402
 from core import paths                 # noqa: E402
 from core import server as srv_mod     # noqa: E402
@@ -57,6 +61,7 @@ from Intelligence import tool_schema   # noqa: E402
 from tracking.service import redact_arguments, TelemetryService  # noqa: E402
 
 READ_ONLY = tool_schema.READ_ONLY_TOOL_NAMES
+SKILLS_DIR = os.path.join(LIB, 'Intelligence', 'skills')
 
 # Tool calls below go through the usage tracking hook: never let a test run
 # send rows to the real dashboard.
@@ -364,6 +369,166 @@ class RegistryTests(unittest.TestCase):
             {'name': 'create_level', 'arguments': {'not_a_real_argument': 1}}]})
         self.assertIn('Step 1', unknown['error'])
         self.assertIn('not_a_real_argument', unknown['error'])
+
+    def test_skill_pages_declare_real_tools(self):
+        # A page that names a tool the server does not have sends the
+        # Assistant and MCP clients after something that is not there.
+        from Intelligence.skills_engine import parse_frontmatter
+        s = _server()
+        for name in sorted(os.listdir(SKILLS_DIR)):
+            with io.open(os.path.join(SKILLS_DIR, name), encoding='utf-8') as f:
+                meta, _body = parse_frontmatter(f.read())
+            missing = sorted(set(meta.get('tools') or []) - set(s._tools))
+            self.assertEqual(missing, [], '{} declares unknown tools'.format(name))
+
+
+# The pages SERVER_INSTRUCTIONS and the t3lab_wiki description send clients to.
+DRAWING_PAGES = ('drawing-completion-rules', 'architectural-drawing-rules',
+                 'structural-drawing-rules', 'mep-drawing-rules',
+                 'drawing-issue-checklist')
+WIKI_PAGES = DRAWING_PAGES + ('drawing-conventions', 'drawing-set-structure',
+                              'construction-glossary')
+
+
+class WikiTests(unittest.TestCase):
+
+    def setUp(self):
+        _clear_policy()
+        self.s = _server()
+        self.s._external_event = None
+
+    def tearDown(self):
+        _clear_policy()
+
+    def _call(self, arguments):
+        res = self.s._handle_tool_call({'name': mcp_wiki.TOOL_NAME,
+                                        'arguments': arguments})
+        return res, json.loads(res['content'][0]['text'])
+
+    def test_registered_read_only_and_external_only(self):
+        self.assertIn(mcp_wiki.TOOL_NAME, self.s._tools)
+        self.assertIn(mcp_wiki.TOOL_NAME, READ_ONLY)
+        self.assertIn(mcp_wiki.TOOL_NAME, tool_schema._EXTERNAL_ONLY_TOOLS)
+        self.assertNotIn(mcp_wiki.TOOL_NAME, self.s._WRITE_TOOLS)
+        _set_settings(**{mp.READ_ONLY_KEY: True})
+        listed = {t['name']: t for t in self.s._handle_tools_list()['tools']}
+        self.assertTrue(listed[mcp_wiki.TOOL_NAME]['annotations']['readOnlyHint'])
+
+    def test_answers_without_revit_even_in_read_only_mode(self):
+        # No ExternalEvent and no document here: the pages are files.
+        _set_settings(**{mp.READ_ONLY_KEY: True})
+        res, out = self._call({'page': mcp_wiki.START_PAGE})
+        self.assertFalse(res['isError'])
+        self.assertEqual(out['page'], mcp_wiki.START_PAGE)
+
+    def test_list_has_the_construction_pages(self):
+        _res, out = self._call({})
+        pages = {p['page']: p for p in out['pages']}
+        for page in WIKI_PAGES:
+            self.assertIn(page, pages)
+            self.assertTrue(pages[page]['description'])
+            self.assertEqual(pages[page]['source'], 'builtin')
+        self.assertEqual(out['count'], len(pages))
+        self.assertIn(mcp_wiki.START_PAGE, out['hint'])
+
+    def test_search_vietnamese_and_english(self):
+        for query, page in (('hoàn thiện bản vẽ', 'drawing-completion-rules'),
+                            ('hoan thien mat bang ket cau', 'structural-drawing-rules'),
+                            ('kiểm tra trước khi phát hành hồ sơ', 'drawing-issue-checklist'),
+                            ('rebar notation and bar schedule', 'structural-drawing-rules'),
+                            ('line weight and text height', 'drawing-conventions'),
+                            ('dịch thuật ngữ mặt cắt sang tiếng Anh', 'construction-glossary')):
+            _res, out = self._call({'query': query})
+            self.assertEqual(out['results'][0]['page'], page, query)
+        _res, out = self._call({'query': 'hoàn thiện bản vẽ', 'limit': 2})
+        self.assertEqual(out['count'], 2)
+        _res, out = self._call({'query': 'zzqx'})
+        self.assertEqual(out['count'], 0)
+        self.assertIn('list', out['hint'])
+
+    def test_read_returns_page_tools_and_project_note(self):
+        _res, out = self._call({'action': 'read', 'page': '/Drawing-Completion-Rules.md'})
+        self.assertEqual(out['page'], mcp_wiki.START_PAGE)
+        self.assertNotIn('---', out['content'][:5])          # frontmatter stripped
+        self.assertIn('tag_all_rooms', out['content'])
+        self.assertIn('revit_list_sheets', out['tools'])
+        self.assertEqual(out['project_standard'], mcp_wiki.PROJECT_STANDARD_NOTE)
+        _res, out = self._call({'page': 'construction-glossary'})
+        self.assertNotIn('project_standard', out)
+
+    def test_bad_requests(self):
+        res, out = self._call({'page': 'drawing-completion-rule'})
+        self.assertTrue(res['isError'])
+        self.assertIn(mcp_wiki.START_PAGE, out['did_you_mean'])
+        for args, needle in (({'action': 'delete'}, 'Unknown action'),
+                             ({'action': 'search'}, 'needs a query'),
+                             ({'action': 'read'}, 'needs a page'),
+                             ({'page': 'x', 'sheet': 'A-101'}, 'does not accept')):
+            res, out = self._call(args)
+            self.assertTrue(res['isError'], args)
+            self.assertIn(needle, out['error'])
+
+    def test_user_page_is_listed_and_found(self):
+        # A user's (or project's) own BEP page sits next to the built-in ones.
+        folder = os.path.join(_TMP, 'T3LabAI', 'skills')
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+        path = os.path.join(folder, 'acme-bep.md')
+        with io.open(path, 'w', encoding='utf-8') as f:
+            f.write(u'---\nname: acme-bep\ndescription: ACME sheet numbering\n'
+                    u'triggers: acme bep\n---\nSheets are numbered ACME-A-0001.\n')
+        try:
+            _res, out = self._call({'query': 'acme bep'})
+            self.assertEqual(out['results'][0]['page'], 'acme-bep')
+            self.assertEqual(out['results'][0]['source'], 'user')
+            _res, out = self._call({'page': 'acme-bep'})
+            self.assertIn('ACME-A-0001', out['content'])
+        finally:
+            os.remove(path)
+        _res, out = self._call({})
+        self.assertNotIn('acme-bep', [p['page'] for p in out['pages']])
+
+    def test_switched_off_page_is_hidden(self):
+        from Intelligence.skills_engine import get_skills_engine
+        engine = get_skills_engine()
+        engine.set_enabled('drawing-conventions', False)
+        try:
+            _res, out = self._call({})
+            self.assertNotIn('drawing-conventions', [p['page'] for p in out['pages']])
+            res, out = self._call({'page': 'drawing-conventions'})
+            self.assertTrue(res['isError'])
+            self.assertIn('turned off', out['error'])
+        finally:
+            engine.set_enabled('drawing-conventions', True)
+
+    def test_teaching_does_not_record_wiki_reads(self):
+        # The local model is trained on recorded steps and has no t3lab_wiki.
+        saved = (self.s._teaching_enabled, self.s._teach_session)
+        self.s._teaching_enabled, self.s._teach_session = True, None
+        try:
+            self.s._teach_record_step(mcp_wiki.TOOL_NAME, {}, {'pages': []})
+            self.assertIsNone(self.s._teach_session)
+        finally:
+            self.s._teaching_enabled, self.s._teach_session = saved
+
+
+class InstructionsTests(unittest.TestCase):
+
+    def test_server_and_bridge_send_the_same_instructions(self):
+        self.assertEqual(bridge.SERVER_INSTRUCTIONS, mp.SERVER_INSTRUCTIONS)
+        res = _server()._handle_initialize({'protocolVersion': '2025-06-18'})
+        self.assertEqual(res['instructions'], mp.SERVER_INSTRUCTIONS)
+        res = bridge._handle_initialize_local(
+            {'id': 1, 'params': {'protocolVersion': '2025-06-18'}})['result']
+        self.assertEqual(res['instructions'], mp.SERVER_INSTRUCTIONS)
+
+    def test_instructions_name_real_pages_and_tool(self):
+        self.assertIn(mcp_wiki.TOOL_NAME, mp.SERVER_INSTRUCTIONS)
+        built_in = set(n[:-3] for n in os.listdir(SKILLS_DIR) if n.endswith('.md'))
+        for page in DRAWING_PAGES:
+            self.assertIn(page, built_in)
+            self.assertIn(page, mp.SERVER_INSTRUCTIONS)
+            self.assertIn(page, mcp_wiki.TOOL_SCHEMA['description'])
 
 
 class ToolCallTests(unittest.TestCase):

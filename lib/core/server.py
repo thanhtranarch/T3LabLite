@@ -22,6 +22,7 @@ import io
 
 from core import jsonsafe
 from core import mcp_policy
+from core import mcp_wiki
 
 try:
     import queue as _queue_mod            # CPython 3
@@ -824,6 +825,10 @@ class T3LabAIServer(object):
                     'type': 'object', 'properties': {}, 'required': [],
                 },
             },
+            # ── Construction wiki + drawing rules (external MCP clients) ─────
+            # Files only, answered without Revit — see core/mcp_wiki.py. The
+            # Assistant gets the same pages injected by SkillsEngine instead.
+            mcp_wiki.TOOL_NAME: mcp_wiki.TOOL_SCHEMA,
             'revit_get_active_view': {
                 'name': 'revit_get_active_view',
                 'description': 'Get information about the currently active view in Revit',
@@ -2902,7 +2907,8 @@ class T3LabAIServer(object):
             'serverInfo': {
                 'name': 'T3LabAI Revit MCP Server',
                 'version': '1.0.0'
-            }
+            },
+            'instructions': mcp_policy.SERVER_INSTRUCTIONS,
         }
 
     @staticmethod
@@ -3283,7 +3289,10 @@ class T3LabAIServer(object):
         """
         if not self._teaching_enabled:
             return
-        if tool_name in (self._TEACH_BEGIN_TOOL, self._TEACH_END_TOOL):
+        # Wiki reads stay out too: the local model is trained on these steps
+        # and has no t3lab_wiki tool (its playbooks are injected instead).
+        if tool_name in (self._TEACH_BEGIN_TOOL, self._TEACH_END_TOOL,
+                         mcp_wiki.TOOL_NAME):
             return
         try:
             from core import teaching
@@ -3918,6 +3927,10 @@ class T3LabAIServer(object):
         rejected = self._reject_unknown_arguments(tool_name, arguments)
         if rejected is not None:
             return rejected
+        if tool_name == mcp_wiki.TOOL_NAME:
+            # Wiki pages are files, not Revit: answered on this thread, with or
+            # without a document, never queued behind the ExternalEvent.
+            return mcp_wiki.call(arguments)
         if confirm and not self._external_event:
             return {'error': ('{} needs the user to confirm it in Revit, but the '
                               'Revit ExternalEvent is not ready.'.format(tool_name)),

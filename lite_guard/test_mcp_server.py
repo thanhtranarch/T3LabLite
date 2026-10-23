@@ -1,0 +1,1208 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""MCP server, bridge and policy tests -- no Revit needed.
+
+    python3 lite_guard/test_mcp_server.py
+
+Covers what an external AI app (Claude Desktop, Codex ... via bridge.py) can
+reach:
+  - core/mcp_policy.py: read-only mode, code execution, destructive-call
+    consent, annotations, isError, Origin and token checks
+  - core/call_summary.py: the "what this call does" text of the Revit
+    confirmation (code purpose and findings, per-tool summaries)
+  - core/server.py: the real HTTP handler on a local port (auth, -32700,
+    202 for notifications, ping, tools/list without the request lock),
+    tools/list filtering, tools/call blocking, run_batch validation
+  - core/bridge.py: re-reading the token after a 401; both protocol eras
+    (initialize / MCP 2026-07-28 server/discover + per-request _meta)
+    answered with Revit closed; cached resources/prompts lists
+  - MCP 2026-07-28 on the server: version errors, header mismatch,
+    resultType / serverInfo / cache hints, stateless requests
+  - core/mcp_wiki.py resources and core/mcp_prompts.py prompts
+  - the mcp_toolset profiles (full / standard / documentation)
+  - core/mcp_wiki.py + Intelligence/skills/: the t3lab_wiki tool (construction
+    wiki and drawing rules) and the initialize instructions pointing at it
+  - core/file_watcher.py: off by default, never runs an old task file
+  - tracking/service.py: code, secrets and full paths are not sent
+
+Revit is not loaded here, so the ExternalEvent and the confirmation dialog
+are not exercised; the Revit side must be checked in Revit.
+
+Plain CPython 3, standard library only. CI runs it next to guard.py
+(.github/workflows/lite-guard.yml).
+"""
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.error
+import urllib.request
+
+sys.dont_write_bytecode = True
+
+# Every module below reads %APPDATA% (token, settings) and ~ (data folder):
+# point both at a scratch folder BEFORE importing them.
+_TMP = tempfile.mkdtemp(prefix='t3lab_mcp_test_')
+os.environ['APPDATA'] = _TMP
+os.environ['HOME'] = _TMP
+os.environ['USERPROFILE'] = _TMP
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LIB = os.path.join(ROOT, 'lib')
+if LIB not in sys.path:
+    sys.path.insert(0, LIB)
+
+from core import mcp_policy as mp      # noqa: E402
+from core import mcp_wiki              # noqa: E402
+from core import call_summary as cs    # noqa: E402
+from core import paths                 # noqa: E402
+from core import server as srv_mod     # noqa: E402
+from core import bridge                # noqa: E402
+from Intelligence import tool_schema   # noqa: E402
+from tracking.service import redact_arguments, TelemetryService  # noqa: E402
+
+READ_ONLY = tool_schema.READ_ONLY_TOOL_NAMES
+SKILLS_DIR = os.path.join(LIB, 'Intelligence', 'skills')
+
+# Tool calls below go through the usage tracking hook: never let a test run
+# send rows to the real dashboard.
+paths.save_settings({'tracking_enabled': False})
+
+
+def _set_settings(**values):
+    data = paths.load_settings() or {}
+    data.update(values)
+    paths.save_settings(data)
+
+
+def _clear_policy():
+    data = paths.load_settings() or {}
+    for key in (mp.READ_ONLY_KEY, mp.CONFIRM_KEY, mp.CODE_KEY):
+        data.pop(key, None)
+    paths.save_settings(data)
+
+
+_SERVER = None
+
+
+def _server():
+    """One registry for the whole run (building it is the slow part)."""
+    global _SERVER
+    if _SERVER is None:
+        _SERVER = srv_mod.T3LabAIServer()
+    return _SERVER
+
+
+class PolicyTests(unittest.TestCase):
+
+    def test_defaults(self):
+        self.assertEqual(mp.policy_from_settings({}), mp.DEFAULT_POLICY)
+        self.assertEqual(mp.policy_from_settings(None), mp.DEFAULT_POLICY)
+
+    def test_bad_values_fall_back(self):
+        p = mp.policy_from_settings({mp.CODE_KEY: 'sometimes',
+                                     mp.READ_ONLY_KEY: 'maybe',
+                                     mp.CONFIRM_KEY: 'no'})
+        self.assertEqual(p['code_execution'], 'ask')
+        self.assertFalse(p['read_only'])
+        self.assertFalse(p['confirm_destructive'])
+        self.assertEqual(mp.policy_from_settings({mp.CODE_KEY: ' OFF '})['code_execution'], 'off')
+
+    def test_negotiate_protocol(self):
+        self.assertEqual(mp.negotiate_protocol('2025-11-25'), '2025-11-25')
+        self.assertEqual(mp.negotiate_protocol('2025-03-26'), '2025-03-26')
+        self.assertEqual(mp.negotiate_protocol('2024-11-05'), '2024-11-05')
+        # initialize is the legacy handshake: never answer with a modern version.
+        self.assertEqual(mp.negotiate_protocol('2026-07-28'), mp.LATEST_LEGACY_PROTOCOL)
+        self.assertEqual(mp.negotiate_protocol('2099-01-01'), mp.LATEST_LEGACY_PROTOCOL)
+        self.assertEqual(mp.negotiate_protocol(None), mp.LATEST_LEGACY_PROTOCOL)
+        self.assertEqual(mp.LATEST_PROTOCOL, '2026-07-28')
+
+    def test_check_call(self):
+        ro = frozenset(['list_levels'])
+        default = dict(mp.DEFAULT_POLICY)
+        self.assertEqual(mp.check_call('list_levels', default, ro, False)[0], 'run')
+        self.assertEqual(mp.check_call('create_level', default, ro, False)[0], 'run')
+        self.assertEqual(mp.check_call('delete_element', default, ro, True)[0], 'confirm')
+        self.assertEqual(mp.check_call('send_code_to_revit', default, ro, False)[0], 'confirm')
+        no_confirm = dict(default, confirm_destructive=False)
+        self.assertEqual(mp.check_call('delete_element', no_confirm, ro, True)[0], 'run')
+        read_only = dict(default, read_only=True)
+        self.assertEqual(mp.check_call('create_level', read_only, ro, False)[0], 'block')
+        self.assertEqual(mp.check_call('list_levels', read_only, ro, False)[0], 'run')
+        allow = dict(default, code_execution='allow')
+        self.assertEqual(mp.check_call('send_code_to_revit', allow, ro, False)[0], 'run')
+        self.assertEqual(mp.check_call('send_code_to_revit', dict(allow, read_only=True), ro, False)[0],
+                         'block')
+        off = dict(default, code_execution='off')
+        decision, message = mp.check_call('send_code_to_revit', off, ro, False)
+        self.assertEqual(decision, 'block')
+        self.assertIn('turned off', message)
+
+    def test_visibility(self):
+        ro = frozenset(['list_levels'])
+        default = dict(mp.DEFAULT_POLICY)
+        self.assertTrue(mp.tool_visible('send_code_to_revit', default, ro))
+        self.assertFalse(mp.tool_visible('send_code_to_revit', dict(default, code_execution='off'), ro))
+        self.assertFalse(mp.tool_visible('create_level', dict(default, read_only=True), ro))
+        self.assertTrue(mp.tool_visible('list_levels', dict(default, read_only=True), ro))
+
+    def test_annotations(self):
+        ro = frozenset(['list_levels'])
+        self.assertEqual(mp.tool_annotations('list_levels', ro),
+                         {'readOnlyHint': True, 'openWorldHint': False})
+        self.assertEqual(mp.tool_annotations('create_level', ro),
+                         {'readOnlyHint': False, 'openWorldHint': False, 'destructiveHint': False})
+        self.assertTrue(mp.tool_annotations('delete_element', ro)['destructiveHint'])
+        tool = {'name': 'list_levels', 'inputSchema': {}}
+        entry = mp.list_entry(tool, ro)
+        self.assertNotIn('annotations', tool, 'the registry entry itself must not change')
+        self.assertTrue(entry['annotations']['readOnlyHint'])
+
+    def test_is_error_result(self):
+        self.assertTrue(mp.is_error_result({'error': 'x'}))
+        self.assertTrue(mp.is_error_result({'success': False}))
+        self.assertFalse(mp.is_error_result({'success': True, 'error': 'warning only'}))
+        self.assertFalse(mp.is_error_result({'error': ''}))
+        self.assertFalse(mp.is_error_result({'ok': 1}))
+        self.assertFalse(mp.is_error_result([1, 2]))
+
+    def test_origin(self):
+        for ok in (None, '', 'http://localhost', 'http://localhost:3000',
+                   'https://127.0.0.1:8443', 'http://[::1]:5173'):
+            self.assertTrue(mp.origin_allowed(ok), ok)
+        for bad in ('null', 'https://evil.example', 'http://localhost.evil.example',
+                    'http://127.0.0.1.evil.example', 'file://'):
+            self.assertFalse(mp.origin_allowed(bad), bad)
+
+    def test_token(self):
+        self.assertTrue(mp.token_matches('Bearer abc', 'abc'))
+        self.assertFalse(mp.token_matches('Bearer abd', 'abc'))
+        self.assertFalse(mp.token_matches('', 'abc'))
+        self.assertFalse(mp.token_matches('Bearer ', ''))
+
+    def test_confirm_text_shows_code(self):
+        main, content, expanded = mp.confirm_text('send_code_to_revit',
+                                                  {'code': 'x = 1\ny = 2'})
+        self.assertIn('AI code', main)
+        self.assertIn('Python code', content)
+        self.assertNotIn('line(s)', content)
+        self.assertEqual(expanded, 'x = 1\ny = 2')
+        _main, _content, long_expanded = mp.confirm_text(
+            'send_code_to_revit', {'code': 'a' * 5000})
+        self.assertIn('more characters not shown', long_expanded)
+
+    def test_confirm_text_says_what_the_code_does(self):
+        code = ('t = Transaction(doc, "Clean up")\nt.Start()\n'
+                'doc.Delete(ids)\nt.Commit()\n')
+        main, content, _expanded = mp.confirm_text(
+            'send_code_to_revit',
+            {'code': code, 'description': 'Delete unused CAD imports'})
+        self.assertEqual(main, 'Run AI code in Revit: Delete unused CAD imports?')
+        self.assertIn('stated by the AI', content)
+        # The AI's words are the headline; the code's own actions stay listed.
+        self.assertIn('Deletes elements', content)
+        self.assertIn('"Clean up"', content)
+        main, content, _expanded = mp.confirm_text('send_code_to_revit', {'code': code})
+        self.assertEqual(main, 'Run AI code in Revit: Clean up?')
+        self.assertIn('transaction name', content)
+
+    def test_confirm_text_says_what_a_tool_does(self):
+        main, content, expanded = mp.confirm_text(
+            'delete_element', {'element_ids': [11, 12, 13]})
+        self.assertEqual(main, 'Delete 3 elements (id 11, 12, 13)?')
+        self.assertIn('deleted too', content)
+        self.assertIn('Tool: delete_element', expanded)
+        main, content, _expanded = mp.confirm_text('run_batch', {'steps': [
+            {'name': 'create_level', 'arguments': {'name': 'L3'}},
+            {'name': 'delete_element', 'arguments': {'element_ids': [9]}}]})
+        self.assertIn('Run 2 steps', main)
+        self.assertIn('1. Create level', content)
+        self.assertIn('2. Delete 1 element (id 9)', content)
+
+    def test_save_policy_round_trip(self):
+        try:
+            p = mp.save_policy(read_only=True, code_execution='OFF')
+            self.assertTrue(p['read_only'])
+            self.assertEqual(p['code_execution'], 'off')
+            self.assertEqual(mp.load_policy(), p)
+            with self.assertRaises(ValueError):
+                mp.save_policy(code_execution='sometimes')
+        finally:
+            _clear_policy()
+
+
+class CallSummaryTests(unittest.TestCase):
+
+    def test_code_findings(self):
+        code = '\n'.join([
+            '# doc.Delete(old) -- a comment is not code',
+            'walls = FilteredElementCollector(doc).OfCategory('
+            'BuiltInCategory.OST_StructuralColumns).ToElements()',
+            't = Transaction(doc, "Mark columns")',
+            't.Start()',
+            'for w in walls:',
+            '    w.LookupParameter("Comments").Set("checked")',
+            'sheet = ViewSheet.Create(doc, tb_id)',
+            'line = Line.CreateBound(a, b)',
+            't.Commit()',
+            'f = open("c:/temp/log.txt", "w")',
+            'f.close()',
+            'sw = StreamWriter(path); sw.Close()',
+        ])
+        found = cs.code_findings(code)
+        self.assertEqual(found['transactions'], ['Mark columns'])
+        self.assertNotIn('Deletes elements', found['actions'])
+        self.assertNotIn('Closes a document', found['actions'], 'writer.Close() is a file')
+        self.assertIn('Changes parameter values', found['actions'])
+        self.assertEqual(found['creates'], ['ViewSheet'], 'Line is geometry, not an element')
+        self.assertEqual(found['categories'], ['Structural Columns'])
+        self.assertEqual(found['parameters'], ['Comments'])
+        self.assertEqual(found['outside'], ['writes files on disk'])
+        self.assertFalse(found['read_only'])
+        lines = cs.describe_code({'code': code})['findings']
+        self.assertIn('Changes parameter values (Comments)', lines)
+        self.assertIn('Creates: ViewSheet', lines)
+        self.assertIn('Works on: Structural Columns', lines)
+        self.assertIn('Outside Revit: writes files on disk', lines)
+
+    def test_code_headline_sources(self):
+        code = 't = Transaction(doc, "T3Lab AI")\nt.Start()\ndoc.Delete(ids)\nt.Commit()'
+        info = cs.describe_code({'code': code, 'description': '  Remove old CAD.  '})
+        self.assertEqual((info['headline'], info['source']), ('Remove old CAD', cs.SOURCE_AI))
+        # A generic transaction name says nothing: fall back to the code.
+        info = cs.describe_code({'code': code})
+        self.assertEqual(info['source'], cs.SOURCE_CODE)
+        self.assertTrue(info['headline'].startswith('Deletes elements'))
+        info = cs.describe_code({'code': 'result = [w.Name for w in FilteredElementCollector('
+                                         'doc).OfClass(Wall)]'})
+        self.assertEqual(info['headline'], 'Reads Wall')
+        self.assertIn('No transaction found: it should only read the model', info['findings'])
+        info = cs.describe_code({'code': 'doc.SaveAs(p)\nwb.Save()'})
+        self.assertIn('Saves the model under a new name', info['findings'])
+        self.assertNotIn('Saves the model', info['findings'], 'wb.Save() is Excel')
+        self.assertFalse(cs.code_findings('doc.SaveAs(p)')['read_only'])
+
+    def test_tool_summaries(self):
+        cases = [
+            ('delete_element', {'element_ids': list(range(1, 9))},
+             'Delete 8 elements (id 1, 2, 3, 4, 5 +3 more)'),
+            ('edit_elements', {'operation': 'ungroup', 'category': 'Model Groups'},
+             'Ungroup all Model Groups in the active view'),
+            ('manage_view_template', {'operation': 'delete', 'template_name': 'A-Plan'},
+             'Delete view template "A-Plan"'),
+            ('manage_links', {'operation': 'delete', 'link_names': ['ARC.rvt']},
+             'Delete link: ARC.rvt'),
+            ('manage_document', {'operation': 'sync_with_central', 'comment': 'daily'},
+             'Sync with central, comment "daily"'),
+            ('purge_unused', {'dry_run': False},
+             'Delete every unused family type and view template'),
+            ('close_document', {'path_or_title': 'Tower A'},
+             'Close "Tower A" without saving'),
+            ('bulk_set_parameter', {'category': 'Doors', 'parameter_name': 'Mark',
+                                    'value': 'D1'},
+             'Set Mark = "D1" on all Doors'),
+            ('create_level', {'name': 'L3', 'elevation': 9},
+             'Create level — elevation: 9, name: L3'),
+        ]
+        for name, args, expected in cases:
+            self.assertEqual(cs.summarize(name, args)[0], expected, name)
+
+    def test_never_raises(self):
+        for name, args in (('delete_element', None), ('run_batch', {'steps': 'x'}),
+                           ('send_code_to_revit', {'code': None}), (None, [1])):
+            headline, details = cs.summarize(name, args)
+            self.assertIsInstance(details, list)
+
+    def test_send_code_schema_asks_for_a_purpose(self):
+        schema = _server()._tools['send_code_to_revit']['inputSchema']
+        self.assertIn('description', schema['properties'])
+        self.assertIn('description', schema['required'])
+
+
+class RegistryTests(unittest.TestCase):
+
+    def test_run_batch_steps_are_real_tools(self):
+        s = _server()
+        self.assertIn('run_batch', s._tools)
+        missing = sorted(s._BATCH_STEP_TOOLS - set(s._tools))
+        self.assertEqual(missing, [], 'run_batch allows tools that do not exist')
+        for banned in ('send_code_to_revit', 'run_batch', 'manage_document',
+                       'export_sheets_pdf', 'set_active_view', 'select_elements',
+                       'switch_active_document', 'close_document', 'famigen_create_family'):
+            self.assertNotIn(banned, s._BATCH_STEP_TOOLS)
+        self.assertIn('run_batch', s._WRITE_TOOLS)
+        self.assertIn('run_batch', tool_schema.LOCAL_HIDDEN_TOOLS)
+
+    def test_point_cloud_tools_are_gone(self):
+        # Removed 2026-10-20: no MCP client called them; the ribbon wizard stays.
+        s = _server()
+        for name in ('list_point_clouds', 'analyze_point_cloud', 'detect_point_cloud_elements'):
+            self.assertNotIn(name, s._tools)
+            self.assertNotIn(name, s._WRITE_TOOLS)
+            self.assertNotIn(name, READ_ONLY)
+            self.assertNotIn(name, bridge.LARGE_RESULT_TOOLS)
+
+    def test_destructive_hint_tools_are_real(self):
+        s = _server()
+        self.assertEqual(sorted(mp.DESTRUCTIVE_HINT_TOOLS - set(s._tools)), [])
+
+    def test_is_destructive(self):
+        s = _server()
+        self.assertTrue(s.is_destructive('close_document', {'path_or_title': 'A'}))
+        self.assertFalse(s.is_destructive('close_document', {'path_or_title': 'A', 'save': True}))
+        self.assertTrue(s.is_destructive('run_batch', {'steps': [
+            {'name': 'create_level', 'arguments': {}},
+            {'name': 'delete_element', 'arguments': {'element_ids': [1]}}]}))
+        self.assertFalse(s.is_destructive('run_batch', {'steps': [
+            {'name': 'create_level', 'arguments': {}}]}))
+
+    def test_batch_problem(self):
+        s = _server()
+        self.assertIsNone(s._batch_problem({'steps': [
+            {'name': 'list_levels'}, {'name': 'create_level', 'arguments': {}}]}))
+        for bad, needle in (({}, 'non-empty'),
+                            ({'steps': [{'arguments': {}}]}, 'needs a "name"'),
+                            ({'steps': [{'name': 'send_code_to_revit'}]}, 'cannot run inside'),
+                            ({'steps': [{'name': 'list_levels', 'args': {}}]}, 'unknown keys'),
+                            ({'steps': [{'name': 'list_levels', 'arguments': []}]}, 'must be an object'),
+                            ({'steps': [{'name': 'list_levels'}] * 51}, 'at most')):
+            problem = s._batch_problem(bad)
+            self.assertIsNotNone(problem, bad)
+            self.assertIn(needle, problem['error'])
+        unknown = s._batch_problem({'steps': [
+            {'name': 'create_level', 'arguments': {'not_a_real_argument': 1}}]})
+        self.assertIn('Step 1', unknown['error'])
+        self.assertIn('not_a_real_argument', unknown['error'])
+
+    def test_skill_pages_declare_real_tools(self):
+        # A page that names a tool the server does not have sends the
+        # Assistant and MCP clients after something that is not there.
+        from Intelligence.skills_engine import parse_frontmatter
+        s = _server()
+        for name in sorted(os.listdir(SKILLS_DIR)):
+            with io.open(os.path.join(SKILLS_DIR, name), encoding='utf-8') as f:
+                meta, _body = parse_frontmatter(f.read())
+            missing = sorted(set(meta.get('tools') or []) - set(s._tools))
+            self.assertEqual(missing, [], '{} declares unknown tools'.format(name))
+
+
+# The pages SERVER_INSTRUCTIONS and the t3lab_wiki description send clients to.
+DRAWING_PAGES = ('drawing-completion-rules', 'architectural-drawing-rules',
+                 'structural-drawing-rules', 'mep-drawing-rules',
+                 'drawing-issue-checklist')
+WIKI_PAGES = DRAWING_PAGES + ('drawing-conventions', 'drawing-set-structure',
+                              'construction-glossary')
+
+
+class WikiTests(unittest.TestCase):
+
+    def setUp(self):
+        _clear_policy()
+        self.s = _server()
+        self.s._external_event = None
+
+    def tearDown(self):
+        _clear_policy()
+
+    def _call(self, arguments):
+        res = self.s._handle_tool_call({'name': mcp_wiki.TOOL_NAME,
+                                        'arguments': arguments})
+        return res, json.loads(res['content'][0]['text'])
+
+    def test_registered_read_only_and_external_only(self):
+        self.assertIn(mcp_wiki.TOOL_NAME, self.s._tools)
+        self.assertIn(mcp_wiki.TOOL_NAME, READ_ONLY)
+        self.assertIn(mcp_wiki.TOOL_NAME, tool_schema._EXTERNAL_ONLY_TOOLS)
+        self.assertNotIn(mcp_wiki.TOOL_NAME, self.s._WRITE_TOOLS)
+        _set_settings(**{mp.READ_ONLY_KEY: True})
+        listed = {t['name']: t for t in self.s._handle_tools_list()['tools']}
+        self.assertTrue(listed[mcp_wiki.TOOL_NAME]['annotations']['readOnlyHint'])
+
+    def test_answers_without_revit_even_in_read_only_mode(self):
+        # No ExternalEvent and no document here: the pages are files.
+        _set_settings(**{mp.READ_ONLY_KEY: True})
+        res, out = self._call({'page': mcp_wiki.START_PAGE})
+        self.assertFalse(res['isError'])
+        self.assertEqual(out['page'], mcp_wiki.START_PAGE)
+
+    def test_list_has_the_construction_pages(self):
+        _res, out = self._call({})
+        pages = {p['page']: p for p in out['pages']}
+        for page in WIKI_PAGES:
+            self.assertIn(page, pages)
+            self.assertTrue(pages[page]['description'])
+            self.assertEqual(pages[page]['source'], 'builtin')
+        self.assertEqual(out['count'], len(pages))
+        self.assertIn(mcp_wiki.START_PAGE, out['hint'])
+
+    def test_search_vietnamese_and_english(self):
+        for query, page in (('hoàn thiện bản vẽ', 'drawing-completion-rules'),
+                            ('hoan thien mat bang ket cau', 'structural-drawing-rules'),
+                            ('kiểm tra trước khi phát hành hồ sơ', 'drawing-issue-checklist'),
+                            ('rebar notation and bar schedule', 'structural-drawing-rules'),
+                            ('line weight and text height', 'drawing-conventions'),
+                            ('dịch thuật ngữ mặt cắt sang tiếng Anh', 'construction-glossary')):
+            _res, out = self._call({'query': query})
+            self.assertEqual(out['results'][0]['page'], page, query)
+        _res, out = self._call({'query': 'hoàn thiện bản vẽ', 'limit': 2})
+        self.assertEqual(out['count'], 2)
+        _res, out = self._call({'query': 'zzqx'})
+        self.assertEqual(out['count'], 0)
+        self.assertIn('list', out['hint'])
+
+    def test_read_returns_page_tools_and_project_note(self):
+        _res, out = self._call({'action': 'read', 'page': '/Drawing-Completion-Rules.md'})
+        self.assertEqual(out['page'], mcp_wiki.START_PAGE)
+        self.assertNotIn('---', out['content'][:5])          # frontmatter stripped
+        self.assertIn('tag_all_rooms', out['content'])
+        self.assertIn('revit_list_sheets', out['tools'])
+        self.assertEqual(out['project_standard'], mcp_wiki.PROJECT_STANDARD_NOTE)
+        _res, out = self._call({'page': 'construction-glossary'})
+        self.assertNotIn('project_standard', out)
+
+    def test_bad_requests(self):
+        res, out = self._call({'page': 'drawing-completion-rule'})
+        self.assertTrue(res['isError'])
+        self.assertIn(mcp_wiki.START_PAGE, out['did_you_mean'])
+        for args, needle in (({'action': 'delete'}, 'Unknown action'),
+                             ({'action': 'search'}, 'needs a query'),
+                             ({'action': 'read'}, 'needs a page'),
+                             ({'page': 'x', 'sheet': 'A-101'}, 'does not accept')):
+            res, out = self._call(args)
+            self.assertTrue(res['isError'], args)
+            self.assertIn(needle, out['error'])
+
+    def test_user_page_is_listed_and_found(self):
+        # A user's (or project's) own BEP page sits next to the built-in ones.
+        folder = os.path.join(_TMP, 'T3LabAI', 'skills')
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+        path = os.path.join(folder, 'acme-bep.md')
+        with io.open(path, 'w', encoding='utf-8') as f:
+            f.write(u'---\nname: acme-bep\ndescription: ACME sheet numbering\n'
+                    u'triggers: acme bep\n---\nSheets are numbered ACME-A-0001.\n')
+        try:
+            _res, out = self._call({'query': 'acme bep'})
+            self.assertEqual(out['results'][0]['page'], 'acme-bep')
+            self.assertEqual(out['results'][0]['source'], 'user')
+            _res, out = self._call({'page': 'acme-bep'})
+            self.assertIn('ACME-A-0001', out['content'])
+        finally:
+            os.remove(path)
+        _res, out = self._call({})
+        self.assertNotIn('acme-bep', [p['page'] for p in out['pages']])
+
+    def test_switched_off_page_is_hidden(self):
+        from Intelligence.skills_engine import get_skills_engine
+        engine = get_skills_engine()
+        engine.set_enabled('drawing-conventions', False)
+        try:
+            _res, out = self._call({})
+            self.assertNotIn('drawing-conventions', [p['page'] for p in out['pages']])
+            res, out = self._call({'page': 'drawing-conventions'})
+            self.assertTrue(res['isError'])
+            self.assertIn('turned off', out['error'])
+        finally:
+            engine.set_enabled('drawing-conventions', True)
+
+    def test_teaching_does_not_record_wiki_reads(self):
+        # The local model is trained on recorded steps and has no t3lab_wiki.
+        saved = (self.s._teaching_enabled, self.s._teach_session)
+        self.s._teaching_enabled, self.s._teach_session = True, None
+        try:
+            self.s._teach_record_step(mcp_wiki.TOOL_NAME, {}, {'pages': []})
+            self.assertIsNone(self.s._teach_session)
+        finally:
+            self.s._teaching_enabled, self.s._teach_session = saved
+
+
+class InstructionsTests(unittest.TestCase):
+
+    def test_server_and_bridge_send_the_same_instructions(self):
+        self.assertEqual(bridge.SERVER_INSTRUCTIONS, mp.SERVER_INSTRUCTIONS)
+        res = _server()._handle_initialize({'protocolVersion': '2025-06-18'})
+        self.assertEqual(res['instructions'], mp.SERVER_INSTRUCTIONS)
+        res = bridge._handle_initialize_local(
+            {'id': 1, 'params': {'protocolVersion': '2025-06-18'}})['result']
+        self.assertEqual(res['instructions'], mp.SERVER_INSTRUCTIONS)
+
+    def test_instructions_name_real_pages_and_tool(self):
+        self.assertIn(mcp_wiki.TOOL_NAME, mp.SERVER_INSTRUCTIONS)
+        built_in = set(n[:-3] for n in os.listdir(SKILLS_DIR) if n.endswith('.md'))
+        for page in DRAWING_PAGES:
+            self.assertIn(page, built_in)
+            self.assertIn(page, mp.SERVER_INSTRUCTIONS)
+            self.assertIn(page, mcp_wiki.TOOL_SCHEMA['description'])
+
+
+class ToolCallTests(unittest.TestCase):
+
+    def setUp(self):
+        _clear_policy()
+        self.s = _server()
+        self.calls = []
+
+        def fake_execute(name, arguments, confirm=None):
+            self.calls.append((name, arguments, confirm))
+            return {'error': 'boom'} if name == 'create_grid' else {'ok': name}
+        self.s._execute_tool = fake_execute
+        self.s._external_event = None
+
+    def tearDown(self):
+        del self.s._execute_tool
+        _clear_policy()
+
+    def _call(self, name, arguments=None):
+        return self.s._handle_tool_call({'name': name, 'arguments': arguments or {}})
+
+    def test_runs_and_sets_is_error(self):
+        res = self._call('create_level')
+        self.assertFalse(res['isError'])
+        self.assertEqual(json.loads(res['content'][0]['text']), {'ok': 'create_level'})
+        self.assertTrue(self._call('create_grid')['isError'])
+
+    def test_read_only_blocks_writes(self):
+        _set_settings(**{mp.READ_ONLY_KEY: True})
+        res = self._call('create_level')
+        self.assertTrue(res['isError'])
+        self.assertIn('Read-only mode', res['content'][0]['text'])
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self._call('list_levels')['isError'])
+
+    def test_code_off_blocks(self):
+        _set_settings(**{mp.CODE_KEY: 'off'})
+        res = self._call('send_code_to_revit', {'code': 'result = 1'})
+        self.assertTrue(res['isError'])
+        self.assertEqual(self.calls, [])
+
+    def test_confirmation_never_runs_without_ui_thread(self):
+        # No ExternalEvent = no dialog = the call must not run unasked.
+        res = self._call('delete_element', {'element_ids': [1]})
+        self.assertTrue(res['isError'])
+        self.assertIn('confirm', res['content'][0]['text'])
+        res = self._call('send_code_to_revit', {'code': 'result = 1'})
+        self.assertTrue(res['isError'])
+        self.assertEqual(self.calls, [])
+
+    def test_confirmation_is_passed_to_the_ui_thread(self):
+        self.s._external_event = object()
+        try:
+            self._call('delete_element', {'element_ids': [1]})
+            self._call('create_level', {})
+        finally:
+            self.s._external_event = None
+        (name1, _a1, confirm1), (name2, _a2, confirm2) = self.calls
+        self.assertEqual(name1, 'delete_element')
+        self.assertTrue(confirm1 and 'Delete 1 element' in confirm1[0])
+        self.assertIn('delete_element', confirm1[2])
+        self.assertIsNone(confirm2)
+
+    def test_confirm_can_be_turned_off(self):
+        _set_settings(**{mp.CONFIRM_KEY: False})
+        res = self._call('delete_element', {'element_ids': [1]})
+        self.assertFalse(res['isError'])
+        self.assertIsNone(self.calls[0][2])
+
+    def test_tools_list_follows_policy(self):
+        names = {t['name']: t for t in self.s._handle_tools_list()['tools']}
+        self.assertIn('send_code_to_revit', names)
+        self.assertIn('run_batch', names)
+        self.assertTrue(names['list_levels']['annotations']['readOnlyHint'])
+        self.assertTrue(names['delete_element']['annotations']['destructiveHint'])
+        self.assertFalse(names['create_level']['annotations']['destructiveHint'])
+        self.assertNotIn('annotations', self.s._tools['list_levels'])
+
+        _set_settings(**{mp.READ_ONLY_KEY: True})
+        names = {t['name'] for t in self.s._handle_tools_list()['tools']}
+        self.assertNotIn('create_level', names)
+        self.assertNotIn('send_code_to_revit', names)
+        self.assertIn('list_levels', names)
+        self.assertTrue(names <= set(READ_ONLY))
+
+        _clear_policy()
+        _set_settings(**{mp.CODE_KEY: 'off'})
+        names = {t['name'] for t in self.s._handle_tools_list()['tools']}
+        self.assertNotIn('send_code_to_revit', names)
+        self.assertIn('create_level', names)
+
+    def test_initialize(self):
+        res = self.s._handle_initialize({'protocolVersion': '2025-06-18'})
+        self.assertEqual(res['protocolVersion'], '2025-06-18')
+        self.assertEqual(self.s._handle_initialize({})['protocolVersion'],
+                         mp.LATEST_LEGACY_PROTOCOL)
+        self.assertEqual(res['capabilities'], mp.SERVER_CAPABILITIES)
+        self.assertEqual(res['serverInfo']['version'], mp.server_version())
+
+
+class ToolTaskTests(unittest.TestCase):
+
+    def test_give_up_before_start_means_never_runs(self):
+        task = srv_mod._ToolTask('create_level', {})
+        self.assertTrue(task.give_up())
+        self.assertFalse(task.claim('ui'))
+
+    def test_give_up_while_running_reports_running(self):
+        task = srv_mod._ToolTask('create_level', {})
+        self.assertTrue(task.claim('ui'))
+        self.assertFalse(task.give_up())
+
+    def test_late_yes_does_not_run(self):
+        task = srv_mod._ToolTask('delete_element', {}, confirm=('a', 'b', 'c'))
+        self.assertTrue(task.claim('ui'))
+        task.awaiting_user = True
+        self.assertTrue(task.give_up())          # caller gives up mid-dialog
+        self.assertFalse(task.proceed_after_confirm())
+
+    def test_yes_in_time_runs(self):
+        task = srv_mod._ToolTask('delete_element', {}, confirm=('a', 'b', 'c'))
+        self.assertTrue(task.claim('ui'))
+        task.awaiting_user = True
+        self.assertTrue(task.proceed_after_confirm())
+
+
+class HttpTests(unittest.TestCase):
+    """The real MCPRequestHandler on a free local port."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.s = _server()
+        cls.http = srv_mod._ThreadedHTTPServer(('127.0.0.1', 0), srv_mod.MCPRequestHandler)
+        cls.http.mcp_server = cls.s
+        cls.port = cls.http.server_address[1]
+        cls.thread = threading.Thread(target=cls.http.serve_forever)
+        cls.thread.daemon = True
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.http.shutdown()
+        cls.http.server_close()
+
+    def _post(self, body, token=True, headers=None):
+        data = body if isinstance(body, bytes) else json.dumps(body).encode('utf-8')
+        h = {'Content-Type': 'application/json'}
+        if token:
+            h['Authorization'] = 'Bearer ' + self.s.token
+        h.update(headers or {})
+        req = urllib.request.Request('http://127.0.0.1:{}/mcp'.format(self.port),
+                                     data=data, headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                raw = r.read()
+                return r.status, (json.loads(raw) if raw else None)
+        except urllib.error.HTTPError as e:
+            raw = e.read()
+            return e.code, (json.loads(raw) if raw else None)
+
+    def test_needs_token(self):
+        code, body = self._post({'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}, token=False)
+        self.assertEqual(code, 401)
+        self.assertEqual(body['error']['code'], -32001)
+
+    def test_ping(self):
+        code, body = self._post({'jsonrpc': '2.0', 'id': 7, 'method': 'ping'})
+        self.assertEqual((code, body['id'], body['result']), (200, 7, {}))
+
+    def test_parse_error(self):
+        code, body = self._post(b'{not json')
+        self.assertEqual(code, 400)
+        self.assertEqual(body['error']['code'], -32700)
+
+    def test_batch_array_rejected(self):
+        code, body = self._post([{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}])
+        self.assertEqual(code, 400)
+        self.assertEqual(body['error']['code'], -32600)
+
+    def test_notification_gets_202_and_no_body(self):
+        code, body = self._post({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        self.assertEqual((code, body), (202, None))
+
+    def test_foreign_origin_refused(self):
+        code, _body = self._post({'jsonrpc': '2.0', 'id': 1, 'method': 'ping'},
+                                 headers={'Origin': 'https://evil.example'})
+        self.assertEqual(code, 403)
+
+    def test_tools_list_does_not_wait_for_a_running_call(self):
+        # A slow tools/call holds the request lock; tools/list must still answer.
+        with srv_mod._MCP_REQUEST_LOCK:
+            t0 = time.time()
+            code, body = self._post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
+            self.assertLess(time.time() - t0, 3)
+        self.assertEqual(code, 200)
+        self.assertGreater(len(body['result']['tools']), 50)
+
+    def test_unknown_method(self):
+        code, body = self._post({'jsonrpc': '2.0', 'id': 3, 'method': 'subscriptions/listen'})
+        self.assertEqual(body['error']['code'], -32601)
+
+    def _modern(self, method, params=None, version='2026-07-28', headers=None):
+        params = dict(params or {})
+        params['_meta'] = {mp.META_PROTOCOL: version,
+                           'io.modelcontextprotocol/clientInfo': {'name': 'test', 'version': '1'},
+                           mp.META_CLIENT_CAPS: {}}
+        return self._post({'jsonrpc': '2.0', 'id': 'm1', 'method': method,
+                           'params': params}, headers=headers)
+
+    def test_modern_discover(self):
+        code, body = self._modern('server/discover')
+        self.assertEqual(code, 200)
+        res = body['result']
+        self.assertEqual(res['resultType'], 'complete')
+        self.assertEqual(res['supportedVersions'], list(mp.SUPPORTED_PROTOCOLS))
+        self.assertEqual(res['capabilities'], mp.SERVER_CAPABILITIES)
+        self.assertEqual(res['instructions'], mp.SERVER_INSTRUCTIONS)
+        self.assertEqual(res['_meta'][mp.META_SERVER_INFO]['name'], mp.SERVER_NAME)
+        self.assertEqual((res['ttlMs'], res['cacheScope']), (mp.LIST_TTL_MS, 'private'))
+
+    def test_modern_tools_list_is_stateless_and_cacheable(self):
+        # No initialize first: a modern request stands on its own.
+        code, body = self._modern('tools/list')
+        res = body['result']
+        self.assertEqual((code, res['resultType']), (200, 'complete'))
+        names = [t['name'] for t in res['tools']]
+        self.assertEqual(names, sorted(names))           # deterministic order
+        self.assertIn('ttlMs', res)
+
+    def test_modern_unsupported_version(self):
+        code, body = self._modern('tools/list', version='1900-01-01')
+        self.assertEqual(code, 400)
+        self.assertEqual(body['error']['code'], mp.ERR_UNSUPPORTED_VERSION)
+        self.assertEqual(body['error']['data']['requested'], '1900-01-01')
+        self.assertIn('2026-07-28', body['error']['data']['supported'])
+
+    def test_modern_header_mismatch(self):
+        code, body = self._modern('tools/list',
+                                  headers={'MCP-Protocol-Version': '2025-06-18'})
+        self.assertEqual((code, body['error']['code']), (400, mp.ERR_HEADER_MISMATCH))
+        code, body = self._modern('tools/list',
+                                  headers={'MCP-Protocol-Version': '2026-07-28'})
+        self.assertEqual(code, 200)
+
+    def test_legacy_results_are_unchanged(self):
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/list'})
+        self.assertNotIn('resultType', body['result'])
+        self.assertNotIn('ttlMs', body['result'])
+
+    def test_resources_and_prompts_over_http(self):
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 5, 'method': 'resources/list'})
+        uris = [r['uri'] for r in body['result']['resources']]
+        self.assertIn(mcp_wiki.page_uri(mcp_wiki.START_PAGE), uris)
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 6, 'method': 'resources/read',
+                                  'params': {'uri': mcp_wiki.page_uri(mcp_wiki.START_PAGE)}})
+        self.assertIn('tag_all_rooms', body['result']['contents'][0]['text'])
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 7, 'method': 'resources/read',
+                                  'params': {'uri': 't3lab://wiki/nope'}})
+        self.assertEqual(body['error']['code'], mp.ERR_LEGACY_RESOURCE_NOT_FOUND)
+        _code, body = self._modern('resources/read', {'uri': 't3lab://wiki/nope'})
+        self.assertEqual(body['error']['code'], mp.ERR_INVALID_PARAMS)
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 8, 'method': 'prompts/list'})
+        self.assertIn('issue-drawings', [p['name'] for p in body['result']['prompts']])
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 9, 'method': 'prompts/get',
+                                  'params': {'name': 'issue-drawings'}})
+        self.assertEqual(body['error']['code'], mp.ERR_INVALID_PARAMS)   # sheets missing
+        _code, body = self._modern('resources/templates/list')
+        self.assertEqual(body['result']['resourceTemplates'][0]['uriTemplate'],
+                         mcp_wiki.URI_PREFIX + '{page}')
+
+    def test_wiki_and_prompts_do_not_wait_for_a_running_call(self):
+        with srv_mod._MCP_REQUEST_LOCK:
+            t0 = time.time()
+            for method in ('server/discover', 'resources/list', 'prompts/list'):
+                code, _body = self._post({'jsonrpc': '2.0', 'id': 10, 'method': method})
+                self.assertEqual(code, 200, method)
+            self.assertLess(time.time() - t0, 6)
+
+
+class BridgeTokenTests(unittest.TestCase):
+    """bridge.py picks up a token written after it started."""
+
+    def setUp(self):
+        self.s = _server()
+        self.http = srv_mod._ThreadedHTTPServer(('127.0.0.1', 0), srv_mod.MCPRequestHandler)
+        self.http.mcp_server = self.s
+        self.port = self.http.server_address[1]
+        t = threading.Thread(target=self.http.serve_forever)
+        t.daemon = True
+        t.start()
+        bridge._LATEST_TOKEN[0] = ''
+
+    def tearDown(self):
+        self.http.shutdown()
+        self.http.server_close()
+        bridge._LATEST_TOKEN[0] = ''
+
+    def test_stale_token_is_refreshed(self):
+        self.assertEqual(bridge._read_token(), self.s.token)
+        resp = bridge._post_mcp(self.port, {'jsonrpc': '2.0', 'id': 1, 'method': 'ping'},
+                                'stale-token', timeout=5)
+        self.assertEqual(resp['result'], {})
+        self.assertEqual(bridge._LATEST_TOKEN[0], self.s.token)
+
+    def test_wrong_token_on_disk_still_fails(self):
+        path = os.path.join(_TMP, 'T3LabAI', 'mcp_token.txt')
+        with open(path) as f:
+            good = f.read()
+        try:
+            with open(path, 'w') as f:
+                f.write('also-wrong')
+            with self.assertRaises(urllib.error.HTTPError):
+                bridge._post_mcp(self.port, {'jsonrpc': '2.0', 'id': 1, 'method': 'ping'},
+                                 'stale-token', timeout=5)
+        finally:
+            with open(path, 'w') as f:
+                f.write(good)
+
+
+class ProtocolParityTests(unittest.TestCase):
+    """bridge.py is deployed alone and keeps copies of the protocol constants."""
+
+    def test_bridge_matches_policy(self):
+        self.assertEqual(bridge.MODERN_PROTOCOLS, mp.MODERN_PROTOCOLS)
+        self.assertEqual(bridge.LEGACY_PROTOCOLS, mp.LEGACY_PROTOCOLS)
+        self.assertEqual(bridge.SERVER_CAPABILITIES, mp.SERVER_CAPABILITIES)
+        self.assertEqual(bridge.CACHEABLE_METHODS, mp.CACHEABLE_METHODS)
+        self.assertEqual((bridge.LIST_TTL_MS, bridge.CACHE_SCOPE),
+                         (mp.LIST_TTL_MS, mp.CACHE_SCOPE))
+        self.assertEqual(bridge.META_PROTOCOL, mp.META_PROTOCOL)
+        self.assertEqual(bridge.SERVER_NAME, mp.SERVER_NAME)
+
+    def test_finish_result(self):
+        resp = {'jsonrpc': '2.0', 'id': 1, 'result': {'tools': []}}
+        self.assertNotIn('resultType', mp.finish_result(dict(resp), 'tools/list', False)['result'])
+        out = mp.finish_result({'jsonrpc': '2.0', 'id': 1, 'result': {'tools': []}},
+                               'tools/list', True)['result']
+        self.assertEqual(out['resultType'], 'complete')
+        self.assertIn(mp.META_SERVER_INFO, out['_meta'])
+        out = mp.finish_result({'jsonrpc': '2.0', 'id': 1, 'result': {'content': []}},
+                               'tools/call', True)['result']
+        self.assertNotIn('ttlMs', out)                    # tools/call is not cacheable
+        err = {'jsonrpc': '2.0', 'id': 1, 'error': {'code': -1, 'message': 'x'}}
+        self.assertEqual(mp.finish_result(err, 'tools/list', True), err)
+
+
+class BridgeProtocolTests(unittest.TestCase):
+    """bridge.py answers both eras without Revit, and forwards the rest."""
+
+    def setUp(self):
+        self.current = {'port': 1, 'validated': True}
+        self._orig = (bridge._forward, bridge._alive_ports)
+        bridge._alive_ports = lambda: []
+        cache = os.path.join(_TMP, 'T3LabAI', 'tools_cache.json')
+        if os.path.exists(cache):
+            os.remove(cache)
+
+    def tearDown(self):
+        bridge._forward, bridge._alive_ports = self._orig
+
+    def _down(self, *_a, **_k):
+        raise ConnectionRefusedError()
+
+    @staticmethod
+    def _req(method, params=None, modern=True):
+        params = dict(params or {})
+        if modern:
+            params['_meta'] = {mp.META_PROTOCOL: '2026-07-28'}
+        return {'jsonrpc': '2.0', 'id': 'b1', 'method': method, 'params': params}
+
+    def test_discover_and_initialize_without_revit(self):
+        bridge._forward = self._down
+        res = bridge._handle(self._req('server/discover'), self.current, 't')['result']
+        self.assertEqual(res['supportedVersions'], list(mp.SUPPORTED_PROTOCOLS))
+        self.assertEqual(res['resultType'], 'complete')
+        self.assertEqual(res['instructions'], mp.SERVER_INSTRUCTIONS)
+        res = bridge._handle(self._req('initialize', {'protocolVersion': '2026-07-28'},
+                                       modern=False), self.current, 't')['result']
+        self.assertEqual(res['protocolVersion'], '2025-11-25')
+        self.assertNotIn('resultType', res)
+        self.assertEqual(res['capabilities'], mp.SERVER_CAPABILITIES)
+
+    def test_unsupported_version(self):
+        req = self._req('tools/list')
+        req['params']['_meta'][mp.META_PROTOCOL] = '2027-01-01'
+        err = bridge._handle(req, self.current, 't')['error']
+        self.assertEqual(err['code'], -32022)
+
+    def test_lists_cached_and_empty_when_revit_is_down(self):
+        live = {'resources': [{'uri': 't3lab://wiki/a', 'name': 'a'}]}
+        bridge._forward = lambda req, cur, tok, timeout=0: {
+            'jsonrpc': '2.0', 'id': req['id'], 'result': dict(live)}
+        res = bridge._handle(self._req('resources/list'), self.current, 't')['result']
+        self.assertEqual(res['resources'], live['resources'])
+        bridge._forward = self._down
+        res = bridge._handle(self._req('resources/list'), self.current, 't')['result']
+        self.assertEqual(res['resources'], live['resources'])      # from the cache
+        self.assertIn('ttlMs', res)
+        res = bridge._handle(self._req('prompts/list', modern=False), self.current, 't')['result']
+        self.assertEqual(res, {'prompts': []})                      # never cached yet
+        err = bridge._handle(self._req('prompts/get', {'name': 'x'}), self.current, 't')
+        self.assertIn('not reachable', err['error']['message'])
+
+    def test_old_revit_build_without_resources(self):
+        bridge._forward = lambda req, cur, tok, timeout=0: {
+            'jsonrpc': '2.0', 'id': req['id'],
+            'error': {'code': -32601, 'message': 'Method not found'}}
+        res = bridge._handle(self._req('prompts/list', modern=False), self.current, 't')
+        self.assertEqual(res['result'], {'prompts': []})
+
+
+class BridgeOverHttpTests(unittest.TestCase):
+    """bridge -> real server: modern errors come back as JSON-RPC, not as an
+    HTTP failure."""
+
+    def setUp(self):
+        self.s = _server()
+        self.http = srv_mod._ThreadedHTTPServer(('127.0.0.1', 0), srv_mod.MCPRequestHandler)
+        self.http.mcp_server = self.s
+        self.port = self.http.server_address[1]
+        t = threading.Thread(target=self.http.serve_forever)
+        t.daemon = True
+        t.start()
+
+    def tearDown(self):
+        self.http.shutdown()
+        self.http.server_close()
+
+    def test_version_error_passes_through(self):
+        req = {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list',
+               'params': {'_meta': {mp.META_PROTOCOL: '1999-01-01'}}}
+        resp = bridge._post_mcp(self.port, req, self.s.token, timeout=5)
+        self.assertEqual(resp['error']['code'], -32022)
+
+    def test_modern_prompt_get(self):
+        req = {'jsonrpc': '2.0', 'id': 3, 'method': 'prompts/get',
+               'params': {'name': 'model-health-check',
+                          '_meta': {mp.META_PROTOCOL: '2026-07-28'}}}
+        resp = bridge._post_mcp(self.port, req, self.s.token, timeout=5)
+        text = resp['result']['messages'][0]['content']['text']
+        self.assertIn('get_model_warnings', text)
+        self.assertEqual(resp['result']['resultType'], 'complete')
+
+
+class ResourceTests(unittest.TestCase):
+
+    def test_every_enabled_page_is_a_resource(self):
+        res = mcp_wiki.resource_list()['resources']
+        by_name = {r['name']: r for r in res}
+        for page in WIKI_PAGES:
+            self.assertIn(page, by_name)
+            self.assertEqual(by_name[page]['uri'], mcp_wiki.page_uri(page))
+            self.assertEqual(by_name[page]['mimeType'], 'text/markdown')
+        self.assertEqual(by_name[mcp_wiki.START_PAGE]['annotations']['priority'], 1.0)
+
+    def test_read(self):
+        out = mcp_wiki.read_resource(mcp_wiki.page_uri('construction-glossary'))
+        item = out['contents'][0]
+        self.assertEqual(item['uri'], mcp_wiki.page_uri('construction-glossary'))
+        self.assertTrue(item['text'])
+        # Company-specific pages carry the "project BEP wins" note on top.
+        out = mcp_wiki.read_resource(mcp_wiki.page_uri(mcp_wiki.START_PAGE))
+        self.assertTrue(out['contents'][0]['text'].startswith('> '))
+        self.assertIsNone(mcp_wiki.read_resource('t3lab://wiki/nope'))
+        self.assertIsNone(mcp_wiki.read_resource('file:///etc/passwd'))
+
+    def test_switched_off_page_is_not_a_resource(self):
+        from Intelligence.skills_engine import get_skills_engine
+        engine = get_skills_engine()
+        engine.set_enabled('drawing-conventions', False)
+        try:
+            names = [r['name'] for r in mcp_wiki.resource_list()['resources']]
+            self.assertNotIn('drawing-conventions', names)
+            self.assertIsNone(mcp_wiki.read_resource(
+                mcp_wiki.page_uri('drawing-conventions')))
+        finally:
+            engine.set_enabled('drawing-conventions', True)
+
+
+class PromptTests(unittest.TestCase):
+
+    def test_prompts_name_real_tools_and_pages(self):
+        from core import mcp_prompts
+        tools = set(_server()._tools)
+        pages = set(n[:-3] for n in os.listdir(SKILLS_DIR) if n.endswith('.md'))
+        for prompt in mcp_prompts.PROMPTS:
+            for tool in prompt['tools']:
+                self.assertIn(tool, tools, prompt['name'])
+                self.assertIn(tool, prompt['template'], prompt['name'])
+            for page in prompt['pages']:
+                self.assertIn(page, pages, prompt['name'])
+                self.assertIn(page, prompt['template'], prompt['name'])
+
+    def test_get_fills_defaults_and_checks_required(self):
+        from core import mcp_prompts
+        listed = mcp_prompts.prompt_list()['prompts']
+        self.assertEqual([p['name'] for p in listed],
+                         ['complete-drawings', 'issue-drawings', 'model-health-check'])
+        self.assertNotIn('template', listed[0])
+        out = mcp_prompts.get_prompt('complete-drawings', {'scope': 'sheet A-101'})
+        text = out['messages'][0]['content']['text']
+        self.assertIn('sheet A-101', text)
+        self.assertIn('from the sheets themselves', text)
+        self.assertEqual(out['messages'][0]['role'], 'user')
+        out = mcp_prompts.get_prompt('issue-drawings', {'sheets': 'A-101', 'format': 'dwg'})
+        self.assertIn('Format: dwg', out['messages'][0]['content']['text'])
+        with self.assertRaises(mcp_prompts.PromptError):
+            mcp_prompts.get_prompt('issue-drawings', {})
+        with self.assertRaises(mcp_prompts.PromptError):
+            mcp_prompts.get_prompt('nope')
+
+
+class ToolsetTests(unittest.TestCase):
+
+    def setUp(self):
+        _clear_policy()
+        self.s = _server()
+        self.calls = []
+
+        def fake_execute(name, arguments, confirm=None):
+            self.calls.append(name)
+            return {'ok': name}
+        self.s._execute_tool = fake_execute
+        self.s._external_event = None
+
+    def tearDown(self):
+        del self.s._execute_tool
+        data = paths.load_settings() or {}
+        data.pop(mp.TOOLSET_KEY, None)
+        paths.save_settings(data)
+        _clear_policy()
+
+    def _listed(self):
+        return {t['name'] for t in self.s._handle_tools_list()['tools']}
+
+    def test_named_tools_are_real(self):
+        tools = set(self.s._tools)
+        self.assertTrue(mp.DOCUMENTATION_TOOLS <= tools, mp.DOCUMENTATION_TOOLS - tools)
+        self.assertTrue(mp.TRAINING_TOOLS <= tools, mp.TRAINING_TOOLS - tools)
+        self.assertFalse(mp.DOCUMENTATION_TOOLS & mp.TRAINING_TOOLS)
+
+    def test_bad_value_means_full(self):
+        self.assertEqual(mp.policy_from_settings({mp.TOOLSET_KEY: 'all'})['toolset'], 'full')
+        with self.assertRaises(ValueError):
+            mp.save_policy(toolset='all')
+
+    def test_full_is_the_default(self):
+        self.assertEqual(self._listed(), set(self.s._tools))
+
+    def test_standard_hides_training(self):
+        mp.save_policy(toolset='standard')
+        listed = self._listed()
+        self.assertFalse(listed & mp.TRAINING_TOOLS)
+        self.assertIn('delete_element', listed)
+        self.assertIn('t3lab_wiki', listed)
+        res = self.s._handle_tool_call({'name': 't3lab_begin_teaching', 'arguments': {}})
+        self.assertTrue(res['isError'])
+        self.assertIn('toolset', json.loads(res['content'][0]['text'])['error'])
+
+    def test_documentation(self):
+        mp.save_policy(toolset='documentation')
+        listed = self._listed()
+        self.assertIn('export_sheets_pdf', listed)
+        self.assertIn('revit_list_sheets', listed)
+        self.assertNotIn('delete_element', listed)
+        self.assertNotIn('place_wall', listed)
+        self.assertNotIn('send_code_to_revit', listed)
+        self.assertLess(len(listed), len(self.s._tools) * 3 // 4)
+        res = self.s._handle_tool_call({'name': 'place_wall', 'arguments': {}})
+        self.assertTrue(res['isError'])
+        res = self.s._handle_tool_call({'name': 'run_batch', 'arguments': {'steps': [
+            {'name': 'tag_elements', 'arguments': {}},
+            {'name': 'delete_element', 'arguments': {}}]}})
+        self.assertTrue(res['isError'])
+        self.assertIn('delete_element', json.loads(res['content'][0]['text'])['error'])
+        self.assertEqual(self.calls, [])
+        res = self.s._handle_tool_call({'name': 'create_sheet', 'arguments': {}})
+        self.assertFalse(res['isError'])
+        self.assertEqual(self.calls, ['create_sheet'])
+
+
+class FileWatcherTests(unittest.TestCase):
+
+    def setUp(self):
+        from core import file_watcher as fw
+        self.fw = fw
+        os.makedirs(fw.T3LAB_DATA_DIR, exist_ok=True)
+        for p in (fw.TASK_FILE, fw.RESULT_FILE, fw.TASK_PY_FILE, fw.RESULT_TXT):
+            if os.path.exists(p):
+                os.remove(p)
+        self.w = fw.TaskFileWatcher()
+
+    def tearDown(self):
+        self.w.stop()
+        time.sleep(0.6)
+        self.fw.set_auto_start(False)
+
+    def _wait_result(self, timeout=3.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.exists(self.fw.RESULT_FILE):
+                with open(self.fw.RESULT_FILE) as f:
+                    return json.load(f)
+            time.sleep(0.1)
+        return None
+
+    def test_off_by_default(self):
+        self.assertFalse(self.fw.auto_start_enabled())
+        self.assertFalse(self.w.start_if_enabled())
+        self.assertFalse(self.w.is_running)
+        self.fw.set_auto_start(True)
+        self.assertTrue(self.w.start_if_enabled())
+
+    def test_old_task_is_not_run(self):
+        with open(self.fw.TASK_FILE, 'w') as f:
+            json.dump({'task_id': 'left-over', 'code': 'result = "old"'}, f)
+        self.w.start()
+        self.assertIsNone(self._wait_result(1.5), 'a task written before start() ran')
+        with open(self.fw.TASK_FILE, 'w') as f:
+            json.dump({'task_id': 'new', 'code': 'result = "new"'}, f)
+        res = self._wait_result()
+        self.assertIsNotNone(res)
+        self.assertEqual((res['task_id'], res['output']), ('new', 'new'))
+
+
+class TelemetryTests(unittest.TestCase):
+
+    def test_redaction(self):
+        out = redact_arguments({
+            'code': 'import os\nos.remove("x")',
+            'output_folder': 'C:\\Users\\someone\\Client A\\Exports',
+            'file_path': '/home/someone/proj/Model.rvt',
+            'api_key': 'sk-123',
+            'view_name': 'Level 1',
+            'steps': [{'name': 'x', 'arguments': {'script': 'a', 'folder': 'D:\\a\\b'}}],
+        })
+        self.assertEqual(out['code'], '(code not sent, 2 lines)')
+        self.assertEqual(out['output_folder'], 'Exports')
+        self.assertEqual(out['file_path'], 'Model.rvt')
+        self.assertEqual(out['api_key'], '(not sent)')
+        self.assertEqual(out['view_name'], 'Level 1')
+        self.assertEqual(out['steps'][0]['arguments'], {'script': '(code not sent, 1 lines)',
+                                                        'folder': 'b'})
+
+    def test_payload_has_no_code(self):
+        sent = []
+        orig = TelemetryService._dispatch_async
+        # Sending is stubbed out, so tracking can be on for this one call.
+        TelemetryService._dispatch_async = classmethod(lambda cls, p: sent.append(p))
+        _set_settings(tracking_enabled=True)
+        try:
+            TelemetryService.record_mcp_call(
+                'send_code_to_revit', {'code': 'SECRET_MARKER = 1'}, {'success': True}, 5)
+        finally:
+            _set_settings(tracking_enabled=False)
+            TelemetryService._dispatch_async = orig
+        self.assertEqual(len(sent), 1)
+        self.assertNotIn('SECRET_MARKER', json.dumps(sent[0]))
+
+
+def tearDownModule():
+    shutil.rmtree(_TMP, ignore_errors=True)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=1)

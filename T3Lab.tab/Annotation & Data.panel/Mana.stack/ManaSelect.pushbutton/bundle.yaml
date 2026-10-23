@@ -1,0 +1,14 @@
+title: "Mana\nSelect"
+tooltip: Element explorer — counted tree of every element; tick to select, zoom, isolate, hide, export or delete.
+description: |
+  Counted tree of every element (Category > Family > Type by default):
+  - Display: Active View, Entire Model or Current Selection
+  - Sort by: Category, Family, Type, Workset, Level, Phase Created, Design Option
+  - Filter presets: model / annotation / loadable / system / in-place / grouped /
+    imports & links / pinned / elements with warnings
+  - Search: every word must match (category, family, type, mark or Element Id)
+  - Tick any level, then Select, Add to Selection, Zoom, Isolate, Hide, Reset,
+    Export CSV (one row per element) or Delete
+  - Window stays open while you work in the model; Display/Sort/Filter are remembered
+
+author: Tran Tien Thanh

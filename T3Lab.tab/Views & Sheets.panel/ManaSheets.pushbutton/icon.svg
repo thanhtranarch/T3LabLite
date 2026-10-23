@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- sheet ngang + viewport (ink-2); khung ten la signal -->
+  <rect x="4" y="6" width="24" height="20" rx="2" stroke="#000000"/>
+  <rect x="8" y="10" width="8" height="12" stroke="#666666"/>
+  <rect x="21" y="9" width="4" height="14" fill="#EA680C"/>
+</svg>

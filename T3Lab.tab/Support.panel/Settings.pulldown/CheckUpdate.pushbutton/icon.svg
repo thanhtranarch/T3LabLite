@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- tier B - ban moi tai xuong vao extension: mui ten vao hop -->
+  <rect x="4.5" y="14.5" width="23" height="13" fill="#F3F3F3" stroke="#000000" stroke-width="1"/>
+  <rect x="8" y="22" width="16" height="2" fill="#858585"/>
+  <rect x="15" y="3" width="2" height="9" fill="#E07B00"/>
+  <polygon points="11,11 21,11 16,17" fill="#E07B00"/>
+</svg>

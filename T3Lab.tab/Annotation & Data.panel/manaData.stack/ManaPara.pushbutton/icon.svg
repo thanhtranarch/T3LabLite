@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- hai dong tham so: nhan (ink-2) + o gia tri; o dang chon la signal -->
+  <path d="M4 9h8M4 23h8" stroke="#666666"/>
+  <rect x="17" y="5" width="11" height="8" rx="2" stroke="#000000"/>
+  <rect x="17" y="19" width="11" height="8" rx="2" stroke="#EA680C"/>
+</svg>

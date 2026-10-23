@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- khoi family + danh sach type; type dang chon la signal -->
+  <path d="M10 7l6 3v8l-6 3-6-3v-8zM4 10l6 3 6-3M10 13v8" stroke="#000000"/>
+  <path d="M20 9h8M20 21h8" stroke="#666666"/>
+  <rect x="20" y="13" width="8" height="4" fill="#EA680C"/>
+</svg>

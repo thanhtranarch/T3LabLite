@@ -1,0 +1,8 @@
+title: "Modify"
+tooltip: "Join, split, cut-profile and level/datum tools"
+layout:
+  - AutoJoin
+  - SplitElements
+  - Wall Cut Profile
+  - DatumSync
+  - Wall_Adjust Base

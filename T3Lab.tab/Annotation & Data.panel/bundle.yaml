@@ -1,0 +1,11 @@
+title: "Annotation & Data"
+background:
+  title: "#46E07B00"
+layout:
+  - Mana
+  - manaData
+  - ManaAnno
+  - MakePattern
+  - IFC-SG
+
+

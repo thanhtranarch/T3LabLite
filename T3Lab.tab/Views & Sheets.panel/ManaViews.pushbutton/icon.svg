@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- viewport (mat dung ngoi nha, ink-2) + view title: vong so hieu + gach chan la signal -->
+  <rect x="4" y="4" width="24" height="16" rx="2" stroke="#000000"/>
+  <path d="M7 16h18M11 16v-4l4-4 4 4v4" stroke="#666666"/>
+  <path d="M5 26a2 2 0 1 0 4 0a2 2 0 1 0-4 0M11 26h13" stroke="#EA680C"/>
+</svg>

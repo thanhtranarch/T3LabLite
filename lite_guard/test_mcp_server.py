@@ -13,7 +13,13 @@ reach:
   - core/server.py: the real HTTP handler on a local port (auth, -32700,
     202 for notifications, ping, tools/list without the request lock),
     tools/list filtering, tools/call blocking, run_batch validation
-  - core/bridge.py: re-reading the token after a 401
+  - core/bridge.py: re-reading the token after a 401; both protocol eras
+    (initialize / MCP 2026-07-28 server/discover + per-request _meta)
+    answered with Revit closed; cached resources/prompts lists
+  - MCP 2026-07-28 on the server: version errors, header mismatch,
+    resultType / serverInfo / cache hints, stateless requests
+  - core/mcp_wiki.py resources and core/mcp_prompts.py prompts
+  - the mcp_toolset profiles (full / standard / documentation)
   - core/mcp_wiki.py + Intelligence/skills/: the t3lab_wiki tool (construction
     wiki and drawing rules) and the initialize instructions pointing at it
   - core/file_watcher.py: off by default, never runs an old task file
@@ -108,10 +114,14 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(mp.policy_from_settings({mp.CODE_KEY: ' OFF '})['code_execution'], 'off')
 
     def test_negotiate_protocol(self):
+        self.assertEqual(mp.negotiate_protocol('2025-11-25'), '2025-11-25')
         self.assertEqual(mp.negotiate_protocol('2025-03-26'), '2025-03-26')
         self.assertEqual(mp.negotiate_protocol('2024-11-05'), '2024-11-05')
-        self.assertEqual(mp.negotiate_protocol('2099-01-01'), mp.LATEST_PROTOCOL)
-        self.assertEqual(mp.negotiate_protocol(None), mp.LATEST_PROTOCOL)
+        # initialize is the legacy handshake: never answer with a modern version.
+        self.assertEqual(mp.negotiate_protocol('2026-07-28'), mp.LATEST_LEGACY_PROTOCOL)
+        self.assertEqual(mp.negotiate_protocol('2099-01-01'), mp.LATEST_LEGACY_PROTOCOL)
+        self.assertEqual(mp.negotiate_protocol(None), mp.LATEST_LEGACY_PROTOCOL)
+        self.assertEqual(mp.LATEST_PROTOCOL, '2026-07-28')
 
     def test_check_call(self):
         ro = frozenset(['list_levels'])
@@ -624,7 +634,10 @@ class ToolCallTests(unittest.TestCase):
     def test_initialize(self):
         res = self.s._handle_initialize({'protocolVersion': '2025-06-18'})
         self.assertEqual(res['protocolVersion'], '2025-06-18')
-        self.assertEqual(self.s._handle_initialize({})['protocolVersion'], mp.LATEST_PROTOCOL)
+        self.assertEqual(self.s._handle_initialize({})['protocolVersion'],
+                         mp.LATEST_LEGACY_PROTOCOL)
+        self.assertEqual(res['capabilities'], mp.SERVER_CAPABILITIES)
+        self.assertEqual(res['serverInfo']['version'], mp.server_version())
 
 
 class ToolTaskTests(unittest.TestCase):
@@ -725,8 +738,85 @@ class HttpTests(unittest.TestCase):
         self.assertGreater(len(body['result']['tools']), 50)
 
     def test_unknown_method(self):
-        code, body = self._post({'jsonrpc': '2.0', 'id': 3, 'method': 'resources/list'})
+        code, body = self._post({'jsonrpc': '2.0', 'id': 3, 'method': 'subscriptions/listen'})
         self.assertEqual(body['error']['code'], -32601)
+
+    def _modern(self, method, params=None, version='2026-07-28', headers=None):
+        params = dict(params or {})
+        params['_meta'] = {mp.META_PROTOCOL: version,
+                           'io.modelcontextprotocol/clientInfo': {'name': 'test', 'version': '1'},
+                           mp.META_CLIENT_CAPS: {}}
+        return self._post({'jsonrpc': '2.0', 'id': 'm1', 'method': method,
+                           'params': params}, headers=headers)
+
+    def test_modern_discover(self):
+        code, body = self._modern('server/discover')
+        self.assertEqual(code, 200)
+        res = body['result']
+        self.assertEqual(res['resultType'], 'complete')
+        self.assertEqual(res['supportedVersions'], list(mp.SUPPORTED_PROTOCOLS))
+        self.assertEqual(res['capabilities'], mp.SERVER_CAPABILITIES)
+        self.assertEqual(res['instructions'], mp.SERVER_INSTRUCTIONS)
+        self.assertEqual(res['_meta'][mp.META_SERVER_INFO]['name'], mp.SERVER_NAME)
+        self.assertEqual((res['ttlMs'], res['cacheScope']), (mp.LIST_TTL_MS, 'private'))
+
+    def test_modern_tools_list_is_stateless_and_cacheable(self):
+        # No initialize first: a modern request stands on its own.
+        code, body = self._modern('tools/list')
+        res = body['result']
+        self.assertEqual((code, res['resultType']), (200, 'complete'))
+        names = [t['name'] for t in res['tools']]
+        self.assertEqual(names, sorted(names))           # deterministic order
+        self.assertIn('ttlMs', res)
+
+    def test_modern_unsupported_version(self):
+        code, body = self._modern('tools/list', version='1900-01-01')
+        self.assertEqual(code, 400)
+        self.assertEqual(body['error']['code'], mp.ERR_UNSUPPORTED_VERSION)
+        self.assertEqual(body['error']['data']['requested'], '1900-01-01')
+        self.assertIn('2026-07-28', body['error']['data']['supported'])
+
+    def test_modern_header_mismatch(self):
+        code, body = self._modern('tools/list',
+                                  headers={'MCP-Protocol-Version': '2025-06-18'})
+        self.assertEqual((code, body['error']['code']), (400, mp.ERR_HEADER_MISMATCH))
+        code, body = self._modern('tools/list',
+                                  headers={'MCP-Protocol-Version': '2026-07-28'})
+        self.assertEqual(code, 200)
+
+    def test_legacy_results_are_unchanged(self):
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/list'})
+        self.assertNotIn('resultType', body['result'])
+        self.assertNotIn('ttlMs', body['result'])
+
+    def test_resources_and_prompts_over_http(self):
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 5, 'method': 'resources/list'})
+        uris = [r['uri'] for r in body['result']['resources']]
+        self.assertIn(mcp_wiki.page_uri(mcp_wiki.START_PAGE), uris)
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 6, 'method': 'resources/read',
+                                  'params': {'uri': mcp_wiki.page_uri(mcp_wiki.START_PAGE)}})
+        self.assertIn('tag_all_rooms', body['result']['contents'][0]['text'])
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 7, 'method': 'resources/read',
+                                  'params': {'uri': 't3lab://wiki/nope'}})
+        self.assertEqual(body['error']['code'], mp.ERR_LEGACY_RESOURCE_NOT_FOUND)
+        _code, body = self._modern('resources/read', {'uri': 't3lab://wiki/nope'})
+        self.assertEqual(body['error']['code'], mp.ERR_INVALID_PARAMS)
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 8, 'method': 'prompts/list'})
+        self.assertIn('issue-drawings', [p['name'] for p in body['result']['prompts']])
+        _code, body = self._post({'jsonrpc': '2.0', 'id': 9, 'method': 'prompts/get',
+                                  'params': {'name': 'issue-drawings'}})
+        self.assertEqual(body['error']['code'], mp.ERR_INVALID_PARAMS)   # sheets missing
+        _code, body = self._modern('resources/templates/list')
+        self.assertEqual(body['result']['resourceTemplates'][0]['uriTemplate'],
+                         mcp_wiki.URI_PREFIX + '{page}')
+
+    def test_wiki_and_prompts_do_not_wait_for_a_running_call(self):
+        with srv_mod._MCP_REQUEST_LOCK:
+            t0 = time.time()
+            for method in ('server/discover', 'resources/list', 'prompts/list'):
+                code, _body = self._post({'jsonrpc': '2.0', 'id': 10, 'method': method})
+                self.assertEqual(code, 200, method)
+            self.assertLess(time.time() - t0, 6)
 
 
 class BridgeTokenTests(unittest.TestCase):
@@ -767,6 +857,268 @@ class BridgeTokenTests(unittest.TestCase):
         finally:
             with open(path, 'w') as f:
                 f.write(good)
+
+
+class ProtocolParityTests(unittest.TestCase):
+    """bridge.py is deployed alone and keeps copies of the protocol constants."""
+
+    def test_bridge_matches_policy(self):
+        self.assertEqual(bridge.MODERN_PROTOCOLS, mp.MODERN_PROTOCOLS)
+        self.assertEqual(bridge.LEGACY_PROTOCOLS, mp.LEGACY_PROTOCOLS)
+        self.assertEqual(bridge.SERVER_CAPABILITIES, mp.SERVER_CAPABILITIES)
+        self.assertEqual(bridge.CACHEABLE_METHODS, mp.CACHEABLE_METHODS)
+        self.assertEqual((bridge.LIST_TTL_MS, bridge.CACHE_SCOPE),
+                         (mp.LIST_TTL_MS, mp.CACHE_SCOPE))
+        self.assertEqual(bridge.META_PROTOCOL, mp.META_PROTOCOL)
+        self.assertEqual(bridge.SERVER_NAME, mp.SERVER_NAME)
+
+    def test_finish_result(self):
+        resp = {'jsonrpc': '2.0', 'id': 1, 'result': {'tools': []}}
+        self.assertNotIn('resultType', mp.finish_result(dict(resp), 'tools/list', False)['result'])
+        out = mp.finish_result({'jsonrpc': '2.0', 'id': 1, 'result': {'tools': []}},
+                               'tools/list', True)['result']
+        self.assertEqual(out['resultType'], 'complete')
+        self.assertIn(mp.META_SERVER_INFO, out['_meta'])
+        out = mp.finish_result({'jsonrpc': '2.0', 'id': 1, 'result': {'content': []}},
+                               'tools/call', True)['result']
+        self.assertNotIn('ttlMs', out)                    # tools/call is not cacheable
+        err = {'jsonrpc': '2.0', 'id': 1, 'error': {'code': -1, 'message': 'x'}}
+        self.assertEqual(mp.finish_result(err, 'tools/list', True), err)
+
+
+class BridgeProtocolTests(unittest.TestCase):
+    """bridge.py answers both eras without Revit, and forwards the rest."""
+
+    def setUp(self):
+        self.current = {'port': 1, 'validated': True}
+        self._orig = (bridge._forward, bridge._alive_ports)
+        bridge._alive_ports = lambda: []
+        cache = os.path.join(_TMP, 'T3LabAI', 'tools_cache.json')
+        if os.path.exists(cache):
+            os.remove(cache)
+
+    def tearDown(self):
+        bridge._forward, bridge._alive_ports = self._orig
+
+    def _down(self, *_a, **_k):
+        raise ConnectionRefusedError()
+
+    @staticmethod
+    def _req(method, params=None, modern=True):
+        params = dict(params or {})
+        if modern:
+            params['_meta'] = {mp.META_PROTOCOL: '2026-07-28'}
+        return {'jsonrpc': '2.0', 'id': 'b1', 'method': method, 'params': params}
+
+    def test_discover_and_initialize_without_revit(self):
+        bridge._forward = self._down
+        res = bridge._handle(self._req('server/discover'), self.current, 't')['result']
+        self.assertEqual(res['supportedVersions'], list(mp.SUPPORTED_PROTOCOLS))
+        self.assertEqual(res['resultType'], 'complete')
+        self.assertEqual(res['instructions'], mp.SERVER_INSTRUCTIONS)
+        res = bridge._handle(self._req('initialize', {'protocolVersion': '2026-07-28'},
+                                       modern=False), self.current, 't')['result']
+        self.assertEqual(res['protocolVersion'], '2025-11-25')
+        self.assertNotIn('resultType', res)
+        self.assertEqual(res['capabilities'], mp.SERVER_CAPABILITIES)
+
+    def test_unsupported_version(self):
+        req = self._req('tools/list')
+        req['params']['_meta'][mp.META_PROTOCOL] = '2027-01-01'
+        err = bridge._handle(req, self.current, 't')['error']
+        self.assertEqual(err['code'], -32022)
+
+    def test_lists_cached_and_empty_when_revit_is_down(self):
+        live = {'resources': [{'uri': 't3lab://wiki/a', 'name': 'a'}]}
+        bridge._forward = lambda req, cur, tok, timeout=0: {
+            'jsonrpc': '2.0', 'id': req['id'], 'result': dict(live)}
+        res = bridge._handle(self._req('resources/list'), self.current, 't')['result']
+        self.assertEqual(res['resources'], live['resources'])
+        bridge._forward = self._down
+        res = bridge._handle(self._req('resources/list'), self.current, 't')['result']
+        self.assertEqual(res['resources'], live['resources'])      # from the cache
+        self.assertIn('ttlMs', res)
+        res = bridge._handle(self._req('prompts/list', modern=False), self.current, 't')['result']
+        self.assertEqual(res, {'prompts': []})                      # never cached yet
+        err = bridge._handle(self._req('prompts/get', {'name': 'x'}), self.current, 't')
+        self.assertIn('not reachable', err['error']['message'])
+
+    def test_old_revit_build_without_resources(self):
+        bridge._forward = lambda req, cur, tok, timeout=0: {
+            'jsonrpc': '2.0', 'id': req['id'],
+            'error': {'code': -32601, 'message': 'Method not found'}}
+        res = bridge._handle(self._req('prompts/list', modern=False), self.current, 't')
+        self.assertEqual(res['result'], {'prompts': []})
+
+
+class BridgeOverHttpTests(unittest.TestCase):
+    """bridge -> real server: modern errors come back as JSON-RPC, not as an
+    HTTP failure."""
+
+    def setUp(self):
+        self.s = _server()
+        self.http = srv_mod._ThreadedHTTPServer(('127.0.0.1', 0), srv_mod.MCPRequestHandler)
+        self.http.mcp_server = self.s
+        self.port = self.http.server_address[1]
+        t = threading.Thread(target=self.http.serve_forever)
+        t.daemon = True
+        t.start()
+
+    def tearDown(self):
+        self.http.shutdown()
+        self.http.server_close()
+
+    def test_version_error_passes_through(self):
+        req = {'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list',
+               'params': {'_meta': {mp.META_PROTOCOL: '1999-01-01'}}}
+        resp = bridge._post_mcp(self.port, req, self.s.token, timeout=5)
+        self.assertEqual(resp['error']['code'], -32022)
+
+    def test_modern_prompt_get(self):
+        req = {'jsonrpc': '2.0', 'id': 3, 'method': 'prompts/get',
+               'params': {'name': 'model-health-check',
+                          '_meta': {mp.META_PROTOCOL: '2026-07-28'}}}
+        resp = bridge._post_mcp(self.port, req, self.s.token, timeout=5)
+        text = resp['result']['messages'][0]['content']['text']
+        self.assertIn('get_model_warnings', text)
+        self.assertEqual(resp['result']['resultType'], 'complete')
+
+
+class ResourceTests(unittest.TestCase):
+
+    def test_every_enabled_page_is_a_resource(self):
+        res = mcp_wiki.resource_list()['resources']
+        by_name = {r['name']: r for r in res}
+        for page in WIKI_PAGES:
+            self.assertIn(page, by_name)
+            self.assertEqual(by_name[page]['uri'], mcp_wiki.page_uri(page))
+            self.assertEqual(by_name[page]['mimeType'], 'text/markdown')
+        self.assertEqual(by_name[mcp_wiki.START_PAGE]['annotations']['priority'], 1.0)
+
+    def test_read(self):
+        out = mcp_wiki.read_resource(mcp_wiki.page_uri('construction-glossary'))
+        item = out['contents'][0]
+        self.assertEqual(item['uri'], mcp_wiki.page_uri('construction-glossary'))
+        self.assertTrue(item['text'])
+        # Company-specific pages carry the "project BEP wins" note on top.
+        out = mcp_wiki.read_resource(mcp_wiki.page_uri(mcp_wiki.START_PAGE))
+        self.assertTrue(out['contents'][0]['text'].startswith('> '))
+        self.assertIsNone(mcp_wiki.read_resource('t3lab://wiki/nope'))
+        self.assertIsNone(mcp_wiki.read_resource('file:///etc/passwd'))
+
+    def test_switched_off_page_is_not_a_resource(self):
+        from Intelligence.skills_engine import get_skills_engine
+        engine = get_skills_engine()
+        engine.set_enabled('drawing-conventions', False)
+        try:
+            names = [r['name'] for r in mcp_wiki.resource_list()['resources']]
+            self.assertNotIn('drawing-conventions', names)
+            self.assertIsNone(mcp_wiki.read_resource(
+                mcp_wiki.page_uri('drawing-conventions')))
+        finally:
+            engine.set_enabled('drawing-conventions', True)
+
+
+class PromptTests(unittest.TestCase):
+
+    def test_prompts_name_real_tools_and_pages(self):
+        from core import mcp_prompts
+        tools = set(_server()._tools)
+        pages = set(n[:-3] for n in os.listdir(SKILLS_DIR) if n.endswith('.md'))
+        for prompt in mcp_prompts.PROMPTS:
+            for tool in prompt['tools']:
+                self.assertIn(tool, tools, prompt['name'])
+                self.assertIn(tool, prompt['template'], prompt['name'])
+            for page in prompt['pages']:
+                self.assertIn(page, pages, prompt['name'])
+                self.assertIn(page, prompt['template'], prompt['name'])
+
+    def test_get_fills_defaults_and_checks_required(self):
+        from core import mcp_prompts
+        listed = mcp_prompts.prompt_list()['prompts']
+        self.assertEqual([p['name'] for p in listed],
+                         ['complete-drawings', 'issue-drawings', 'model-health-check'])
+        self.assertNotIn('template', listed[0])
+        out = mcp_prompts.get_prompt('complete-drawings', {'scope': 'sheet A-101'})
+        text = out['messages'][0]['content']['text']
+        self.assertIn('sheet A-101', text)
+        self.assertIn('from the sheets themselves', text)
+        self.assertEqual(out['messages'][0]['role'], 'user')
+        out = mcp_prompts.get_prompt('issue-drawings', {'sheets': 'A-101', 'format': 'dwg'})
+        self.assertIn('Format: dwg', out['messages'][0]['content']['text'])
+        with self.assertRaises(mcp_prompts.PromptError):
+            mcp_prompts.get_prompt('issue-drawings', {})
+        with self.assertRaises(mcp_prompts.PromptError):
+            mcp_prompts.get_prompt('nope')
+
+
+class ToolsetTests(unittest.TestCase):
+
+    def setUp(self):
+        _clear_policy()
+        self.s = _server()
+        self.calls = []
+
+        def fake_execute(name, arguments, confirm=None):
+            self.calls.append(name)
+            return {'ok': name}
+        self.s._execute_tool = fake_execute
+        self.s._external_event = None
+
+    def tearDown(self):
+        del self.s._execute_tool
+        data = paths.load_settings() or {}
+        data.pop(mp.TOOLSET_KEY, None)
+        paths.save_settings(data)
+        _clear_policy()
+
+    def _listed(self):
+        return {t['name'] for t in self.s._handle_tools_list()['tools']}
+
+    def test_named_tools_are_real(self):
+        tools = set(self.s._tools)
+        self.assertTrue(mp.DOCUMENTATION_TOOLS <= tools, mp.DOCUMENTATION_TOOLS - tools)
+        self.assertTrue(mp.TRAINING_TOOLS <= tools, mp.TRAINING_TOOLS - tools)
+        self.assertFalse(mp.DOCUMENTATION_TOOLS & mp.TRAINING_TOOLS)
+
+    def test_bad_value_means_full(self):
+        self.assertEqual(mp.policy_from_settings({mp.TOOLSET_KEY: 'all'})['toolset'], 'full')
+        with self.assertRaises(ValueError):
+            mp.save_policy(toolset='all')
+
+    def test_full_is_the_default(self):
+        self.assertEqual(self._listed(), set(self.s._tools))
+
+    def test_standard_hides_training(self):
+        mp.save_policy(toolset='standard')
+        listed = self._listed()
+        self.assertFalse(listed & mp.TRAINING_TOOLS)
+        self.assertIn('delete_element', listed)
+        self.assertIn('t3lab_wiki', listed)
+        res = self.s._handle_tool_call({'name': 't3lab_begin_teaching', 'arguments': {}})
+        self.assertTrue(res['isError'])
+        self.assertIn('toolset', json.loads(res['content'][0]['text'])['error'])
+
+    def test_documentation(self):
+        mp.save_policy(toolset='documentation')
+        listed = self._listed()
+        self.assertIn('export_sheets_pdf', listed)
+        self.assertIn('revit_list_sheets', listed)
+        self.assertNotIn('delete_element', listed)
+        self.assertNotIn('place_wall', listed)
+        self.assertNotIn('send_code_to_revit', listed)
+        self.assertLess(len(listed), len(self.s._tools) * 3 // 4)
+        res = self.s._handle_tool_call({'name': 'place_wall', 'arguments': {}})
+        self.assertTrue(res['isError'])
+        res = self.s._handle_tool_call({'name': 'run_batch', 'arguments': {'steps': [
+            {'name': 'tag_elements', 'arguments': {}},
+            {'name': 'delete_element', 'arguments': {}}]}})
+        self.assertTrue(res['isError'])
+        self.assertIn('delete_element', json.loads(res['content'][0]['text'])['error'])
+        self.assertEqual(self.calls, [])
+        res = self.s._handle_tool_call({'name': 'create_sheet', 'arguments': {}})
+        self.assertFalse(res['isError'])
+        self.assertEqual(self.calls, ['create_sheet'])
 
 
 class FileWatcherTests(unittest.TestCase):

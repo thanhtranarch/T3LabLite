@@ -68,6 +68,10 @@ _CLOUD_AGENT_TOKENS = 16000
 _CONTEXT_EDIT = {"edits": [{"type": "clear_tool_uses_20250919"}]}
 _CONTEXT_BETA = "context-management-2025-06-27"
 
+# Claude's MCP connector (remote MCP servers the user added in LLMs Setting,
+# Intelligence/remote_mcp.py). Dropped per model on a 400 naming MCP.
+_MCP_BETA = "mcp-client-2025-11-20"
+
 # Streaming / blocking agent call timeout. .NET: Timeout waits for the
 # response headers, ReadWriteTimeout is per read — a 32k-token answer at
 # ~80 tok/s streams for ~7 minutes, so both get 10 minutes.
@@ -92,6 +96,8 @@ class ClaudeProvider(BaseLLMProvider):
         self._thinking_mode = {}     # model name -> "adaptive" | "legacy", learned on first 400
         self._tool_search_mode = {}  # model name -> "off" once the API rejected deferral
         self._context_edit_mode = {} # model name -> "off" once the API rejected it
+        self._mcp_mode = {}          # model name -> "off" once remote MCP was refused
+        self.remote_mcp_error = None # last refusal of the remote MCP servers
 
     # ── Credentials ───────────────────────────────────────────────────────────
 
@@ -530,6 +536,34 @@ class ClaudeProvider(BaseLLMProvider):
     def _context_edit_rejected(ex):
         return "context_management" in u"{}".format(ex).lower()
 
+    @staticmethod
+    def _remote_mcp_parts():
+        """(mcp_servers, toolsets) of the user's remote MCP servers
+        (Intelligence/remote_mcp.py); ([], []) when none or on any error."""
+        try:
+            _ensure_lib_in_path()
+            from Intelligence import remote_mcp
+            return remote_mcp.request_parts()
+        except Exception:
+            return [], []
+
+    def _mcp_on(self, model):
+        if self._mcp_mode.get(model) == "off":
+            return False
+        try:
+            _ensure_lib_in_path()
+            from Intelligence import remote_mcp
+            return any(s.get("enabled") for s in remote_mcp.load())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _mcp_rejected(ex):
+        """True if `ex` is the API refusing the remote MCP servers (a server
+        it cannot reach, a bad token, a model or account without the
+        connector) -- the turn is then retried without them."""
+        return "mcp" in u"{}".format(ex).lower()
+
     def _agent_payload(self, model, system_prompt, messages, tools, max_tokens,
                        stream, thinking_mode=None, context_edit=False):
         """Build a Messages API payload with prompt caching on system + tools
@@ -560,6 +594,13 @@ class ClaudeProvider(BaseLLMProvider):
         }
         if cached_tools:
             payload["tools"] = cached_tools
+        if self._mcp_on(model):
+            # Remote MCP servers (Claude's MCP connector): appended AFTER the
+            # cached tool list so the cache breakpoint above stays put.
+            servers, toolsets = self._remote_mcp_parts()
+            if servers:
+                payload["mcp_servers"] = servers
+                payload["tools"] = list(payload.get("tools") or []) + toolsets
         if thinking_mode == "adaptive":
             payload["thinking"]      = {"type": "adaptive"}
             payload["output_config"] = {"effort": _THINK_EFFORT}
@@ -684,6 +725,8 @@ class ClaudeProvider(BaseLLMProvider):
                 betas.append(_THINK_BETA)
             if self._context_edit_on(model):
                 betas.append(_CONTEXT_BETA)
+            if self._mcp_on(model):
+                betas.append(_MCP_BETA)
             if betas:
                 h["anthropic-beta"] = ",".join(betas)
             return h
@@ -748,6 +791,16 @@ class ClaudeProvider(BaseLLMProvider):
                     state["cur"] = {"type": "server_tool_use",
                                     "id": cb.get("id", ""),
                                     "name": cb.get("name", ""), "parts": []}
+                elif cb.get("type") == "mcp_tool_use":
+                    # A call to a remote MCP server, run by Anthropic inside
+                    # this response (its result follows as mcp_tool_result).
+                    # Input streams like a tool_use; echoed back, never
+                    # answered by us.
+                    state["cur"] = {"type": "mcp_tool_use",
+                                    "id": cb.get("id", ""),
+                                    "name": cb.get("name", ""),
+                                    "server": cb.get("server_name", ""),
+                                    "parts": []}
                 elif cb.get("type") == "tool_search_tool_result":
                     # Whole block arrives in the start event; kept as is so
                     # the discovered tools stay usable on later turns.
@@ -809,7 +862,17 @@ class ClaudeProvider(BaseLLMProvider):
             self._clear_error()
             streamed_ok = _stream_once()
         except Exception as ex:
-            if self._context_edit_on(model) and self._context_edit_rejected(ex):
+            if self._mcp_on(model) and self._mcp_rejected(ex):
+                # A remote MCP server was refused: answer without them for
+                # the rest of the session and say why in the settings UI.
+                self._mcp_mode[model] = "off"
+                self.remote_mcp_error = u"{}".format(ex)
+                state["blocks"], state["cur"], state["stop_reason"] = [], None, None
+                try:
+                    streamed_ok = _stream_once()
+                except Exception as ex2:
+                    self._record_error(u"chat_agent stream failed: {}".format(ex2))
+            elif self._context_edit_on(model) and self._context_edit_rejected(ex):
                 # Context editing refused (older model / proxy): drop it for
                 # this model and retry once.
                 self._context_edit_mode[model] = "off"
@@ -885,6 +948,11 @@ class ClaudeProvider(BaseLLMProvider):
                     blocks.append({"type": "server_tool_use", "id": b.get("id", ""),
                                    "name": b.get("name", ""),
                                    "parts": [json.dumps(b.get("input") or {})]})
+                elif b.get("type") == "mcp_tool_use":
+                    blocks.append({"type": "mcp_tool_use", "id": b.get("id", ""),
+                                   "name": b.get("name", ""),
+                                   "server": b.get("server_name", ""),
+                                   "parts": [json.dumps(b.get("input") or {})]})
                 elif b.get("type"):
                     # tool_search_tool_result and anything newer: pass
                     # through untouched so the transcript stays valid.
@@ -897,6 +965,16 @@ class ClaudeProvider(BaseLLMProvider):
             return self._with_model(self._agent_result_from_blocks(
                 blocks, stop_reason, usage), model)
         except Exception as ex:
+            if self._mcp_on(model) and self._mcp_rejected(ex):
+                self._mcp_mode[model] = "off"
+                self.remote_mcp_error = u"{}".format(ex)
+                try:
+                    blocks, stop_reason, usage = _do_blocking(thinking_mode)
+                    return self._with_model(self._agent_result_from_blocks(
+                        blocks, stop_reason, usage), model)
+                except Exception as ex2:
+                    self._record_error(u"chat_agent() failed: {}".format(ex2))
+                    return None
             if self._context_edit_on(model) and self._context_edit_rejected(ex):
                 self._context_edit_mode[model] = "off"
                 try:
@@ -943,6 +1021,7 @@ class ClaudeProvider(BaseLLMProvider):
         texts      = []
         tool_calls = []
         content    = []
+        mcp_calls  = []
         for b in blocks:
             joined = u"".join(b.get("parts", []))
             if b["type"] == "text":
@@ -966,6 +1045,18 @@ class ClaudeProvider(BaseLLMProvider):
                     args = {}
                 content.append({"type": "server_tool_use", "id": b.get("id", ""),
                                 "name": b.get("name", ""), "input": args})
+            elif b["type"] == "mcp_tool_use":
+                # Remote MCP call, already run by Anthropic: transcript only.
+                try:
+                    args = json.loads(joined) if joined.strip() else {}
+                except Exception:
+                    args = {}
+                content.append({"type": "mcp_tool_use", "id": b.get("id", ""),
+                                "name": b.get("name", ""),
+                                "server_name": b.get("server", ""),
+                                "input": args})
+                mcp_calls.append({"server": b.get("server", ""),
+                                  "name": b.get("name", "")})
             elif b["type"] in ("tool_search_tool_result", "raw"):
                 raw = b.get("raw")
                 if isinstance(raw, dict):
@@ -987,6 +1078,8 @@ class ClaudeProvider(BaseLLMProvider):
             "assistant_msg": {"role": "assistant", "content": content},
             "stop_reason":   stop_reason or ("tool_use" if tool_calls else "end_turn"),
             "usage":         dict(usage or {}),
+            # Remote MCP tools Claude ran this turn ({"server", "name"}).
+            "mcp_calls":     mcp_calls,
         }
 
     def _with_model(self, result, model):

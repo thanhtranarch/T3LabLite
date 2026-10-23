@@ -124,8 +124,8 @@
     },
     {
       "file": "lib/core/server.py",
-      "pattern": "^\\s+'instructions': mcp_policy\\.SERVER_INSTRUCTIONS,",
-      "why": "initialize must tell AI apps to read the drawing rules (t3lab_wiki) before drawing work"
+      "pattern": "^\\s+instructions=mcp_policy\\.SERVER_INSTRUCTIONS\\)",
+      "why": "initialize and server/discover must tell AI apps to read the drawing rules (t3lab_wiki) before drawing work"
     },
     {
       "file": "lib/core/bridge.py",
@@ -144,11 +144,13 @@
     "CHANGELOG.md",
     "README.md",
     "extension.json",
+    "lib/core/mcp_prompts.py",
     "lib/core/mcp_wiki.py",
     "lib/core/ribbon_retire.py",
     "lib/core/update_schedule.py",
     "lib/core/updater.py",
     "lib/core/whats_new.py",
+    "lib/Intelligence/remote_mcp.py",
     "lib/tracking",
     "lite_guard",
     "version.txt"

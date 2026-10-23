@@ -96,7 +96,8 @@ def load(settings=None):
 
 def save(servers, settings=None):
     """Replace the stored list. Each entry: name, url, enabled and, to change
-    the token, `token` (u'' removes it; a missing key keeps the stored one).
+    the token, `token` (u'' removes it; a missing key keeps the stored one,
+    also across a rename when `previous_name` names the old entry).
     Returns (saved list as load() shows it, error or None); nothing is
     written when any entry has a problem."""
     settings = settings or _settings()
@@ -122,7 +123,8 @@ def save(servers, settings=None):
             if token:
                 row['token'] = _secrets().protect(token)
         else:
-            old = stored.get(row['name']) or stored.get(server.get('name'))
+            old = (stored.get(row['name'])
+                   or stored.get(server.get('previous_name')))
             if old and old.get('token'):
                 row['token'] = old['token']
         rows.append(row)

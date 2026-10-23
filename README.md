@@ -55,6 +55,7 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
 - **Skills** — reusable instruction packs that activate on what you ask, 33 built in (ISO 19650 naming, LOD, worksets, QA checklist, BEP, COBie handover, clash coordination, sheet & annotation standards, construction wiki and drawing-completion rules, …). Type `/skill-name` to force one, or install more from a GitHub repo — Claude's `SKILL.md` format is read as-is.
 - **Knowledge (RAG)** — index folders of PDF / TXT / MD and get answers with citations. Keyword search works offline; semantic search is optional and runs on a local Ollama embedding model.
 - **Projects** — per-project chat history, custom instructions, default model, knowledge folders, remembered facts, and daily scheduled prompts.
+- **Remote MCP servers (Claude)** — add MCP servers on the internet (https) in **LLMs Setting → Models**; Claude runs their tools through its MCP connector. Those calls do not go through "Ask before model edits".
 - **Context & attachments** — the assistant sees the active view and current selection, and accepts attached files and images.
 - **PDF comments** — read markups from a PDF, trace them to the matching sheet, and resolve them item by item.
 - **Spell check** — proofread every Text Note in the model or just the active view.
@@ -203,6 +204,7 @@ usage tracking. Both of the last two can be switched off (see
 | Component | Destination | When |
 |---|---|---|
 | Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each week (retried the next day if GitHub was unreachable), unless `"auto_update": false` |
+| T3Lab Assistant remote MCP servers | Anthropic's servers connect to the https MCP servers you add (Claude only) | Every Assistant message while a server is on |
 | T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `api.deepseek.com`, the Base URL you set for Custom — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
 | Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
 | Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |

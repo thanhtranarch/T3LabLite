@@ -2191,6 +2191,35 @@
                                 </Border>
                             </StackPanel>
                         </Border>
+
+                        <!-- Remote MCP servers (Intelligence/remote_mcp.py): tools from MCP servers on the
+                             internet, run through Claude's MCP connector. Claude only. -->
+                        <TextBlock Text="REMOTE MCP SERVERS (CLAUDE)" Style="{StaticResource T3.Label}" Margin="0,16,0,8"/>
+                        <Border Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
+                                BorderThickness="1" CornerRadius="4" Padding="12">
+                            <StackPanel>
+                                <TextBlock Text="Give the Assistant tools from MCP servers on the internet (company wiki, Notion, Linear ...). Claude connects to them itself, so the server needs an https:// address; a local (stdio) server cannot be used. Their tools run without the &quot;Ask before model edits&quot; card."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                                <ComboBox x:Name="mcp_server_cb" Style="{StaticResource T3.ComboBox}" Margin="0,0,0,8"
+                                          SelectionChanged="mcp_server_selected"/>
+                                <TextBlock Text="Name:" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                <TextBox x:Name="mcp_server_name_box" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
+                                <TextBlock Text="URL (https://...):" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                <TextBox x:Name="mcp_server_url_box" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="mcp_server_token_label" Text="Authorization token (optional):" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                <TextBox x:Name="mcp_server_token_box" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
+                                <CheckBox x:Name="mcp_server_enabled_toggle" Content="Use this server" IsChecked="True"
+                                          Style="{StaticResource T3.CheckBox}" Margin="0,0,0,8"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="mcp_server_save_btn" Style="{StaticResource T3.Button.Secondary}"
+                                            Content="Save Server" Click="mcp_server_save_clicked" Margin="0,0,8,0"/>
+                                    <Button x:Name="mcp_server_remove_btn" Style="{StaticResource T3.Button.Secondary}"
+                                            Content="Remove" Click="mcp_server_remove_clicked"/>
+                                </StackPanel>
+                                <TextBlock x:Name="mcp_server_status" Text="" Style="{StaticResource T3.Caption}"
+                                           TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <!-- ════════ TAB 3: PROJECTS ════════ -->

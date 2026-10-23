@@ -214,6 +214,7 @@ class LLMSettingWindow(T3WPFWindow):
         # General is cheap (settings reads) and Models is the tab that opens
         # first, so those two are eager; the rest load on first click.
         self._load_general_tab()
+        self._load_mcp_servers()
         self._tabs_loaded.update(('general', 'provider'))
         self._ui_ready = True
         self._probe_all_async()
@@ -1134,6 +1135,145 @@ class LLMSettingWindow(T3WPFWindow):
         t.Text = text
         t.Margin = Thickness(0, 8, 0, 8)
         return t
+
+    # ─── Remote MCP servers (Intelligence/remote_mcp.py) ─────────────────────
+
+    def _load_mcp_servers(self, select_name=None):
+        """Fill the server picker: "New server..." first, then the saved
+        servers. Selects `select_name` when given."""
+        try:
+            from System.Windows.Controls import ComboBoxItem
+            from Intelligence import remote_mcp
+            servers = remote_mcp.load()
+            self._mcp_servers = servers
+            combo = self.mcp_server_cb
+            self._mcp_guard = True
+            try:
+                combo.Items.Clear()
+                first = ComboBoxItem()
+                first.Content = u"New server..."
+                first.Tag = None
+                combo.Items.Add(first)
+                sel = 0
+                for i, srv in enumerate(servers):
+                    item = ComboBoxItem()
+                    item.Content = u"{}{}".format(
+                        srv['name'], u"" if srv['enabled'] else u" (off)")
+                    item.Tag = srv['name']
+                    item.ToolTip = srv['url']
+                    combo.Items.Add(item)
+                    if srv['name'] == select_name:
+                        sel = i + 1
+                combo.SelectedIndex = sel
+            finally:
+                self._mcp_guard = False
+            self._show_mcp_server(self._selected_mcp_server())
+            self._show_mcp_refusal()
+        except Exception as ex:
+            logger.debug("_load_mcp_servers error: {}".format(ex))
+
+    def _selected_mcp_server(self):
+        item = self.mcp_server_cb.SelectedItem
+        name = getattr(item, 'Tag', None) if item is not None else None
+        for srv in getattr(self, '_mcp_servers', None) or []:
+            if srv['name'] == name:
+                return srv
+        return None
+
+    def _show_mcp_server(self, srv):
+        self.mcp_server_name_box.Text = srv['name'] if srv else u""
+        self.mcp_server_url_box.Text = srv['url'] if srv else u""
+        self.mcp_server_token_box.Text = u""
+        self.mcp_server_enabled_toggle.IsChecked = srv['enabled'] if srv else True
+        self.mcp_server_token_label.Text = (
+            u"Authorization token (saved - leave empty to keep it):"
+            if srv and srv.get('has_token') else u"Authorization token (optional):")
+        self.mcp_server_remove_btn.IsEnabled = srv is not None
+
+    def mcp_server_selected(self, sender, e):
+        if getattr(self, '_mcp_guard', False):
+            return
+        self._show_mcp_server(self._selected_mcp_server())
+        self.mcp_server_status.Text = u""
+        self._show_mcp_refusal()
+
+    @staticmethod
+    def _claude_provider():
+        try:
+            from Intelligence.llm_router import LLMRouter
+            return LLMRouter().get_provider("claude")
+        except Exception:
+            return None
+
+    def _mcp_servers_changed(self):
+        claude = self._claude_provider()
+        if claude is not None and hasattr(claude, 'reset_remote_mcp'):
+            claude.reset_remote_mcp()
+
+    def _show_mcp_refusal(self):
+        """Say so when Claude refused the servers this session (the
+        Assistant then answered without them)."""
+        err = getattr(self._claude_provider(), 'remote_mcp_error', None)
+        if err:
+            self.mcp_server_status.Foreground = _RED
+            self.mcp_server_status.Text = (
+                u"Claude refused the MCP servers in this Revit session, so the "
+                u"Assistant answers without them: {}".format(err)[:400])
+
+    def mcp_server_save_clicked(self, sender, e):
+        try:
+            from Intelligence import remote_mcp
+            current = self._selected_mcp_server()
+            entry = {'name': remote_mcp.clean_name(self.mcp_server_name_box.Text),
+                     'url': (self.mcp_server_url_box.Text or u"").strip(),
+                     'enabled': bool(self.mcp_server_enabled_toggle.IsChecked)}
+            token = (self.mcp_server_token_box.Text or u"").strip()
+            if token:
+                entry['token'] = token
+            servers = []
+            for srv in getattr(self, '_mcp_servers', None) or []:
+                if current is not None and srv['name'] == current['name']:
+                    entry['previous_name'] = current['name']
+                    servers.append(entry)
+                else:
+                    servers.append({'name': srv['name'], 'url': srv['url'],
+                                    'enabled': srv['enabled']})
+            if current is None:
+                servers.append(entry)
+            _saved, err = remote_mcp.save(servers)
+            if err:
+                self.mcp_server_status.Foreground = _RED
+                self.mcp_server_status.Text = err
+                return
+            self._mcp_servers_changed()
+            self._load_mcp_servers(select_name=entry['name'])
+            self.mcp_server_status.Foreground = _GREEN
+            self.mcp_server_status.Text = (
+                u"Saved. Claude uses it from the next message." if entry['enabled']
+                else u"Saved (off).")
+        except Exception as ex:
+            logger.debug("mcp_server_save_clicked error: {}".format(ex))
+
+    def mcp_server_remove_clicked(self, sender, e):
+        try:
+            from Intelligence import remote_mcp
+            current = self._selected_mcp_server()
+            if current is None:
+                return
+            if not self._confirm(u"Remove the MCP server '{}'?".format(current['name']),
+                                 title=u"Remote MCP Server", ok_text=u"Remove",
+                                 details=u"Its saved token is deleted too."):
+                return
+            servers = [{'name': s['name'], 'url': s['url'], 'enabled': s['enabled']}
+                       for s in self._mcp_servers if s['name'] != current['name']]
+            _saved, err = remote_mcp.save(servers)
+            if not err:
+                self._mcp_servers_changed()
+            self._load_mcp_servers()
+            self.mcp_server_status.Foreground = _RED if err else _MUTED
+            self.mcp_server_status.Text = err or u"Removed."
+        except Exception as ex:
+            logger.debug("mcp_server_remove_clicked error: {}".format(ex))
 
     def _set_status(self, text):
         """Footer status line. Never raises."""

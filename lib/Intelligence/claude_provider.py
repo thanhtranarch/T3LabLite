@@ -557,6 +557,12 @@ class ClaudeProvider(BaseLLMProvider):
         except Exception:
             return False
 
+    def reset_remote_mcp(self):
+        """Forget the session's refusals after the user changed the servers
+        in LLMs Setting, so the next turn tries them again."""
+        self._mcp_mode = {}
+        self.remote_mcp_error = None
+
     @staticmethod
     def _mcp_rejected(ex):
         """True if `ex` is the API refusing the remote MCP servers (a server

@@ -85,7 +85,12 @@ class RemoteMcpTests(unittest.TestCase):
         servers, _ = remote_mcp.request_parts(self.s)
         self.assertEqual(servers[0]['authorization_token'], 'old')
         self.assertEqual(servers[0]['url'], 'https://w2.example')
-        remote_mcp.save([{'name': 'wiki', 'url': 'https://w2.example', 'token': ''}], self.s)
+        remote_mcp.save([{'name': 'kb', 'previous_name': 'wiki',
+                          'url': 'https://w2.example'}], self.s)
+        servers, _ = remote_mcp.request_parts(self.s)
+        self.assertEqual((servers[0]['name'], servers[0]['authorization_token']),
+                         ('kb', 'old'))                        # kept across a rename
+        remote_mcp.save([{'name': 'kb', 'url': 'https://w2.example', 'token': ''}], self.s)
         servers, _ = remote_mcp.request_parts(self.s)
         self.assertNotIn('authorization_token', servers[0])
 

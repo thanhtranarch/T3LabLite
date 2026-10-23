@@ -445,12 +445,11 @@ class T3LabAssistantWindow(T3WPFWindow):
                         u"MCP server/watcher did not start: {}".format(
                             _exc_text(ex)))
 
-                # ─── 2. Local engine: OFFER, never start or download ───────
-                # (it once spawned `ollama serve` + pulled ~1 GB without consent)
-                try:
-                    self._offer_local_engine()
-                except Exception as ex:
-                    logger.debug(u"Local engine offer failed: {}".format(_exc_text(ex)))
+                # ─── 2. Local engine: never started or downloaded here ─────
+                # (it once spawned `ollama serve` + pulled ~1 GB without
+                # consent). A running Ollama / LM Studio shows up in the model
+                # popup by itself (_refresh_model_popup_async), and onboarding
+                # covers "no provider yet".
 
                 # ─── 3.4 Skills registry scan ───
                 try:

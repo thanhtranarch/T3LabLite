@@ -46,6 +46,7 @@ Releasing a new version:
 - **MCP point cloud tools** (`list_point_clouds`, `analyze_point_cloud`, `detect_point_cloud_elements`): no AI app called them since usage tracking began. Scan-to-BIM stays in the **Point Cloud to Model** button.
 
 ### Fixed
+- **T3Lab Assistant:** opening the Assistant no longer logs "Local engine offer failed" every time (it called a method that never existed).
 - **MCP:** the port set in MCP Control is used again (48884–48894); the Manual Config snippet is valid JSON and matches the app setup; `tools/list` no longer waits behind a slow tool call; a call that timed out says whether it may still finish; failed tools are flagged `isError`; Claude no longer needs a restart when Revit created the token after it.
 - **ManaSched:** text cells with Excel's Accounting format no longer show a stray `_(` … `_)` around the text in Revit. `[Red]`-style colour codes and `\` escapes in text formats are no longer printed either.
 - **ManaSched:** Excel / Google Sheets cell borders now show in a schedule. Grid lines stay on (Revit hides every header border when they are off), borders use the line style's category id, and a line Excel saved on only one of two neighbouring cells (e.g. a header row's bottom border) reaches both.

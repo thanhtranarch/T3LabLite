@@ -113,9 +113,7 @@ LIVE_NAMES = ('_LAST_USER_VIET',)
 # `self.<name>(` calls that did not resolve BEFORE the split either. Each is
 # inside a try/except that logs and carries on; fix them separately, then
 # delete the entry here.
-KNOWN_UNRESOLVED = {
-    '_offer_local_engine',   # __init__'s startup probe: "Local engine offer failed"
-}
+KNOWN_UNRESOLVED = set()
 
 
 # ── reading the code ──────────────────────────────────────────────────────────

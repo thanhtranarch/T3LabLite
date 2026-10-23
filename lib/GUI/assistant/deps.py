@@ -36,6 +36,12 @@ try:
 except Exception as e:
     logger.warning("Could not import t3lab_assistant: {}".format(e))
     HAS_NLP = False
+    # The offline / "no answer" paths call keyword_parse unconditionally: a
+    # missing name there was a NameError bubble on a broken install. Without
+    # the NLP layer nothing parses, so the caller shows the guidance below.
+    def keyword_parse(*a, **kw): return None
+    def parse_command(*a, **kw): return None
+    def has_api_key(*a, **kw): return False
     def learn_pattern(*a, **kw): pass
     def find_learned_match(*a, **kw): return None
     def has_local_llm(*a, **kw): return False

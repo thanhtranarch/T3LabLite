@@ -140,9 +140,6 @@ same file is shared with t3lab_dev):
   `new_chat_clicked`).
 - `parse_command` / `parse_command_local` (`Intelligence.t3lab_assistant`)
   are imported by the dialog but no chat path calls them.
-- With the NLP layer missing (`HAS_NLP` False), rung 15 calls
-  `keyword_parse`, which is then undefined: the NameError surfaces as an
-  error bubble. Pre-existing; only matters on a broken install.
 
 ## Proposal: one `AgentLoop` path (not done — it changes behaviour)
 

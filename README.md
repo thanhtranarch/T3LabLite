@@ -61,7 +61,7 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
 
 #### Settings (pulldown)
 - **MCP Control** — start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit, connect Claude Desktop / Codex / Antigravity in one click, pick the port (48884–48894) and set what AI apps may do (read-only mode, confirmations, code execution — see [MCP security](#mcp-security)).
-- **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, DeepSeek, Ollama, LM Studio), model, API key or local server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs.
+- **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, Gemini, DeepSeek, any OpenAI-compatible server — OpenRouter, Azure OpenAI, vLLM/LiteLLM, Groq, Mistral, xAI —, Ollama, LM Studio), model, API key or server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs.
 - **Feedback** — send feedback or suggestions to the T3Lab team directly from Revit.
 - **ManaTabs** — hide or show Revit ribbon tabs to reduce clutter.
 - **Ribbon Names** — shorten or restore ribbon tab names with inline editing and saved mappings.
@@ -203,7 +203,7 @@ usage tracking. Both of the last two can be switched off (see
 | Component | Destination | When |
 |---|---|---|
 | Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each week (retried the next day if GitHub was unreachable), unless `"auto_update": false` |
-| T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `api.deepseek.com` — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
+| T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `api.deepseek.com`, the Base URL you set for Custom — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
 | Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
 | Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |
 | MCP Server | `127.0.0.1:48884`–`48894` only (never reachable from the network), bearer token from `%APPDATA%\T3LabAI\mcp_token.txt` | Only while the MCP server is running |

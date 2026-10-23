@@ -117,20 +117,29 @@ class LLMSettingWindow(T3WPFWindow):
     """Standalone dialog for LLM provider / model / API key / connection setup."""
 
     _BRAND_COLORS = _SHARED_PROVIDER_COLORS
-    _PROV_INDEX = {"claude": 0, "openai": 1, "deepseek": 2, "ollama": 3, "lmstudio": 4}
+    # Order of the provider_combo items in LLMSetting.xaml.
+    _PROV_INDEX = {"claude": 0, "openai": 1, "gemini": 2, "deepseek": 3,
+                   "custom": 4, "ollama": 5, "lmstudio": 6}
+    # Every provider with a status row in CONNECTION STATUS.
+    _STATUS_PROVIDERS = ("claude", "openai", "gemini", "deepseek", "custom",
+                         "ollama", "lmstudio")
 
-    _KEY_PROVIDERS = ("claude", "openai", "deepseek")
-    _KEY_NAME_MAP  = {"claude": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek"}
+    _KEY_PROVIDERS = ("claude", "openai", "gemini", "deepseek", "custom")
+    _KEY_NAME_MAP  = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini",
+                      "deepseek": "DeepSeek", "custom": "Custom"}
     _KEY_LABELS = {
         "claude":   u"Anthropic API Key (sk-ant-...)",
         "openai":   u"OpenAI API Key (sk-...)",
+        "gemini":   u"Gemini API Key (AIza...)",
         "deepseek": u"DeepSeek API Key (sk-...)",
+        "custom":   u"API Key (leave empty if your server needs none)",
         "ollama":   u"No key needed (local)",
         "lmstudio": u"No key needed — start LM Studio first",
     }
     _API_KEY_URLS = {
         "claude":   "https://console.anthropic.com/settings/keys",
         "openai":   "https://platform.openai.com/api-keys",
+        "gemini":   "https://aistudio.google.com/apikey",
         "deepseek": "https://platform.deepseek.com/api_keys",
     }
     _HOST_DEFAULTS = {
@@ -185,6 +194,7 @@ class LLMSettingWindow(T3WPFWindow):
         self._suppress_text_dirty = 0
         self._key_dirty  = False
         self._host_dirty = False
+        self._custom_dirty = False     # Custom URL / model typed, not saved
         self._chrome_provider = None   # provider the fields currently show
 
         T3WPFWindow.__init__(self, _XAML)
@@ -195,6 +205,8 @@ class LLMSettingWindow(T3WPFWindow):
         try:
             self.api_key_box.TextChanged += self._key_box_changed
             self.host_box.TextChanged += self._host_box_changed
+            self.custom_base_url_box.TextChanged += self._custom_box_changed
+            self.custom_model_box.TextChanged += self._custom_box_changed
         except Exception as ex:
             logger.debug("dirty-tracking wiring failed: {}".format(ex))
 
@@ -239,6 +251,10 @@ class LLMSettingWindow(T3WPFWindow):
     def _host_box_changed(self, sender, e):
         if not self._suppress_text_dirty:
             self._host_dirty = True
+
+    def _custom_box_changed(self, sender, e):
+        if not self._suppress_text_dirty:
+            self._custom_dirty = True
 
     def _set_text_quiet(self, box, text):
         """Write to a text box without marking it user-edited."""
@@ -329,6 +345,7 @@ class LLMSettingWindow(T3WPFWindow):
                 return
             self._populate_model_combo(tag)
             self._apply_host_panel(tag)
+            self._apply_custom_panel(tag)
             self._switch_provider(tag)
         except Exception as ex:
             logger.debug("provider_changed error: {}".format(ex))
@@ -468,7 +485,11 @@ class LLMSettingWindow(T3WPFWindow):
                 else:
                     self.model_combo.SelectedIndex = 0
             else:
-                if active in self._KEY_PROVIDERS:
+                if active == "custom":
+                    hint = (u"Enter the server Base URL first"
+                            if not self._custom_endpoint().get("base_url")
+                            else u"Not connected — press Save URL to test")
+                elif active in self._KEY_PROVIDERS:
                     hint = (u"Enter an API key first" if not self._has_saved_key(active)
                             else u"Not connected — press Save to test")
                 else:
@@ -669,6 +690,126 @@ class LLMSettingWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug("_apply_host_panel error: {}".format(ex))
 
+    # ─── Custom OpenAI-compatible server ────────────────────────────────────
+
+    @staticmethod
+    def _custom_endpoint():
+        """settings.json → endpoints.custom ({"base_url", "model", "azure"})."""
+        try:
+            from config.settings import T3LabAISettings
+            return T3LabAISettings().get_provider_endpoint("custom")
+        except Exception:
+            return {"base_url": u"", "model": u"", "azure": False}
+
+    def custom_azure_toggled(self, sender, e):
+        """The Azure box is saved with Save URL, like the two text fields."""
+        if not self._suppress_text_dirty:
+            self._custom_dirty = True
+
+    def save_custom_clicked(self, sender, e):
+        """Save Base URL + model name + Azure flag → verify → fetch models."""
+        try:
+            from config.settings import T3LabAISettings
+            from Intelligence.llm_router import LLMRouter
+            from Intelligence.custom_provider import normalize_base_url
+
+            url = normalize_base_url(self.custom_base_url_box.Text or u"")
+            model = (self.custom_model_box.Text or u"").strip()
+            azure = bool(self.custom_azure_toggle.IsChecked)
+            if not url:
+                self.model_saved_hint.Foreground = _RED
+                self.model_saved_hint.Text = u"Enter the server Base URL first"
+                self._flash_saved_hint()
+                return
+
+            s = T3LabAISettings()
+            previous_model = s.get_provider_endpoint("custom").get("model")
+            s.set_provider_endpoint("custom", base_url=url, model=model,
+                                    azure=azure)
+            self._custom_dirty = False
+            self._set_text_quiet(self.custom_base_url_box, url)
+
+            router = LLMRouter()
+            # A typed model name is the user's choice; clearing the field
+            # hands the choice back to the MODEL combo / live list.
+            if model:
+                router.set_model("custom", model)
+            elif previous_model:
+                router.set_model("custom", u"")
+            provider = router.get_provider("custom")
+            if provider and hasattr(provider, "reload_credentials"):
+                provider.reload_credentials()
+            self._models_cache.pop("custom", None)
+
+            self.model_combo.IsEnabled = False
+            self.save_model_btn.IsEnabled = False
+            self.save_custom_btn.IsEnabled = False
+            self.model_saved_hint.Foreground = _MUTED
+            self.model_saved_hint.Text = u"Checking connection…"
+
+            def _validate():
+                models = []
+                try:
+                    if provider and provider.check_health():
+                        models = provider.get_models() or []
+                except Exception:
+                    models = []
+                ok = len(models) > 0
+
+                def _apply():
+                    try:
+                        self.save_custom_btn.IsEnabled = True
+                    except Exception:
+                        pass
+                    if ok:
+                        self._models_cache["custom"] = models
+                    else:
+                        self._models_cache.pop("custom", None)
+                    if router.get_active_name() == "custom":
+                        self._populate_model_combo("custom")
+                        if ok:
+                            self.model_saved_hint.Foreground = _GREEN
+                            self.model_saved_hint.Text = (
+                                u"Connected ({} models)".format(len(models)))
+                        else:
+                            self.model_saved_hint.Foreground = _RED
+                            self.model_saved_hint.Text = (
+                                u"No model list — check the URL / key, or "
+                                u"type a model name")
+                    self._set_status_dot("custom", ok)
+
+                self._ui_invoke(_apply)
+
+            if not self._start_worker(_validate):
+                self.save_custom_btn.IsEnabled = True
+                self.model_saved_hint.Foreground = _RED
+                self.model_saved_hint.Text = u"Could not start the check — try again"
+        except Exception as ex:
+            logger.debug("save_custom_clicked error: {}".format(ex))
+
+    def _apply_custom_panel(self, name, force_fields=False):
+        """Show the Base URL / model / Azure fields for the Custom provider."""
+        try:
+            if name != "custom":
+                self.custom_panel.Visibility = Visibility.Collapsed
+                return
+            self.custom_panel.Visibility = Visibility.Visible
+            if not force_fields and (self._custom_dirty or self._is_editing(
+                    self.custom_base_url_box, False) or self._is_editing(
+                    self.custom_model_box, False)):
+                return
+            self._custom_dirty = False
+            ep = self._custom_endpoint()
+            self._set_text_quiet(self.custom_base_url_box, ep.get("base_url") or u"")
+            self._set_text_quiet(self.custom_model_box, ep.get("model") or u"")
+            self._suppress_text_dirty += 1
+            try:
+                self.custom_azure_toggle.IsChecked = bool(ep.get("azure"))
+            finally:
+                self._suppress_text_dirty -= 1
+        except Exception as ex:
+            logger.debug("_apply_custom_panel error: {}".format(ex))
+
     # ─── Test connection ────────────────────────────────────────────────────
 
     def test_clicked(self, sender, e):
@@ -709,6 +850,11 @@ class LLMSettingWindow(T3WPFWindow):
                         msg = (u"LM Studio not available or no model loaded.\n"
                                u"1. Open LM Studio.\n"
                                u"2. Load a model in LM Studio first.")
+                    elif name == "custom":
+                        msg = (u"Custom server not reachable.\n"
+                               u"Check the Base URL and API key — Azure needs "
+                               u"the api-key option and a model (deployment) "
+                               u"name.")
                     else:
                         msg = u"Provider not reachable.\nCheck API key or service status."
                 else:
@@ -762,7 +908,9 @@ class LLMSettingWindow(T3WPFWindow):
         mapping = {
             "claude":   (self.status_dot_claude,   self.status_text_claude),
             "openai":   (self.status_dot_openai,   self.status_text_openai),
+            "gemini":   (self.status_dot_gemini,   self.status_text_gemini),
             "deepseek": (self.status_dot_deepseek, self.status_text_deepseek),
+            "custom":   (self.status_dot_custom,   self.status_text_custom),
             "ollama":   (self.status_dot_ollama,   self.status_text_ollama),
             "lmstudio": (self.status_dot_lmstudio, self.status_text_lmstudio),
         }
@@ -812,7 +960,8 @@ class LLMSettingWindow(T3WPFWindow):
         self.api_key_box.IsEnabled = needs_key
         self.save_key_btn.IsEnabled = needs_key
         self.get_api_key_link.Visibility = (
-            Visibility.Visible if needs_key else Visibility.Collapsed)
+            Visibility.Visible if active in self._API_KEY_URLS
+            else Visibility.Collapsed)
 
         # Always repaint when the provider itself changed, otherwise the fields
         # would describe a provider that is no longer selected.
@@ -839,6 +988,7 @@ class LLMSettingWindow(T3WPFWindow):
 
         self._chrome_provider = active
         self._apply_host_panel(active, force_fields=force_fields or switched)
+        self._apply_custom_panel(active, force_fields=force_fields or switched)
 
     def _update_instant(self):
         """Phase 1 — zero HTTP, cached/local data only."""
@@ -862,7 +1012,7 @@ class LLMSettingWindow(T3WPFWindow):
             self._apply_provider_chrome(active)
             self._populate_model_combo(active)
 
-            for name in ("claude", "openai", "deepseek", "ollama", "lmstudio"):
+            for name in self._STATUS_PROVIDERS:
                 info = status.get(name, {})
                 self._set_status_dot(name, info.get("available", False),
                                      probed=info.get("probed", True))

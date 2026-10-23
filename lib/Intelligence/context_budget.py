@@ -67,6 +67,7 @@ CLAUDE_LARGE_WINDOW = 1000000   # Opus/Sonnet 4.6+, every 5.x model, Fable, Myth
 CLAUDE_WINDOW       = 200000    # Haiku 4.5, Claude 3.x/4.0–4.5, unknown ids
 OPENAI_WINDOW       = 128000    # gpt-4o / gpt-4-turbo and unknown ids
 DEEPSEEK_WINDOW     = 64000
+GEMINI_WINDOW       = 1000000   # every Gemini 2.x / 3.x model takes ~1M
 LMSTUDIO_WINDOW     = 8192      # what a model loads with unless told otherwise
 OLLAMA_WINDOW       = 32768     # OllamaProvider.NUM_CTX_MAX default
 UNKNOWN_WINDOW      = 32768
@@ -180,6 +181,20 @@ def _openai_window(model):
     return OPENAI_WINDOW
 
 
+def _custom_window(model):
+    """A user-configured OpenAI-compatible server can serve anything: use a
+    known family's window when the model id names one, else the cautious
+    UNKNOWN_WINDOW (an Azure deployment name says nothing about the model)."""
+    low = (model or u'').lower().split('/')[-1]
+    if low.startswith('claude'):
+        return _claude_window(low)
+    if 'gemini' in low:
+        return GEMINI_WINDOW
+    if low.startswith('gpt-') or re.match(r'o\d', low):
+        return _openai_window(low)
+    return UNKNOWN_WINDOW
+
+
 def context_window(provider_name, model=None, local_max=None):
     """Input tokens the model accepts. Never raises.
 
@@ -194,8 +209,12 @@ def context_window(provider_name, model=None, local_max=None):
         return _claude_window(model)
     if name == 'openai':
         return _openai_window(model)
+    if name == 'gemini':
+        return GEMINI_WINDOW
     if name == 'deepseek':
         return DEEPSEEK_WINDOW
+    if name == 'custom':
+        return _custom_window(model)
     if name == 'ollama':
         return int(local_max) if local_max else OLLAMA_WINDOW
     if name == 'lmstudio':

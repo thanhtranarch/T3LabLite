@@ -195,7 +195,8 @@ except Exception:
     _SHARED_PROVIDER_COLORS = {
         "claude": (217, 119, 87), "openai": (16, 163, 127),
         "deepseek": (37, 99, 235), "ollama": (59, 130, 246),
-        "lmstudio": (124, 58, 237),
+        "lmstudio": (124, 58, 237), "gemini": (66, 133, 244),
+        "custom": (100, 116, 139),
     }
     _SHARED_PROVIDER_GRAY = (161, 161, 170)
 
@@ -3292,6 +3293,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                     "claude":   u"ANTHROPIC API KEY",
                     "openai":   u"OPENAI API KEY",
                     "deepseek": u"DEEPSEEK API KEY",
+                    "gemini":   u"GEMINI API KEY",
                 }
                 self.onboarding_key_label.Text = labels.get(prov, u"API KEY")
         except Exception:
@@ -3367,8 +3369,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                 key = (self.onboarding_key_box.Text or u"").strip()
             except Exception:
                 pass
-            if key and provider in ("claude", "openai", "deepseek"):
-                key_map = {"claude": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek"}
+            if key and provider in ("claude", "openai", "deepseek", "gemini"):
+                key_map = {"claude": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek",
+                           "gemini": "Gemini"}
                 try:
                     from config.settings import T3LabAISettings
                     T3LabAISettings().set_api_key(key_map[provider], key)
@@ -4198,7 +4201,8 @@ class T3LabAssistantWindow(T3WPFWindow):
     _PROVIDER_LABELS = {
         'claude': u'Claude (Anthropic)', 'openai': u'OpenAI',
         'deepseek': u'DeepSeek', 'ollama': u'Ollama (local)',
-        'lmstudio': u'LM Studio (local)',
+        'lmstudio': u'LM Studio (local)', 'gemini': u'Gemini (Google)',
+        'custom': u'Custom (OpenAI-compatible)',
     }
 
     def _try_which_model(self, raw):

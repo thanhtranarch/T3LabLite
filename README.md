@@ -227,6 +227,7 @@ Change them in **MCP Control → Advanced → Security**, or in
 | `mcp_read_only` | `false` | `true`: AI apps only see and call tools that change neither the model nor any file |
 | `mcp_confirm_destructive` | `true` | Revit asks Yes/No before delete, purge, ungroup, deleting a view template or link, save as, sync, close without saving, or a `run_batch` that contains any of these. No is the default answer |
 | `mcp_code_execution` | `"ask"` | `send_code_to_revit`: `"off"` hides and refuses it, `"ask"` asks in Revit each time, `"allow"` runs it without asking |
+| `mcp_toolset` | `"full"` | Which tools AI apps see: `"full"` (all), `"standard"` (no teaching / training tools), `"documentation"` (read tools plus views, sheets, annotation, schedules, revisions and export — nothing that models or deletes). Fewer tools means fewer tokens on every request. A hidden tool is refused, also inside `run_batch` |
 | `auto_start_file_watcher` | `false` | The file task watcher (`~/T3Lab_AI_Data/task.json`) runs code with no token, so it only starts with Revit after you click **Start Watcher** once |
 
 The Revit question says what the call does, e.g. *Delete 3 elements (id 101,
@@ -259,3 +260,17 @@ Your own pages in `%APPDATA%\T3LabAI\skills` and the active project's
 that a project BEP wins over the generic examples in the built-in pages.
 Pages switched off in **LLMs Setting → Skills** are hidden from AI apps as
 well.
+
+The same pages are also MCP **resources** (`t3lab://wiki/<page>`), so you can
+attach one by hand in apps that show resources (Claude Desktop's **+** menu,
+`@` in Claude Code). Three MCP **prompts** start the common workflows with the
+right pages and tools: `complete-drawings`, `issue-drawings` and
+`model-health-check` (read-only).
+
+### MCP protocol versions
+
+The server and the bridge speak MCP `2026-07-28` (no handshake: the version
+travels with every request, `server/discover` describes the server) and the
+earlier `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05` (with the
+`initialize` handshake), so old and new AI apps both connect. Both eras are
+answered with Revit closed.

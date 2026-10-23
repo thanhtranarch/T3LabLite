@@ -143,12 +143,9 @@ from GUI.assistant.deps import (learn_pattern, find_learned_match,
                                 HAS_SPECIALISTS, telemetry, HAS_TELEMETRY,
                                 StreamingJSONExtractor, _provider_usable,
                                 _get_uiapp)
-# Defined only when their optional import worked (NLP layer / BatchOut
-# executor), exactly as before the split.
-try:
-    from GUI.assistant.deps import parse_command, has_api_key, keyword_parse
-except ImportError:
-    pass
+# The NLP names always exist (deps stubs them when the layer fails to load);
+# the BatchOut executor names only when its optional import worked.
+from GUI.assistant.deps import parse_command, has_api_key, keyword_parse
 try:
     from GUI.assistant.deps import configure_batchout_window, direct_export
 except ImportError:

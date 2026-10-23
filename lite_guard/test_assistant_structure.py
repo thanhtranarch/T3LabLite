@@ -664,6 +664,27 @@ class CompileAndImportTest(unittest.TestCase):
                     checked += 1
         self.assertTrue(checked > 140, checked)
 
+    def test_without_the_nlp_layer_keyword_parse_still_exists(self):
+        """A broken install (Intelligence.t3lab_assistant fails to import)
+        must still answer the offline path with guidance, not a NameError."""
+        broken = types.ModuleType('Intelligence.t3lab_assistant')
+        saved = sys.modules.get('Intelligence.t3lab_assistant')
+        sys.modules['Intelligence.t3lab_assistant'] = broken   # no names in it
+        try:
+            mods, dialog = self._import_all()
+        finally:
+            if saved is None:
+                sys.modules.pop('Intelligence.t3lab_assistant', None)
+            else:
+                sys.modules['Intelligence.t3lab_assistant'] = saved
+        deps = mods['deps']
+        self.assertFalse(deps.HAS_NLP)
+        for name in ('keyword_parse', 'parse_command', 'has_api_key'):
+            self.assertIs(getattr(dialog, name), getattr(deps, name), name)
+        self.assertIsNone(dialog.keyword_parse(u'mở batchout'))
+        self.assertFalse(dialog.has_api_key())
+        self.assertTrue(dialog.get_setup_guidance_message(False))
+
     def test_shared_registries_are_one_object(self):
         mods, dialog = self._import_all()
         launchers = mods['launchers']

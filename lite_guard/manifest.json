@@ -150,6 +150,7 @@
     "lib/core/update_schedule.py",
     "lib/core/updater.py",
     "lib/core/whats_new.py",
+    "lib/GUI/assistant",
     "lib/Intelligence/remote_mcp.py",
     "lib/tracking",
     "lite_guard",

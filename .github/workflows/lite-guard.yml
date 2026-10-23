@@ -6,7 +6,8 @@
 # and the once-per-version What's new popup tests (lite_guard/test_whats_new.py)
 # and the MCP server / bridge / security policy tests (lite_guard/test_mcp_server.py)
 # and the LLM provider tests (lite_guard/test_llm_providers.py)
-# and the Assistant's remote MCP server tests (lite_guard/test_assistant_mcp.py).
+# and the Assistant's remote MCP server tests (lite_guard/test_assistant_mcp.py)
+# and the Assistant window split tests (lite_guard/test_assistant_structure.py).
 name: Lite guard
 
 on:
@@ -35,3 +36,5 @@ jobs:
         run: python3 lite_guard/test_llm_providers.py
       - name: Test remote MCP servers in the Assistant
         run: python3 lite_guard/test_assistant_mcp.py
+      - name: Test the Assistant window split (XAML handlers, moved methods)
+        run: python3 lite_guard/test_assistant_structure.py

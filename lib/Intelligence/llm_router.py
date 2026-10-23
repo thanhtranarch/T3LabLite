@@ -49,7 +49,7 @@ class LLMRouter(object):
     Singleton router for multi-provider LLM access.
 
     Provider priority / fallback order:
-        claude → openai → ollama
+        claude → openai → gemini → deepseek → custom → ollama → lmstudio
 
     Switching is hot (no session restart required).
     The active provider and per-provider model are persisted in settings.json.
@@ -58,7 +58,8 @@ class LLMRouter(object):
     _instance = None
 
     # Canonical fallback order — also used as the display order in UI
-    FALLBACK_CHAIN = ["claude", "openai", "deepseek", "ollama", "lmstudio"]
+    FALLBACK_CHAIN = ["claude", "openai", "gemini", "deepseek", "custom",
+                      "ollama", "lmstudio"]
 
     def __new__(cls):
         if cls._instance is None:
@@ -98,7 +99,9 @@ class LLMRouter(object):
         adapters = [
             ("claude",    "Intelligence.claude_provider",    "ClaudeProvider"),
             ("openai",    "Intelligence.openai_provider",    "OpenAIProvider"),
+            ("gemini",    "Intelligence.gemini_provider",    "GeminiProvider"),
             ("deepseek",  "Intelligence.deepseek_provider",  "DeepSeekProvider"),
+            ("custom",    "Intelligence.custom_provider",    "CustomProvider"),
             ("ollama",    "Intelligence.ollama_provider",    "OllamaProvider"),
             ("lmstudio",  "Intelligence.lmstudio_provider",  "LMStudioProvider"),
         ]
@@ -151,7 +154,7 @@ class LLMRouter(object):
         Hot-swap to a different provider.
 
         Args:
-            name (str): provider name — "claude", "openai", or "ollama".
+            name (str): provider name — one of FALLBACK_CHAIN.
             model (str|None): optional model to activate on the new provider.
             persist (bool): write the choice to settings.json as the user's
                 global default. Pass False for a SCOPED switch (e.g. a project
@@ -457,8 +460,9 @@ class LLMRouter(object):
             try:
                 if name in ("ollama", "lmstudio"):
                     available = False          # needs a port probe → unknown yet
-                elif hasattr(provider, "_get_api_key"):
-                    available = bool(provider._get_api_key())
+                elif hasattr(provider, "is_configured"):
+                    # Key presence (Custom: a saved Base URL) — no HTTP.
+                    available = bool(provider.is_configured())
                 else:
                     available = False
             except Exception:
@@ -572,19 +576,39 @@ class LLMRouter(object):
                 return "Opus"
             return "Claude"
         if name == "openai":
-            if "mini" in model:
-                return "GPT-4o mini"
-            if "4o" in model:
-                return "GPT-4o"
-            if "turbo" in model:
-                return "GPT-4 Turbo"
-            return "GPT"
+            return _gpt_label(model)
+        if name == "gemini":
+            low = model.lower()
+            if "flash" in low:
+                return "Gemini Flash"
+            if "pro" in low:
+                return "Gemini Pro"
+            return "Gemini"
+        if name == "custom":
+            short = model.split("/")[-1] if "/" in model else model
+            return short[:14] if short else "Custom"
         if name == "deepseek":
             if "reasoner" in model:
                 return "DS Reasoner"
             return "DeepSeek"
 
         return name.upper()
+
+
+def _gpt_label(model):
+    """Badge text for an OpenAI model id: "gpt-5.5" → "GPT-5.5",
+    "gpt-5-mini" → "GPT-5 mini", "o4-mini" → "o4-mini"."""
+    low = (model or "").lower()
+    if low.startswith("gpt-"):
+        parts = low[4:].split("-")
+        label = "GPT-" + parts[0]
+        for size in ("mini", "nano"):
+            if size in parts:
+                return label + " " + size
+        return label
+    if low[:1] == "o" and low[1:2].isdigit():
+        return low[:14]
+    return "GPT"
 
 
 # ─── Module-level singleton accessor ──────────────────────────────────────────

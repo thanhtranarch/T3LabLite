@@ -222,7 +222,7 @@ _SECOND_PERSON = ('ban', 'cau', 'may', 'minh', 'you', 'your', "you're", 'ur')
 # Words that make the question unambiguously about the AI, with no need for a
 # second-person pronoun.
 _LLM_WORDS = ('llm', 'gpt', 'chatgpt', 'claude', 'ollama', 'lmstudio',
-              'deepseek', 'provider')
+              'deepseek', 'gemini', 'provider')
 _MODEL_WORDS = ('model', 'ai', 'engine')
 _ASK_WORDS = ('nao', 'gi', 'what', 'which', 'who')
 # A document verb settles it the other way: "model bạn vừa mở tên gì" carries

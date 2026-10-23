@@ -2,9 +2,21 @@
 """
 OpenAI Provider
 
-OpenAI GPT API adapter for the T3Lab LLM router.
+OpenAI GPT API adapter for the T3Lab LLM router (Chat Completions).
 Models are discovered live from /v1/models after the key verifies; vision input
-is supported.
+is supported. The request / streaming / tool-calling plumbing is shared with
+Gemini and Custom through OpenAICompatProvider.
+
+Reasoning models (o-series, gpt-5 and newer):
+  - the output cap is sent as max_completion_tokens (max_tokens is deprecated
+    and rejected by the o-series; every current chat model accepts the new name)
+  - no temperature is sent (reasoning models only accept the default)
+  - reasoning_effort: "high" when Deep reasoning is on, "low" for tiny utility
+    calls, otherwise the model's own default
+
+Chat Completions stays the wire format on purpose: the agent loop, DeepSeek,
+LM Studio, Gemini and Custom all share its message/tool-call shape. The
+Responses API would need its own transcript conversion for no gain here.
 
 Vision format conversion:
   Claude block  → {"type":"image","source":{"type":"base64","media_type":"...","data":"..."}}
@@ -18,40 +30,42 @@ from __future__ import unicode_literals
 __author__ = "Tran Tien Thanh"
 __title__  = "OpenAI Provider"
 
-import json
 import os
 import sys
 
-from Intelligence.llm_provider import (BaseLLMProvider, http_post, http_post_stream,
-                                       http_get_auth, parse_openai_stream_line,
-                                       openai_chat_agent, openai_agent_tool_results,
-                                       HAS_HTTP)
+from Intelligence.openai_compat_provider import (OpenAICompatProvider,
+                                                 is_openai_reasoning_model)
 
 
 # ─── Constants ─────────────────────────────────────────────────────────────────
 
-OPENAI_CHAT_URL   = "https://api.openai.com/v1/chat/completions"
-OPENAI_MODELS_URL = "https://api.openai.com/v1/models"
+OPENAI_BASE_URL   = "https://api.openai.com/v1"
+OPENAI_CHAT_URL   = OPENAI_BASE_URL + "/chat/completions"
+OPENAI_MODELS_URL = OPENAI_BASE_URL + "/models"
 
 # NO hardcoded default model: what the account can use comes exclusively from
 # the live /v1/models endpoint after the key is verified. The names below are
 # only capability/preference HINTS matched against that live list.
 
-# Substrings that identify non-chat models to exclude from the list
+# Substrings that identify models Chat Completions cannot serve (embeddings,
+# audio, images, video, moderation) or that are Responses-API-only (codex,
+# computer-use, deep-research, *-pro).
 _EXCLUDE_SUBSTRINGS = (
     "embedding", "whisper", "tts", "dall-e", "davinci",
     "babbage", "ada", "curie", "moderation", "realtime",
     "audio", "instruct", "search", "similarity", "edit",
+    "image", "transcribe", "codex", "sora", "computer-use",
+    "deep-research", "-pro",
 )
 
-# Substring hints (capable-first) used ONLY to auto-pick a vision default from
-# the live list — never an exact-name whitelist to validate against.
-_PREF_VISION = ("gpt-4o", "gpt-4.1", "gpt-4-turbo", "chatgpt")
+# Substring hints (capable-first, newest family first) used ONLY to auto-pick
+# a default from the live list — never an exact-name whitelist.
+_PREF_VISION = ("gpt-6", "gpt-5", "gpt-4.1", "gpt-4o", "gpt-4-turbo", "chatgpt")
 
 
 # ─── Provider ──────────────────────────────────────────────────────────────────
 
-class OpenAIProvider(BaseLLMProvider):
+class OpenAIProvider(OpenAICompatProvider):
     """Adapter for the OpenAI Chat Completions API."""
 
     NAME                  = "openai"
@@ -59,369 +73,35 @@ class OpenAIProvider(BaseLLMProvider):
     SUPPORTS_VISION       = True
     SUPPORTS_NATIVE_TOOLS = True
 
-    def __init__(self):
-        self._model         = None   # None → resolve from the live model list
-        self._cached_models = None   # filled on first successful /v1/models fetch
+    KEY_NAME           = "OpenAI"
+    BASE_URL           = OPENAI_BASE_URL
+    EXCLUDE_SUBSTRINGS = _EXCLUDE_SUBSTRINGS
+    PREF_MODELS        = _PREF_VISION
+    AVOID_DEFAULT      = ("nano", "chat-latest")
+    FAST_HINTS         = ("nano", "mini")
+    SORT_MODELS_DESC   = True       # newest ids first (gpt-5.5 before gpt-5)
+    TOKEN_PARAM        = "max_completion_tokens"
 
-    # ── Credentials ───────────────────────────────────────────────────────────
+    def _pick_model(self, models, prefer_vision=False):
+        """Pick a model from a LIVE list only — never invent a name.
 
-    def _get_api_key(self):
-        try:
-            _ensure_lib_in_path()
-            from config.settings import T3LabAISettings
-            return T3LabAISettings().get_api_key("OpenAI")
-        except Exception:
-            return None
-
-    def reload_credentials(self):
-        """Clear model cache so next get_models() re-fetches live data."""
-        self._cached_models = None
-
-    def invalidate_models_cache(self):
-        self._cached_models = None
-
-    # ── Health & model discovery ───────────────────────────────────────────────
-
-    def check_health(self):
-        """Return True if the API key is set and the models endpoint responds."""
-        if not HAS_HTTP:
-            return False
-        if not self._get_api_key():
-            return False
-        models = self.get_models()
-        return len(models) > 0
-
-    def get_models(self):
+        Plain chat defaults to the newest family's "mini" (cheap, fast, still
+        vision + tools); images / agent turns with no choice made take the
+        newest full model. o-series minis are not a plain-chat default: they
+        are slower and the newest GPT mini beats them on everyday turns.
         """
-        Fetch live model list from OpenAI /v1/models, filtered to chat models.
-        Returns [] if there is no key or the live fetch fails, so callers can
-        treat a non-empty result as a verified connection.
-        """
-        if self._cached_models is not None:
-            return list(self._cached_models)
-
-        api_key = self._get_api_key()
-        if not api_key:
-            return []   # no genuine live result → report unset (gates the model list)
-
-        try:
-            text = http_get_auth(
-                OPENAI_MODELS_URL,
-                {"Authorization": "Bearer " + api_key},
-            )
-            if text:
-                data = json.loads(text)
-                ids = [
-                    m.get("id", "")
-                    for m in data.get("data", [])
-                    if m.get("id") and _is_chat_model(m.get("id", ""))
-                ]
-                # Sort: newest models first via lexicographic sort on IDs
-                ids.sort(reverse=True)
-                if ids:
-                    self._cached_models = ids
-                    return list(ids)
-        except Exception:
-            pass
-
-        return []   # no genuine live result → report unset (gates the model list)
-
-    def get_active_model(self):
-        """User's saved choice, else the default from the CACHED live list.
-
-        Deliberately does no HTTP (badge/sidebar call this) — returns None
-        until a live model list has been fetched at least once.
-        """
-        if self._model:
-            return self._model
-        return self._pick_model(self._cached_models or [], prefer_vision=False)
-
-    def set_model(self, model_name):
-        self._model = model_name
-        return True
-
-    @staticmethod
-    def _pick_model(models, prefer_vision):
-        """Pick a model from a LIVE list only — never invent a name."""
         if not models:
             return None
-        if prefer_vision:
-            for hint in _PREF_VISION:
+        if not prefer_vision:
+            for hint in self.PREF_MODELS:
                 for m in models:
-                    if hint in m:
+                    low = m.lower()
+                    if hint in low and "mini" in low:
                         return m
-        for m in models:
-            if "mini" in m:          # cheap-first default for plain chat
-                return m
-        return models[0]
+        return OpenAICompatProvider._pick_model(self, models, prefer_vision)
 
-    def _resolve_model(self, has_vision=False):
-        """Model to call: the user's explicit choice ALWAYS wins — it came from
-        the vendor's own live list, so it is never second-guessed against a
-        capability whitelist. Only when no model was picked do we auto-select
-        from the LIVE list (vision-preferred if images are present; may fetch)."""
-        if self._model:
-            return self._model
-        return self._pick_model(self.get_models(), prefer_vision=has_vision)
-
-    def pick_fast_model(self):
-        """Fastest model from the CACHED live list (classification calls)."""
-        for hint in ("nano", "mini"):
-            for m in (self._cached_models or []):
-                if hint in m:
-                    return m
-        return None
-
-    # ── Chat ─────────────────────────────────────────────────────────────────
-
-    def chat(self, messages, system_prompt, user_content, max_tokens=400, **kwargs):
-        """
-        Post a chat request to the OpenAI Chat Completions API.
-
-        user_content may be a string or a list of Claude-format content blocks.
-        Image blocks are automatically converted to the OpenAI image_url format.
-        When no model is selected and images are present, a vision-preferred
-        default is auto-picked from the LIVE model list.
-        """
-        if not HAS_HTTP:
-            return self._fail_no_http("chat()")
-        api_key = self._get_api_key()
-        if not api_key:
-            return self._fail_no_key("chat()")
-
-        has_vision = self.has_image_blocks(user_content)
-
-        model = kwargs.get("model_override") or self._resolve_model(has_vision)
-        if not model:
-            return self._fail_no_model("chat()")
-
-        openai_content = self._to_openai_content(user_content)
-
-        msgs = [{"role": "system", "content": system_prompt}]
-        for h in (messages or []):
-            role    = h.get("role", "user")
-            content = h.get("content", "")
-            if role not in ("user", "assistant"):
-                continue
-            if isinstance(content, list):
-                content = self.blocks_to_text(content)
-            if content:
-                msgs.append({"role": role, "content": content})
-
-        msgs.append({"role": "user", "content": openai_content})
-
-        payload = {
-            "model":      model,
-            "max_tokens": max_tokens,
-            "messages":   msgs,
-        }
-
-        headers = {"Authorization": "Bearer {}".format(api_key)}
-
-        try:
-            resp_text  = http_post(OPENAI_CHAT_URL, payload, headers,
-                                   timeout_ms=int(kwargs.get("timeout_ms")
-                                                  or 60000))
-            api_result = json.loads(resp_text)
-            return api_result["choices"][0]["message"]["content"].strip()
-        except Exception as ex:
-            self._record_error(u"chat() failed: {}".format(ex))
-            return None
-
-    def chat_stream(self, messages, system_prompt, user_content,
-                    on_delta=None, max_tokens=400, **kwargs):
-        """Stream a GPT response token-by-token via the Chat Completions SSE API."""
-        self._clear_error()
-        if not HAS_HTTP:
-            return self._fail_no_http("chat_stream()")
-        api_key = self._get_api_key()
-        if not api_key:
-            return self._fail_no_key("chat_stream()")
-
-        has_vision = self.has_image_blocks(user_content)
-        model = self._resolve_model(has_vision)
-        if not model:
-            return self._fail_no_model("chat_stream()")
-
-        openai_content = self._to_openai_content(user_content)
-
-        msgs = [{"role": "system", "content": system_prompt}]
-        for h in (messages or []):
-            role    = h.get("role", "user")
-            content = h.get("content", "")
-            if role not in ("user", "assistant"):
-                continue
-            if isinstance(content, list):
-                content = self.blocks_to_text(content)
-            if content:
-                msgs.append({"role": role, "content": content})
-        msgs.append({"role": "user", "content": openai_content})
-
-        payload = {
-            "model":      model,
-            "max_tokens": max_tokens,
-            "messages":   msgs,
-            "stream":     True,
-        }
-        headers = {"Authorization": "Bearer {}".format(api_key)}
-
-        chunks = []
-
-        def _on_line(line):
-            delta = parse_openai_stream_line(line)
-            if delta:
-                chunks.append(delta)
-                if on_delta:
-                    try:
-                        on_delta(delta)
-                    except Exception:
-                        pass
-
-        try:
-            http_post_stream(OPENAI_CHAT_URL, payload, headers, _on_line)
-            full = u"".join(chunks)
-            return full.strip() if full else None
-        except Exception as ex:
-            # Transport/streaming error. Record the reason first — chat() clears
-            # the error state on entry, so otherwise the chat window could only
-            # report a generic "no response" with no cause.
-            stream_err = u"chat_stream() failed: {}".format(ex)
-            self._record_error(stream_err)
-            partial = u"".join(chunks)
-            if not partial.strip():
-                # Nothing reached the live bubble yet, so a fresh blocking retry
-                # cannot visibly swap an answer — keep the original safety net.
-                result = self.chat(messages, system_prompt, user_content,
-                                   max_tokens, **kwargs)
-                if result is None:
-                    self._record_error(u"{} | blocking retry: {}".format(
-                        stream_err, self.get_last_error() or u"no response"))
-                return result
-            # Partial text ALREADY streamed into the bubble. Regenerating a whole
-            # new answer here is exactly what made the reply visibly swap under
-            # the user (and cost double the tokens). Prefill the partial as the
-            # assistant turn and let the model CONTINUE the same reply. Any
-            # failure keeps just the partial — never a different answer.
-            prefill = partial.rstrip()
-            cont = self._continue_after_drop(
-                msgs, model, headers, max_tokens, prefill, on_delta,
-                int(kwargs.get("timeout_ms") or 60000))
-            if cont:
-                return (prefill + cont).strip()
-            return prefill.strip()
-
-    def _continue_after_drop(self, msgs, model, headers, max_tokens, prefill,
-                             on_delta, timeout_ms):
-        """Finish a stream that dropped mid-answer with ONE blocking call.
-
-        Prefills `prefill` as the assistant turn so the model continues the same
-        reply instead of starting a different one — the text the user already
-        watched stream in stays put. Best-effort: any failure returns None and
-        the caller keeps just the partial. Never raises.
-        """
-        try:
-            cont_msgs = list(msgs)
-            cont_msgs.append({"role": "assistant", "content": prefill})
-            payload = {
-                "model":      model,
-                "max_tokens": max_tokens,
-                "messages":   cont_msgs,
-            }
-            resp_text  = http_post(OPENAI_CHAT_URL, payload, headers,
-                                   timeout_ms=timeout_ms)
-            api_result = json.loads(resp_text)
-            cont = api_result["choices"][0]["message"]["content"]
-            if cont and on_delta:
-                try:
-                    on_delta(cont)
-                except Exception:
-                    pass
-            return cont
-        except Exception as ex:
-            self._record_error(u"stream continuation failed: {}".format(ex))
-            return None
-
-    # ── Agentic chat (native tool calling, blocking) ──────────────────────────
-
-    def chat_agent(self, system_prompt, messages, tools,
-                   on_delta=None, max_tokens=1500, **kwargs):
-        """One agentic turn via the `tools` parameter. Blocking (no SSE) —
-        the agent loop surfaces the text through on_text_delta itself."""
-        self._clear_error()
-        if not HAS_HTTP:
-            return self._fail_no_http("chat_agent()")
-        api_key = self._get_api_key()
-        if not api_key:
-            return self._fail_no_key("chat_agent()")
-        # Agent turns can carry Claude-format image blocks (attached images,
-        # active-view snapshots). They must be converted here — openai_chat_agent
-        # forwards `messages` verbatim, so an unconverted {"type":"image"} block
-        # is a 400 from the API — and the auto-picked model must be one that can
-        # actually see them.
-        agent_msgs = self._agent_messages(messages)
-        has_vision = any(self.has_image_blocks(m.get("content"))
-                         for m in (messages or []) if isinstance(m, dict))
-        model = self._resolve_model(has_vision)
-        if not model:
-            return self._fail_no_model("chat_agent()")
-        try:
-            return openai_chat_agent(
-                OPENAI_CHAT_URL,
-                {"Authorization": "Bearer {}".format(api_key)},
-                model,
-                system_prompt, agent_msgs, tools, max_tokens)
-        except Exception as ex:
-            self._record_error(u"chat_agent() failed: {}".format(ex))
-            return None
-
-    agent_tool_results = staticmethod(openai_agent_tool_results)
-
-    # ── Conversion helpers ─────────────────────────────────────────────────────
-
-    @classmethod
-    def _agent_messages(cls, messages):
-        """Copy an agent-loop message list with Claude image blocks converted.
-
-        Only the `content` of user/assistant turns is touched; tool_calls and
-        role:"tool" results pass through untouched, and the caller's list is
-        never mutated (the agent loop keeps appending to it across iterations).
-        Idempotent — an already-converted image_url block is left alone.
-        """
-        out = []
-        for m in (messages or []):
-            if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-                out.append(m)
-                continue
-            converted = dict(m)
-            converted["content"] = cls._to_openai_content(m["content"])
-            out.append(converted)
-        return out
-
-    @staticmethod
-    def _to_openai_content(user_content):
-        """Convert Claude-format content blocks to OpenAI format."""
-        if not isinstance(user_content, list):
-            return user_content
-
-        converted = []
-        for block in user_content:
-            if not isinstance(block, dict):
-                converted.append(block)
-                continue
-            if block.get("type") == "image":
-                source = block.get("source", {})
-                if source.get("type") == "base64":
-                    mime = source.get("media_type", "image/jpeg")
-                    data = source.get("data", "")
-                    url  = "data:{};base64,{}".format(mime, data)
-                    converted.append({
-                        "type":      "image_url",
-                        "image_url": {"url": url},
-                    })
-            else:
-                converted.append(block)
-
-        return converted
+    def _is_reasoning(self, model):
+        return is_openai_reasoning_model(model)
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────

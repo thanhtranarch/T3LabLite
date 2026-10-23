@@ -108,8 +108,9 @@ QA_TOOLS = READ_TOOLS | frozenset([
 ])
 
 
-# Cloud answer ceilings (Claude / OpenAI / DeepSeek). Streaming is already on
-# for every cloud call, so a large cap costs nothing until it is used.
+# Cloud answer ceilings (Claude / OpenAI / Gemini / DeepSeek / Custom).
+# Streaming is on for every cloud call, so a large cap costs nothing until
+# it is used (a Custom server that refuses it is retried with a smaller cap).
 # 16k covers long tables and summaries; 32k is for the specialists that
 # write IronPython for send_code_to_revit. Local models keep max_tokens.
 CLOUD_MAX_TOKENS = 16000

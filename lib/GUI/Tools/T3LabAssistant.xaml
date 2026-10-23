@@ -2470,6 +2470,7 @@
                                   Margin="0,0,0,12" SelectionChanged="onboarding_provider_changed">
                             <ComboBoxItem Content="Claude — Anthropic" Tag="claude" IsSelected="True"/>
                             <ComboBoxItem Content="GPT — OpenAI" Tag="openai"/>
+                            <ComboBoxItem Content="Gemini — Google" Tag="gemini"/>
                             <ComboBoxItem Content="DeepSeek" Tag="deepseek"/>
                             <ComboBoxItem Content="Ollama — Local (no key)" Tag="ollama"/>
                             <ComboBoxItem Content="LM Studio — Local (no key)" Tag="lmstudio"/>

@@ -1933,10 +1933,10 @@
 
                                 <Separator Margin="0,0,0,12"/>
 
-                                <CheckBox x:Name="extended_thinking_toggle" Content="Deep reasoning (Claude)"
+                                <CheckBox x:Name="extended_thinking_toggle" Content="Deep reasoning (Claude, GPT, Gemini)"
                                           Style="{StaticResource T3.CheckBox}" Margin="0,0,0,4"
                                           Checked="extended_thinking_toggled" Unchecked="extended_thinking_toggled"/>
-                                <TextBlock Text="ON: Claude spends more tokens thinking through complex multi-step problems before acting."
+                                <TextBlock Text="ON: the model spends more tokens thinking through complex multi-step problems before acting (Claude extended thinking; GPT / Gemini reasoning effort high)."
                                            Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,0,0,12"/>
 
                                 <Separator Margin="0,0,0,12"/>
@@ -1998,7 +1998,9 @@
                                               Padding="24,0,8,0" SelectionChanged="provider_changed">
                                         <ComboBoxItem Tag="claude">Claude (Anthropic)</ComboBoxItem>
                                         <ComboBoxItem Tag="openai">GPT (OpenAI)</ComboBoxItem>
+                                        <ComboBoxItem Tag="gemini">Gemini (Google)</ComboBoxItem>
                                         <ComboBoxItem Tag="deepseek">DeepSeek</ComboBoxItem>
+                                        <ComboBoxItem Tag="custom">Custom (OpenAI-compatible)</ComboBoxItem>
                                         <ComboBoxItem Tag="ollama">Local (Ollama)</ComboBoxItem>
                                         <ComboBoxItem Tag="lmstudio">LM Studio</ComboBoxItem>
                                     </ComboBox>
@@ -2060,6 +2062,30 @@
                                                 Content="Save Host" Click="save_host_clicked"/>
                                     </Grid>
                                 </StackPanel>
+
+                                <!-- Custom OpenAI-compatible server (OpenRouter / Azure OpenAI / vLLM / LiteLLM / Groq / Mistral / xAI) -->
+                                <StackPanel x:Name="custom_panel" Visibility="Collapsed" Margin="0,4,0,0">
+                                    <Separator Margin="0,0,0,8"/>
+                                    <TextBlock Text="Base URL (e.g. https://openrouter.ai/api/v1):" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="8"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="custom_base_url_box" Grid.Column="0" Style="{StaticResource T3.TextBox}"/>
+                                        <Button x:Name="save_custom_btn" Grid.Column="2"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                Content="Save URL" Click="save_custom_clicked"/>
+                                    </Grid>
+                                    <TextBlock Text="Model name (optional — Azure deployment, or a server without /models):" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
+                                    <TextBox x:Name="custom_model_box" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
+                                    <CheckBox x:Name="custom_azure_toggle" Content="Azure OpenAI (send the key as an api-key header)"
+                                              Style="{StaticResource T3.CheckBox}" Margin="0,0,0,4"
+                                              Checked="custom_azure_toggled" Unchecked="custom_azure_toggled"/>
+                                    <TextBlock Text="Detected automatically for *.azure.com hosts. Every other server gets Authorization: Bearer."
+                                               Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,0,0,0"/>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 
@@ -2097,10 +2123,34 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse x:Name="status_dot_gemini" Width="8" Height="8" Fill="{StaticResource T3.Border}" Margin="0,0,8,0"/>
+                                        <TextBlock Text="Gemini" Style="{StaticResource T3.BodyStrong}"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="status_text_gemini" Grid.Column="1" Text="—" Style="{StaticResource T3.Body.Secondary}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="100"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                                         <Ellipse x:Name="status_dot_deepseek" Width="8" Height="8" Fill="{StaticResource T3.Border}" Margin="0,0,8,0"/>
                                         <TextBlock Text="DeepSeek" Style="{StaticResource T3.BodyStrong}"/>
                                     </StackPanel>
                                     <TextBlock x:Name="status_text_deepseek" Grid.Column="1" Text="—" Style="{StaticResource T3.Body.Secondary}" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="100"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse x:Name="status_dot_custom" Width="8" Height="8" Fill="{StaticResource T3.Border}" Margin="0,0,8,0"/>
+                                        <TextBlock Text="Custom" Style="{StaticResource T3.BodyStrong}"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="status_text_custom" Grid.Column="1" Text="—" Style="{StaticResource T3.Body.Secondary}" VerticalAlignment="Center"/>
                                 </Grid>
 
                                 <Grid Margin="0,0,0,8">
@@ -2196,7 +2246,9 @@
                                             <ComboBoxItem Content="Follow Global Setting" Tag="" IsSelected="True"/>
                                             <ComboBoxItem Content="Claude — Anthropic" Tag="claude"/>
                                             <ComboBoxItem Content="GPT — OpenAI" Tag="openai"/>
+                                            <ComboBoxItem Content="Gemini — Google" Tag="gemini"/>
                                             <ComboBoxItem Content="DeepSeek" Tag="deepseek"/>
+                                            <ComboBoxItem Content="Custom — OpenAI-compatible" Tag="custom"/>
                                             <ComboBoxItem Content="Ollama — Local" Tag="ollama"/>
                                             <ComboBoxItem Content="LM Studio — Local" Tag="lmstudio"/>
                                         </ComboBox>

@@ -117,20 +117,29 @@ class LLMSettingWindow(T3WPFWindow):
     """Standalone dialog for LLM provider / model / API key / connection setup."""
 
     _BRAND_COLORS = _SHARED_PROVIDER_COLORS
-    _PROV_INDEX = {"claude": 0, "openai": 1, "deepseek": 2, "ollama": 3, "lmstudio": 4}
+    # Order of the provider_combo items in LLMSetting.xaml.
+    _PROV_INDEX = {"claude": 0, "openai": 1, "gemini": 2, "deepseek": 3,
+                   "custom": 4, "ollama": 5, "lmstudio": 6}
+    # Every provider with a status row in CONNECTION STATUS.
+    _STATUS_PROVIDERS = ("claude", "openai", "gemini", "deepseek", "custom",
+                         "ollama", "lmstudio")
 
-    _KEY_PROVIDERS = ("claude", "openai", "deepseek")
-    _KEY_NAME_MAP  = {"claude": "Claude", "openai": "OpenAI", "deepseek": "DeepSeek"}
+    _KEY_PROVIDERS = ("claude", "openai", "gemini", "deepseek", "custom")
+    _KEY_NAME_MAP  = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini",
+                      "deepseek": "DeepSeek", "custom": "Custom"}
     _KEY_LABELS = {
         "claude":   u"Anthropic API Key (sk-ant-...)",
         "openai":   u"OpenAI API Key (sk-...)",
+        "gemini":   u"Gemini API Key (AIza...)",
         "deepseek": u"DeepSeek API Key (sk-...)",
+        "custom":   u"API Key (leave empty if your server needs none)",
         "ollama":   u"No key needed (local)",
         "lmstudio": u"No key needed — start LM Studio first",
     }
     _API_KEY_URLS = {
         "claude":   "https://console.anthropic.com/settings/keys",
         "openai":   "https://platform.openai.com/api-keys",
+        "gemini":   "https://aistudio.google.com/apikey",
         "deepseek": "https://platform.deepseek.com/api_keys",
     }
     _HOST_DEFAULTS = {
@@ -185,6 +194,7 @@ class LLMSettingWindow(T3WPFWindow):
         self._suppress_text_dirty = 0
         self._key_dirty  = False
         self._host_dirty = False
+        self._custom_dirty = False     # Custom URL / model typed, not saved
         self._chrome_provider = None   # provider the fields currently show
 
         T3WPFWindow.__init__(self, _XAML)
@@ -195,6 +205,8 @@ class LLMSettingWindow(T3WPFWindow):
         try:
             self.api_key_box.TextChanged += self._key_box_changed
             self.host_box.TextChanged += self._host_box_changed
+            self.custom_base_url_box.TextChanged += self._custom_box_changed
+            self.custom_model_box.TextChanged += self._custom_box_changed
         except Exception as ex:
             logger.debug("dirty-tracking wiring failed: {}".format(ex))
 
@@ -202,6 +214,7 @@ class LLMSettingWindow(T3WPFWindow):
         # General is cheap (settings reads) and Models is the tab that opens
         # first, so those two are eager; the rest load on first click.
         self._load_general_tab()
+        self._load_mcp_servers()
         self._tabs_loaded.update(('general', 'provider'))
         self._ui_ready = True
         self._probe_all_async()
@@ -239,6 +252,10 @@ class LLMSettingWindow(T3WPFWindow):
     def _host_box_changed(self, sender, e):
         if not self._suppress_text_dirty:
             self._host_dirty = True
+
+    def _custom_box_changed(self, sender, e):
+        if not self._suppress_text_dirty:
+            self._custom_dirty = True
 
     def _set_text_quiet(self, box, text):
         """Write to a text box without marking it user-edited."""
@@ -329,6 +346,7 @@ class LLMSettingWindow(T3WPFWindow):
                 return
             self._populate_model_combo(tag)
             self._apply_host_panel(tag)
+            self._apply_custom_panel(tag)
             self._switch_provider(tag)
         except Exception as ex:
             logger.debug("provider_changed error: {}".format(ex))
@@ -468,7 +486,11 @@ class LLMSettingWindow(T3WPFWindow):
                 else:
                     self.model_combo.SelectedIndex = 0
             else:
-                if active in self._KEY_PROVIDERS:
+                if active == "custom":
+                    hint = (u"Enter the server Base URL first"
+                            if not self._custom_endpoint().get("base_url")
+                            else u"Not connected — press Save URL to test")
+                elif active in self._KEY_PROVIDERS:
                     hint = (u"Enter an API key first" if not self._has_saved_key(active)
                             else u"Not connected — press Save to test")
                 else:
@@ -669,6 +691,126 @@ class LLMSettingWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug("_apply_host_panel error: {}".format(ex))
 
+    # ─── Custom OpenAI-compatible server ────────────────────────────────────
+
+    @staticmethod
+    def _custom_endpoint():
+        """settings.json → endpoints.custom ({"base_url", "model", "azure"})."""
+        try:
+            from config.settings import T3LabAISettings
+            return T3LabAISettings().get_provider_endpoint("custom")
+        except Exception:
+            return {"base_url": u"", "model": u"", "azure": False}
+
+    def custom_azure_toggled(self, sender, e):
+        """The Azure box is saved with Save URL, like the two text fields."""
+        if not self._suppress_text_dirty:
+            self._custom_dirty = True
+
+    def save_custom_clicked(self, sender, e):
+        """Save Base URL + model name + Azure flag → verify → fetch models."""
+        try:
+            from config.settings import T3LabAISettings
+            from Intelligence.llm_router import LLMRouter
+            from Intelligence.custom_provider import normalize_base_url
+
+            url = normalize_base_url(self.custom_base_url_box.Text or u"")
+            model = (self.custom_model_box.Text or u"").strip()
+            azure = bool(self.custom_azure_toggle.IsChecked)
+            if not url:
+                self.model_saved_hint.Foreground = _RED
+                self.model_saved_hint.Text = u"Enter the server Base URL first"
+                self._flash_saved_hint()
+                return
+
+            s = T3LabAISettings()
+            previous_model = s.get_provider_endpoint("custom").get("model")
+            s.set_provider_endpoint("custom", base_url=url, model=model,
+                                    azure=azure)
+            self._custom_dirty = False
+            self._set_text_quiet(self.custom_base_url_box, url)
+
+            router = LLMRouter()
+            # A typed model name is the user's choice; clearing the field
+            # hands the choice back to the MODEL combo / live list.
+            if model:
+                router.set_model("custom", model)
+            elif previous_model:
+                router.set_model("custom", u"")
+            provider = router.get_provider("custom")
+            if provider and hasattr(provider, "reload_credentials"):
+                provider.reload_credentials()
+            self._models_cache.pop("custom", None)
+
+            self.model_combo.IsEnabled = False
+            self.save_model_btn.IsEnabled = False
+            self.save_custom_btn.IsEnabled = False
+            self.model_saved_hint.Foreground = _MUTED
+            self.model_saved_hint.Text = u"Checking connection…"
+
+            def _validate():
+                models = []
+                try:
+                    if provider and provider.check_health():
+                        models = provider.get_models() or []
+                except Exception:
+                    models = []
+                ok = len(models) > 0
+
+                def _apply():
+                    try:
+                        self.save_custom_btn.IsEnabled = True
+                    except Exception:
+                        pass
+                    if ok:
+                        self._models_cache["custom"] = models
+                    else:
+                        self._models_cache.pop("custom", None)
+                    if router.get_active_name() == "custom":
+                        self._populate_model_combo("custom")
+                        if ok:
+                            self.model_saved_hint.Foreground = _GREEN
+                            self.model_saved_hint.Text = (
+                                u"Connected ({} models)".format(len(models)))
+                        else:
+                            self.model_saved_hint.Foreground = _RED
+                            self.model_saved_hint.Text = (
+                                u"No model list — check the URL / key, or "
+                                u"type a model name")
+                    self._set_status_dot("custom", ok)
+
+                self._ui_invoke(_apply)
+
+            if not self._start_worker(_validate):
+                self.save_custom_btn.IsEnabled = True
+                self.model_saved_hint.Foreground = _RED
+                self.model_saved_hint.Text = u"Could not start the check — try again"
+        except Exception as ex:
+            logger.debug("save_custom_clicked error: {}".format(ex))
+
+    def _apply_custom_panel(self, name, force_fields=False):
+        """Show the Base URL / model / Azure fields for the Custom provider."""
+        try:
+            if name != "custom":
+                self.custom_panel.Visibility = Visibility.Collapsed
+                return
+            self.custom_panel.Visibility = Visibility.Visible
+            if not force_fields and (self._custom_dirty or self._is_editing(
+                    self.custom_base_url_box, False) or self._is_editing(
+                    self.custom_model_box, False)):
+                return
+            self._custom_dirty = False
+            ep = self._custom_endpoint()
+            self._set_text_quiet(self.custom_base_url_box, ep.get("base_url") or u"")
+            self._set_text_quiet(self.custom_model_box, ep.get("model") or u"")
+            self._suppress_text_dirty += 1
+            try:
+                self.custom_azure_toggle.IsChecked = bool(ep.get("azure"))
+            finally:
+                self._suppress_text_dirty -= 1
+        except Exception as ex:
+            logger.debug("_apply_custom_panel error: {}".format(ex))
+
     # ─── Test connection ────────────────────────────────────────────────────
 
     def test_clicked(self, sender, e):
@@ -709,6 +851,11 @@ class LLMSettingWindow(T3WPFWindow):
                         msg = (u"LM Studio not available or no model loaded.\n"
                                u"1. Open LM Studio.\n"
                                u"2. Load a model in LM Studio first.")
+                    elif name == "custom":
+                        msg = (u"Custom server not reachable.\n"
+                               u"Check the Base URL and API key — Azure needs "
+                               u"the api-key option and a model (deployment) "
+                               u"name.")
                     else:
                         msg = u"Provider not reachable.\nCheck API key or service status."
                 else:
@@ -762,7 +909,9 @@ class LLMSettingWindow(T3WPFWindow):
         mapping = {
             "claude":   (self.status_dot_claude,   self.status_text_claude),
             "openai":   (self.status_dot_openai,   self.status_text_openai),
+            "gemini":   (self.status_dot_gemini,   self.status_text_gemini),
             "deepseek": (self.status_dot_deepseek, self.status_text_deepseek),
+            "custom":   (self.status_dot_custom,   self.status_text_custom),
             "ollama":   (self.status_dot_ollama,   self.status_text_ollama),
             "lmstudio": (self.status_dot_lmstudio, self.status_text_lmstudio),
         }
@@ -812,7 +961,8 @@ class LLMSettingWindow(T3WPFWindow):
         self.api_key_box.IsEnabled = needs_key
         self.save_key_btn.IsEnabled = needs_key
         self.get_api_key_link.Visibility = (
-            Visibility.Visible if needs_key else Visibility.Collapsed)
+            Visibility.Visible if active in self._API_KEY_URLS
+            else Visibility.Collapsed)
 
         # Always repaint when the provider itself changed, otherwise the fields
         # would describe a provider that is no longer selected.
@@ -839,6 +989,7 @@ class LLMSettingWindow(T3WPFWindow):
 
         self._chrome_provider = active
         self._apply_host_panel(active, force_fields=force_fields or switched)
+        self._apply_custom_panel(active, force_fields=force_fields or switched)
 
     def _update_instant(self):
         """Phase 1 — zero HTTP, cached/local data only."""
@@ -862,7 +1013,7 @@ class LLMSettingWindow(T3WPFWindow):
             self._apply_provider_chrome(active)
             self._populate_model_combo(active)
 
-            for name in ("claude", "openai", "deepseek", "ollama", "lmstudio"):
+            for name in self._STATUS_PROVIDERS:
                 info = status.get(name, {})
                 self._set_status_dot(name, info.get("available", False),
                                      probed=info.get("probed", True))
@@ -984,6 +1135,145 @@ class LLMSettingWindow(T3WPFWindow):
         t.Text = text
         t.Margin = Thickness(0, 8, 0, 8)
         return t
+
+    # ─── Remote MCP servers (Intelligence/remote_mcp.py) ─────────────────────
+
+    def _load_mcp_servers(self, select_name=None):
+        """Fill the server picker: "New server..." first, then the saved
+        servers. Selects `select_name` when given."""
+        try:
+            from System.Windows.Controls import ComboBoxItem
+            from Intelligence import remote_mcp
+            servers = remote_mcp.load()
+            self._mcp_servers = servers
+            combo = self.mcp_server_cb
+            self._mcp_guard = True
+            try:
+                combo.Items.Clear()
+                first = ComboBoxItem()
+                first.Content = u"New server..."
+                first.Tag = None
+                combo.Items.Add(first)
+                sel = 0
+                for i, srv in enumerate(servers):
+                    item = ComboBoxItem()
+                    item.Content = u"{}{}".format(
+                        srv['name'], u"" if srv['enabled'] else u" (off)")
+                    item.Tag = srv['name']
+                    item.ToolTip = srv['url']
+                    combo.Items.Add(item)
+                    if srv['name'] == select_name:
+                        sel = i + 1
+                combo.SelectedIndex = sel
+            finally:
+                self._mcp_guard = False
+            self._show_mcp_server(self._selected_mcp_server())
+            self._show_mcp_refusal()
+        except Exception as ex:
+            logger.debug("_load_mcp_servers error: {}".format(ex))
+
+    def _selected_mcp_server(self):
+        item = self.mcp_server_cb.SelectedItem
+        name = getattr(item, 'Tag', None) if item is not None else None
+        for srv in getattr(self, '_mcp_servers', None) or []:
+            if srv['name'] == name:
+                return srv
+        return None
+
+    def _show_mcp_server(self, srv):
+        self.mcp_server_name_box.Text = srv['name'] if srv else u""
+        self.mcp_server_url_box.Text = srv['url'] if srv else u""
+        self.mcp_server_token_box.Text = u""
+        self.mcp_server_enabled_toggle.IsChecked = srv['enabled'] if srv else True
+        self.mcp_server_token_label.Text = (
+            u"Authorization token (saved - leave empty to keep it):"
+            if srv and srv.get('has_token') else u"Authorization token (optional):")
+        self.mcp_server_remove_btn.IsEnabled = srv is not None
+
+    def mcp_server_selected(self, sender, e):
+        if getattr(self, '_mcp_guard', False):
+            return
+        self._show_mcp_server(self._selected_mcp_server())
+        self.mcp_server_status.Text = u""
+        self._show_mcp_refusal()
+
+    @staticmethod
+    def _claude_provider():
+        try:
+            from Intelligence.llm_router import LLMRouter
+            return LLMRouter().get_provider("claude")
+        except Exception:
+            return None
+
+    def _mcp_servers_changed(self):
+        claude = self._claude_provider()
+        if claude is not None and hasattr(claude, 'reset_remote_mcp'):
+            claude.reset_remote_mcp()
+
+    def _show_mcp_refusal(self):
+        """Say so when Claude refused the servers this session (the
+        Assistant then answered without them)."""
+        err = getattr(self._claude_provider(), 'remote_mcp_error', None)
+        if err:
+            self.mcp_server_status.Foreground = _RED
+            self.mcp_server_status.Text = (
+                u"Claude refused the MCP servers in this Revit session, so the "
+                u"Assistant answers without them: {}".format(err)[:400])
+
+    def mcp_server_save_clicked(self, sender, e):
+        try:
+            from Intelligence import remote_mcp
+            current = self._selected_mcp_server()
+            entry = {'name': remote_mcp.clean_name(self.mcp_server_name_box.Text),
+                     'url': (self.mcp_server_url_box.Text or u"").strip(),
+                     'enabled': bool(self.mcp_server_enabled_toggle.IsChecked)}
+            token = (self.mcp_server_token_box.Text or u"").strip()
+            if token:
+                entry['token'] = token
+            servers = []
+            for srv in getattr(self, '_mcp_servers', None) or []:
+                if current is not None and srv['name'] == current['name']:
+                    entry['previous_name'] = current['name']
+                    servers.append(entry)
+                else:
+                    servers.append({'name': srv['name'], 'url': srv['url'],
+                                    'enabled': srv['enabled']})
+            if current is None:
+                servers.append(entry)
+            _saved, err = remote_mcp.save(servers)
+            if err:
+                self.mcp_server_status.Foreground = _RED
+                self.mcp_server_status.Text = err
+                return
+            self._mcp_servers_changed()
+            self._load_mcp_servers(select_name=entry['name'])
+            self.mcp_server_status.Foreground = _GREEN
+            self.mcp_server_status.Text = (
+                u"Saved. Claude uses it from the next message." if entry['enabled']
+                else u"Saved (off).")
+        except Exception as ex:
+            logger.debug("mcp_server_save_clicked error: {}".format(ex))
+
+    def mcp_server_remove_clicked(self, sender, e):
+        try:
+            from Intelligence import remote_mcp
+            current = self._selected_mcp_server()
+            if current is None:
+                return
+            if not self._confirm(u"Remove the MCP server '{}'?".format(current['name']),
+                                 title=u"Remote MCP Server", ok_text=u"Remove",
+                                 details=u"Its saved token is deleted too."):
+                return
+            servers = [{'name': s['name'], 'url': s['url'], 'enabled': s['enabled']}
+                       for s in self._mcp_servers if s['name'] != current['name']]
+            _saved, err = remote_mcp.save(servers)
+            if not err:
+                self._mcp_servers_changed()
+            self._load_mcp_servers()
+            self.mcp_server_status.Foreground = _RED if err else _MUTED
+            self.mcp_server_status.Text = err or u"Removed."
+        except Exception as ex:
+            logger.debug("mcp_server_remove_clicked error: {}".format(ex))
 
     def _set_status(self, text):
         """Footer status line. Never raises."""

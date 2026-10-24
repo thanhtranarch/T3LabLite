@@ -79,6 +79,25 @@ python lite_guard/sync_from_dev.py D:/t3lab_dev lib/GUI "T3Lab.tab/Model & Datum
 - `KEEP`: only Lite has it. Left as is.
 - `SKIP`: listed under `lite_only` in `manifest.json`.
 
+**MCP Control is maintained in Lite only** (owner's decision, 2026-10-24):
+`sync_from_dev.py` never copies the MCP stack, so t3lab_dev cannot overwrite
+the MCP 2026-07-28 protocol, resources, prompts, toolsets and security work.
+Every other tool still comes from dev as before. The Lite-only MCP paths:
+
+| Path | What it is |
+|---|---|
+| `T3Lab.tab/Support.panel/Settings.pulldown/MCPControl.pushbutton` | the ribbon button |
+| `lib/GUI/MCPControlDialog.py`, `lib/GUI/Tools/MCPControl.xaml` | the MCP Control window |
+| `lib/Services/mcp_service.py` | start/stop, app setup, bridge deploy |
+| `lib/core/server.py`, `bridge.py`, `mcp_ipy_host.py` | the MCP server, stdio bridge, IronPython host |
+| `lib/core/mcp_policy.py`, `call_summary.py` | protocol versions, security policy, confirmations |
+| `lib/core/mcp_wiki.py`, `mcp_prompts.py` | resources and prompts |
+| `lib/core/file_watcher.py`, `teaching.py` | the file task watcher and teaching capture in MCP Control |
+
+`lib/core/server.py` also holds the Revit tools the T3Lab Assistant calls, so
+a new tool added in dev must be ported into the Lite `server.py` by hand.
+`lib/core/jsonsafe.py` is shared by many tools and still syncs.
+
 If you copy in Explorer: replace only the sub-folders of `lib/` you are
 updating (delete `lib/GUI`, paste the dev `lib/GUI`), never `lib/` as a whole
 and never `lib/tracking/`. Replacing a whole tool folder

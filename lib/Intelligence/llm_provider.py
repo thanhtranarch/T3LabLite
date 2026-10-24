@@ -400,12 +400,15 @@ def local_sampling_params(model_name):
 
 
 def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
-                      max_tokens=1500, timeout_ms=180000, extra_payload=None):
+                      max_tokens=1500, timeout_ms=180000, extra_payload=None,
+                      token_param="max_tokens"):
     """One blocking agentic turn against an OpenAI-compatible /chat/completions.
 
     `messages` must be OpenAI-native (may contain assistant tool_calls and
     role:"tool" results from earlier iterations) and already end with the
     latest user / tool turn. Raises on transport failure — callers wrap.
+    `token_param` names the output cap: OpenAI reasoning models (o-series,
+    gpt-5+) reject "max_tokens" and need "max_completion_tokens".
 
     Returns the uniform chat_agent dict:
         {"text", "tool_calls":[{"id","name","args"}], "assistant_msg", "stop_reason"}
@@ -415,7 +418,7 @@ def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
         msgs.append({"role": "system", "content": system_prompt})
     msgs.extend(list(messages or []))
 
-    payload = {"model": model, "messages": msgs, "max_tokens": max_tokens}
+    payload = {"model": model, "messages": msgs, token_param: max_tokens}
     if tools:
         payload["tools"] = tools
     # extra_payload carries provider-specific knobs (sampling for local
@@ -460,7 +463,7 @@ def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
 
 def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools,
                              max_tokens=1500, timeout_ms=180000, on_delta=None,
-                             extra_payload=None):
+                             extra_payload=None, token_param="max_tokens"):
     """Streaming variant of openai_chat_agent for OpenAI-compatible servers.
 
     Streams visible text through on_delta as it arrives AND accumulates the
@@ -475,7 +478,7 @@ def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools
     msgs.extend(list(messages or []))
 
     payload = {"model": model, "messages": msgs,
-               "max_tokens": max_tokens, "stream": True}
+               token_param: max_tokens, "stream": True}
     if tools:
         payload["tools"] = tools
     if extra_payload:
@@ -525,6 +528,11 @@ def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools
                 slot["name"] = fn["name"]
             if fn.get("arguments"):
                 slot["args"].append(fn["arguments"])
+            # Gemini 3 (OpenAI-compat layer) carries the call's thought
+            # signature here and rejects the next turn when it is not sent
+            # back — keep it so the rebuilt call round-trips intact.
+            if tc.get("extra_content"):
+                slot["extra"] = tc["extra_content"]
 
         if ch.get("finish_reason"):
             state["finish"] = ch["finish_reason"]
@@ -544,9 +552,12 @@ def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools
         except Exception:
             args = {}
         tool_calls.append({"id": slot["id"], "name": slot["name"], "args": args})
-        raw_calls.append({"id": slot["id"], "type": "function",
-                          "function": {"name": slot["name"],
-                                       "arguments": args_str or "{}"}})
+        raw_call = {"id": slot["id"], "type": "function",
+                    "function": {"name": slot["name"],
+                                 "arguments": args_str or "{}"}}
+        if slot.get("extra"):
+            raw_call["extra_content"] = slot["extra"]
+        raw_calls.append(raw_call)
 
     assistant_msg = {"role": "assistant", "content": raw_text or None}
     if raw_calls:

@@ -39,7 +39,9 @@ except Exception:                                    # CPython test runs
 PROVIDER_COLORS = {
     "claude":    (217, 119,  87),   # Anthropic orange
     "openai":    ( 16, 163, 127),   # OpenAI green
+    "gemini":    ( 66, 133, 244),   # Google blue
     "deepseek":  ( 37,  99, 235),   # DeepSeek blue
+    "custom":    (100, 116, 139),   # slate — any OpenAI-compatible server
     "ollama":    ( 59, 130, 246),   # Ollama blue
     "lmstudio":  (124,  58, 237),   # LM Studio purple
 }

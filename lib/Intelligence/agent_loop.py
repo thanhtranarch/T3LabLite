@@ -234,6 +234,11 @@ _MAX_PHANTOM_RETRIES = 2
 # "Đang liệt kê các mức…" with no tool call is narration, not an answer (once
 # ended "list levels" with no level shown); zero-tool prose is ungrounded.
 _MAX_ANNOUNCE_NUDGES = 1
+# Server-run tools (Claude's tool search, remote MCP servers) can end a turn
+# with stop_reason "pause_turn": the API stopped a long server-side loop and
+# resumes it when the assistant message is sent back as is. Bounded so a
+# server that keeps pausing cannot spin the loop.
+_MAX_PAUSE_RESUMES = 5
 
 _ANNOUNCE_PATTERNS = (
     # Vietnamese
@@ -891,6 +896,7 @@ class AgentLoop(object):
         done_calls = set()   # (name, canonical args) that succeeded this run
         phantom_retries = 0  # JSON calls to tools that don't exist, corrected
         announce_nudges = 0  # "I'm about to…" replies that called nothing
+        pause_resumes = 0    # pause_turn continuations of server-run tools
         hinted = set()       # tools whose schema we already attached to an error
 
         while iteration < self._max_iterations:
@@ -932,6 +938,17 @@ class AgentLoop(object):
 
             text  = (resp.get("text") or u"").strip()
             calls = resp.get("tool_calls") or []
+
+            if (not calls and resp.get("stop_reason") == "pause_turn"
+                    and pause_resumes < _MAX_PAUSE_RESUMES):
+                pause_resumes += 1
+                if text:
+                    last_text = text
+                    if not turn["streamed"]:
+                        self._emit("on_text_delta", text)
+                    self._emit("on_turn_text", text, False)
+                messages.append(resp["assistant_msg"])
+                continue
 
             # Tool call written as JSON text: strip the blob from the reply;
             # a registered name is executed anyway.

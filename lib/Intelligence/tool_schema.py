@@ -575,7 +575,8 @@ def get_tools_for_provider(provider_name, extra_tools=None, essential_only=False
         if defer and not essential_only:
             return to_anthropic_tools_deferred(extra_tools)
         return to_anthropic_tools(extra_tools, essential_only=essential_only)
-    # openai / deepseek / ollama / lmstudio all use the OpenAI function shape
+    # openai / gemini / deepseek / custom / ollama / lmstudio all use the
+    # OpenAI function shape
     return to_openai_tools(extra_tools, essential_only=essential_only)
 
 

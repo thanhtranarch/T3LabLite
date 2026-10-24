@@ -22,6 +22,12 @@ Advanced > Security):
   mcp_code_execution       "ask"   send_code_to_revit: "off" (hidden and
                                    refused), "ask" (Revit shows the code and
                                    asks each time), "allow" (runs at once).
+  mcp_toolset              "full"  Which tools external clients see:
+                                   "full" (all), "standard" (no teaching /
+                                   training tools), "documentation" (read
+                                   tools + views, sheets, annotation, export).
+                                   Fewer tools = fewer tokens per request for
+                                   clients without tool search.
 """
 
 from __future__ import unicode_literals
@@ -30,25 +36,97 @@ import json
 
 from core import call_summary
 
-# Newest first. initialize answers with the client's version when it is one
-# of these, otherwise with the newest one -- the spec's negotiation rule.
-SUPPORTED_PROTOCOLS = ('2025-06-18', '2025-03-26', '2024-11-05')
+# Newest first. The server is "dual-era" (MCP 2026-07-28, Versioning):
+#  - MODERN versions carry the version, client info and capabilities in every
+#    request's params._meta and have no handshake; `server/discover` tells a
+#    client what this server speaks, and a version not listed here gets
+#    UnsupportedProtocolVersionError.
+#  - LEGACY versions open with `initialize`, which answers with the client's
+#    version when it is one of these, otherwise with the newest legacy one --
+#    never with a modern one, which has no `initialize`.
+MODERN_PROTOCOLS = ('2026-07-28',)
+LEGACY_PROTOCOLS = ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05')
+SUPPORTED_PROTOCOLS = MODERN_PROTOCOLS + LEGACY_PROTOCOLS
 LATEST_PROTOCOL = SUPPORTED_PROTOCOLS[0]
+LATEST_LEGACY_PROTOCOL = LEGACY_PROTOCOLS[0]
+
+# params._meta keys of a modern request / result (MCP 2026-07-28).
+META_PROTOCOL = 'io.modelcontextprotocol/protocolVersion'
+META_CLIENT_INFO = 'io.modelcontextprotocol/clientInfo'
+META_CLIENT_CAPS = 'io.modelcontextprotocol/clientCapabilities'
+META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo'
+
+# JSON-RPC error codes. -32020..-32099 belong to the MCP spec.
+ERR_HEADER_MISMATCH = -32020
+ERR_UNSUPPORTED_VERSION = -32022
+ERR_INVALID_PARAMS = -32602
+# Legacy (2025-11-25 and earlier) "resource not found"; modern uses -32602.
+ERR_LEGACY_RESOURCE_NOT_FOUND = -32002
+
+SERVER_NAME = 'T3Lab Revit MCP Server'
+
+# How long a client may reuse a list result before asking again (modern
+# CacheableResult). Short: the read-only switch and the toolset in MCP Control
+# change tools/list, and a user's new wiki page changes resources/list.
+LIST_TTL_MS = 60000
+# Results describe this machine's Revit and policy: never for shared caches.
+CACHE_SCOPE = 'private'
+CACHEABLE_METHODS = frozenset(['tools/list', 'resources/list', 'resources/read',
+                               'resources/templates/list', 'prompts/list',
+                               'server/discover'])
+
+# What the server offers. listChanged stays False: the server never pushes
+# (no subscriptions/listen); clients re-list after LIST_TTL_MS instead.
+SERVER_CAPABILITIES = {
+    'tools': {'listChanged': False},
+    'resources': {'listChanged': False, 'subscribe': False},
+    'prompts': {'listChanged': False},
+}
 
 READ_ONLY_KEY = 'mcp_read_only'
 CONFIRM_KEY = 'mcp_confirm_destructive'
 CODE_KEY = 'mcp_code_execution'
+TOOLSET_KEY = 'mcp_toolset'
 
 CODE_OFF = 'off'
 CODE_ASK = 'ask'
 CODE_ALLOW = 'allow'
 CODE_MODES = (CODE_OFF, CODE_ASK, CODE_ALLOW)
 
+TOOLSET_FULL = 'full'
+TOOLSET_STANDARD = 'standard'
+TOOLSET_DOCUMENTATION = 'documentation'
+TOOLSETS = (TOOLSET_FULL, TOOLSET_STANDARD, TOOLSET_DOCUMENTATION)
+
 DEFAULT_POLICY = {
     'read_only': False,
     'confirm_destructive': True,
     'code_execution': CODE_ASK,
+    'toolset': TOOLSET_FULL,
 }
+
+# Teaching / fine-tuning controls and the connection smoke test: only the
+# owner's "teach then train" sessions need them. Hidden by every toolset but
+# "full".
+TRAINING_TOOLS = frozenset([
+    't3lab_begin_teaching', 't3lab_end_teaching', 't3lab_set_teaching_mode',
+    't3lab_mark_sandbox', 't3lab_build_exemplars', 't3lab_train_model',
+    't3lab_training_status', 'say_hello',
+])
+
+# The "documentation" toolset: every read tool plus what finishing and issuing
+# drawings needs (views, sheets, annotation, schedules, revisions, export).
+# lite_guard/test_mcp_server.py checks every name is a real tool.
+DOCUMENTATION_TOOLS = frozenset([
+    'add_view_to_sheet', 'apply_view_template', 'bulk_set_parameter',
+    'color_elements', 'create_detail_annotation', 'create_dimension',
+    'create_schedule', 'create_sheet', 'create_text_note', 'create_view',
+    'create_view_filter', 'duplicate_view', 'export_dwg', 'export_image',
+    'export_sheets_pdf', 'manage_revision', 'manage_sheet', 'manage_view',
+    'manage_view_template', 'place_views_on_sheets', 'rename_element',
+    'revit_override_color', 'run_batch', 'set_parameter', 'tag_all_rooms',
+    'tag_all_walls', 'tag_elements',
+])
 
 # Tools that run caller-supplied code.
 CODE_TOOLS = frozenset(['send_code_to_revit'])
@@ -67,7 +145,10 @@ DESTRUCTIVE_HINT_TOOLS = frozenset([
 # the Revit API, so they must not queue behind a slow tools/call (a
 # tools/list stuck there ran past the bridge's 15 s list timeout and the
 # client got the stale cache).
-LOCK_FREE_METHODS = frozenset(['initialize', 'ping', 'tools/list'])
+LOCK_FREE_METHODS = frozenset(['initialize', 'ping', 'tools/list',
+                               'server/discover', 'resources/list',
+                               'resources/templates/list', 'resources/read',
+                               'prompts/list', 'prompts/get'])
 
 # How much of the code / arguments the confirmation dialog shows.
 _CONFIRM_TEXT_LIMIT = 1800
@@ -100,8 +181,122 @@ SERVER_INSTRUCTIONS = (
 
 
 def negotiate_protocol(requested):
-    """The protocol version to answer `initialize` with."""
-    return requested if requested in SUPPORTED_PROTOCOLS else LATEST_PROTOCOL
+    """The protocol version to answer `initialize` with (legacy handshake)."""
+    return requested if requested in LEGACY_PROTOCOLS else LATEST_LEGACY_PROTOCOL
+
+
+def server_version():
+    """The extension version (version.txt) -- serverInfo.version."""
+    import io
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), 'version.txt')
+    try:
+        with io.open(path, 'r', encoding='utf-8') as f:
+            return f.read().strip() or u'0.0.0'
+    except Exception:
+        return u'0.0.0'
+
+
+def server_info():
+    return {'name': SERVER_NAME, 'version': server_version()}
+
+
+def request_meta(request):
+    """params._meta of a JSON-RPC request, or {}."""
+    params = request.get('params') if isinstance(request, dict) else None
+    meta = params.get('_meta') if isinstance(params, dict) else None
+    return meta if isinstance(meta, dict) else {}
+
+
+def modern_version(request):
+    """The protocol version a MODERN request declares in params._meta, or
+    None for a legacy request (one that relies on the initialize handshake).
+    A declared but unsupported version is returned as is -- check it with
+    version_error()."""
+    meta = request_meta(request)
+    if META_PROTOCOL not in meta:
+        return None
+    return u'{}'.format(meta.get(META_PROTOCOL) or u'')
+
+
+def version_error(request_id, requested):
+    """UnsupportedProtocolVersionError response for a modern request whose
+    version this server does not speak; None when it does."""
+    if requested in MODERN_PROTOCOLS:
+        return None
+    return {'jsonrpc': '2.0', 'id': request_id,
+            'error': {'code': ERR_UNSUPPORTED_VERSION,
+                      'message': 'Unsupported protocol version',
+                      'data': {'supported': list(SUPPORTED_PROTOCOLS),
+                               'requested': requested}}}
+
+
+def header_mismatch(request, header_version):
+    """HeaderMismatchError response when the MCP-Protocol-Version HTTP header
+    and the request's _meta disagree; None otherwise (or when either is
+    missing)."""
+    declared = modern_version(request)
+    header_version = u'{}'.format(header_version or u'').strip()
+    if not declared or not header_version or declared == header_version:
+        return None
+    return {'jsonrpc': '2.0', 'id': request.get('id'),
+            'error': {'code': ERR_HEADER_MISMATCH,
+                      'message': ('MCP-Protocol-Version header ({}) does not '
+                                  'match the request _meta ({})').format(
+                                      header_version, declared)}}
+
+
+def discover_result(instructions=None, info=None):
+    """server/discover result (before finish_result adds resultType/_meta)."""
+    result = {'supportedVersions': list(SUPPORTED_PROTOCOLS),
+              'capabilities': json.loads(json.dumps(SERVER_CAPABILITIES))}
+    if instructions:
+        result['instructions'] = instructions
+    if info:
+        result['_meta'] = {META_SERVER_INFO: info}
+    return result
+
+
+def initialize_result(requested, instructions=None, info=None):
+    """initialize result for a legacy client."""
+    result = {'protocolVersion': negotiate_protocol(requested),
+              'capabilities': json.loads(json.dumps(SERVER_CAPABILITIES)),
+              'serverInfo': info or server_info()}
+    if instructions:
+        result['instructions'] = instructions
+    return result
+
+
+def finish_result(response, method, modern, info=None):
+    """Add the fields a MODERN client expects on every result: resultType,
+    serverInfo in _meta, and ttlMs/cacheScope on cacheable ones. Legacy
+    responses and errors pass through untouched. Returns the response."""
+    if not modern or not isinstance(response, dict):
+        return response
+    result = response.get('result')
+    if not isinstance(result, dict):
+        return response
+    result.setdefault('resultType', 'complete')
+    meta = result.get('_meta')
+    if not isinstance(meta, dict):
+        meta = {}
+        result['_meta'] = meta
+    meta.setdefault(META_SERVER_INFO, info or server_info())
+    if method in CACHEABLE_METHODS:
+        result.setdefault('ttlMs', LIST_TTL_MS)
+        result.setdefault('cacheScope', CACHE_SCOPE)
+    return response
+
+
+def resource_not_found(request_id, uri, modern):
+    """Error for resources/read of an unknown URI: -32602 in the modern spec,
+    -32002 before it."""
+    return {'jsonrpc': '2.0', 'id': request_id,
+            'error': {'code': (ERR_INVALID_PARAMS if modern
+                               else ERR_LEGACY_RESOURCE_NOT_FOUND),
+                      'message': 'Resource not found',
+                      'data': {'uri': uri}}}
 
 
 def _as_bool(value, default):
@@ -129,7 +324,37 @@ def policy_from_settings(settings):
         'confirm_destructive': _as_bool(settings.get(CONFIRM_KEY),
                                         DEFAULT_POLICY['confirm_destructive']),
         'code_execution': code,
+        'toolset': _toolset(settings.get(TOOLSET_KEY)),
     }
+
+
+def _toolset(value):
+    name = u'{}'.format(value or TOOLSET_FULL).strip().lower()
+    return name if name in TOOLSETS else TOOLSET_FULL
+
+
+def toolset_allows(tool_name, toolset, read_only_names):
+    """Whether the active toolset includes `tool_name`."""
+    toolset = _toolset(toolset)
+    if toolset == TOOLSET_FULL:
+        return True
+    if tool_name in TRAINING_TOOLS:
+        return False
+    if toolset == TOOLSET_DOCUMENTATION:
+        return tool_name in read_only_names or tool_name in DOCUMENTATION_TOOLS
+    return True
+
+
+def batch_outside_toolset(arguments, toolset, read_only_names):
+    """Sorted step tool names of a run_batch call that the toolset hides --
+    run_batch must not be a way around it."""
+    steps = (arguments or {}).get('steps') if isinstance(arguments, dict) else None
+    names = set()
+    for step in steps if isinstance(steps, list) else []:
+        name = step.get('name') if isinstance(step, dict) else None
+        if name and not toolset_allows(name, toolset, read_only_names):
+            names.add(name)
+    return sorted(names)
 
 
 def load_policy():
@@ -142,10 +367,16 @@ def load_policy():
         return dict(DEFAULT_POLICY)
 
 
-def save_policy(read_only=None, confirm_destructive=None, code_execution=None):
+def save_policy(read_only=None, confirm_destructive=None, code_execution=None,
+                toolset=None):
     """Persist the given fields; the others keep their stored values."""
     from core import paths
     data = paths.load_settings() or {}
+    if toolset is not None:
+        name = u'{}'.format(toolset).strip().lower()
+        if name not in TOOLSETS:
+            raise ValueError('toolset must be one of {}'.format(', '.join(TOOLSETS)))
+        data[TOOLSET_KEY] = name
     if read_only is not None:
         data[READ_ONLY_KEY] = bool(read_only)
     if confirm_destructive is not None:
@@ -166,7 +397,7 @@ def tool_visible(tool_name, policy, read_only_names):
         return False
     if policy.get('read_only') and tool_name not in read_only_names:
         return False
-    return True
+    return toolset_allows(tool_name, policy.get('toolset'), read_only_names)
 
 
 def check_call(tool_name, policy, read_only_names, destructive):
@@ -175,6 +406,8 @@ def check_call(tool_name, policy, read_only_names, destructive):
     Returns (decision, message): decision is 'run', 'confirm' or 'block';
     message explains a block to the caller.
     """
+    if not toolset_allows(tool_name, policy.get('toolset'), read_only_names):
+        return 'block', toolset_message(tool_name, policy.get('toolset'))
     if tool_name in CODE_TOOLS:
         mode = policy.get('code_execution')
         if mode == CODE_OFF:
@@ -192,6 +425,12 @@ def check_call(tool_name, policy, read_only_names, destructive):
     if destructive and policy.get('confirm_destructive', True):
         return 'confirm', None
     return 'run', None
+
+
+def toolset_message(tool_name, toolset):
+    return ('{} is not in the "{}" toolset chosen on this machine (MCP Control '
+            '> Advanced > Security). Use the listed tools, or ask the user to '
+            'pick the "full" toolset.'.format(tool_name, _toolset(toolset)))
 
 
 def _read_only_message(tool_name):

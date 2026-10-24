@@ -174,6 +174,13 @@ class T3LabAISettings(object):
             # classification, newest Sonnet for agent turns, newest Opus for
             # quality mode / the teacher).
             'model_roles': {},
+            # Server endpoint of a provider the user points at themselves —
+            # today only "custom" (any OpenAI-compatible server). NOT secret,
+            # so plain text; its API key lives under api_keys["Custom"]
+            # (DPAPI) like every other key. See get/set_provider_endpoint.
+            'endpoints': {
+                'custom': {'base_url': '', 'model': '', 'azure': False},
+            },
             'username': 'Thạnh',
             'window_state': {
                 'left':         None,
@@ -357,6 +364,38 @@ class T3LabAISettings(object):
         """Persist the preferred model name for a provider."""
         def _m(s):
             s.setdefault('model_preferences', {})[provider_name] = model_name
+        return self._update(_m)
+
+    def get_provider_endpoint(self, provider_name):
+        """Endpoint config of a user-configured provider, always complete:
+        {"base_url": str, "model": str, "azure": bool}. A file written before
+        this existed has no "endpoints" block and reads as empty values."""
+        out = {'base_url': u'', 'model': u'', 'azure': False}
+        block = (self._settings.get('endpoints') or {}).get(provider_name)
+        if isinstance(block, dict):
+            out['base_url'] = u'{}'.format(block.get('base_url') or u'').strip()
+            out['model'] = u'{}'.format(block.get('model') or u'').strip()
+            out['azure'] = bool(block.get('azure', False))
+        return out
+
+    def set_provider_endpoint(self, provider_name, base_url=None, model=None,
+                              azure=None):
+        """Persist any of base_url / model / azure (None = leave as is)."""
+        def _m(s):
+            eps = s.get('endpoints')
+            if not isinstance(eps, dict):
+                eps = {}
+                s['endpoints'] = eps
+            block = eps.get(provider_name)
+            if not isinstance(block, dict):
+                block = {'base_url': '', 'model': '', 'azure': False}
+                eps[provider_name] = block
+            if base_url is not None:
+                block['base_url'] = u'{}'.format(base_url).strip()
+            if model is not None:
+                block['model'] = u'{}'.format(model).strip()
+            if azure is not None:
+                block['azure'] = bool(azure)
         return self._update(_m)
 
     def get_username(self):

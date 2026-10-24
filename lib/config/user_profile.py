@@ -204,7 +204,7 @@ class UserProfile(object):
         try:
             from config.settings import T3LabAISettings
             s = T3LabAISettings()
-            for key in ("Claude", "OpenAI", "DeepSeek"):
+            for key in ("Claude", "OpenAI", "Gemini", "DeepSeek", "Custom"):
                 if s.get_api_key(key):
                     return True
         except Exception:

@@ -152,7 +152,10 @@ SERVER_INSTRUCTIONS = (
     '4. Read before you write: list what exists, show the plan with targets and '
     'counts before a batch change, then check the result with a read tool.\n'
     '5. Report what was done and what was not, with element ids, in the '
-    'user\'s language.')
+    'user\'s language.\n'
+    '6. t3lab_memory holds this project\'s saved conventions (from the T3Lab '
+    'Assistant and Claude Code): search it before you assume or ask; save a '
+    'new lasting convention the user states with t3lab_memory_save.')
 
 # Tools implemented by the bridge itself (multi-instance control lives here —
 # a server inside one Revit process cannot see the other processes). Injected

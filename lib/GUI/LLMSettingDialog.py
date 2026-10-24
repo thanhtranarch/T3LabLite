@@ -1403,6 +1403,8 @@ class LLMSettingWindow(T3WPFWindow):
                 _s.is_show_tool_calls_enabled())
             self.show_thinking_toggle.IsChecked = bool(
                 _s.is_show_thinking_enabled())
+            self.claude_code_memory_toggle.IsChecked = (
+                _s.get_agent_option('claude_code_memory', True) is not False)
         except Exception:
             pass
         finally:
@@ -1865,6 +1867,17 @@ class LLMSettingWindow(T3WPFWindow):
                 bool(self.show_thinking_toggle.IsChecked))
         except Exception as ex:
             logger.debug("show_thinking_toggled error: {}".format(ex))
+
+    def claude_code_memory_toggled(self, sender, e):
+        """Search Claude Code's memory of the project folders (memory_hub)."""
+        if getattr(self, '_verbosity_guard', False):
+            return
+        try:
+            from config.settings import get_settings
+            get_settings().set_agent_option(
+                'claude_code_memory', bool(self.claude_code_memory_toggle.IsChecked))
+        except Exception as ex:
+            logger.debug("claude_code_memory_toggled error: {}".format(ex))
 
     def open_data_dir_clicked(self, sender, e):
         """Open %APPDATA%/T3LabAI in Explorer."""

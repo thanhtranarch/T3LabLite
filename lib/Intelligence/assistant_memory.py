@@ -468,6 +468,22 @@ def clear_facts(project_id=None, everything=False):
 
 # ─── Prompt / report rendering ────────────────────────────────────────────────
 
+# How the model keeps memory current (the remember_fact tool). Shared with
+# Intelligence/memory_hub.py, whose index block ends with it too.
+TOOL_HINT = (
+    u'When the user states a NEW durable preference or convention '
+    u'("from now on...", "remember...", "our standard is..."), call '
+    u'the `remember_fact` tool ONCE with a short English sentence — '
+    u'scope "global" for user preferences, "project" for facts about '
+    u'this model, "session" for something that holds only for THIS '
+    u'conversation (the current task\'s scope, a temporary '
+    u'assumption). Never store one-off requests, secrets, or element '
+    u'ids. If the user CHANGES a fact above, call `remember_fact` with '
+    u'action "update" (replaces=old gist, fact=new statement) so the '
+    u'old one is superseded, not duplicated. If the user CANCELS a '
+    u'fact, call it with action "forget" (replaces=gist).')
+
+
 def build_memory_block(project_id=None, include_tool_hint=True, max_chars=None):
     """System-prompt section carrying the remembered facts ('' when none).
 
@@ -499,18 +515,7 @@ def build_memory_block(project_id=None, include_tool_hint=True, max_chars=None):
         lines.append(u'({} older fact(s) not shown here; the user can list '
                      u'them with /memory.)'.format(hidden))
     if include_tool_hint:
-        lines.append(
-            u'When the user states a NEW durable preference or convention '
-            u'("from now on...", "remember...", "our standard is..."), call '
-            u'the `remember_fact` tool ONCE with a short English sentence — '
-            u'scope "global" for user preferences, "project" for facts about '
-            u'this model, "session" for something that holds only for THIS '
-            u'conversation (the current task\'s scope, a temporary '
-            u'assumption). Never store one-off requests, secrets, or element '
-            u'ids. If the user CHANGES a fact above, call `remember_fact` with '
-            u'action "update" (replaces=old gist, fact=new statement) so the '
-            u'old one is superseded, not duplicated. If the user CANCELS a '
-            u'fact, call it with action "forget" (replaces=gist).')
+        lines.append(TOOL_HINT)
     return u'\n'.join(lines)
 
 

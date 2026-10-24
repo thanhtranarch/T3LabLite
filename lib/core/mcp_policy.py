@@ -126,6 +126,8 @@ DOCUMENTATION_TOOLS = frozenset([
     'manage_view_template', 'place_views_on_sheets', 'rename_element',
     'revit_override_color', 'run_batch', 'set_parameter', 'tag_all_rooms',
     'tag_all_walls', 'tag_elements',
+    # Project memory: writes the T3Lab memory file, never the model.
+    't3lab_memory_save',
 ])
 
 # Tools that run caller-supplied code.
@@ -177,7 +179,10 @@ SERVER_INSTRUCTIONS = (
     '4. Read before you write: list what exists, show the plan with targets and '
     'counts before a batch change, then check the result with a read tool.\n'
     '5. Report what was done and what was not, with element ids, in the '
-    'user\'s language.')
+    'user\'s language.\n'
+    '6. t3lab_memory holds this project\'s saved conventions (from the T3Lab '
+    'Assistant and Claude Code): search it before you assume or ask; save a '
+    'new lasting convention the user states with t3lab_memory_save.')
 
 
 def negotiate_protocol(requested):

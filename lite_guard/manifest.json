@@ -148,6 +148,7 @@
     "lib/GUI/MCPControlDialog.py",
     "lib/GUI/Tools/MCPControl.xaml",
     "lib/GUI/assistant",
+    "lib/Intelligence/memory_hub.py",
     "lib/Intelligence/remote_mcp.py",
     "lib/Services/mcp_service.py",
     "lib/core/bridge.py",

@@ -1969,6 +1969,12 @@
                                           Style="{StaticResource T3.CheckBox}" Margin="0,0,0,4"
                                           Checked="show_thinking_toggled" Unchecked="show_thinking_toggled"/>
                                 <TextBlock Text="ON: Displays intermediate thought summaries during complex reasoning cycles."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,0,0,12"/>
+                                <!-- Intelligence/memory_hub.py: agents.claude_code_memory -->
+                                <CheckBox x:Name="claude_code_memory_toggle" Content="Use Claude Code memory of the project folders"
+                                          Style="{StaticResource T3.CheckBox}" Margin="0,0,0,4"
+                                          Checked="claude_code_memory_toggled" Unchecked="claude_code_memory_toggled"/>
+                                <TextBlock Text="ON: CLAUDE.md and Claude Code's auto memory of the folders linked to the active project are searched by the Assistant (recall_memory) and by AI apps (t3lab_memory). Read only."
                                            Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,0,0,0"/>
                             </StackPanel>
                         </Border>

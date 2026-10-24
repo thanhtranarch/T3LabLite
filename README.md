@@ -55,6 +55,7 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
 - **Skills** — reusable instruction packs that activate on what you ask, 33 built in (ISO 19650 naming, LOD, worksets, QA checklist, BEP, COBie handover, clash coordination, sheet & annotation standards, construction wiki and drawing-completion rules, …). Type `/skill-name` to force one, or install more from a GitHub repo — Claude's `SKILL.md` format is read as-is.
 - **Knowledge (RAG)** — index folders of PDF / TXT / MD and get answers with citations. Keyword search works offline; semantic search is optional and runs on a local Ollama embedding model.
 - **Projects** — per-project chat history, custom instructions, default model, knowledge folders, remembered facts, and daily scheduled prompts.
+- **Project memory shared with Claude** — facts the Assistant remembers ("remember that ...") and conventions saved by AI apps through MCP (`t3lab_memory_save`) are one memory per project. Claude Code's memory of the project's linked folders (CLAUDE.md, auto memory) is searched too, read only. A long memory reaches the prompt as an index and the Assistant searches the rest with `recall_memory`, so each message stays small.
 - **Remote MCP servers (Claude)** — add MCP servers on the internet (https) in **LLMs Setting → Models**; Claude runs their tools through its MCP connector. Those calls do not go through "Ask before model edits".
 - **Context & attachments** — the assistant sees the active view and current selection, and accepts attached files and images.
 - **PDF comments** — read markups from a PDF, trace them to the matching sheet, and resolve them item by item.
@@ -262,6 +263,14 @@ Your own pages in `%APPDATA%\T3LabAI\skills` and the active project's
 that a project BEP wins over the generic examples in the built-in pages.
 Pages switched off in **LLMs Setting → Skills** are hidden from AI apps as
 well.
+
+**Project memory.** `t3lab_memory` (read only: `list`, `search`, `read`)
+returns what is remembered about the active T3Lab project: conventions saved
+in the T3Lab Assistant or by an AI app with `t3lab_memory_save`, and Claude
+Code's memory of the folders linked to the project (`CLAUDE.md`,
+`.claude/CLAUDE.md`, `CLAUDE.local.md`, `~/.claude/projects/<folder>/memory`).
+Also the resource `t3lab://memory/project`. Read-only mode hides
+`t3lab_memory_save`; Claude Code's own files are never changed.
 
 The same pages are also MCP **resources** (`t3lab://wiki/<page>`), so you can
 attach one by hand in apps that show resources (Claude Desktop's **+** menu,

@@ -79,15 +79,16 @@ class AssistantProjects(object):
             ps = ProjectStore()
             project = ps.get_active_prompt_addendum() or u""
             try:
-                from Intelligence import assistant_memory
+                from Intelligence import memory_hub
                 try:
                     _mem_chars = _active_budgets()['memory_chars']
                 except Exception:
                     _mem_chars = None
-                memory = assistant_memory.build_memory_block(
-                    ps.get_active_project_id(),
-                    include_tool_hint=bool(memory_tool),
-                    max_chars=_mem_chars) or u""
+                # With tools (memory_tool): a long memory, or one with Claude
+                # Code notes, becomes an index + recall_memory.
+                memory = memory_hub.prompt_block(
+                    ps.get_active_project_id(), max_chars=_mem_chars,
+                    recall_tool=bool(memory_tool)) or u""
             except Exception:
                 memory = u""
         except Exception:

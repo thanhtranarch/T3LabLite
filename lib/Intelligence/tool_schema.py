@@ -42,6 +42,19 @@ MEMORY_TOOL_NAME = "remember_fact"
 PAST_CHATS_TOOL_NAME = "search_past_chats"
 
 
+# Synthetic tool: search the project memory (T3Lab facts + the project's
+# Claude Code memory, Intelligence/memory_hub.py). Read-only, executed
+# locally by the dialog's _exec_tool. Never deferred: a long memory reaches
+# the prompt as an index that tells the model to call it.
+RECALL_TOOL_NAME = "recall_memory"
+
+
+def make_recall_tool():
+    """Build the recall_memory schema in server-registry shape."""
+    from Intelligence.memory_hub import RECALL_TOOL_SCHEMA
+    return dict(RECALL_TOOL_SCHEMA)
+
+
 # Synthetic tool: search the tool catalog (Tool Hub, lib/Intelligence/toolhub).
 # Executed locally by the dialog's _exec_tool. On Claude it answers with
 # `tool_reference` blocks (the deferred schemas load on demand); on the other
@@ -330,6 +343,9 @@ READ_ONLY_TOOL_NAMES = frozenset([
     "find_tools",
     # Construction wiki + drawing rules for MCP clients (core/mcp_wiki.py)
     "t3lab_wiki",
+    # Project memory for MCP clients (Intelligence/memory_hub.py). Its save
+    # twin t3lab_memory_save writes the memory file, so it is not listed.
+    "t3lab_memory",
     # FamiGen: the contract, and a proposal shown in the review window - the
     # model is untouched until famigen_create_family (not listed: it saves an
     # .rfa and can load it into the project).
@@ -410,6 +426,8 @@ _EXTERNAL_ONLY_TOOLS = frozenset([
     # The same pages reach the assistant as injected skills (SkillsEngine);
     # a tool for them too would only cost a turn.
     't3lab_wiki',
+    # The assistant has its own memory tools (recall_memory, remember_fact).
+    't3lab_memory', 't3lab_memory_save',
 ])
 
 
@@ -539,7 +557,8 @@ def strip_deferred_loading(tools):
 
 
 # Synthetic tools the dialog always appends (never deferred).
-_EXTRA_TOOL_NAMES = frozenset([LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME, FIND_TOOLS_NAME])
+_EXTRA_TOOL_NAMES = frozenset([LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME, FIND_TOOLS_NAME,
+                               RECALL_TOOL_NAME])
 
 
 def tools_named(provider_name, names):

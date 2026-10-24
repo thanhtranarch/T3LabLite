@@ -33,12 +33,13 @@ import time
 
 from core import jsonsafe
 from Intelligence.tool_schema import (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME,
-                                      PAST_CHATS_TOOL_NAME,
+                                      PAST_CHATS_TOOL_NAME, RECALL_TOOL_NAME,
                                       is_file_output_only, is_model_modifying)
 
-# Pseudo-tools the pane runs itself (launcher, memory file, archived chats);
-# none touches the model.
-_LOCAL_PSEUDO_TOOLS = (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME, PAST_CHATS_TOOL_NAME)
+# Pseudo-tools the pane runs itself (launcher, memory file, archived chats,
+# memory search); none touches the model.
+_LOCAL_PSEUDO_TOOLS = (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME, PAST_CHATS_TOOL_NAME,
+                       RECALL_TOOL_NAME)
 
 
 # ─── Result truncation ─────────────────────────────────────────────────────────

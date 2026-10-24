@@ -5121,6 +5121,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         # memory, past chats (read-only), Tool Hub search for tools the model
         # cannot see, and published recipes (sha256-verified) as recipe_<slug>.
         _extras.append(tool_schema.make_memory_tool())
+        _extras.append(tool_schema.make_recall_tool())
         _extras.append(tool_schema.make_past_chats_tool())
         _extras.append(tool_schema.make_find_tools_tool())
         try:
@@ -5368,6 +5369,16 @@ class T3LabAssistantWindow(T3WPFWindow):
                     return _hr.run(_row, args, _exec_tool)
                 except Exception as ex:
                     return {"error": u"Recipe failed: {}".format(_exc_text(ex))}
+            if name == tool_schema.RECALL_TOOL_NAME:
+                # Local and read-only: T3Lab facts + the project's Claude Code
+                # memory (Intelligence/memory_hub.py).
+                try:
+                    from Intelligence import memory_hub
+                    return memory_hub.call_read(
+                        args, project_id=self._projects._active_pid())
+                except Exception as _rm_ex:
+                    return {"error": u"recall_memory failed: {}".format(
+                        _exc_text(_rm_ex))}
             if name == tool_schema.PAST_CHATS_TOOL_NAME:
                 # Local and read-only: the archived chats of this scope.
                 try:

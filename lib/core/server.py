@@ -22,6 +22,7 @@ import io
 
 from core import jsonsafe
 from core import mcp_policy
+from core import mcp_prompts
 from core import mcp_wiki
 
 try:
@@ -451,8 +452,8 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
 
         elif path == '/':
             self._send_json({
-                'name': 'T3LabAI MCP Server',
-                'version': '1.0.0',
+                'name': mcp_policy.SERVER_NAME,
+                'version': mcp_policy.server_version(),
                 'protocol': 'mcp',
                 'status': 'running'
             })
@@ -515,6 +516,17 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             # session state, so notifications/initialized needs no handling.
             self._send_response(202, 'application/json', None)
             return
+        # MCP 2026-07-28: a request that declares its version in _meta is
+        # served statelessly -- refuse a version we do not speak, or one the
+        # MCP-Protocol-Version header contradicts, before doing any work.
+        declared = mcp_policy.modern_version(request)
+        if declared is not None:
+            error = (mcp_policy.version_error(request.get('id'), declared)
+                     or mcp_policy.header_mismatch(
+                         request, self.headers.get('MCP-Protocol-Version')))
+            if error is not None:
+                self._send_json(error, 400)
+                return
         if request.get('method', '') in mcp_policy.LOCK_FREE_METHODS:
             self._handle_mcp_message_locked(request)
             return
@@ -552,15 +564,40 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             'id': request_id
         }
 
+        modern = mcp_policy.modern_version(request) is not None
         try:
             if method == 'initialize':
                 response['result'] = server._handle_initialize(params)
+            elif method == 'server/discover':
+                response['result'] = mcp_policy.discover_result(
+                    instructions=mcp_policy.SERVER_INSTRUCTIONS)
             elif method == 'ping':
                 response['result'] = {}
             elif method == 'tools/list':
                 response['result'] = server._handle_tools_list()
             elif method == 'tools/call':
                 response['result'] = server._handle_tool_call(params)
+            elif method == 'resources/list':
+                response['result'] = mcp_wiki.resource_list()
+            elif method == 'resources/templates/list':
+                response['result'] = mcp_wiki.resource_templates()
+            elif method == 'resources/read':
+                uri = params.get('uri')
+                result = mcp_wiki.read_resource(uri)
+                if result is None:
+                    response = mcp_policy.resource_not_found(
+                        request_id, uri, modern)
+                else:
+                    response['result'] = result
+            elif method == 'prompts/list':
+                response['result'] = mcp_prompts.prompt_list()
+            elif method == 'prompts/get':
+                try:
+                    response['result'] = mcp_prompts.get_prompt(
+                        params.get('name'), params.get('arguments'))
+                except mcp_prompts.PromptError as e:
+                    response['error'] = {'code': mcp_policy.ERR_INVALID_PARAMS,
+                                         'message': str(e)}
             else:
                 response['error'] = {
                     'code': -32601,
@@ -573,7 +610,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             }
 
         server._commands_processed += 1
-        self._send_json(response)
+        self._send_json(mcp_policy.finish_result(response, method, modern))
 
 
 class T3LabAIServer(object):
@@ -2898,18 +2935,9 @@ class T3LabAIServer(object):
 
     def _handle_initialize(self, params):
         """Handle MCP initialize request"""
-        requested = (params or {}).get('protocolVersion')
-        return {
-            'protocolVersion': mcp_policy.negotiate_protocol(requested),
-            'capabilities': {
-                'tools': {'listChanged': False}
-            },
-            'serverInfo': {
-                'name': 'T3LabAI Revit MCP Server',
-                'version': '1.0.0'
-            },
-            'instructions': mcp_policy.SERVER_INSTRUCTIONS,
-        }
+        return mcp_policy.initialize_result(
+            (params or {}).get('protocolVersion'),
+            instructions=mcp_policy.SERVER_INSTRUCTIONS)
 
     @staticmethod
     def _read_only_tool_names():
@@ -2942,8 +2970,19 @@ class T3LabAIServer(object):
             destructive = self.is_destructive(tool_name, arguments)
         except Exception:
             destructive = True
+        read_only = self._read_only_tool_names()
         decision, message = mcp_policy.check_call(
-            tool_name, policy, self._read_only_tool_names(), destructive)
+            tool_name, policy, read_only, destructive)
+        hidden = []
+        if decision != 'block' and tool_name == 'run_batch':
+            hidden = mcp_policy.batch_outside_toolset(
+                arguments, policy.get('toolset'), read_only)
+        if hidden:
+            decision, message = 'block', (
+                'run_batch was not run: {} {} not in the "{}" toolset chosen '
+                'on this machine (MCP Control > Advanced > Security).'.format(
+                    ', '.join(hidden), 'is' if len(hidden) == 1 else 'are',
+                    policy.get('toolset')))
         confirm = None
         if decision == 'confirm':
             confirm = mcp_policy.confirm_text(tool_name, arguments)
@@ -2980,6 +3019,15 @@ class T3LabAIServer(object):
         """
         tool_name = params.get('name', '')
         arguments = params.get('arguments', {})
+
+        # A tool the machine's toolset hides is refused before anything else,
+        # the teaching tools below included (MCP Control > Security).
+        policy = mcp_policy.load_policy()
+        if not mcp_policy.toolset_allows(tool_name, policy.get('toolset'),
+                                         self._read_only_tool_names()):
+            return self._tool_call_result({
+                'error': mcp_policy.toolset_message(tool_name, policy.get('toolset')),
+                'blocked_by_policy': True, 'tool': tool_name})
 
         # Teaching session boundary tools are handled locally (no Revit) so the
         # teacher can frame each trajectory. No-op unless teaching mode is on.

@@ -267,3 +267,66 @@ def call(arguments):
     except Exception as e:
         return {'error': 'The T3Lab wiki could not be read: {}'.format(e),
                 'tool': TOOL_NAME}
+
+
+# ─── The same pages as MCP resources ────────────────────────────────────────
+# A client that shows resources (Claude Desktop's "+ Add from T3Lab", Claude
+# Code's @-mentions) lets the user attach a page by hand; t3lab_wiki stays
+# the way the MODEL finds pages on its own.
+
+URI_PREFIX = 't3lab://wiki/'
+MIME_TYPE = 'text/markdown'
+URI_TEMPLATE = {
+    'uriTemplate': URI_PREFIX + '{page}',
+    'name': 'wiki-page',
+    'title': 'T3Lab wiki page',
+    'description': ('One page of the T3Lab construction wiki / drawing rules '
+                    'by page id, e.g. ' + URI_PREFIX + START_PAGE + '.'),
+    'mimeType': MIME_TYPE,
+}
+
+
+def page_uri(page_id):
+    return URI_PREFIX + page_id
+
+
+def _resource(meta):
+    entry = {'uri': page_uri(meta['id']),
+             'name': meta['id'],
+             'title': meta.get('name') or meta['id'],
+             'mimeType': MIME_TYPE}
+    if meta.get('description'):
+        entry['description'] = meta['description']
+    # The page every drawing task starts from comes first in a client's list.
+    entry['annotations'] = {'audience': ['assistant', 'user'],
+                            'priority': 1.0 if meta['id'] == START_PAGE else 0.5}
+    return entry
+
+
+def resource_list(engine=None):
+    """resources/list result: every page the user has not switched off."""
+    engine = engine or _engine()
+    pages = _pages(engine)
+    return {'resources': [_resource(pages[pid]) for pid in sorted(pages)]}
+
+
+def resource_templates():
+    """resources/templates/list result."""
+    return {'resourceTemplates': [dict(URI_TEMPLATE)]}
+
+
+def read_resource(uri, engine=None):
+    """resources/read result for a t3lab://wiki/<page> URI, or None when no
+    such page is on (the caller answers "Resource not found")."""
+    uri = u'{}'.format(uri or u'')
+    if not uri.startswith(URI_PREFIX):
+        return None
+    engine = engine or _engine()
+    page = read(engine, uri[len(URI_PREFIX):])
+    if 'content' not in page:
+        return None
+    text = page['content']
+    if page.get('project_standard'):
+        text = u'> {}\n\n{}'.format(page['project_standard'], text)
+    return {'contents': [{'uri': page_uri(page['page']), 'mimeType': MIME_TYPE,
+                          'text': text}]}

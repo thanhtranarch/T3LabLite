@@ -55,13 +55,14 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
 - **Skills** — reusable instruction packs that activate on what you ask, 33 built in (ISO 19650 naming, LOD, worksets, QA checklist, BEP, COBie handover, clash coordination, sheet & annotation standards, construction wiki and drawing-completion rules, …). Type `/skill-name` to force one, or install more from a GitHub repo — Claude's `SKILL.md` format is read as-is.
 - **Knowledge (RAG)** — index folders of PDF / TXT / MD and get answers with citations. Keyword search works offline; semantic search is optional and runs on a local Ollama embedding model.
 - **Projects** — per-project chat history, custom instructions, default model, knowledge folders, remembered facts, and daily scheduled prompts.
+- **Remote MCP servers (Claude)** — add MCP servers on the internet (https) in **LLMs Setting → Models**; Claude runs their tools through its MCP connector. Those calls do not go through "Ask before model edits".
 - **Context & attachments** — the assistant sees the active view and current selection, and accepts attached files and images.
 - **PDF comments** — read markups from a PDF, trace them to the matching sheet, and resolve them item by item.
 - **Spell check** — proofread every Text Note in the model or just the active view.
 
 #### Settings (pulldown)
 - **MCP Control** — start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit, connect Claude Desktop / Codex / Antigravity in one click, pick the port (48884–48894) and set what AI apps may do (read-only mode, confirmations, code execution — see [MCP security](#mcp-security)).
-- **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, DeepSeek, Ollama, LM Studio), model, API key or local server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs.
+- **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, Gemini, DeepSeek, any OpenAI-compatible server — OpenRouter, Azure OpenAI, vLLM/LiteLLM, Groq, Mistral, xAI —, Ollama, LM Studio), model, API key or server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs.
 - **Feedback** — send feedback or suggestions to the T3Lab team directly from Revit.
 - **ManaTabs** — hide or show Revit ribbon tabs to reduce clutter.
 - **Ribbon Names** — shorten or restore ribbon tab names with inline editing and saved mappings.
@@ -203,7 +204,8 @@ usage tracking. Both of the last two can be switched off (see
 | Component | Destination | When |
 |---|---|---|
 | Auto-update | `github.com` / `raw.githubusercontent.com` / `cdn.jsdelivr.net` | First Revit start of each week (retried the next day if GitHub was unreachable), unless `"auto_update": false` |
-| T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `api.deepseek.com` — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
+| T3Lab Assistant remote MCP servers | Anthropic's servers connect to the https MCP servers you add (Claude only) | Every Assistant message while a server is on |
+| T3Lab Assistant / AI tools | Only the provider you configure: `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `api.deepseek.com`, the Base URL you set for Custom — or nothing leaves the machine with Ollama (`localhost:11434`) / LM Studio (`localhost:1234`) | User sends a message or runs an AI-powered tool |
 | Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
 | Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |
 | MCP Server | `127.0.0.1:48884`–`48894` only (never reachable from the network), bearer token from `%APPDATA%\T3LabAI\mcp_token.txt` | Only while the MCP server is running |
@@ -227,6 +229,7 @@ Change them in **MCP Control → Advanced → Security**, or in
 | `mcp_read_only` | `false` | `true`: AI apps only see and call tools that change neither the model nor any file |
 | `mcp_confirm_destructive` | `true` | Revit asks Yes/No before delete, purge, ungroup, deleting a view template or link, save as, sync, close without saving, or a `run_batch` that contains any of these. No is the default answer |
 | `mcp_code_execution` | `"ask"` | `send_code_to_revit`: `"off"` hides and refuses it, `"ask"` asks in Revit each time, `"allow"` runs it without asking |
+| `mcp_toolset` | `"full"` | Which tools AI apps see: `"full"` (all), `"standard"` (no teaching / training tools), `"documentation"` (read tools plus views, sheets, annotation, schedules, revisions and export — nothing that models or deletes). Fewer tools means fewer tokens on every request. A hidden tool is refused, also inside `run_batch` |
 | `auto_start_file_watcher` | `false` | The file task watcher (`~/T3Lab_AI_Data/task.json`) runs code with no token, so it only starts with Revit after you click **Start Watcher** once |
 
 The Revit question says what the call does, e.g. *Delete 3 elements (id 101,
@@ -259,3 +262,17 @@ Your own pages in `%APPDATA%\T3LabAI\skills` and the active project's
 that a project BEP wins over the generic examples in the built-in pages.
 Pages switched off in **LLMs Setting → Skills** are hidden from AI apps as
 well.
+
+The same pages are also MCP **resources** (`t3lab://wiki/<page>`), so you can
+attach one by hand in apps that show resources (Claude Desktop's **+** menu,
+`@` in Claude Code). Three MCP **prompts** start the common workflows with the
+right pages and tools: `complete-drawings`, `issue-drawings` and
+`model-health-check` (read-only).
+
+### MCP protocol versions
+
+The server and the bridge speak MCP `2026-07-28` (no handshake: the version
+travels with every request, `server/discover` describes the server) and the
+earlier `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05` (with the
+`initialize` handshake), so old and new AI apps both connect. Both eras are
+answered with Revit closed.

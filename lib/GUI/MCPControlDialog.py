@@ -287,12 +287,17 @@ class MCPControlWindow(T3WPFWindow):
         self._confirm_toggle     = self.FindName('confirm_destructive_toggle')
         self._code_exec_toggle   = self.FindName('code_exec_toggle')
         self._code_exec_hint     = self.FindName('code_exec_hint_label')
+        self._toolset_cb         = self.FindName('toolset_cb')
+        self._toolset_hint       = self.FindName('toolset_hint_label')
+        self._toolset_loading    = False
         if self._read_only_toggle:
             self._read_only_toggle.Click += self._on_read_only_toggle
         if self._confirm_toggle:
             self._confirm_toggle.Click += self._on_confirm_toggle
         if self._code_exec_toggle:
             self._code_exec_toggle.Click += self._on_code_exec_toggle
+        if self._toolset_cb:
+            self._toolset_cb.SelectionChanged += self._on_toolset_changed
 
         # Advanced tab · file watcher
         self._watcher_indicator = self.FindName('watcher_indicator')
@@ -723,9 +728,18 @@ class MCPControlWindow(T3WPFWindow):
         'allow': 'Runs without asking ("mcp_code_execution": "allow" in mcp_paths.json).',
     }
 
+    # ComboBox item order in MCPControl.xaml (toolset_cb).
+    _TOOLSETS = ('full', 'standard', 'documentation')
+    _TOOLSET_HINTS = {
+        'full':          'Every T3Lab tool. Applies from the next tool call.',
+        'standard':      'Hides the teaching and training tools. Applies from the next tool call.',
+        'documentation': ('Read tools plus views, sheets, annotation, schedules, revisions '
+                          'and export. AI apps cannot model or delete elements.'),
+    }
+
     def _refresh_security(self):
         toggles = (self._read_only_toggle, self._confirm_toggle,
-                   self._code_exec_toggle)
+                   self._code_exec_toggle, self._toolset_cb)
         if not HAS_SERVICE:
             for t in toggles:
                 if t is not None:
@@ -741,6 +755,16 @@ class MCPControlWindow(T3WPFWindow):
             self._code_exec_toggle.IsChecked = mode != 'off'
         if self._code_exec_hint is not None:
             self._code_exec_hint.Text = self._CODE_HINTS.get(mode, '')
+        toolset = policy.get('toolset') or 'full'
+        if self._toolset_cb is not None and toolset in self._TOOLSETS:
+            # Setting SelectedIndex raises SelectionChanged: not a user choice.
+            self._toolset_loading = True
+            try:
+                self._toolset_cb.SelectedIndex = self._TOOLSETS.index(toolset)
+            finally:
+                self._toolset_loading = False
+        if self._toolset_hint is not None:
+            self._toolset_hint.Text = self._TOOLSET_HINTS.get(toolset, '')
 
     def _save_security(self, **fields):
         if not HAS_SERVICE:
@@ -763,6 +787,13 @@ class MCPControlWindow(T3WPFWindow):
         # Turning it back on means "ask"; an "allow" set by hand is kept.
         current = MCPService.mcp_policy().get('code_execution') if HAS_SERVICE else 'ask'
         self._save_security(code_execution='allow' if current == 'allow' else 'ask')
+
+    def _on_toolset_changed(self, sender, e):
+        if self._toolset_loading or self._toolset_cb is None:
+            return
+        index = self._toolset_cb.SelectedIndex
+        if 0 <= index < len(self._TOOLSETS):
+            self._save_security(toolset=self._TOOLSETS[index])
 
     # ── Teaching capture ────────────────────────────────────────────────────────
 

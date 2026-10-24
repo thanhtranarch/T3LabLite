@@ -64,7 +64,7 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-BRIDGE_VERSION = '2.6.0'
+BRIDGE_VERSION = '2.7.0'
 
 PORT_MIN, PORT_MAX = 48884, 48894
 PROBE_TIMEOUT = 1.0    # /health probe per port (run in parallel)
@@ -106,11 +106,29 @@ LARGE_RESULT_TOOLS = (
     'revit_list_views',
 )
 
-# Protocol versions this bridge can echo back to the client. The in-Revit
-# server is version-agnostic (tools/list + tools/call only), so accepting
-# the client's requested revision here is safe.
-SUPPORTED_PROTOCOLS = ('2025-06-18', '2025-03-26', '2024-11-05')
-DEFAULT_PROTOCOL = '2024-11-05'
+# Protocol versions, newest first -- copies of core.mcp_policy (this file is
+# deployed on its own and cannot import lib/; lite_guard/test_mcp_server.py
+# keeps them identical). Dual-era (MCP 2026-07-28): a MODERN request carries
+# its version in params._meta and needs no handshake (server/discover is
+# answered here); a LEGACY client opens with initialize, answered here too.
+MODERN_PROTOCOLS = ('2026-07-28',)
+LEGACY_PROTOCOLS = ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05')
+SUPPORTED_PROTOCOLS = MODERN_PROTOCOLS + LEGACY_PROTOCOLS
+DEFAULT_PROTOCOL = LEGACY_PROTOCOLS[0]   # initialize with an unknown version
+
+META_PROTOCOL = 'io.modelcontextprotocol/protocolVersion'
+META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo'
+SERVER_NAME = 'T3Lab Revit MCP Server'
+LIST_TTL_MS = 60000
+CACHE_SCOPE = 'private'
+CACHEABLE_METHODS = frozenset(['tools/list', 'resources/list', 'resources/read',
+                               'resources/templates/list', 'prompts/list',
+                               'server/discover'])
+SERVER_CAPABILITIES = {
+    'tools': {'listChanged': False},
+    'resources': {'listChanged': False, 'subscribe': False},
+    'prompts': {'listChanged': False},
+}
 
 # `instructions` of the initialize result: points the AI app at the drawing
 # rules (t3lab_wiki) before its first tool call. A copy of
@@ -200,24 +218,42 @@ def _cache_file():
     return os.path.join(_data_dir(), 'tools_cache.json')
 
 
-def _load_cached_tools():
+def _load_cache():
     try:
         with open(_cache_file(), 'r', encoding='utf-8') as f:
-            tools = json.load(f).get('tools')
-        return tools if isinstance(tools, list) else []
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return []
+        return {}
 
 
-def _save_cached_tools(tools):
+def _load_cached_list(key):
+    items = _load_cache().get(key)
+    return items if isinstance(items, list) else []
+
+
+def _load_cached_tools():
+    return _load_cached_list('tools')
+
+
+def _save_cached_list(key, items):
+    """Keep the last live list of `key` (tools, resources, prompts ...) so
+    the matching list request still answers while Revit is closed."""
     try:
         os.makedirs(_data_dir(), exist_ok=True)
+        data = _load_cache()
+        data['bridge_version'] = BRIDGE_VERSION
+        data[key] = items
         tmp = _cache_file() + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump({'bridge_version': BRIDGE_VERSION, 'tools': tools}, f)
+            json.dump(data, f)
         os.replace(tmp, _cache_file())
     except Exception:
         pass
+
+
+def _save_cached_tools(tools):
+    _save_cached_list('tools', tools)
 
 
 # Token read again from disk after a 401. The bridge starts with the client
@@ -235,10 +271,25 @@ def _post_once(port, request, token, timeout):
     headers = {'Content-Type': 'application/json'}
     if token:
         headers['Authorization'] = 'Bearer ' + token
+    version = _declared_version(request)
+    if version:
+        headers['MCP-Protocol-Version'] = version
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/mcp", data=data, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode('utf-8'))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        # A modern-protocol error (unsupported version, header mismatch)
+        # comes back as 400 with a JSON-RPC body: pass it on as is.
+        if e.code == 400:
+            try:
+                body = json.loads(e.read().decode('utf-8'))
+            except Exception:
+                body = None
+            if isinstance(body, dict) and body.get('jsonrpc') == '2.0':
+                return body
+        raise
 
 
 def _post_mcp(port, request, token, timeout=CALL_TIMEOUT):
@@ -618,23 +669,80 @@ def _handle_switch(request, current, token):
     return resp
 
 
+def _server_info():
+    return {'name': SERVER_NAME, 'version': BRIDGE_VERSION}
+
+
+def _capabilities():
+    return json.loads(json.dumps(SERVER_CAPABILITIES))
+
+
 def _handle_initialize_local(request):
-    """Answer initialize without touching Revit — attach always succeeds."""
+    """Answer initialize without touching Revit — attach always succeeds.
+    Legacy handshake: never answers with a modern version."""
     params = request.get('params') or {}
     protocol = params.get('protocolVersion')
-    if protocol not in SUPPORTED_PROTOCOLS:
+    if protocol not in LEGACY_PROTOCOLS:
         protocol = DEFAULT_PROTOCOL
     return {
         'jsonrpc': '2.0',
         'id': request.get('id'),
         'result': {
             'protocolVersion': protocol,
-            'capabilities': {'tools': {}},
-            'serverInfo': {'name': 'T3Lab Revit MCP Server',
-                           'version': BRIDGE_VERSION},
+            'capabilities': _capabilities(),
+            'serverInfo': _server_info(),
             'instructions': SERVER_INSTRUCTIONS,
         },
     }
+
+
+def _handle_discover_local(request):
+    """server/discover (MCP 2026-07-28) without touching Revit, so a modern
+    client attaches with Revit closed exactly like a legacy one."""
+    return {
+        'jsonrpc': '2.0',
+        'id': request.get('id'),
+        'result': {
+            'supportedVersions': list(SUPPORTED_PROTOCOLS),
+            'capabilities': _capabilities(),
+            'instructions': SERVER_INSTRUCTIONS,
+        },
+    }
+
+
+def _declared_version(request):
+    """Version a modern request declares in params._meta, else None."""
+    params = request.get('params') if isinstance(request, dict) else None
+    meta = params.get('_meta') if isinstance(params, dict) else None
+    if not isinstance(meta, dict) or META_PROTOCOL not in meta:
+        return None
+    return str(meta.get(META_PROTOCOL) or '')
+
+
+def _version_error(request_id, requested):
+    return {'jsonrpc': '2.0', 'id': request_id,
+            'error': {'code': -32022,
+                      'message': 'Unsupported protocol version',
+                      'data': {'supported': list(SUPPORTED_PROTOCOLS),
+                               'requested': requested}}}
+
+
+def _finish_modern(response, method):
+    """resultType, serverInfo and cache hints on a modern result (copy of
+    core.mcp_policy.finish_result)."""
+    result = response.get('result') if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return response
+    result.setdefault('resultType', 'complete')
+    meta = result.get('_meta')
+    if not isinstance(meta, dict):
+        meta = {}
+        result['_meta'] = meta
+    meta.setdefault(META_SERVER_INFO, _server_info())
+    if method in CACHEABLE_METHODS:
+        result.setdefault('ttlMs', LIST_TTL_MS)
+        result.setdefault('cacheScope', CACHE_SCOPE)
+    return response
 
 
 def _handle_tools_list(request, current, token):
@@ -778,27 +886,72 @@ def _revit_down_response(request_id):
     })
 
 
-# Capability probes some clients send at startup even though `initialize`
-# advertises tools only (Codex and Antigravity both do). Answering them here
-# with an empty list keeps the handshake clean; forwarding them to Revit would
-# either surface an "unknown method" from the in-Revit server or — with Revit
-# closed — turn a routine probe into a connection error during attach.
-EMPTY_LIST_METHODS = {
+# List methods served live from Revit (the wiki pages as resources, the
+# workflow prompts) and cached like tools/list, so they still answer with
+# Revit closed: with the last live list, else an empty one. An empty list --
+# never an error -- also answers an older Revit build without them.
+LIST_METHODS = {
     'resources/list':           'resources',
     'resources/templates/list': 'resourceTemplates',
     'prompts/list':             'prompts',
 }
+# Single-item reads that need the live server.
+READ_METHODS = frozenset(['resources/read', 'prompts/get'])
+
+
+def _handle_cached_list(request, current, token):
+    method = request.get('method')
+    key = LIST_METHODS[method]
+    items = None
+    try:
+        resp = _forward(request, current, token, timeout=LIST_TIMEOUT)
+        result = resp.get('result') if isinstance(resp, dict) else None
+        if isinstance(result, dict) and isinstance(result.get(key), list):
+            items = result[key]
+            _save_cached_list(key, items)
+    except Exception:
+        pass
+    if items is None:
+        items = _load_cached_list(key)
+    return {'jsonrpc': '2.0', 'id': request.get('id'), 'result': {key: items}}
+
+
+def _handle_read(request, current, token):
+    try:
+        return _forward(request, current, token, timeout=LIST_TIMEOUT)
+    except Exception as e:
+        if not _is_conn_refused(e) and _alive_ports():
+            raise
+        return _rpc_error(request.get('id'),
+                          'Revit is not reachable, so {} cannot be answered. '
+                          'Start Revit with the T3Lab extension and retry.'.format(
+                              request.get('method')))
 
 
 def _handle(request, current, token):
+    """One request -> response. Modern requests (version in params._meta)
+    are checked here and their results get the modern fields."""
+    declared = _declared_version(request)
+    if declared is not None and declared not in MODERN_PROTOCOLS:
+        return _version_error(request.get('id'), declared)
+    response = _dispatch(request, current, token)
+    if declared is not None:
+        response = _finish_modern(response, request.get('method'))
+    return response
+
+
+def _dispatch(request, current, token):
     method = request.get('method')
     if method == 'initialize':
         return _handle_initialize_local(request)
+    if method == 'server/discover':
+        return _handle_discover_local(request)
     if method == 'ping':
         return {'jsonrpc': '2.0', 'id': request.get('id'), 'result': {}}
-    if method in EMPTY_LIST_METHODS:
-        return {'jsonrpc': '2.0', 'id': request.get('id'),
-                'result': {EMPTY_LIST_METHODS[method]: []}}
+    if method in LIST_METHODS:
+        return _handle_cached_list(request, current, token)
+    if method in READ_METHODS:
+        return _handle_read(request, current, token)
     if method == 'tools/list':
         return _handle_tools_list(request, current, token)
     if method == 'tools/call':
@@ -818,8 +971,8 @@ def _handle(request, current, token):
                 return _revit_down_response(request.get('id'))
             raise
 
-    # Anything else: the in-Revit server implements tools/list + tools/call
-    # only, so forwarding an unknown method just trades a clean protocol answer
+    # Anything else (subscriptions/listen, logging ...): the in-Revit server
+    # does not implement it, so forwarding just trades a clean protocol answer
     # for a connection error whenever Revit happens to be closed. -32601 is what
     # the spec asks for and every client already knows how to ignore it.
     return _rpc_error(request.get('id'),

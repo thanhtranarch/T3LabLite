@@ -54,6 +54,7 @@ Agent definitions: `.Codex/agents/`
 | Bilingual VI/EN analysis | `T3Lab.extension/lib/Intelligence/language/` |
 | Graph agent layer | `T3Lab.extension/lib/Intelligence/graph/` |
 | Assistant architecture doc | `docs/assistant-graph-architecture.md` |
+| Assistant request paths + code map (window = `lib/GUI/T3LabAssistantDialog.py`, helpers = `lib/GUI/assistant/`) | `docs/assistant-request-paths.md` |
 | **UI standard (the only one)** | `pyRevit UI Design System/T3LAB_UI_STANDARD.md` |
 | **UI stylesheet — 82 `T3.*` keys** | `pyRevit UI Design System/T3Lab.Styles.xaml` |
 | **Rule for every new tool** | `.claude/rules/new-tool-standard.md` |

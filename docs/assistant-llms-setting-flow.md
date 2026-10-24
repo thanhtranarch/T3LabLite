@@ -145,7 +145,7 @@ flowchart TD
     ACT -- "trả về text" --> OK["Kết quả"]
     ACT -- "lỗi / None" --> FB{"fallback bật?"}
     FB -- không --> NONE["None → thông báo lỗi"]
-    FB -- có --> CHAIN["Duyệt FALLBACK_CHAIN<br/>claude → openai → deepseek → ollama → lmstudio"]
+    FB -- có --> CHAIN["Duyệt FALLBACK_CHAIN<br/>claude → openai → gemini → deepseek → custom → ollama → lmstudio"]
     CHAIN --> HC{"check_health<br/>đạt?"}
     HC -- không --> CHAIN
     HC -- có --> OK

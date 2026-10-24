@@ -898,14 +898,15 @@ class MCPService(object):
     @staticmethod
     def mcp_policy():
         """Current external-client policy: read_only, confirm_destructive,
-        code_execution ('off' | 'ask' | 'allow'). See core/mcp_policy.py."""
+        code_execution ('off' | 'ask' | 'allow'), toolset ('full' |
+        'standard' | 'documentation'). See core/mcp_policy.py."""
         _ensure_lib_in_path()
         from core import mcp_policy
         return mcp_policy.load_policy()
 
     @staticmethod
     def set_mcp_policy(read_only=None, confirm_destructive=None,
-                       code_execution=None):
+                       code_execution=None, toolset=None):
         """
         Persist one or more policy fields. Applies to the next tool call; no
         restart needed.
@@ -919,18 +920,20 @@ class MCPService(object):
         try:
             mcp_policy.save_policy(read_only=read_only,
                                    confirm_destructive=confirm_destructive,
-                                   code_execution=code_execution)
+                                   code_execution=code_execution,
+                                   toolset=toolset)
         except Exception as ex:
             return mcp_policy.load_policy(), str(ex)
         stored = mcp_policy.load_policy()
         wanted = {'read_only': read_only,
                   'confirm_destructive': confirm_destructive,
-                  'code_execution': code_execution}
+                  'code_execution': code_execution,
+                  'toolset': toolset}
         for key, value in wanted.items():
             if value is None:
                 continue
             expected = (u'{}'.format(value).strip().lower()
-                        if key == 'code_execution' else bool(value))
+                        if key in ('code_execution', 'toolset') else bool(value))
             if stored.get(key) != expected:
                 return stored, 'Could not save the setting to mcp_paths.json'
         return stored, None

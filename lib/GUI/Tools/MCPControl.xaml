@@ -2041,7 +2041,23 @@
                                       Content="Let AI apps run Python code in Revit"/>
                             <TextBlock x:Name="code_exec_hint_label"
                                        Text="Revit shows the code and asks before each run."
-                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,4,0,0"/>
+                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,4,0,12"/>
+
+                            <!-- Toolset: how many tools AI apps see (core/mcp_policy.py TOOLSETS,
+                                 item order = 'full', 'standard', 'documentation'). -->
+                            <TextBlock Text="TOOLSET" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                            <ComboBox x:Name="toolset_cb" Style="{StaticResource T3.ComboBox}"
+                                      ToolTip="Fewer tools = fewer tokens on every AI request">
+                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}" IsSelected="True"
+                                              Content="Full — every T3Lab tool"/>
+                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
+                                              Content="Standard — without the teaching and training tools"/>
+                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
+                                              Content="Documentation — read tools, views, sheets, annotation, export"/>
+                            </ComboBox>
+                            <TextBlock x:Name="toolset_hint_label"
+                                       Text="Applies from the next tool call. Some AI apps list tools again only after a restart."
+                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,4,0,0"/>
 
                             <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
 

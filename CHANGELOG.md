@@ -20,6 +20,12 @@ Releasing a new version:
 ## [Unreleased]
 
 ### Added
+- **MCP protocol 2026-07-28:** AI apps on the newest MCP version connect without a handshake (`server/discover`), next to apps on 2025-11-25 … 2024-11-05. Both work with Revit closed.
+- **MCP resources and prompts:** every wiki page is an MCP resource (`t3lab://wiki/<page>`) you can attach in the AI app, and three prompts start the common jobs: `complete-drawings`, `issue-drawings`, `model-health-check`.
+- **MCP toolsets (MCP Control → Advanced → Security):** Full, Standard (no teaching tools) or Documentation (read, views, sheets, annotation, export — nothing that models or deletes). Fewer tools = fewer tokens per request.
+- **T3Lab Assistant — remote MCP servers (Claude):** LLMs Setting → Models → Remote MCP servers adds tools from MCP servers on the internet (https), run through Claude's MCP connector. Tokens are stored encrypted like API keys.
+- **LLMs Setting — Gemini (Google):** models listed live from your key, vision and tools, Deep reasoning maps to Gemini's reasoning effort.
+- **LLMs Setting — Custom (OpenAI-compatible):** OpenRouter, Azure OpenAI, Groq, Mistral, xAI or a company vLLM / LiteLLM server with a Base URL, optional key and model name (Azure `api-key` header detected automatically).
 - **Batch Link — link from Autodesk Docs:** Link Models links cloud models straight from Autodesk Docs (path type Cloud), never their Desktop Connector copy — the default when the open model is a cloud model. A Desktop Connector folder narrows the list. **Manage Links → Switch to Cloud** re-points disk / Desktop Connector links to the same cloud model, keeping placement and worksets.
 - **Batch Link — View Display → Copy to This View:** copies a view template's RVT link display, Model and Annotation category tabs included, onto the active view, and warns when the view's own template controls its link display.
 - **MCP security (MCP Control → Advanced → Security):** read-only mode for AI apps; Revit asks Yes/No before an AI app deletes, purges, ungroups, syncs, saves as or closes without saving; `send_code_to_revit` shows the code and asks first (or can be turned off). The T3Lab Assistant is not affected.
@@ -28,6 +34,10 @@ Releasing a new version:
 - **Construction wiki & drawing rules for AI apps:** 8 new pages — when a sheet is finished and how to finish it with T3Lab tools, what architectural, structural (rebar notation, bar schedule) and MEP drawings must show, a check before issuing drawings, paper sizes / scales / line weights / symbols / title block, drawing set order and design stages, and a Vietnamese–English–Revit glossary. AI apps read them with the new read-only `t3lab_wiki` tool, and Revit's MCP server now tells them to read the drawing rules before drawing work. The T3Lab Assistant uses the same pages as skills.
 
 ### Changed
+- **OpenAI:** agent replies stream live; GPT-5 / o-series reasoning models get the right token-limit parameter and Deep reasoning → high effort; image, audio and codex models are hidden from the list. A provider that rejects a request parameter is retried without it instead of failing the turn.
+- **T3Lab Assistant dead code removed (~400 lines):** the switched-off reply action bar ("Try again", 👍/👎), the unwired Reset Chat handler, and the never-called `parse_command` / `parse_command_local` chain with the local model's old JSON prompt. No visible change.
+- **T3Lab Assistant code split:** `T3LabAssistantDialog.py` went from 11,930 to about 6,740 lines; helpers and seven method groups (sessions, projects, commands, documents, plans, spellcheck, tool cards) moved to `lib/GUI/assistant/`. No behaviour change intended. `docs/assistant-request-paths.md` maps every path a chat message can take.
+- **MCP:** the server reports the extension version (from `version.txt`) instead of 1.0.0.
 - **MCP confirmations say what the AI is doing, not how much code it sends:** `send_code_to_revit` now asks in Revit with the purpose of the code, e.g. *Run AI code in Revit: Add prefix A- to sheet numbers?*, and lists what T3Lab finds in the code: deletes, parameter changes, created elements, categories, transaction names, and file or network access. It no longer shows "N line(s) of IronPython". Other confirmations name the change too (*Delete 3 elements (id …)?*, *Close "Tower A" without saving?*). AI apps now send a one-line `description` with their code. In the T3Lab Assistant, tool cards and approval cards show the same summary instead of raw JSON.
 - **File task watcher** (`task.json` / `task.py`) no longer starts on its own: it runs code with no token. Click **Start Watcher** once to turn it on for later sessions. A task file left from before is never run.
 - **Usage tracking** no longer sends code, secrets or full paths (paths go as the file name only). README now lists it under Network Traffic.
@@ -37,6 +47,8 @@ Releasing a new version:
 - **MCP point cloud tools** (`list_point_clouds`, `analyze_point_cloud`, `detect_point_cloud_elements`): no AI app called them since usage tracking began. Scan-to-BIM stays in the **Point Cloud to Model** button.
 
 ### Fixed
+- **T3Lab Assistant:** when its language module cannot load (a broken install), a message the Assistant cannot answer gets the setup guidance instead of an error bubble (`keyword_parse` was undefined there).
+- **T3Lab Assistant:** opening the Assistant no longer logs "Local engine offer failed" every time (it called a method that never existed).
 - **MCP:** the port set in MCP Control is used again (48884–48894); the Manual Config snippet is valid JSON and matches the app setup; `tools/list` no longer waits behind a slow tool call; a call that timed out says whether it may still finish; failed tools are flagged `isError`; Claude no longer needs a restart when Revit created the token after it.
 - **ManaSched:** text cells with Excel's Accounting format no longer show a stray `_(` … `_)` around the text in Revit. `[Red]`-style colour codes and `\` escapes in text formats are no longer printed either.
 - **ManaSched:** Excel / Google Sheets cell borders now show in a schedule. Grid lines stay on (Revit hides every header border when they are off), borders use the line style's category id, and a line Excel saved on only one of two neighbouring cells (e.g. a header row's bottom border) reaches both.

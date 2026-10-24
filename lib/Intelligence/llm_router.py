@@ -620,7 +620,7 @@ def get_router():
 
 # ─── Pane chat helpers ──────────────────────────────────────────────────────────
 # Used by AssistantPaneControl (DockablePane) for lightweight chat without the
-# full JSON-intent pipeline that parse_command() uses.
+# Assistant window's agent / JSON-intent pipeline.
 
 _PANE_SYSTEM_PROMPT = (
     "You are T3Lab Assistant, an AI helper integrated directly into Autodesk Revit. "

@@ -100,7 +100,7 @@ ORIGINAL_MODULE_NAMES = (
     'launch_batchout_configured', 'launch_loadfamily', 'learn_pattern',
     'lib_dir', 'link_reader', 'load_chat_history', 'load_chat_session',
     'load_chat_summary', 'logger', 'make_generic_launcher',
-    'make_launcher_for', 'os', 'parse_command', 'parse_command_local',
+    'make_launcher_for', 'os',
     'parse_command_nlu', 're', 'revit', 'routing', 'run_in_api_context',
     'save_chat_history', 'script', 'show_assistant_dialog',
     'summarize_attachments', 'sys', 'telemetry',
@@ -679,7 +679,7 @@ class CompileAndImportTest(unittest.TestCase):
                 sys.modules['Intelligence.t3lab_assistant'] = saved
         deps = mods['deps']
         self.assertFalse(deps.HAS_NLP)
-        for name in ('keyword_parse', 'parse_command', 'has_api_key'):
+        for name in ('keyword_parse', 'has_api_key'):
             self.assertIs(getattr(dialog, name), getattr(deps, name), name)
         self.assertIsNone(dialog.keyword_parse(u'mở batchout'))
         self.assertFalse(dialog.has_api_key())

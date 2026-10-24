@@ -80,8 +80,7 @@ class AssistantSessions(object):
             viet = _ui_viet()
             self.win._append_bot_message(self._restored_banner(saved, viet,
                                                            hidden=hidden),
-                                     icon=_ICON_REFRESH, icon_color=_ICON_SLATE,
-                                     actions=False)
+                                     icon=_ICON_REFRESH, icon_color=_ICON_SLATE)
 
             for msg in replay:
                 role    = msg.get("role", "")
@@ -251,24 +250,6 @@ class AssistantSessions(object):
                               session=self._session_state())
         except Exception as ex:
             logger.debug(u"Could not persist message: {}".format(_exc_text(ex)))
-
-    def reset_chat_clicked(self, sender, e):
-        """Clear the chat history for this document and reset the UI."""
-        try:
-            # Resetting mid-request orphaned the live bubble and the stale
-            # _typing_row blocked the typing indicator for the session.
-            if getattr(self.win, '_busy', False):
-                self.win._append_bot_message(
-                    u"Still working on the current request — press Stop first, "
-                    u"then start a new conversation.",
-                    icon=_ICON_WARNING, icon_color=_ICON_AMBER)
-                return
-            self.win._reset_session_state(clear_transcript=True)
-            clear_chat_history(self.win._doc_key)
-            # No "refreshed" bubble: the welcome panel returns on an empty transcript.
-            self.win._update_welcome_greeting(fresh=True)
-        except Exception as ex:
-            logger.debug(u"reset_chat error: {}".format(_exc_text(ex)))
 
     def new_chat_clicked(self, sender=None, e=None):
         """Start a new chat conversation. Archive current session if it has messages."""
@@ -786,7 +767,7 @@ class AssistantSessions(object):
                     (u"{} older message{} not shown here, still part of the "
                      u"context.".format(hidden,
                                         u"s are" if hidden != 1 else u" is")),
-                    icon=_ICON_INFO, icon_color=_ICON_SLATE, actions=False)
+                    icon=_ICON_INFO, icon_color=_ICON_SLATE)
             for m in replay:
                 role = m.get("role", "")
                 content = m.get("content", "")

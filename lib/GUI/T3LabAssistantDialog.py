@@ -118,7 +118,7 @@ from GUI import AssistantGreetings as _greetings
 # tool launchers, chat-history persistence, icon & plan constants. Every name
 # is re-imported so `from GUI.T3LabAssistantDialog import X` keeps working.
 from GUI.assistant.deps import (learn_pattern, find_learned_match,
-                                has_local_llm, parse_command_local,
+                                has_local_llm,
                                 get_local_model_name, parse_command_nlu,
                                 inject_discovered_tools,
                                 get_active_provider_name,
@@ -145,7 +145,7 @@ from GUI.assistant.deps import (learn_pattern, find_learned_match,
                                 _get_uiapp)
 # The NLP names always exist (deps stubs them when the layer fails to load);
 # the BatchOut executor names only when its optional import worked.
-from GUI.assistant.deps import parse_command, has_api_key, keyword_parse
+from GUI.assistant.deps import has_api_key, keyword_parse
 try:
     from GUI.assistant.deps import configure_batchout_window, direct_export
 except ImportError:
@@ -256,7 +256,6 @@ class T3LabAssistantWindow(T3WPFWindow):
         self._conversation_history = []         # [{role, content}, ...] multi-turn context
         self._history_summary  = u''            # turns folded out of the window
         self._last_raw         = ''             # last user input (for learning)
-        self._last_result      = None           # last parsed result (for votes)
         self._doc_key          = _get_doc_key() # document identifier for history
         self._persisted_msgs   = []             # flat list with timestamps, for save/load
         # This chat's identity + its own memory (Intelligence.session_context).
@@ -279,13 +278,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         # ── Live streaming bubble state ───────────────────────────────────────
         self._stream_row       = None           # Grid row of the live reply
         self._stream_tb        = None           # TextBlock being filled token-by-token
-        self._stream_host      = None           # StackPanel holding body + action row
-
-        # ── Claude-style message actions ──────────────────────────────────────
-        # During "Try again": the answer becomes another version of that row
-        # and the user message is not echoed again.
-        self._retry_target_row   = None
-        self._suppress_user_echo = False
+        self._stream_host      = None           # StackPanel holding the reply body
 
         # ── Native agent loop state ───────────────────────────────────────────
         self._agent_loop        = None    # running AgentLoop (native tools path)
@@ -1478,7 +1471,7 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _reset_session_state(self, clear_transcript=True):
         """Drop everything tied to the OLD conversation scope. UI THREAD.
 
-        Shared by reset_chat_clicked / _activate_project / _create_new_project.
+        Shared by new_chat_clicked / _activate_project / _create_new_project.
         A stale `_stream_row` / `_typing_row` strands the answer in an orphaned
         TextBlock and stalls `_show_typing_indicator`.
         """
@@ -2371,9 +2364,6 @@ class T3LabAssistantWindow(T3WPFWindow):
             self._hide_typing_indicator()
             # Rotation means "thinking"; a finished turn stands still.
             self._stop_avatar_spins()
-            # An armed "Try again" target would file the next unrelated answer
-            # as a version of an old message.
-            self._retry_target_row = None
 
         # BeginInvoke lets the finish-handler stack unwind before the next send.
         if not busy and self._queued_inputs:
@@ -3571,13 +3561,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             raw = self.chat_input.Text.strip()
             attached = list(self._attached_files)   # snapshot
 
-            # Read-and-clear: "Try again" echo suppression is ONE-SHOT (left set,
-            # an early return below would swallow the next real message).
-            suppress_echo = self._suppress_user_echo
-            self._suppress_user_echo = False
-
             if not raw and not attached:
-                self._retry_target_row = None
                 return
 
             # this turn's language steers every string emitted (cards, notices)
@@ -3691,16 +3675,11 @@ class T3LabAssistantWindow(T3WPFWindow):
             self.chat_input.Text = ""
             self._last_raw = raw or u"[attached documents]"
 
-            # ── Show user message (not on "Try again": already on screen) ──
+            # ── Show user message ──
             display_text     = raw
             attachment_note  = summarize_attachments(attached) if attached else None
-            if not suppress_echo:
-                # drop a stale retry target (it'd capture an unrelated answer)
-                self._retry_target_row = None
-                self._append_user_message(display_text,
-                                          attachment_note=attachment_note)
-            # A retry records the prompt again on purpose: roles must alternate
-            # (Anthropic rejects two assistant turns in a row).
+            self._append_user_message(display_text,
+                                      attachment_note=attachment_note)
             history_text = (u"{}\n[attached: {}]".format(display_text, attachment_note)
                             if attachment_note else display_text)
             self._add_to_history("user", history_text)
@@ -3969,7 +3948,6 @@ class T3LabAssistantWindow(T3WPFWindow):
 
             use_local        = HAS_NLP and has_local_llm()
             use_claude       = HAS_NLP and has_api_key()   # True for any configured provider
-            _active_provider = get_active_provider_name()  # "claude" | "openai" | "ollama"
 
             # A /slash skill must reach the agent with its playbook — learned
             # patterns / NLU would hijack it (e.g. "/english-spellcheck").
@@ -4808,8 +4786,6 @@ class T3LabAssistantWindow(T3WPFWindow):
         message = result.get("message", "")
         params  = result.get("params", {})
         raw     = self._last_raw
-        # For 👍/👎 on the reply (_vote_decision).
-        self._last_result = dict(result or {})
 
         def _bot(msg):
             self._append_bot_message(msg)
@@ -5969,35 +5945,13 @@ class T3LabAssistantWindow(T3WPFWindow):
         text_block.Inlines.Add(Run(u"  "))
 
     # ─── Claude-style message actions ────────────────────────────────────────
-    # Line-art glyphs for the reply action row (same 1.5px / 24x24 language
-    # as the composer icons).
-
-    _ACT_COPY  = (u"M8 8h11a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Z "
-                  u"M4 16a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2")
-    _ACT_CHECK = u"M20 6 9 17l-5-5"
-    _ACT_RETRY = u"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8 M3 3v5h5"
-    _ACT_UP    = (u"M7 10v12 M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4"
-                  u"a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z")
-    _ACT_DOWN  = (u"M17 14V2 M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20"
-                  u"a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z")
-    _ACT_PREV  = u"M15 18l-6-6 6-6"
-    _ACT_NEXT  = u"M9 18l6-6-6-6"
-
-
-    def _make_message_actions(self, row):
-        """The action/feedback bar under assistant replies — disabled per user request."""
-        return None
-
-
     def _refresh_reply_row(self, row):
-        """Re-render a reply row's body + action bar from its Tag state."""
+        """Re-render a reply row's body (full markdown) from its Tag state."""
         from System.Windows.Controls import TextBlock
         from System.Windows import TextWrapping
 
         state = row.Tag or {}
-        versions = state.get('versions') or [u""]
-        idx = max(0, min(state.get('index', 0), len(versions) - 1))
-        text = versions[idx]
+        text = state.get('text') or u""
 
         host = state.get('host')
         if host is None:
@@ -6015,58 +5969,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             body.LineHeight   = 21
             body.Text         = text
         host.Children.Add(body)
-        acts = self._make_message_actions(row)
-        if acts is not None:
-            host.Children.Add(acts)
 
-    # ─── Action handlers ─────────────────────────────────────────────────────
-
-
-    def _vote_decision(self):
-        """Snapshot of how the current turn was routed, for the vote loop.
-
-        Taken at row build time so a late vote refers to its own turn.
-        """
-        dec = getattr(self, '_agent_decision', None) or {}
-        last = getattr(self, '_last_result', None) or {}
-        return {
-            'raw':        getattr(self, '_last_raw', u"") or u"",
-            'intent':     last.get('intent'),
-            'params':     last.get('params') or {},
-            'message':    last.get('message') or u"",
-            'skill':      dec.get('skill'),
-            'specialist': dec.get('specialist'),
-        }
-
-
-    def _adopt_retry_version(self, text, icon=None, icon_color=None):
-        """File `text` as another version of the row Try again was pressed on.
-
-        True = adopted (caller must NOT append a row). On False the reply
-        lands as a new message, so a broken regenerate never swallows it.
-        """
-        row = getattr(self, '_retry_target_row', None)
-        if row is None:
-            return False
-        self._retry_target_row = None
-        try:
-            state = row.Tag or {}
-            versions = state.get('versions')
-            if not isinstance(versions, list):
-                return False
-            versions.append(text)
-            state['versions']   = versions
-            state['index']      = len(versions) - 1
-            state['icon']       = icon
-            state['icon_color'] = icon_color
-            state['vote']       = None
-            row.Tag = state
-            self._refresh_reply_row(row)
-            self._scroll_to_bottom()
-            return True
-        except Exception as ex:
-            logger.debug(u"_adopt_retry_version failed: {}".format(_exc_text(ex)))
-            return False
 
     def _append_user_message(self, text, attachment_note=None):
         """Add the user's message as right-aligned text.
@@ -6465,7 +6368,7 @@ class T3LabAssistantWindow(T3WPFWindow):
             panel.Children.Add(_new_tb())
         return panel
 
-    def _append_bot_message(self, text, icon=None, icon_color=None, actions=True):
+    def _append_bot_message(self, text, icon=None, icon_color=None):
         """Add an assistant reply — full-width text on the pane, no bubble
         (in a ~320px docked pane a bubble + avatar gutter leaves two-word lines).
 
@@ -6474,11 +6377,6 @@ class T3LabAssistantWindow(T3WPFWindow):
         # A blank row looks like a broken answer.
         if not (text or u"").strip() and icon is None:
             return
-
-        # A pending "Try again" folds this answer into its row.
-        if getattr(self, '_retry_target_row', None) is not None:
-            if self._adopt_retry_version(text, icon=icon, icon_color=icon_color):
-                return
 
         try:
             from System.Windows.Controls import TextBlock, Grid, StackPanel, ColumnDefinition
@@ -6494,18 +6392,9 @@ class T3LabAssistantWindow(T3WPFWindow):
             Grid.SetColumn(host, 0)
             row.Children.Add(host)
 
-            # Action-row state: versions, and the prompt (for Try again).
-            row.Tag = {
-                'versions':   [text],
-                'index':      0,
-                'icon':       icon,
-                'icon_color': icon_color,
-                'vote':       None,
-                'host':       host,
-                'prompt':     getattr(self, '_last_raw', u"") or u"",
-                # So a 👍/👎 can act on the route.
-                'decision':   self._vote_decision(),
-            }
+            # What _refresh_reply_row needs to re-render the body.
+            row.Tag = {'text': text, 'icon': icon, 'icon_color': icon_color,
+                       'host': host}
 
             try:
                 content = self._render_md_blocks(text, icon=icon, icon_color=icon_color)
@@ -6518,14 +6407,6 @@ class T3LabAssistantWindow(T3WPFWindow):
                 content.LineHeight   = 21
                 content.Text         = text
             host.Children.Add(content)
-
-            if actions:
-                try:
-                    acts = self._make_message_actions(row)
-                    if acts is not None:
-                        host.Children.Add(acts)
-                except Exception as ex:
-                    logger.debug(u"message actions skipped: {}".format(_exc_text(ex)))
 
             self.chat_history_panel.Children.Add(row)
             self._scroll_to_bottom()
@@ -6582,24 +6463,10 @@ class T3LabAssistantWindow(T3WPFWindow):
             row  = self._stream_row
             host = getattr(self, '_stream_host', None)
 
-            # Pending "Try again": fold into its row, drop the stream row.
-            if getattr(self, '_retry_target_row', None) is not None:
-                if self._adopt_retry_version(text):
-                    self._remove_stream_bubble()
-                    return
-
             if host is not None and row is not None:
                 # Promote to a full reply row, as _append_bot_message builds.
-                row.Tag = {
-                    'versions':   [text],
-                    'index':      0,
-                    'icon':       None,
-                    'icon_color': None,
-                    'vote':       None,
-                    'host':       host,
-                    'prompt':     getattr(self, '_last_raw', u"") or u"",
-                    'decision':   self._vote_decision(),
-                }
+                row.Tag = {'text': text, 'icon': None, 'icon_color': None,
+                           'host': host}
                 self._refresh_reply_row(row)
             else:
                 tb.Inlines.Clear()

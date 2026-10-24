@@ -151,7 +151,7 @@ _EXTRA_TOOLS_SECTION = ''   # set by inject_discovered_tools()
 def inject_discovered_tools(tools):
     """
     Called by the Assistant window after tool discovery.
-    Stores extra intent lines so parse_command() includes them in the prompt.
+    Stores extra intent lines so _build_system_prompt() includes them.
 
     Args:
         tools: list of tool dicts from tool_discovery.get_registered_tools()
@@ -416,91 +416,6 @@ def _get_api_key():
         return T3LabAISettings().get_api_key("Claude")
     except Exception:
         return None
-
-
-def _extract_json(text):
-    """Extract the first JSON object from text, tolerating surrounding noise."""
-    try:
-        return json.loads(text.strip())
-    except Exception:
-        pass
-    match = re.search(r'\{[\s\S]*\}', text)
-    if match:
-        try:
-            return json.loads(match.group())
-        except Exception:
-            pass
-    return None
-
-
-def parse_command(user_input, history=None, attached_files=None, rag_context=None):
-    """Parse a natural-language command via the active LLM provider.
-
-    Routes through LLMRouter (Claude / OpenAI / Ollama) with automatic
-    fallback.  Vision and RAG attachments are forwarded when the active
-    provider supports them; text-only extraction is used otherwise.
-
-    Args:
-        user_input: The raw text the user typed.
-        history: optional list of previous {"role", "content"} dicts.
-        attached_files: optional list of local file paths to attach.
-        rag_context: optional string of pre-extracted document text.
-
-    Returns:
-        dict with keys {intent, params, message} on success, or None on failure.
-    """
-    # ── Build content blocks for vision / RAG ──────────────────────────────────
-    content_blocks = None
-    if attached_files or rag_context:
-        try:
-            from Intelligence.rag_processor import build_vision_content_blocks
-            files = attached_files or []
-            content_blocks = build_vision_content_blocks(user_input, files)
-            if rag_context and not any(
-                    'PDF' in b.get('text', '') for b in content_blocks
-                    if b.get('type') == 'text'):
-                content_blocks.insert(0, {"type": "text", "text": rag_context})
-        except Exception:
-            content_blocks = None
-
-    user_content = content_blocks if content_blocks else user_input
-    max_tokens   = 1200 if (attached_files or rag_context) else 400
-
-    system_prompt = _build_system_prompt()
-    if attached_files or rag_context:
-        system_prompt = _RAG_SYSTEM_PREFIX + system_prompt
-
-    # ── Delegate to router ─────────────────────────────────────────────────────
-    try:
-        from Intelligence.llm_router import LLMRouter
-        router = LLMRouter()
-        # As much history as the active model's window has left after this
-        # request's system prompt and user turn (was a fixed 16).
-        try:
-            from Intelligence.context_budget import fit_history
-            messages = fit_history(history, router.get_active_provider(),
-                                   system_prompt=system_prompt,
-                                   user=user_content, reply_tokens=max_tokens)
-        except Exception:
-            messages = list(history[-16:]) if history else []
-        raw_text = router.chat(messages, system_prompt, user_content, max_tokens)
-    except Exception:
-        raw_text = None
-
-    if raw_text is None:
-        return None
-
-    result = _extract_json(raw_text)
-
-    # Free-text response from a RAG/vision request → wrap as chat intent
-    if result is None and (attached_files or rag_context):
-        result = {
-            "intent":  "chat",
-            "params":  {},
-            "message": raw_text,
-        }
-
-    return result
 
 
 def has_api_key():
@@ -852,20 +767,6 @@ def get_local_model_name():
         return None
     try:
         return mod.get_best_model()
-    except Exception:
-        return None
-
-
-def parse_command_local(user_input, history=None):
-    """Parse user_input using local Ollama LLM.
-
-    Returns dict {intent, params, message} or None.
-    """
-    mod = _get_local_llm()
-    if not mod:
-        return None
-    try:
-        return mod.parse_command(user_input, history=history)
     except Exception:
         return None
 

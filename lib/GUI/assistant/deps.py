@@ -22,9 +22,9 @@ from GUI.assistant.text import _exc_text
 
 # ─── NLP module ───────────────────────────────────────────────────────────────
 try:
-    from Intelligence.t3lab_assistant import (parse_command, has_api_key, keyword_parse,
+    from Intelligence.t3lab_assistant import (has_api_key, keyword_parse,
                                               learn_pattern, find_learned_match,
-                                              has_local_llm, parse_command_local,
+                                              has_local_llm,
                                               get_local_model_name, parse_command_nlu,
                                               inject_discovered_tools,
                                               get_active_provider_name,
@@ -40,12 +40,10 @@ except Exception as e:
     # missing name there was a NameError bubble on a broken install. Without
     # the NLP layer nothing parses, so the caller shows the guidance below.
     def keyword_parse(*a, **kw): return None
-    def parse_command(*a, **kw): return None
     def has_api_key(*a, **kw): return False
     def learn_pattern(*a, **kw): pass
     def find_learned_match(*a, **kw): return None
     def has_local_llm(*a, **kw): return False
-    def parse_command_local(*a, **kw): return None
     def get_local_model_name(*a, **kw): return None
     def parse_command_nlu(*a, **kw): return None
     def inject_discovered_tools(*a, **kw): pass

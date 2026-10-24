@@ -128,18 +128,12 @@ Nothing was removed. Every rung above is reachable:
   to it.
 - Rung 15 is the no-provider install.
 
-Dead code found on the way (left in place, it is not a request path and the
-same file is shared with t3lab_dev):
-
-- `_suppress_user_echo` is initialised `False` and only ever reset to `False`
-  ("Try again" was removed with the message action bar —
-  `_make_message_actions` returns `None`), so the "don't echo the user
-  message" branch in `_process_input` never runs. `_adopt_retry_version`,
-  `_refresh_reply_row` and `_vote_decision` belong to the same disabled bar.
-- `reset_chat_clicked` has no caller and no XAML wiring (New chat is
-  `new_chat_clicked`).
-- `parse_command` / `parse_command_local` (`Intelligence.t3lab_assistant`)
-  are imported by the dialog but no chat path calls them.
+Dead code found on the way was removed on 2026-10-24: the disabled reply
+action bar ("Try again" versions, 👍/👎 votes, the user-echo suppression),
+the unwired `reset_chat_clicked`, and the never-called `parse_command` /
+`parse_command_local` chain (with `local_llm.parse_command` and its
+prompt). `lite_guard/test_assistant_structure.py` keeps calls to missing
+methods from coming back.
 
 ## Proposal: one `AgentLoop` path (not done — it changes behaviour)
 

@@ -38,7 +38,6 @@ Environment variable
 
 import json
 import os
-import re
 
 # ─── HTTP back-end selection ───────────────────────────────────────────────────
 # Try .NET HttpWebRequest first (available in IronPython / pyRevit)
@@ -101,63 +100,6 @@ PREFERRED_MODELS = [
     "qwen3:30b-a3b",
     "qwen3:32b",
 ]
-
-# ─── System prompt (tuned for small models: concise, structured) ───────────────
-
-SYSTEM_PROMPT = u"""\
-You are T3Lab Assistant for Autodesk Revit. Your job: read user input and \
-return a single JSON object. No explanation, no markdown, only JSON.
-
-INTENTS (pick the best one):
-  export_direct           - export/print sheets without opening UI
-  open_batchout_configured- open BatchOut pre-configured
-  open_batchout           - open BatchOut (no config)
-  open_loadfamily         - open the Family Loader
-  help                    - answer a question about T3Lab
-  greet                   - reply to a greeting
-  chat                    - general conversation
-  unknown                 - cannot understand
-
-PARAMS for export_direct / open_batchout_configured:
-  format: "pdf"|"dwg"|"dwf"|"dgn"|"ifc"|"nwd"|"img"  (default "pdf")
-  filter: sheet-prefix letter like "G", "A", "S" — or "" for all sheets
-  combine: false
-
-RULES:
-- "xuất/export + format" with no "mở/open" → export_direct
-- "mở batchout" + extra info → open_batchout_configured
-- "mở batchout" alone → open_batchout
-- Reply in the SAME language as the user (Vietnamese or English).
-
-OUTPUT (JSON only, no other text):
-{"intent":"<intent>","params":{<params>},"message":"<short friendly reply>"}
-
-EXAMPLES:
-input:  xuất pdf G sheet
-output: {"intent":"export_direct","params":{"format":"pdf","filter":"G","combine":false},"message":"Đang xuất G sheet sang PDF..."}
-
-input:  export all sheets to dwg
-output: {"intent":"export_direct","params":{"format":"dwg","filter":"","combine":false},"message":"Exporting all sheets to DWG..."}
-
-input:  mở batchout
-output: {"intent":"open_batchout","params":{},"message":"Đang mở BatchOut..."}
-
-input:  mở batchout G sheet pdf
-output: {"intent":"open_batchout_configured","params":{"format":"pdf","filter":"G"},"message":"Mở BatchOut với G sheet..."}
-
-input:  load family
-output: {"intent":"open_loadfamily","params":{},"message":"Đang mở Family Loader..."}
-
-input:  hello
-output: {"intent":"greet","params":{},"message":"Hello! I'm T3Lab Assistant. How can I help?"}
-
-input:  batchout là gì
-output: {"intent":"help","params":{"answer":"BatchOut xuất hàng loạt sheets sang PDF, DWG, DWF..."},"message":"BatchOut là công cụ xuất sheets hàng loạt."}
-
-input:  cảm ơn
-output: {"intent":"chat","params":{},"message":"Không có gì! Cần gì cứ hỏi nhé."}
-"""
-
 
 # ─── HTTP helpers ──────────────────────────────────────────────────────────────
 
@@ -399,85 +341,3 @@ def get_best_model(prefer_capable=False, host=None):
     of relying on a hardcoded whitelist.
     """
     return pick_best(list_models(host=host), prefer_capable=prefer_capable)
-
-
-def parse_command(user_input, history=None, model=None):
-    """Ask the local Ollama LLM to parse a natural-language command.
-
-    Args:
-        user_input: raw text from user.
-        history: list of {role, content} dicts (conversation context).
-        model: explicit model name; auto-selects best if None.
-
-    Returns:
-        dict with keys {intent, params, message}, or None on failure.
-    """
-    if model is None:
-        model = get_best_model()
-    if not model:
-        return None
-
-    _sys = SYSTEM_PROMPT
-    try:
-        from Intelligence.t3lab_agent import build_system_prompt
-        _sys = build_system_prompt()
-    except Exception:
-        pass
-    messages = [{"role": "system", "content": _sys}]
-
-    if history:
-        # num_ctx is pinned to 8192 below — history gets what that window
-        # has left after this request's system prompt and the user turn.
-        from Intelligence.context_budget import (fit_messages, history_budget,
-                                                 request_overhead)
-        _hist, _dropped = fit_messages(history, history_budget(
-            8192, local=True, overhead=request_overhead(_sys, None, user_input)))
-        for h in _hist:
-            role    = h.get("role", "user")
-            content = h.get("content", "")
-            if role in ("user", "assistant") and content:
-                messages.append({"role": role, "content": content})
-
-    messages.append({"role": "user", "content": user_input})
-
-    try:
-        resp_text = _post_json(
-            get_host() + "/api/chat",
-            {
-                "model":   model,
-                "messages": messages,
-                "stream":  False,
-                "format":  "json",          # force JSON output mode
-                "options": {
-                    "temperature": 0.0,     # deterministic
-                    "num_predict": 300,
-                    # Ollama's default context (2048–4096) silently truncates
-                    # the tool-catalog system prompt — see ollama_provider.py
-                    "num_ctx":     8192,
-                },
-            },
-            timeout=TIMEOUT_GEN,
-        )
-        data    = json.loads(resp_text)
-        content = data.get("message", {}).get("content", "")
-        return _extract_json(content)
-    except Exception:
-        return None
-
-
-# ─── JSON extraction ──────────────────────────────────────────────────────────
-
-def _extract_json(text):
-    """Parse the first JSON object from LLM response text."""
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    m = re.search(r'\{[\s\S]*\}', text)
-    if m:
-        try:
-            return json.loads(m.group())
-        except Exception:
-            pass
-    return None

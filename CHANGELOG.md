@@ -20,6 +20,8 @@ Releasing a new version:
 ## [Unreleased]
 
 ### Added
+- **Project memory shared with Claude:** the T3Lab Assistant and AI apps (Claude Desktop, Claude Code ...) now use one project memory. AI apps search it with the new MCP tool `t3lab_memory` (also the resource `t3lab://memory/project`) and save conventions with `t3lab_memory_save`; the Assistant sees them in its next chat. Claude Code's memory of the folders linked to the project (CLAUDE.md, auto memory) is searched too, read only — switch it off in LLMs Setting → General.
+- **T3Lab Assistant — smaller prompts:** a long memory, or one with Claude Code notes, now reaches the prompt as an index (newest facts + counts) and the Assistant looks up the rest with `recall_memory` when the task needs it, instead of carrying every fact in every message.
 - **MCP protocol 2026-07-28:** AI apps on the newest MCP version connect without a handshake (`server/discover`), next to apps on 2025-11-25 … 2024-11-05. Both work with Revit closed.
 - **MCP resources and prompts:** every wiki page is an MCP resource (`t3lab://wiki/<page>`) you can attach in the AI app, and three prompts start the common jobs: `complete-drawings`, `issue-drawings`, `model-health-check`.
 - **MCP toolsets (MCP Control → Advanced → Security):** Full, Standard (no teaching tools) or Documentation (read, views, sheets, annotation, export — nothing that models or deletes). Fewer tools = fewer tokens per request.

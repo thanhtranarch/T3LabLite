@@ -7,7 +7,8 @@
 # and the MCP server / bridge / security policy tests (lite_guard/test_mcp_server.py)
 # and the LLM provider tests (lite_guard/test_llm_providers.py)
 # and the Assistant's remote MCP server tests (lite_guard/test_assistant_mcp.py)
-# and the Assistant window split tests (lite_guard/test_assistant_structure.py).
+# and the Assistant window split tests (lite_guard/test_assistant_structure.py)
+# and the shared project memory tests (lite_guard/test_memory_hub.py).
 name: Lite guard
 
 on:
@@ -38,3 +39,5 @@ jobs:
         run: python3 lite_guard/test_assistant_mcp.py
       - name: Test the Assistant window split (XAML handlers, moved methods)
         run: python3 lite_guard/test_assistant_structure.py
+      - name: Test the project memory shared with Claude (memory hub)
+        run: python3 lite_guard/test_memory_hub.py

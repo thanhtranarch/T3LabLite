@@ -579,11 +579,15 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
                 response['result'] = server._handle_tool_call(params)
             elif method == 'resources/list':
                 response['result'] = mcp_wiki.resource_list()
+                memory = _memory_resource()
+                if memory:
+                    response['result']['resources'].append(memory)
             elif method == 'resources/templates/list':
                 response['result'] = mcp_wiki.resource_templates()
             elif method == 'resources/read':
                 uri = params.get('uri')
-                result = mcp_wiki.read_resource(uri)
+                result = (_memory_read_resource(uri)
+                          or mcp_wiki.read_resource(uri))
                 if result is None:
                     response = mcp_policy.resource_not_found(
                         request_id, uri, modern)
@@ -611,6 +615,29 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
 
         server._commands_processed += 1
         self._send_json(mcp_policy.finish_result(response, method, modern))
+
+
+def _memory_schema(name):
+    """A tool schema from Intelligence/memory_hub.py (copied: the registry
+    entry must not share a dict with the Assistant's copy)."""
+    from Intelligence import memory_hub
+    return dict(getattr(memory_hub, name))
+
+
+def _memory_resource():
+    try:
+        from Intelligence import memory_hub
+        return memory_hub.resource_entry()
+    except Exception:
+        return None
+
+
+def _memory_read_resource(uri):
+    try:
+        from Intelligence import memory_hub
+        return memory_hub.read_resource(uri)
+    except Exception:
+        return None
 
 
 class T3LabAIServer(object):
@@ -866,6 +893,12 @@ class T3LabAIServer(object):
             # Files only, answered without Revit — see core/mcp_wiki.py. The
             # Assistant gets the same pages injected by SkillsEngine instead.
             mcp_wiki.TOOL_NAME: mcp_wiki.TOOL_SCHEMA,
+            # ── Project memory (external MCP clients) ───────────────────────
+            # T3Lab facts + the project's Claude Code memory, answered without
+            # Revit — see Intelligence/memory_hub.py. The Assistant uses its
+            # own recall_memory / remember_fact instead.
+            't3lab_memory': _memory_schema('READ_TOOL_SCHEMA'),
+            't3lab_memory_save': _memory_schema('SAVE_TOOL_SCHEMA'),
             'revit_get_active_view': {
                 'name': 'revit_get_active_view',
                 'description': 'Get information about the currently active view in Revit',
@@ -3340,7 +3373,8 @@ class T3LabAIServer(object):
         # Wiki reads stay out too: the local model is trained on these steps
         # and has no t3lab_wiki tool (its playbooks are injected instead).
         if tool_name in (self._TEACH_BEGIN_TOOL, self._TEACH_END_TOOL,
-                         mcp_wiki.TOOL_NAME):
+                         mcp_wiki.TOOL_NAME, 't3lab_memory',
+                         't3lab_memory_save'):
             return
         try:
             from core import teaching
@@ -3979,6 +4013,13 @@ class T3LabAIServer(object):
             # Wiki pages are files, not Revit: answered on this thread, with or
             # without a document, never queued behind the ExternalEvent.
             return mcp_wiki.call(arguments)
+        if tool_name in ('t3lab_memory', 't3lab_memory_save'):
+            # The memory is a JSON file + Claude Code's markdown: same as the
+            # wiki, no Revit and no ExternalEvent.
+            from Intelligence import memory_hub
+            if tool_name == 't3lab_memory':
+                return memory_hub.call_read(arguments)
+            return memory_hub.call_save(arguments)
         if confirm and not self._external_event:
             return {'error': ('{} needs the user to confirm it in Revit, but the '
                               'Revit ExternalEvent is not ready.'.format(tool_name)),

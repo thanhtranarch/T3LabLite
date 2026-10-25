@@ -4,8 +4,8 @@ Hai pushbutton tách rời trên ribbon (`Support.panel`), nhưng dùng chung đ
 
 | Thành phần | Đường dẫn |
 |------------|-----------|
-| T3Lab Assistant | `T3Lab.extension/T3Lab Docs.tab/Support.panel/T3LabAssistant.pushbutton/script.py` |
-| LLMs Setting | `T3Lab.extension/T3Lab Docs.tab/Support.panel/Assistant Tools.stack/LLMsSetting.pushbutton/script.py` → `lib/GUI/LLMSettingDialog.py` |
+| T3Lab Assistant | `T3Lab.tab/Support.panel/T3LabAssistant.pushbutton/script.py` |
+| LLMs Setting | `T3Lab.tab/Support.panel/Settings.pulldown/LLMsSetting.pushbutton/script.py` → `lib/GUI/LLMSettingDialog.py` |
 | Router (singleton) | `T3Lab.extension/lib/Intelligence/llm_router.py` |
 | Cấu hình bền vững | `T3Lab.extension/lib/config/settings.py` → `%APPDATA%\T3LabAI\settings.json` |
 
@@ -19,7 +19,7 @@ Không có tham chiếu trực tiếp nào khác giữa hai UI này.
 flowchart LR
     subgraph UI["Ribbon — Support panel"]
         A["T3Lab Assistant<br/><small>cửa sổ chat / DockablePane</small>"]
-        S["LLMs Setting<br/><small>dialog 5 tab</small>"]
+        S["LLMs Setting<br/><small>dialog 6 tab</small>"]
     end
 
     subgraph CORE["lib — lõi dùng chung"]
@@ -76,9 +76,11 @@ sequenceDiagram
     R-->>D: đổ vào status cache 30s
     D-->>U: chấm trạng thái xanh / xám
 
-    U->>D: Dán API key → Save
-    D->>S: set_api_key provider
-    D->>P: reload_credentials + validate
+    U->>D: Dán API key → Save API Key
+    D->>P: validate_key(key) — key CHƯA lưu
+    P-->>D: danh sách model live (hoặc rỗng = từ chối)
+    D->>S: set_api_key provider (chỉ khi hợp lệ; False → báo lỗi)
+    D->>P: reload_credentials
     Note over S,P: Provider luôn đọc key tươi từ settings,<br/>không cache trong RAM
 
     U->>D: Đóng dialog
@@ -143,9 +145,9 @@ Bậc fast-context answer đang tắt (`_FAST_CONTEXT_ENABLED = False`).
 flowchart TD
     REQ["router.chat / chat_stream"] --> ACT["Provider đang active"]
     ACT -- "trả về text" --> OK["Kết quả"]
-    ACT -- "lỗi / None" --> FB{"fallback bật?"}
-    FB -- không --> NONE["None → thông báo lỗi"]
-    FB -- có --> CHAIN["Duyệt FALLBACK_CHAIN<br/>claude → openai → gemini → deepseek → custom → ollama → lmstudio"]
+    ACT -- "lỗi / None" --> FB{"set_fallback(True)?<br/>mặc định TẮT"}
+    FB -- không --> NONE["None + get_last_error() → thông báo lỗi"]
+    FB -- có --> CHAIN["get_fallback_candidates()<br/>thứ tự: claude → openai → gemini → deepseek → custom → ollama → lmstudio<br/>provider local chỉ sang local, không bao giờ lên cloud;<br/>không chuyển model_override sang vendor khác"]
     CHAIN --> HC{"check_health<br/>đạt?"}
     HC -- không --> CHAIN
     HC -- có --> OK
@@ -168,18 +170,41 @@ flowchart TD
 
 ---
 
+## D-05 · Auto model switch (Claude)
+
+`Intelligence/model_tier.py` — bật/tắt: LLMs Setting ▸ General ▸ **Auto model (Claude)** (`agents.auto_model`, mặc định bật).
+
+```mermaid
+flowchart LR
+    Q["Tin nhắn<br/>(sau NLU + dispatcher)"] --> T{"Haiku triage<br/>1 call · không thinking · ≤120 token"}
+    T -- fast --> H["Haiku<br/>trả lời luôn"]
+    T -- standard --> S["Sonnet<br/>+ brief của Haiku"]
+    T -- deep --> O["Opus<br/>+ brief của Haiku"]
+    T -. "lỗi / timeout 6s" .-> S
+```
+
+- Tier → role của provider (`fast` / `agent` / `quality`), nên id model vẫn lấy từ `/v1/models`; role ghim trong `model_roles` vẫn thắng.
+- Sàn tối thiểu không cần model: ảnh đính kèm, specialist `modeling` / `multi_doc` / `comment` / `qa_check` → ít nhất Sonnet; có khối code → Opus.
+- Câu trả lời cho câu hỏi làm rõ giữ model của lượt trước. Cùng câu hỏi trong 10 phút dùng lại kết quả triage (cache).
+- **Maximum quality** bật → bỏ qua auto, luôn dùng model mạnh nhất. Chỉ áp cho Claude.
+- Đánh đổi: prompt cache tách theo model, nên lượt đổi tier không đọc lại được cache system + tool schema của lượt trước.
+
+---
+
 ## settings.json — ai ghi, ai đọc
 
 | Khoá | Ghi bởi | Đọc bởi | Ảnh hưởng |
 |------|---------|---------|-----------|
-| `api_keys` | Setting · Onboarding | Provider adapters | Quyết định provider có "available" hay không |
-| `active_provider` | Setting · chip model · Onboarding | `LLMRouter._restore_settings` | Provider mặc định khi mở Revit lần sau. **Seed lần đầu = `ollama`** (Qwen local, riêng tư + zero API cost); lựa chọn đã lưu vẫn thắng, fallback chain vẫn với tới cloud khi Ollama chưa sẵn sàng |
-| `model_preferences` | Setting (Save model) | Router + `get_status_instant` | Model hiển thị trên chip khi chưa probe |
+| `api_keys` | Setting · Onboarding | Provider adapters | Quyết định provider có "available" hay không. Lưu dạng `dpapi:...` (Windows DPAPI, CurrentUser — chỉ đúng tài khoản Windows trên đúng máy đọc lại được; `config/secret_store.py`). DPAPI lỗi lúc lưu → key nằm dạng plain text **và** dialog cảnh báo. Blob của tài khoản/máy khác → UI báo "Saved key can't be read on this Windows account — paste it again". Key plain text của bản cũ được mã hoá một lần khi phiên mới khởi động (`migrate_plaintext_keys`), không phải trong getter |
+| env `ANTHROPIC_API_KEY` · `OPENAI_API_KEY` · `DEEPSEEK_API_KEY` | người dùng / IT | `get_api_key` | Chỉ dùng khi chưa có key lưu; chỉ đọc, không bao giờ ghi vào `settings.json`. Key lưu trong Setting thắng env |
+| `active_provider` | Setting · chip model · Onboarding | `LLMRouter._restore_settings` | Provider mặc định khi mở Revit lần sau. **Seed lần đầu và giá trị khi thiếu khoá = `DEFAULT_PROVIDER` (`ollama`)** (Qwen local, riêng tư + zero API cost); lựa chọn đã lưu vẫn thắng. Không có fallback ngầm sang cloud |
+| `model_preferences` | Setting (chọn trong combo model — lưu ngay) | Router + `get_status_instant` | Model hiển thị trên chip khi chưa probe |
 | `Ollama_Host` · `LMStudio_Host` | Setting (tab Models) | Local provider adapters | Địa chỉ engine cục bộ |
 | `username` | Setting (tab General) | Assistant — lời chào | `_update_welcome_greeting` |
 | `agents.*` · `action_mode` | Setting (tab General) | Dispatcher + Assistant | Multi-agent, LLM classify, quality mode, auto/confirm |
 | knowledge dirs | Setting (tab Knowledge) | `knowledge_store` · RAG | Kho tài liệu được index |
-| `disabled_skills` | Setting (tab Skills) | `SkillsEngine` | Skill nào hiện trong popup dấu `/` |
+| `skills.disabled` | Setting (tab Skills) | `SkillsEngine` | Skill nào hiện trong popup dấu `/` |
+| Tool Hub session (`%APPDATA%\T3LabAI`, DPAPI) | Setting (tab Tool Hub) · `/toolhub login` | `Intelligence/toolhub` | Đăng nhập / sync catalog / tool của tôi. Mở nhanh: gõ `/toolhub` hoặc chọn **Tool Hub** trong popup `/` |
 | `active_project` | Setting (tab Projects) · chip project | Assistant + context digest | Instruction, memory, file ngữ cảnh của workspace |
 
 Mọi setter đều reload từ đĩa trước khi ghi; file hỏng bị cách ly thành

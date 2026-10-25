@@ -72,12 +72,15 @@ class FakeHTTP(object):
         self.get_reply = None
         self.post_replies = []     # str or Exception, FIFO
         self.stream_replies = []   # list of lines or Exception, FIFO
+        self.cancels = []          # cancel= of every post / stream
 
     def http_get_auth(self, url, headers=None, timeout_ms=8000):
         self.gets.append((url, dict(headers or {})))
         return self.get_reply
 
-    def http_post(self, url, payload, headers=None, timeout_ms=60000):
+    def http_post(self, url, payload, headers=None, timeout_ms=60000,
+                  cancel=None):
+        self.cancels.append(cancel)
         self.posts.append((url, json.loads(json.dumps(payload)),
                            dict(headers or {})))
         reply = self.post_replies.pop(0)
@@ -86,7 +89,8 @@ class FakeHTTP(object):
         return reply
 
     def http_post_stream(self, url, payload, headers=None, on_line=None,
-                         timeout_ms=120000):
+                         timeout_ms=120000, cancel=None):
+        self.cancels.append(cancel)
         self.streams.append((url, json.loads(json.dumps(payload)),
                              dict(headers or {})))
         reply = self.stream_replies.pop(0)
@@ -362,6 +366,29 @@ class AgentTurnTests(ProviderTestCase):
                                   'content': u'{"ok": true}'})
         self.assertEqual(out[1]['content'], u'{"cancelled": true}')
 
+    def test_cancel_token_reaches_the_request_and_usage_is_asked(self):
+        self.http.stream_replies.append(_sse(
+            {'choices': [{'index': 0, 'delta': {'content': u'Hi'},
+                          'finish_reason': 'stop'}]},
+            {'choices': [], 'usage': {'prompt_tokens': 10,
+                                      'completion_tokens': 2}}))
+        token = llm_provider.CancelToken()
+        res = self.p.chat_agent(u'sys', [{'role': 'user', 'content': u'x'}],
+                                self.TOOLS, cancel=token)
+        self.assertIs(self.http.cancels[0], token)
+        self.assertEqual(self.http.streams[0][1]['stream_options'],
+                         {'include_usage': True})
+        self.assertEqual(res['usage']['input_tokens'], 10)
+        self.assertEqual(res['usage']['output_tokens'], 2)
+
+    def test_cancelled_stream_is_not_retried_as_a_blocking_call(self):
+        self.http.stream_replies.append(llm_provider.RequestCancelled('cancelled'))
+        with self.assertRaises(llm_provider.RequestCancelled):
+            self.p.chat_agent(u'sys', [{'role': 'user', 'content': u'x'}],
+                              self.TOOLS, cancel=llm_provider.CancelToken())
+        self.assertEqual(self.http.posts, [])
+        self.assertEqual(len(self.http.streams), 1)
+
     def test_blocking_helper_parses_object_and_string_arguments(self):
         self.http.post_replies.append(_chat_reply(u'<think>x</think>Done', tool_calls=[
             {'id': 'c1', 'type': 'function',
@@ -476,6 +503,15 @@ class CustomProviderTests(ProviderTestCase):
         self._configure('https://openrouter.ai/api/v1/', key='or-key')
         self.assertEqual(self.p._url('chat/completions'),
                          'https://openrouter.ai/api/v1/chat/completions')
+
+    def test_custom_stream_does_not_send_stream_options(self):
+        # Gateways may reject the unknown field; only OpenAI asks for usage.
+        self._configure('http://h:8000/v1', model=u'qwen3', key='k')
+        self.http.stream_replies.append(_sse(
+            {'choices': [{'index': 0, 'delta': {'content': u'ok'},
+                          'finish_reason': 'stop'}]}))
+        self.p.chat_agent(u'sys', [{'role': 'user', 'content': u'x'}], [])
+        self.assertNotIn('stream_options', self.http.streams[0][1])
 
     def test_unconfigured_custom_is_inert(self):
         self.assertFalse(self.p.is_configured())

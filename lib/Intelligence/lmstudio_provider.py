@@ -18,9 +18,10 @@ import os
 import time
 
 from Intelligence.context_budget import fit_history
-from Intelligence.llm_provider import (BaseLLMProvider, http_post, http_get,
+from Intelligence.llm_provider import (BaseLLMProvider, text_history,
+                                       http_post, http_get,
                                        http_get_auth, openai_chat_agent,
-                                       openai_chat_agent_stream,
+                                       openai_chat_agent_stream, RequestCancelled,
                                        openai_agent_tool_results,
                                        local_sampling_params, is_reasoning_model)
 
@@ -255,16 +256,9 @@ class LMStudioProvider(BaseLLMProvider):
         msgs = []
         if system_prompt:
             msgs.append({"role": "system", "content": system_prompt})
-        for h in fit_history(messages, self, system_prompt=system_prompt,
-                             user=text, reply_tokens=max_tokens):
-            role    = h.get("role", "user")
-            content = h.get("content", "")
-            if role not in ("user", "assistant"):
-                continue
-            if isinstance(content, list):
-                content = self.blocks_to_text(content)
-            if content:
-                msgs.append({"role": role, "content": content})
+        history = fit_history(messages, self, system_prompt=system_prompt,
+                              user=text, reply_tokens=max_tokens)
+        msgs.extend(text_history(self, history))
         msgs.append({"role": "user", "content": text})
 
         payload = {
@@ -313,13 +307,15 @@ class LMStudioProvider(BaseLLMProvider):
             # Strip <think>...</think> blocks — keep only the final answer
             import re as _re
             content = _re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
-            
-            tool_calls = msg.get("tool_calls")
-            if tool_calls:
-                return tool_calls
-
-            return content if content else None
-        except Exception:
+            if content:
+                return content
+            # chat() is str|None: tool calls belong to chat_agent().
+            if msg.get("tool_calls"):
+                return self._fail(u"chat(): {} answered with tool calls, not "
+                                  u"text".format(model))
+            return self._fail(u"chat(): {} returned an empty reply".format(model))
+        except Exception as ex:
+            self._record_error(u"chat() failed: {}".format(ex))
             return None
 
     # ── Agentic chat (native tool calling, blocking) ──────────────────────────
@@ -358,18 +354,24 @@ class LMStudioProvider(BaseLLMProvider):
         # Stream first for a live typing effect; any transport/parse failure
         # falls back to a single blocking call so a stream-averse server or
         # proxy never breaks the turn.
+        cancel = kwargs.get("cancel")
         try:
             self._clear_error()
             return openai_chat_agent_stream(
                 endpoint, headers, model, system_prompt, messages, tools,
-                max_tokens, on_delta=on_delta, extra_payload=extra)
+                max_tokens, on_delta=on_delta, extra_payload=extra,
+                cancel=cancel)
+        except RequestCancelled:
+            raise
         except Exception as ex:
             self._debug_log(u"chat_agent stream failed, blocking: {}".format(ex))
 
         try:
             return openai_chat_agent(
                 endpoint, headers, model, system_prompt, messages, tools,
-                max_tokens, extra_payload=extra)
+                max_tokens, extra_payload=extra, cancel=cancel)
+        except RequestCancelled:
+            raise
         except Exception as ex:
             self._record_error(u"chat_agent() failed: {}".format(ex))
             return None

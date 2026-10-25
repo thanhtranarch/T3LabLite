@@ -1780,6 +1780,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
                     <!-- Main Message / Headline -->
@@ -1791,6 +1792,10 @@
                         <TextBlock x:Name="txt_details" Text=""
                                    Style="{StaticResource T3.Body.Secondary}" TextWrapping="Wrap"/>
                     </ScrollViewer>
+
+                    <!-- One-line answer (ask_for_string only) -->
+                    <TextBox x:Name="txt_input" Grid.Row="2" Style="{StaticResource T3.TextBox}"
+                             Margin="0,8,0,0" Visibility="Collapsed"/>
                 </Grid>
             </Grid>
 

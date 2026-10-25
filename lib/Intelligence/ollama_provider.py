@@ -19,9 +19,11 @@ import sys
 import time
 
 from Intelligence.context_budget import fit_history
-from Intelligence.llm_provider import (BaseLLMProvider, http_post, http_get,
+from Intelligence.llm_provider import (BaseLLMProvider, text_history,
+                                       http_post, http_get,
                                        http_post_stream,
-                                       local_sampling_params, is_reasoning_model)
+                                       local_sampling_params, is_reasoning_model,
+                                       ollama_usage, RequestCancelled)
 
 
 # ─── Provider ──────────────────────────────────────────────────────────────────
@@ -307,16 +309,9 @@ class OllamaProvider(BaseLLMProvider):
                 u"running, and has a model been pulled?")
 
         msgs = [{"role": "system", "content": system_prompt}]
-        for h in fit_history(messages, self, system_prompt=system_prompt,
-                             user=text, reply_tokens=max_tokens):
-            role    = h.get("role", "user")
-            content = h.get("content", "")
-            if role not in ("user", "assistant"):
-                continue
-            if isinstance(content, list):
-                content = self.blocks_to_text(content)
-            if content:
-                msgs.append({"role": role, "content": content})
+        history = fit_history(messages, self, system_prompt=system_prompt,
+                              user=text, reply_tokens=max_tokens)
+        msgs.extend(text_history(self, history))
         msgs.append({"role": "user", "content": text})
 
         payload = {
@@ -366,8 +361,10 @@ class OllamaProvider(BaseLLMProvider):
                 timeout_ms=int(kwargs.get("timeout_ms") or 180000),
             )
             data = json.loads(resp_text)
-            return self._reply_text(data.get("message") or {})
-        except Exception:
+            text = self._reply_text(data.get("message") or {})
+            return text or self._fail(u"chat(): {} returned an empty reply".format(model))
+        except Exception as ex:
+            self._record_error(u"chat() failed: {}".format(ex))
             return None
 
     @staticmethod
@@ -428,6 +425,7 @@ class OllamaProvider(BaseLLMProvider):
         payload["options"]["num_ctx"] = self._num_ctx_for(payload, max_tokens)
 
         url = self._get_host() + "/api/chat"
+        cancel = kwargs.get("cancel")
 
         # Qwen3-class models think by default. Quality mode keeps that deep
         # reasoning; normal mode turns it OFF for reasoning models — faster
@@ -448,7 +446,7 @@ class OllamaProvider(BaseLLMProvider):
             stream_payload["stream"] = True
             if think_val is not None:
                 stream_payload["think"] = think_val
-            state = {"content": [], "tool_calls": []}
+            state = {"content": [], "tool_calls": [], "usage": {}}
 
             def _on_line(line, _st=state):
                 if not line:
@@ -468,14 +466,18 @@ class OllamaProvider(BaseLLMProvider):
                             pass
                 if msg.get("tool_calls"):
                     _st["tool_calls"].extend(msg["tool_calls"])
+                if obj.get("done"):
+                    _st["usage"] = ollama_usage(obj)
 
             http_post_stream(url, stream_payload, on_line=_on_line,
-                             timeout_ms=180000)
+                             timeout_ms=180000, cancel=cancel)
             if state["content"] or state["tool_calls"]:
                 full_msg = {"role": "assistant",
                             "content": u"".join(state["content"]),
                             "tool_calls": state["tool_calls"]}
-                return self._assemble_agent_result(full_msg)
+                return self._assemble_agent_result(full_msg, state["usage"])
+        except RequestCancelled:
+            raise
         except Exception as ex:
             self._debug_log("chat_agent stream failed, blocking: {}".format(ex))
 
@@ -483,15 +485,19 @@ class OllamaProvider(BaseLLMProvider):
         try:
             block_payload = dict(payload)
             block_payload["stream"] = False
-            resp_text = http_post(url, block_payload, timeout_ms=180000)
+            resp_text = http_post(url, block_payload, timeout_ms=180000,
+                                  cancel=cancel)
             data = json.loads(resp_text)
-            return self._assemble_agent_result(data.get("message", {}) or {})
+            return self._assemble_agent_result(data.get("message", {}) or {},
+                                               ollama_usage(data))
+        except RequestCancelled:
+            raise
         except Exception as ex:
-            self._debug_log("chat_agent() failed: {}".format(ex))
+            self._record_error(u"chat_agent() failed: {}".format(ex))
             return None
 
     @staticmethod
-    def _assemble_agent_result(msg):
+    def _assemble_agent_result(msg, usage=None):
         """Build the uniform chat_agent dict from an Ollama assistant message
         (used by both the streaming and blocking paths)."""
         import re as _re
@@ -515,6 +521,7 @@ class OllamaProvider(BaseLLMProvider):
             "tool_calls":    tool_calls,
             "assistant_msg": msg,
             "stop_reason":   "tool_use" if tool_calls else "end_turn",
+            "usage":         dict(usage or {}),
         }
 
     @staticmethod

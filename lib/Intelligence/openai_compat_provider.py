@@ -29,10 +29,12 @@ import os
 import re
 import sys
 
-from Intelligence.llm_provider import (BaseLLMProvider, http_post, http_post_stream,
+from Intelligence.llm_provider import (BaseLLMProvider, text_history,
+                                       http_post, http_post_stream,
                                        http_get_auth, parse_openai_stream_line,
                                        openai_chat_agent, openai_chat_agent_stream,
-                                       openai_agent_tool_results, HAS_HTTP)
+                                       openai_agent_tool_results, HAS_HTTP,
+                                       RequestCancelled)
 
 
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>")
@@ -118,6 +120,11 @@ class OpenAICompatProvider(BaseLLMProvider):
 
     CHAT_TIMEOUT_MS  = 60000
     AGENT_TIMEOUT_MS = 180000
+
+    # Ask for the final usage chunk (stream_options.include_usage) on agent
+    # streams. Off by default: some gateways reject the unknown field. A
+    # server that sends usage anyway is read either way.
+    STREAM_USAGE = False
 
     def __init__(self):
         self._model         = None   # None → resolve from the live model list
@@ -382,6 +389,8 @@ class OpenAICompatProvider(BaseLLMProvider):
             knobs = self._knobs(model, max_tokens)
             try:
                 return send(knobs)
+            except RequestCancelled:
+                raise
             except Exception as ex:
                 attempt += 1
                 if attempt > 2 or (can_retry is not None and not can_retry()) \
@@ -408,17 +417,7 @@ class OpenAICompatProvider(BaseLLMProvider):
                                user=text, reply_tokens=max_tokens)
         except Exception:
             pass
-        out = []
-        for h in hist:
-            role    = h.get("role", "user")
-            content = h.get("content", "")
-            if role not in ("user", "assistant"):
-                continue
-            if isinstance(content, list):
-                content = self.blocks_to_text(content)
-            if content:
-                out.append({"role": role, "content": content})
-        return out
+        return text_history(self, hist)
 
     def _chat_messages(self, messages, system_prompt, user_content, max_tokens):
         if self._vision_on():
@@ -499,14 +498,15 @@ class OpenAICompatProvider(BaseLLMProvider):
 
     # ── Chat ──────────────────────────────────────────────────────────────────
 
-    def _post_chat(self, msgs, model, headers, max_tokens, timeout_ms):
+    def _post_chat(self, msgs, model, headers, max_tokens, timeout_ms,
+                   cancel=None):
         """One blocking /chat/completions call → raw message content."""
         def _send(knobs):
             payload = {"model": model, "messages": msgs,
                        knobs["param"]: knobs["budget"]}
             payload.update(knobs["extra"])
             resp_text = http_post(self._url("chat/completions"), payload,
-                                  headers, timeout_ms=timeout_ms)
+                                  headers, timeout_ms=timeout_ms, cancel=cancel)
             data = json.loads(resp_text)
             choice = (data.get("choices") or [{}])[0]
             return (choice.get("message") or {}).get("content") or u""
@@ -529,12 +529,15 @@ class OpenAICompatProvider(BaseLLMProvider):
         try:
             text = self._clean(self._post_chat(
                 msgs, model, headers, max_tokens,
-                int(kwargs.get("timeout_ms") or self.CHAT_TIMEOUT_MS)))
+                int(kwargs.get("timeout_ms") or self.CHAT_TIMEOUT_MS),
+                cancel=kwargs.get("cancel")))
             if not text:
                 return self._fail(u"chat(): {} returned an empty reply (the "
                                   u"output budget may have gone to reasoning)"
                                   .format(model))
             return text
+        except RequestCancelled:
+            return self._fail(u"chat(): cancelled")
         except Exception as ex:
             self._record_error(u"chat() failed: {}".format(ex))
             return None
@@ -554,6 +557,7 @@ class OpenAICompatProvider(BaseLLMProvider):
         msgs    = self._chat_messages(messages, system_prompt, user_content, max_tokens)
         headers = self._headers(self._get_api_key())
         timeout = int(kwargs.get("timeout_ms") or self.CHAT_TIMEOUT_MS)
+        cancel  = kwargs.get("cancel")
         chunks  = []
 
         def _on_line(line):
@@ -571,13 +575,18 @@ class OpenAICompatProvider(BaseLLMProvider):
                        knobs["param"]: knobs["budget"], "stream": True}
             payload.update(knobs["extra"])
             http_post_stream(self._url("chat/completions"), payload, headers,
-                             _on_line)
+                             _on_line, timeout_ms=timeout, cancel=cancel)
 
         try:
             self._with_retry(model, max_tokens, _send,
                              can_retry=lambda: not chunks)
             full = self._clean(u"".join(chunks))
-            return full if full else None
+            return full if full else self._fail(
+                u"chat_stream(): {} returned an empty reply".format(model))
+        except RequestCancelled:
+            # Stop: keep what already streamed, never start a retry.
+            self._record_error(u"chat_stream(): cancelled")
+            return self._clean(u"".join(chunks)) or None
         except Exception as ex:
             # Record the reason first — chat() clears the error state on
             # entry, so otherwise the window could only say "no response".
@@ -598,20 +607,20 @@ class OpenAICompatProvider(BaseLLMProvider):
             # regenerating a different one. Any failure keeps the partial.
             prefill = partial.rstrip()
             cont = self._continue_after_drop(msgs, model, headers, max_tokens,
-                                             prefill, on_delta, timeout)
+                                             prefill, on_delta, timeout, cancel)
             if cont:
                 return self._clean(prefill + cont)
             return self._clean(prefill)
 
     def _continue_after_drop(self, msgs, model, headers, max_tokens, prefill,
-                             on_delta, timeout_ms):
+                             on_delta, timeout_ms, cancel=None):
         """Finish a stream that dropped mid-answer with ONE blocking call.
         Best-effort: any failure returns None. Never raises."""
         try:
             cont_msgs = list(msgs)
             cont_msgs.append({"role": "assistant", "content": prefill})
             cont = self._post_chat(cont_msgs, model, headers, max_tokens,
-                                   timeout_ms)
+                                   timeout_ms, cancel=cancel)
             if cont and on_delta:
                 try:
                     on_delta(cont)
@@ -631,7 +640,9 @@ class OpenAICompatProvider(BaseLLMProvider):
         Streams first (text reaches on_delta live, tool-call fragments are
         reassembled); a transport/parse failure before any text arrived falls
         back to one blocking call. Returns the uniform chat_agent dict (plus
-        "model"), or None with get_last_error() set.
+        "model"), or None with get_last_error() set. kwargs["cancel"] (a
+        CancelToken) aborts the request; RequestCancelled is re-raised, never
+        retried, so Stop and the agent loop's time budget end the turn at once.
         """
         self._clear_error()
         bad = self._precheck("chat_agent()")
@@ -649,6 +660,7 @@ class OpenAICompatProvider(BaseLLMProvider):
 
         url     = self._url("chat/completions")
         headers = self._headers(self._get_api_key())
+        cancel  = kwargs.get("cancel")
         state   = {"streamed": False}
 
         def _delta(chunk):
@@ -661,19 +673,23 @@ class OpenAICompatProvider(BaseLLMProvider):
                 url, headers, model, system_prompt, agent_msgs, tools,
                 knobs["budget"], timeout_ms=self.AGENT_TIMEOUT_MS,
                 on_delta=_delta, extra_payload=knobs["extra"],
-                token_param=knobs["param"])
+                token_param=knobs["param"], cancel=cancel,
+                include_usage=self.STREAM_USAGE)
 
         def _blocking(knobs):
             return openai_chat_agent(
                 url, headers, model, system_prompt, agent_msgs, tools,
                 knobs["budget"], timeout_ms=self.AGENT_TIMEOUT_MS,
-                extra_payload=knobs["extra"], token_param=knobs["param"])
+                extra_payload=knobs["extra"], token_param=knobs["param"],
+                cancel=cancel)
 
         try:
             result = self._with_retry(model, max_tokens, _stream,
                                       can_retry=lambda: not state["streamed"])
             result["model"] = model
             return result
+        except RequestCancelled:
+            raise
         except Exception as ex:
             self._debug_log(u"chat_agent stream failed, blocking: {}".format(ex))
 
@@ -681,6 +697,8 @@ class OpenAICompatProvider(BaseLLMProvider):
             result = self._with_retry(model, max_tokens, _blocking)
             result["model"] = model
             return result
+        except RequestCancelled:
+            raise
         except Exception as ex:
             self._record_error(u"chat_agent() failed: {}".format(ex))
             return None

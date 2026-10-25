@@ -2,7 +2,7 @@
 """
 LLM Router
 
-Singleton that manages LLM provider selection, hot-swap, and automatic fallback.
+Singleton that manages LLM provider selection, hot-swap, and opt-in fallback.
 
 Usage:
     from Intelligence.llm_router import LLMRouter
@@ -48,8 +48,12 @@ class LLMRouter(object):
     """
     Singleton router for multi-provider LLM access.
 
-    Provider priority / fallback order:
+    Provider display / fallback order:
         claude → openai → gemini → deepseek → custom → ollama → lmstudio
+
+    Fallback is OFF by default (set_fallback): the prompt carries Revit
+    context, so it must never reach a vendor the user did not pick. Even when
+    on, a local provider never falls back to a cloud one.
 
     Switching is hot (no session restart required).
     The active provider and per-provider model are persisted in settings.json.
@@ -60,6 +64,8 @@ class LLMRouter(object):
     # Canonical fallback order — also used as the display order in UI
     FALLBACK_CHAIN = ["claude", "openai", "gemini", "deepseek", "custom",
                       "ollama", "lmstudio"]
+    # "custom" is any OpenAI-compatible URL, so it is not counted as local.
+    LOCAL_PROVIDERS = ("ollama", "lmstudio")
 
     def __new__(cls):
         if cls._instance is None:
@@ -72,8 +78,9 @@ class LLMRouter(object):
             return
         import threading
         self._providers     = {}
-        self._active_name   = "claude"
-        self._fallback_on   = True
+        self._active_name   = _default_provider()
+        self._fallback_on   = False
+        self._last_error    = None
         self._status_cache  = None   # cached result of get_status()
         self._status_ts     = 0.0    # epoch time of last cache fill
         # Guards reads/writes of _status_cache/_status_ts. script.py fires
@@ -257,96 +264,109 @@ class LLMRouter(object):
         return [n for n in self.FALLBACK_CHAIN if n in self._providers]
 
 
+    # ── Fallback ──────────────────────────────────────────────────────────────
+
+    def set_fallback(self, enabled):
+        """Opt in/out of retrying a failed request on other providers."""
+        self._fallback_on = bool(enabled)
+
+    def is_fallback_enabled(self):
+        return self._fallback_on
+
+    def get_last_error(self):
+        """Why the last chat()/chat_stream() returned None, or None."""
+        return self._last_error
+
+    def get_fallback_candidates(self):
+        """Providers a failed request may move to: none unless opted in, and
+        never local → cloud."""
+        if not self._fallback_on:
+            return []
+        local_only = self._active_name in self.LOCAL_PROVIDERS
+        out = []
+        for name in self.FALLBACK_CHAIN:
+            if name == self._active_name or name not in self._providers:
+                continue
+            if local_only and name not in self.LOCAL_PROVIDERS:
+                continue
+            out.append(name)
+        return out
+
+    def _active_failed(self, active, ex=None):
+        """Record the active provider's failure on it (get_last_error) and here."""
+        if active is None:
+            self._last_error = u"no active LLM provider '{}'".format(self._active_name)
+            return
+        if ex is not None:
+            try:
+                active._record_error(u"{} failed: {}".format(active.NAME, ex))
+            except Exception:
+                pass
+        err = None
+        try:
+            err = active.get_last_error()
+        except Exception:
+            pass
+        self._last_error = err or u"{} returned no response".format(
+            getattr(active, "DISPLAY_NAME", self._active_name))
+
+    def _route(self, call, kwargs):
+        """Run `call(provider, kwargs)` on the active provider, then (opt-in)
+        on the fallback candidates. model_override names the active vendor's
+        model, so it is never forwarded to another vendor."""
+        self._last_error = None
+        active = self._providers.get(self._active_name)
+        if active:
+            try:
+                result = call(active, kwargs)
+                if result is not None:
+                    return result
+                self._active_failed(active)
+            except Exception as ex:
+                self._active_failed(active, ex)
+        else:
+            self._active_failed(None)
+
+        other_kwargs = dict(kwargs)
+        other_kwargs.pop("model_override", None)
+        for name in self.get_fallback_candidates():
+            provider = self._providers[name]
+            try:
+                if not provider.check_health():
+                    continue
+                result = call(provider, other_kwargs)
+                if result is not None:
+                    _debug_log(u"LLMRouter: fell back from {} to {} ({})".format(
+                        self._active_name, name, self._last_error))
+                    return result
+            except Exception as ex:
+                _debug_log(u"LLMRouter: fallback {} failed: {}".format(name, ex))
+        return None
+
     # ── Chat ──────────────────────────────────────────────────────────────────
 
     def chat(self, messages, system_prompt, user_content, max_tokens=400, **kwargs):
         """
         Route a chat request to the active provider and return raw response text.
 
-        If the active provider fails and fallback is enabled, the router tries
-        each provider in FALLBACK_CHAIN order until one succeeds.
-
-        Args:
-            messages (list): conversation history [{role, content}, ...].
-            system_prompt (str): system instruction.
-            user_content (str|list): current user input (string or content blocks).
-            max_tokens (int): maximum response tokens.
+        On failure the reason is kept in get_last_error() (router and active
+        provider); other providers are tried only after set_fallback(True).
 
         Returns:
-            str | None: raw response text, or None if all providers fail.
+            str | None: raw response text, or None on failure.
         """
-        active = self._providers.get(self._active_name)
-
-        # ── Active provider ────────────────────────────────────────────────────
-        if active:
-            try:
-                result = active.chat(messages, system_prompt, user_content, max_tokens, **kwargs)
-                if result is not None:
-                    return result
-            except Exception:
-                pass
-
-        if not self._fallback_on:
-            return None
-
-        # ── Fallback chain ─────────────────────────────────────────────────────
-        for name in self.FALLBACK_CHAIN:
-            if name == self._active_name:
-                continue
-            provider = self._providers.get(name)
-            if not provider:
-                continue
-            try:
-                if not provider.check_health():
-                    continue
-                result = provider.chat(messages, system_prompt, user_content, max_tokens, **kwargs)
-                if result is not None:
-                    return result
-            except Exception:
-                continue
-
-        return None
+        return self._route(
+            lambda p, kw: p.chat(messages, system_prompt, user_content,
+                                 max_tokens, **kw),
+            kwargs)
 
     def chat_stream(self, messages, system_prompt, user_content,
                     on_delta=None, max_tokens=400, **kwargs):
-        """
-        Route a streaming chat request to the active provider, with fallback.
-
-        on_delta(text_chunk) is invoked for each streamed piece of text. Mirrors
-        chat()'s active-then-fallback strategy. Returns the full response text,
-        or None if every provider fails.
-        """
-        active = self._providers.get(self._active_name)
-
-        if active:
-            try:
-                result = active.chat_stream(
-                    messages, system_prompt, user_content, on_delta, max_tokens, **kwargs)
-                if result is not None:
-                    return result
-            except Exception:
-                pass
-
-        if not self._fallback_on:
-            return None
-
-        for name in self.FALLBACK_CHAIN:
-            if name == self._active_name:
-                continue
-            provider = self._providers.get(name)
-            if not provider:
-                continue
-            try:
-                if not provider.check_health():
-                    continue
-                result = provider.chat_stream(
-                    messages, system_prompt, user_content, on_delta, max_tokens, **kwargs)
-                if result is not None:
-                    return result
-            except Exception:
-                continue
-
-        return None
+        """Streaming chat(); on_delta(text_chunk) gets each streamed piece."""
+        return self._route(
+            lambda p, kw: p.chat_stream(messages, system_prompt, user_content,
+                                        on_delta, max_tokens, **kw),
+            kwargs)
 
     # ── Status ────────────────────────────────────────────────────────────────
 
@@ -530,12 +550,12 @@ class LLMRouter(object):
 
     def get_local_provider_names(self):
         """Return loaded local (no-API-key) provider names — probed first for speed."""
-        return [n for n in ("ollama", "lmstudio") if n in self._providers]
+        return [n for n in self.LOCAL_PROVIDERS if n in self._providers]
 
     def get_remote_provider_names(self):
         """Return loaded remote (API-key) provider names."""
         return [n for n in self.FALLBACK_CHAIN
-                if n in self._providers and n not in ("ollama", "lmstudio")]
+                if n in self._providers and n not in self.LOCAL_PROVIDERS]
 
 
     def get_display_label(self):
@@ -630,6 +650,15 @@ _PANE_SYSTEM_PROMPT = (
     "Use plain text (no Markdown). "
     "Respond in the SAME language the user wrote in."
 )
+
+
+def _default_provider():
+    try:
+        _ensure_lib_in_path()
+        from config.settings import DEFAULT_PROVIDER
+        return DEFAULT_PROVIDER
+    except Exception:
+        return "ollama"
 
 
 # ─── Path helper ───────────────────────────────────────────────────────────────

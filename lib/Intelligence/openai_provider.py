@@ -72,6 +72,7 @@ class OpenAIProvider(OpenAICompatProvider):
     DISPLAY_NAME          = "GPT (OpenAI)"
     SUPPORTS_VISION       = True
     SUPPORTS_NATIVE_TOOLS = True
+    STREAM_USAGE          = True   # OpenAI sends the usage chunk on request
 
     KEY_NAME           = "OpenAI"
     BASE_URL           = OPENAI_BASE_URL

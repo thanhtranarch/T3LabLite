@@ -17,6 +17,7 @@ import base64
 PREFIX = 'dpapi:'
 
 _protector = None      # (protect(bytes)->bytes, unprotect(bytes)->bytes) or False
+_last_protect_error = None   # why the last protect() fell back to plaintext
 
 
 def _dotnet_protector():
@@ -76,8 +77,18 @@ def is_protected(value):
         return False
 
 
+def last_protect_error():
+    """Reason the last protect() stored plaintext because DPAPI threw, or None."""
+    return _last_protect_error
+
+
 def protect(value):
-    """Plaintext -> stored form. Empty values and already-protected ones pass."""
+    """Plaintext -> stored form. Empty values and already-protected ones pass.
+
+    When DPAPI throws the value is stored as plaintext (the key must not be
+    lost) and the reason is kept for last_protect_error() — callers warn."""
+    global _last_protect_error
+    _last_protect_error = None
     if not value or is_protected(value):
         return value
     pair = _get()
@@ -86,8 +97,19 @@ def protect(value):
     try:
         blob = pair[0](value.encode('utf-8'))
         return PREFIX + base64.b64encode(blob).decode('ascii')
-    except Exception:
+    except Exception as ex:
+        _last_protect_error = u'{}'.format(ex) or type(ex).__name__
+        _log_warning(u'DPAPI protect failed, secret stored as plain text: {}'
+                     .format(_last_protect_error))
         return value
+
+
+def _log_warning(msg):
+    try:
+        from pyrevit import script
+        script.get_logger().warning(msg)
+    except Exception:
+        pass
 
 
 def unprotect(value):

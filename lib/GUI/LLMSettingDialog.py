@@ -27,8 +27,10 @@ from System.Threading import Thread, ThreadStart, ApartmentState
 from System.Windows import Visibility, WindowState
 from System.Windows.Media import SolidColorBrush, Color
 
-from pyrevit import forms, script
+from pyrevit import script
 from GUI.WPF_Base import T3WPFWindow
+from GUI import T3Dialog
+from Services import llm_settings_service as _svc
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'LLMSetting.xaml')
 
@@ -91,11 +93,15 @@ def _brush(r, g, b):
     return SolidColorBrush(Color.FromRgb(r, g, b))
 
 
-_READY  = _brush(16, 185, 129)
-_GRAY   = _brush(230, 230, 234)
-_MUTED  = _brush(161, 161, 170)
-_GREEN  = _brush(16, 185, 129)
-_RED    = _brush(239, 68, 68)
+# Used only when a T3 key cannot be resolved (window not loaded yet).
+_TOKEN_FALLBACK_RGB = {
+    "T3.Success.Accent": (16, 185, 129), "T3.Success.Text": (21, 128, 61),
+    "T3.Success.Fill": (240, 253, 244), "T3.Danger.Text": (185, 28, 28),
+    "T3.Danger.Fill": (254, 242, 242), "T3.Danger.Border": (254, 202, 202),
+    "T3.Warning.Text": (180, 83, 9), "T3.Border": (229, 231, 235),
+    "T3.SurfaceSunken": (249, 250, 251), "T3.TextSecondary": (82, 82, 91),
+    "T3.TextMuted": (161, 161, 170),
+}
 
 # Segoe MDL2 Assets "Cancel" (U+E711) — the remove/forget glyph on project
 # rows. Named because it renders BLANK in a terminal, which has already led
@@ -296,7 +302,7 @@ class LLMSettingWindow(T3WPFWindow):
                     Visibility.Visible if key == tag else Visibility.Collapsed)
             self._ensure_tab_loaded(tag)
         except Exception as ex:
-            logger.debug("tab_changed error: {}".format(ex))
+            self._fail_action(u"Switching tabs", ex)
 
     def _ensure_tab_loaded(self, tag):
         """Fill a tab the first time it is shown (see __init__ for why)."""
@@ -316,7 +322,7 @@ class LLMSettingWindow(T3WPFWindow):
         except Exception as ex:
             # Never leave a tab permanently marked as loaded after a failure.
             self._tabs_loaded.discard(tag)
-            logger.debug("load tab {} error: {}".format(tag, ex))
+            self._fail_action(u"Loading the tab", ex, u"close and reopen LLMs Setting")
 
     # ─── Chrome ─────────────────────────────────────────────────────────────
 
@@ -349,7 +355,7 @@ class LLMSettingWindow(T3WPFWindow):
             self._apply_custom_panel(tag)
             self._switch_provider(tag)
         except Exception as ex:
-            logger.debug("provider_changed error: {}".format(ex))
+            self._fail_action(u"Models · switching provider", ex)
 
     def _switch_provider(self, name):
         try:
@@ -363,13 +369,13 @@ class LLMSettingWindow(T3WPFWindow):
                 # DeepSeek key into the Claude slot.
                 self._apply_provider_chrome(router.get_active_name(),
                                             force_fields=True)
-                self.model_saved_hint.Foreground = _RED
+                self.model_saved_hint.Foreground = self._t("T3.Danger.Text")
                 self.model_saved_hint.Text = u"That provider failed to load"
                 return
             self._apply_provider_chrome(name, force_fields=True)
             self._start_probe(name)
         except Exception as ex:
-            logger.debug("_switch_provider error: {}".format(ex))
+            self._fail_action(u"Models · switching provider", ex)
 
     def _start_probe(self, name):
         """Probe one provider off-thread, queueing if another probe is running.
@@ -421,25 +427,12 @@ class LLMSettingWindow(T3WPFWindow):
             if item is None:
                 return
             router = LLMRouter()
-            router.set_model(router.get_active_name(), item.ToString())
-        except Exception as ex:
-            logger.debug("model_changed error: {}".format(ex))
-
-    def save_model_clicked(self, sender, e):
-        try:
-            from Intelligence.llm_router import LLMRouter
-            item = self.model_combo.SelectedItem
-            if item is None:
-                self.model_saved_hint.Text = u"Select a model first"
+            if router.set_model(router.get_active_name(), item.ToString()):
+                self.model_saved_hint.Foreground = self._t("T3.Success.Text")
+                self.model_saved_hint.Text = u"Model saved"
                 self._flash_saved_hint()
-                return
-            router = LLMRouter()
-            router.set_model(router.get_active_name(), item.ToString())
-            self.model_saved_hint.Foreground = _GREEN
-            self.model_saved_hint.Text = u"Saved"
-            self._flash_saved_hint()
         except Exception as ex:
-            logger.debug("save_model_clicked error: {}".format(ex))
+            self._fail_action(u"Models · saving the model", ex)
 
     def _flash_saved_hint(self):
         try:
@@ -491,18 +484,13 @@ class LLMSettingWindow(T3WPFWindow):
                             if not self._custom_endpoint().get("base_url")
                             else u"Not connected — press Save URL to test")
                 elif active in self._KEY_PROVIDERS:
-                    hint = (u"Enter an API key first" if not self._has_saved_key(active)
-                            else u"Not connected — press Save to test")
+                    hint = self._key_hint(active)
                 else:
                     hint = u"Start the server & press Test Connection"
 
             self.model_combo.IsEnabled = enabled
-            try:
-                self.save_model_btn.IsEnabled = enabled
-            except Exception:
-                pass
             self.model_saved_hint.Text = hint
-            self.model_saved_hint.Foreground = _MUTED
+            self.model_saved_hint.Foreground = self._t("T3.TextMuted")
         except Exception as ex:
             logger.debug("_populate_model_combo error: {}".format(ex))
         finally:
@@ -511,12 +499,25 @@ class LLMSettingWindow(T3WPFWindow):
             except Exception:
                 pass
 
-    def _has_saved_key(self, provider):
+    def _key_source(self, provider):
         try:
             from config.settings import T3LabAISettings
-            return bool(T3LabAISettings().get_api_key(self._KEY_NAME_MAP.get(provider, "")))
+            return T3LabAISettings().api_key_source(
+                self._KEY_NAME_MAP.get(provider, ""))
         except Exception:
-            return False
+            return None
+
+    def _key_hint(self, provider):
+        """Model-combo hint when no live model list exists yet."""
+        src = self._key_source(provider)
+        if src == 'unreadable':
+            return (u"Saved key can't be read on this Windows account — "
+                    u"paste it again")
+        if src == 'env':
+            return u"Using the key from an environment variable — press Save Key"
+        if src is None:
+            return u"Enter an API key first"
+        return u"Not connected — press Save Key to test"
 
     # ─── API key ────────────────────────────────────────────────────────────
 
@@ -535,12 +536,12 @@ class LLMSettingWindow(T3WPFWindow):
             psi.UseShellExecute = True
             _diag.Process.Start(psi)
         except Exception as ex:
-            logger.debug("get_api_key_clicked error: {}".format(ex))
+            self._fail_action(u"Models · opening the API key page", ex, u"open the provider website in your browser")
 
     def save_key_clicked(self, sender, e):
-        """Save API key → verify connection → fetch models → enable MODEL combo."""
+        """Validate the key against the live model list → save it only if it
+        works → enable MODEL combo. A rejected key never reaches settings.json."""
         try:
-            from config.settings import T3LabAISettings
             from Intelligence.llm_router import LLMRouter
 
             key = (self.api_key_box.Text or u"").strip()
@@ -551,61 +552,74 @@ class LLMSettingWindow(T3WPFWindow):
                 return
 
             if not key:
-                self.model_saved_hint.Foreground = _RED
-                self.model_saved_hint.Text = u"Enter an API key first"
+                self.model_saved_hint.Foreground = self._t("T3.Danger.Text")
+                self.model_saved_hint.Text = (
+                    self._key_hint(name)
+                    if self._key_source(name) == 'unreadable'
+                    else u"Enter an API key first")
                 self._flash_saved_hint()
                 return
 
-            # The box shows a MASK of the stored key until the user types.
-            # This used to `return` silently on the mask, so pressing Save Key
-            # without retyping looked like a dead button. Re-validating the
-            # stored key is the useful thing to do — and re-saving the mask
-            # would have destroyed the real key.
-            if not self._key_dirty and key == getattr(self, '_key_mask_shown', None):
-                self.model_saved_hint.Foreground = _MUTED
-                self.model_saved_hint.Text = u"Using the saved key — checking connection…"
-            else:
-                T3LabAISettings().set_api_key(settings_key, key)
-                self._key_dirty = False
-                self.model_saved_hint.Foreground = _MUTED
-                self.model_saved_hint.Text = u"Checking connection…"
+            # The box shows a MASK of the stored key until the user types:
+            # re-check the stored key, never save the mask over it.
+            new_key = not (not self._key_dirty
+                           and key == getattr(self, '_key_mask_shown', None))
+            self.model_saved_hint.Foreground = self._t("T3.TextMuted")
+            self.model_saved_hint.Text = (
+                u"Checking the key…" if new_key
+                else u"Using the saved key — checking connection…")
 
             provider = router.get_active_provider()
-            if provider and hasattr(provider, "reload_credentials"):
-                provider.reload_credentials()
-            elif provider and hasattr(provider, "invalidate_models_cache"):
-                provider.invalidate_models_cache()
-            self._models_cache.pop(name, None)
+            if not new_key:
+                if provider and hasattr(provider, "reload_credentials"):
+                    provider.reload_credentials()
+                elif provider and hasattr(provider, "invalidate_models_cache"):
+                    provider.invalidate_models_cache()
+                self._models_cache.pop(name, None)
 
             self.model_combo.IsEnabled = False
-            self.save_model_btn.IsEnabled = False
             self.save_key_btn.IsEnabled = False
 
             def _validate():
-                ok = False
                 models = []
                 try:
-                    if provider and provider.check_health():
+                    if provider is None:
+                        models = []
+                    elif new_key:
+                        models = provider.validate_key(key)
+                    elif provider.check_health():
                         models = provider.get_models() or []
-                        ok = len(models) > 0
-                except Exception:
-                    ok = False
+                except Exception as vex:
+                    self._fail_action(u"Models · Save Key", vex)
+                    models = []
 
                 def _apply():
                     try:
                         self.save_key_btn.IsEnabled = True
                     except Exception:
                         pass
+                    ok = bool(models)
+                    msg = None
+                    if ok and new_key:
+                        msg = self._save_api_key(name, settings_key, key, provider)
+                        ok = msg is None
                     if ok:
                         self._models_cache[name] = models
                         self._populate_model_combo(name)
-                        self.model_saved_hint.Foreground = _GREEN
-                        self.model_saved_hint.Text = u"Connected ({} models)".format(len(models))
+                        self.model_saved_hint.Foreground = self._t("T3.Success.Text")
+                        self.model_saved_hint.Text = (
+                            u"Key saved — connected ({} models)" if new_key
+                            else u"Connected ({} models)").format(len(models))
+                        self.model_saved_hint.ToolTip = None
                     else:
-                        self._models_cache.pop(name, None)
+                        if not new_key:
+                            self._models_cache.pop(name, None)
                         self._populate_model_combo(name)
-                        self.model_saved_hint.Foreground = _RED
-                        self.model_saved_hint.Text = u"Invalid key or connection failed"
+                        short, full = msg or self._key_rejected_text(
+                            provider, new_key)
+                        self.model_saved_hint.Foreground = self._t("T3.Danger.Text")
+                        self.model_saved_hint.Text = short
+                        self.model_saved_hint.ToolTip = full
                     self._set_status_dot(name, ok)
 
                 self._ui_invoke(_apply)
@@ -613,10 +627,54 @@ class LLMSettingWindow(T3WPFWindow):
             if not self._start_worker(_validate):
                 # Never leave the button latched off because a thread failed.
                 self.save_key_btn.IsEnabled = True
-                self.model_saved_hint.Foreground = _RED
+                self.model_saved_hint.Foreground = self._t("T3.Danger.Text")
                 self.model_saved_hint.Text = u"Could not start the check — try again"
         except Exception as ex:
-            logger.debug("save_key_clicked error: {}".format(ex))
+            self._fail_action(u"Models · Save Key", ex)
+
+    def _save_api_key(self, name, settings_key, key, provider):
+        """Persist a validated key. Returns None, or (short hint, full tooltip)."""
+        failed = _svc.persist_api_key(settings_key, key, provider)
+        if failed:
+            return failed
+        self._key_dirty = False
+        self._warn_if_plaintext()
+        self._models_cache.pop(name, None)
+        return None
+
+    def _warn_if_plaintext(self):
+        """DPAPI threw on save: the key is stored as plain text — say so."""
+        try:
+            from config import secret_store
+            err = secret_store.last_protect_error()
+        except Exception:
+            err = None
+        if not err:
+            return
+        self._confirm_info(
+            u"The API key was saved WITHOUT Windows encryption, as plain text "
+            u"in %APPDATA%\\T3LabAI\\settings.json.",
+            u"Windows DPAPI failed: {}\n\nAnyone who can read that file can "
+            u"use the key. Restart Revit and click Save Key again to encrypt "
+            u"it.".format(err))
+
+    def _confirm_info(self, message, details):
+        try:
+            T3Dialog.show_warning(message, title=u"API key not encrypted",
+                                  details=details, owner=self)
+        except Exception as ex:
+            logger.debug(u"plaintext warning failed: {}".format(ex))
+
+    @staticmethod
+    def _key_rejected_text(provider, new_key):
+        label = getattr(provider, 'DISPLAY_NAME', u"The provider")
+        if new_key:
+            return (u"Key rejected or offline — not saved; check it, retry",
+                    u"{} rejected the key or could not be reached — nothing was "
+                    u"saved. Check the key and your connection, then click "
+                    u"Save Key again.".format(label))
+        text = u"Invalid key or connection failed"
+        return (text, text)
 
     # ─── Local server host (Ollama / LM Studio) ────────────────────────────
 
@@ -656,11 +714,11 @@ class LLMSettingWindow(T3WPFWindow):
                         self._models_cache[name] = live_models
                     self._ui_invoke(self._update_probed)
                 except Exception as pex:
-                    logger.debug("host probe error: {}".format(pex))
+                    self._fail_action(u"Models · checking the server", pex)
 
             self._start_worker(_probe)
         except Exception as ex:
-            logger.debug("save_host_clicked error: {}".format(ex))
+            self._fail_action(u"Models · saving the server URL", ex, u"check the URL (http://host:port) and that the server runs")
 
     def _apply_host_panel(self, name, force_fields=False):
         try:
@@ -718,7 +776,7 @@ class LLMSettingWindow(T3WPFWindow):
             model = (self.custom_model_box.Text or u"").strip()
             azure = bool(self.custom_azure_toggle.IsChecked)
             if not url:
-                self.model_saved_hint.Foreground = _RED
+                self.model_saved_hint.Foreground = self._t("T3.Danger.Text")
                 self.model_saved_hint.Text = u"Enter the server Base URL first"
                 self._flash_saved_hint()
                 return
@@ -743,9 +801,8 @@ class LLMSettingWindow(T3WPFWindow):
             self._models_cache.pop("custom", None)
 
             self.model_combo.IsEnabled = False
-            self.save_model_btn.IsEnabled = False
             self.save_custom_btn.IsEnabled = False
-            self.model_saved_hint.Foreground = _MUTED
+            self.model_saved_hint.Foreground = self._t("T3.TextMuted")
             self.model_saved_hint.Text = u"Checking connection…"
 
             def _validate():
@@ -769,11 +826,11 @@ class LLMSettingWindow(T3WPFWindow):
                     if router.get_active_name() == "custom":
                         self._populate_model_combo("custom")
                         if ok:
-                            self.model_saved_hint.Foreground = _GREEN
+                            self.model_saved_hint.Foreground = self._t("T3.Success.Text")
                             self.model_saved_hint.Text = (
                                 u"Connected ({} models)".format(len(models)))
                         else:
-                            self.model_saved_hint.Foreground = _RED
+                            self.model_saved_hint.Foreground = self._t("T3.Danger.Text")
                             self.model_saved_hint.Text = (
                                 u"No model list — check the URL / key, or "
                                 u"type a model name")
@@ -783,7 +840,7 @@ class LLMSettingWindow(T3WPFWindow):
 
             if not self._start_worker(_validate):
                 self.save_custom_btn.IsEnabled = True
-                self.model_saved_hint.Foreground = _RED
+                self.model_saved_hint.Foreground = self._t("T3.Danger.Text")
                 self.model_saved_hint.Text = u"Could not start the check — try again"
         except Exception as ex:
             logger.debug("save_custom_clicked error: {}".format(ex))
@@ -815,92 +872,36 @@ class LLMSettingWindow(T3WPFWindow):
 
     def test_clicked(self, sender, e):
         self.test_result_border.Visibility = Visibility.Visible
-        self.test_result_border.Background = _brush(249, 250, 251)
-        self.test_result_border.BorderBrush = _brush(229, 231, 235)
+        self.test_result_border.Background = self._t("T3.SurfaceSunken")
+        self.test_result_border.BorderBrush = self._t("T3.Border")
         self.test_label.Text = u"Testing…"
-        self.test_label.Foreground = _brush(107, 114, 128)
+        self.test_label.Foreground = self._t("T3.TextSecondary")
         self.test_result.Text = u""
         self.test_btn.IsEnabled = False
-        self.status_text.Text = u"Testing connection…"
+        self._set_status(u"Testing connection…")
 
         def _do_test():
-            ok, label, msg = False, u"Result", u""
-            try:
-                from Intelligence.llm_router import LLMRouter
-                router = LLMRouter()
-                name = router.get_active_name()
-                provider = router.get_active_provider()
-
-                if provider is None:
-                    msg = u"Provider '{}' not loaded.".format(name)
-                elif not provider.check_health():
-                    if name == "ollama":
-                        # Recommend the tool-capable sweet spot (qwen3:14b), not
-                        # a tiny NLU-only model — the assistant's agentic path
-                        # needs a model that reliably tool-calls.
-                        rec = u"qwen3:14b"
-                        try:
-                            from Intelligence import local_llm as _ll
-                            rec = _ll.recommended_tool_model()
-                        except Exception:
-                            pass
-                        msg = (u"Ollama not available or no models installed.\n"
-                               u"1. Make sure Ollama is running.\n"
-                               u"2. Run: ollama pull {}".format(rec))
-                    elif name == "lmstudio":
-                        msg = (u"LM Studio not available or no model loaded.\n"
-                               u"1. Open LM Studio.\n"
-                               u"2. Load a model in LM Studio first.")
-                    elif name == "custom":
-                        msg = (u"Custom server not reachable.\n"
-                               u"Check the Base URL and API key — Azure needs "
-                               u"the api-key option and a model (deployment) "
-                               u"name.")
-                    else:
-                        msg = u"Provider not reachable.\nCheck API key or service status."
-                else:
-                    active_model = None
-                    try:
-                        active_model = provider.get_active_model()
-                    except Exception:
-                        pass
-                    if not active_model:
-                        msg = u"No model selected. Choose a model from the Model dropdown."
-                    else:
-                        resp = provider.chat(
-                            [],
-                            u"You are a concise assistant. Do not think. Reply in one short sentence only.",
-                            u"Reply with exactly this sentence: 'Connected OK'",
-                            max_tokens=120,
-                        )
-                        if resp and resp.strip():
-                            ok, label, msg = True, u"Connected", resp.strip()[:120]
-                        else:
-                            msg = u"Provider responded but returned an empty reply."
-            except Exception as ex:
-                msg = u"Error: {}".format(str(ex)[:100])
-
-            _ok, _label, _msg = ok, label, msg
+            _ok, _label, _msg = _svc.connection_test()
 
             def _update():
                 if _ok:
-                    self.test_result_border.Background = _brush(240, 253, 244)
-                    self.test_result_border.BorderBrush = _brush(187, 247, 208)
-                    self.test_label.Foreground = _brush(21, 128, 61)
+                    self.test_result_border.Background = self._t("T3.Success.Fill")
+                    self.test_result_border.BorderBrush = self._t("T3.Success.Accent")
+                    self.test_label.Foreground = self._t("T3.Success.Text")
                 else:
-                    self.test_result_border.Background = _brush(254, 242, 242)
-                    self.test_result_border.BorderBrush = _brush(254, 202, 202)
-                    self.test_label.Foreground = _brush(185, 28, 28)
+                    self.test_result_border.Background = self._t("T3.Danger.Fill")
+                    self.test_result_border.BorderBrush = self._t("T3.Danger.Border")
+                    self.test_label.Foreground = self._t("T3.Danger.Text")
                 self.test_label.Text = _label
                 self.test_result.Text = _msg
                 self.test_btn.IsEnabled = True
-                self.status_text.Text = u"Ready"
+                self._set_status(u"Ready")
 
             self._ui_invoke(_update)
 
         if not self._start_worker(_do_test):
             self.test_btn.IsEnabled = True
-            self.status_text.Text = u"Ready"
+            self._set_status(u"Ready")
             self.test_label.Text = u"Could not start the test — try again"
 
     # ─── Status dots ────────────────────────────────────────────────────────
@@ -920,19 +921,19 @@ class LLMSettingWindow(T3WPFWindow):
             return
         dot, txt = pair
         if available:
-            dot.Fill = _READY
+            dot.Fill = self._t("T3.Success.Accent")
             txt.Text = u"Ready"
-            txt.Foreground = _READY
+            txt.Foreground = self._t("T3.Success.Accent")
         elif not probed:
             # Not health-checked yet — say so rather than asserting
             # "Not set up", which contradicted the live check moments later.
-            dot.Fill = _GRAY
+            dot.Fill = self._t("T3.Border")
             txt.Text = u"Checking…"
-            txt.Foreground = _MUTED
+            txt.Foreground = self._t("T3.TextMuted")
         else:
-            dot.Fill = _GRAY
+            dot.Fill = self._t("T3.Border")
             txt.Text = u"Not set up"
-            txt.Foreground = _MUTED
+            txt.Foreground = self._t("T3.TextMuted")
 
     # ─── Full render passes ─────────────────────────────────────────────────
 
@@ -978,8 +979,7 @@ class LLMSettingWindow(T3WPFWindow):
                     from config.settings import T3LabAISettings
                     saved = T3LabAISettings().get_api_key(
                         self._KEY_NAME_MAP.get(active, "")) or ""
-                    self._key_mask_shown = (
-                        (saved[:8] + u"...") if len(saved) > 8 else saved)
+                    self._key_mask_shown = _svc.mask_key(saved)
                     self._set_text_quiet(self.api_key_box, self._key_mask_shown)
                 except Exception:
                     pass
@@ -1078,6 +1078,41 @@ class LLMSettingWindow(T3WPFWindow):
             return self.TryFindResource(key)
         except Exception:
             return None
+
+    def _t(self, key):
+        """T3 brush by key (rule 21), with a fixed fallback colour."""
+        brush = self._res(key)
+        if brush is not None:
+            return brush
+        return _brush(*_TOKEN_FALLBACK_RGB.get(key, (82, 82, 91)))
+
+    # ─── S3: a failed action always says what / where / next ────────────────
+
+    def _fail_action(self, what, ex, next_step=None):
+        """Show `what` failed, why, and what to do in the footer status line
+        (thread-safe). Replaces silent logger.debug in user actions."""
+        logger.debug(u"{} failed: {}".format(what, ex))
+        reason = u"{}".format(ex).strip() or type(ex).__name__
+        if len(reason) > 140:
+            reason = reason[:137] + u"..."
+        msg = u"{} failed: {} — {}".format(
+            what, reason, next_step or u"try again; if it keeps failing, "
+                                      u"restart Revit and check the pyRevit log")
+
+        def _show():
+            try:
+                self.status_text.Text = msg
+                self.status_text.ToolTip = msg
+                self.status_text.Foreground = self._t("T3.Danger.Text")
+            except Exception:
+                pass
+        try:
+            if self.Dispatcher.CheckAccess():
+                _show()
+            else:
+                self._ui_invoke(_show)
+        except Exception:
+            pass
 
     def _apply_style(self, ctrl, key):
         st = self._res(key)
@@ -1215,7 +1250,7 @@ class LLMSettingWindow(T3WPFWindow):
         Assistant then answered without them)."""
         err = getattr(self._claude_provider(), 'remote_mcp_error', None)
         if err:
-            self.mcp_server_status.Foreground = _RED
+            self.mcp_server_status.Foreground = self._t("T3.Danger.Text")
             self.mcp_server_status.Text = (
                 u"Claude refused the MCP servers in this Revit session, so the "
                 u"Assistant answers without them: {}".format(err)[:400])
@@ -1242,12 +1277,12 @@ class LLMSettingWindow(T3WPFWindow):
                 servers.append(entry)
             _saved, err = remote_mcp.save(servers)
             if err:
-                self.mcp_server_status.Foreground = _RED
+                self.mcp_server_status.Foreground = self._t("T3.Danger.Text")
                 self.mcp_server_status.Text = err
                 return
             self._mcp_servers_changed()
             self._load_mcp_servers(select_name=entry['name'])
-            self.mcp_server_status.Foreground = _GREEN
+            self.mcp_server_status.Foreground = self._t("T3.Success.Text")
             self.mcp_server_status.Text = (
                 u"Saved. Claude uses it from the next message." if entry['enabled']
                 else u"Saved (off).")
@@ -1270,15 +1305,17 @@ class LLMSettingWindow(T3WPFWindow):
             if not err:
                 self._mcp_servers_changed()
             self._load_mcp_servers()
-            self.mcp_server_status.Foreground = _RED if err else _MUTED
+            self.mcp_server_status.Foreground = self._t("T3.Danger.Text") if err else self._t("T3.TextMuted")
             self.mcp_server_status.Text = err or u"Removed."
         except Exception as ex:
             logger.debug("mcp_server_remove_clicked error: {}".format(ex))
 
     def _set_status(self, text):
-        """Footer status line. Never raises."""
+        """Footer status line (clears an earlier failure's red). Never raises."""
         try:
             self.status_text.Text = text
+            self.status_text.ToolTip = None
+            self.status_text.Foreground = self._t("T3.TextSecondary")
         except Exception:
             pass
 
@@ -1323,7 +1360,7 @@ class LLMSettingWindow(T3WPFWindow):
     def _flash_hint(self, tb, text=u"Saved", seconds=2.0):
         """Show a short confirmation next to a field, then clear it."""
         try:
-            tb.Foreground = self._res("T3.Success.Text") or _GREEN
+            tb.Foreground = self._t("T3.Success.Text")
             tb.Text = text
             from System.Windows.Threading import DispatcherTimer
             from System import TimeSpan
@@ -1437,7 +1474,7 @@ class LLMSettingWindow(T3WPFWindow):
             finally:
                 self._lang_guard = False
         except Exception as ex:
-            logger.debug("_load_personalization error: {}".format(ex))
+            self._fail_action(u"Loading the General tab", ex, u"close and reopen LLMs Setting")
 
     def _update_instructions_counter(self):
         """Live 'n / 2000' counter + Save enabled only when there is a change."""
@@ -1456,7 +1493,7 @@ class LLMSettingWindow(T3WPFWindow):
             self.user_instructions_counter.Text = msg
             if n >= int(_cap * 0.9):
                 self.user_instructions_counter.Foreground = (
-                    self._res("T3.Warning.Text") or _RED)
+                    self._t("T3.Warning.Text"))
             else:
                 from System.Windows.Controls import TextBlock as _TB
                 self.user_instructions_counter.ClearValue(
@@ -1495,7 +1532,7 @@ class LLMSettingWindow(T3WPFWindow):
                 u"next message.".format(n) if n else
                 u"Personal instructions cleared.", seconds=3.0)
         except Exception as ex:
-            logger.debug("save_user_instructions_clicked error: {}".format(ex))
+            self._fail_action(u"General · saving personal instructions", ex)
 
     def reply_language_changed(self, sender, e):
         """Persist agents.reply_language the moment the combo changes."""
@@ -1511,7 +1548,7 @@ class LLMSettingWindow(T3WPFWindow):
                 self._set_status(u"Could not save the reply language: "
                                  u"settings.json is locked or read-only.")
         except Exception as ex:
-            logger.debug("reply_language_changed error: {}".format(ex))
+            self._fail_action(u"General · reply language", ex)
 
     # ── Memory (General: global scope · Projects: project scope) ────────────
     #
@@ -1572,7 +1609,7 @@ class LLMSettingWindow(T3WPFWindow):
                     t.Margin = Thickness(0, 4, 0, 0)
                     panel.Children.Add(t)
         except Exception as ex:
-            logger.debug("_render_memory({}) error: {}".format(scope, ex))
+            self._fail_action(u"Memory · showing saved facts", ex, u"close and reopen LLMs Setting")
 
     def _memory_row(self, scope, pid, fact, editing):
         from System.Windows.Controls import (Grid, ColumnDefinition,
@@ -1680,7 +1717,7 @@ class LLMSettingWindow(T3WPFWindow):
             else:
                 self._set_status(note or u"Could not update the fact.")
         except Exception as ex:
-            logger.debug("_save_memory_edit error: {}".format(ex))
+            self._fail_action(u"Memory · saving the edit", ex)
 
     def _delete_memory_fact(self, scope, pid, index):
         try:
@@ -1694,7 +1731,7 @@ class LLMSettingWindow(T3WPFWindow):
             else:
                 self._set_status(u"That fact was already gone; the list is refreshed.")
         except Exception as ex:
-            logger.debug("_delete_memory_fact error: {}".format(ex))
+            self._fail_action(u"Memory · deleting a fact", ex)
 
     def _add_memory(self, scope, pid, box):
         try:
@@ -1710,7 +1747,7 @@ class LLMSettingWindow(T3WPFWindow):
             self._set_status(note or (u"Fact added." if ok
                                       else u"Could not add the fact."))
         except Exception as ex:
-            logger.debug("_add_memory error: {}".format(ex))
+            self._fail_action(u"Memory · adding a fact", ex)
 
     def _clear_memory(self, scope, pid=None):
         """Clear ONE scope behind a P5 confirm that states the count."""
@@ -1745,7 +1782,7 @@ class LLMSettingWindow(T3WPFWindow):
             self._set_status(u"Cleared {} from {}.".format(
                 self._plural(removed, u"fact"), where))
         except Exception as ex:
-            logger.debug("_clear_memory error: {}".format(ex))
+            self._fail_action(u"Memory · Clear", ex)
 
     def global_memory_add_clicked(self, sender, e):
         self._add_memory(_MEM_GLOBAL, None, self.global_memory_add_box)
@@ -1784,7 +1821,7 @@ class LLMSettingWindow(T3WPFWindow):
             UserProfile().set_name(name)
             self._flash_hint(self.username_saved_hint)
         except Exception as ex:
-            logger.debug("save_username_clicked error: {}".format(ex))
+            self._fail_action(u"General · saving your name", ex)
 
     def ai_mode_toggled(self, sender, e):
         """Persist the global AI Mode state for tools."""
@@ -1794,7 +1831,7 @@ class LLMSettingWindow(T3WPFWindow):
             from config.settings import get_settings
             get_settings().set_ai_mode_enabled(bool(self.ai_mode_toggle.IsChecked))
         except Exception as ex:
-            logger.debug("ai_mode_toggled error: {}".format(ex))
+            self._fail_action(u"General · AI mode", ex)
 
     def action_mode_toggled(self, sender, e):
         """Persist 'ask before model edits' (confirm) vs 'auto'."""
@@ -1805,7 +1842,7 @@ class LLMSettingWindow(T3WPFWindow):
             mode = 'confirm' if self.action_mode_toggle.IsChecked else 'auto'
             get_settings().set_agent_option('action_mode', mode)
         except Exception as ex:
-            logger.debug("action_mode_toggled error: {}".format(ex))
+            self._fail_action(u"General · action mode", ex)
 
     def extended_thinking_toggled(self, sender, e):
         """Persist the Claude extended-thinking (deep reasoning) switch."""
@@ -1817,7 +1854,7 @@ class LLMSettingWindow(T3WPFWindow):
                 'extended_thinking',
                 bool(self.extended_thinking_toggle.IsChecked))
         except Exception as ex:
-            logger.debug("extended_thinking_toggled error: {}".format(ex))
+            self._fail_action(u"General · extended thinking", ex)
 
     def auto_model_toggled(self, sender, e):
         """Persist the auto model switch (Haiku triage -> Haiku/Sonnet/Opus)."""
@@ -1828,7 +1865,7 @@ class LLMSettingWindow(T3WPFWindow):
             get_settings().set_agent_option(
                 'auto_model', bool(self.auto_model_toggle.IsChecked))
         except Exception as ex:
-            logger.debug("auto_model_toggled error: {}".format(ex))
+            self._fail_action(u"General · auto model switch", ex)
 
     def quality_mode_toggled(self, sender, e):
         """Persist the Opus-parity (maximum quality) switch.
@@ -1844,7 +1881,7 @@ class LLMSettingWindow(T3WPFWindow):
                 'quality_mode',
                 bool(self.quality_mode_toggle.IsChecked))
         except Exception as ex:
-            logger.debug("quality_mode_toggled error: {}".format(ex))
+            self._fail_action(u"General · quality mode", ex)
 
     def show_tool_calls_toggled(self, sender, e):
         """Full tool cards vs one collapsed summary row per reply."""
@@ -1855,7 +1892,7 @@ class LLMSettingWindow(T3WPFWindow):
             get_settings().set_show_tool_calls(
                 bool(self.show_tool_calls_toggle.IsChecked))
         except Exception as ex:
-            logger.debug("show_tool_calls_toggled error: {}".format(ex))
+            self._fail_action(u"General · show tool calls", ex)
 
     def show_thinking_toggled(self, sender, e):
         """Interim step narration on/off (the final answer always shows)."""
@@ -1866,7 +1903,7 @@ class LLMSettingWindow(T3WPFWindow):
             get_settings().set_show_thinking(
                 bool(self.show_thinking_toggle.IsChecked))
         except Exception as ex:
-            logger.debug("show_thinking_toggled error: {}".format(ex))
+            self._fail_action(u"General · show thinking", ex)
 
     def claude_code_memory_toggled(self, sender, e):
         """Search Claude Code's memory of the project folders (memory_hub)."""
@@ -1885,7 +1922,7 @@ class LLMSettingWindow(T3WPFWindow):
             d = os.path.join(os.environ.get('APPDATA', ''), 'T3LabAI')
             _open_in_explorer(d)
         except Exception as ex:
-            logger.debug("open_data_dir_clicked error: {}".format(ex))
+            self._fail_action(u"General · opening the data folder", ex, u"open %APPDATA%\\T3LabAI in Explorer yourself")
 
     # ─── TAB: Projects ──────────────────────────────────────────────────────
 
@@ -1937,7 +1974,7 @@ class LLMSettingWindow(T3WPFWindow):
                 pass
             self._fill_project_edit(self._selected_project_id())
         except Exception as ex:
-            logger.debug("_load_projects_tab error: {}".format(ex))
+            self._fail_action(u"Loading the Projects tab", ex, u"close and reopen LLMs Setting")
 
     def _fill_project_edit(self, pid):
         try:
@@ -1981,7 +2018,7 @@ class LLMSettingWindow(T3WPFWindow):
             else:
                 self.project_edit_panel.Visibility = Visibility.Collapsed
         except Exception as ex:
-            logger.debug("_fill_project_edit error: {}".format(ex))
+            self._fail_action(u"Projects · showing the project", ex, u"close and reopen LLMs Setting")
 
     def project_changed(self, sender, e):
         self._fill_project_edit(self._selected_project_id())
@@ -1999,7 +2036,7 @@ class LLMSettingWindow(T3WPFWindow):
             except Exception:
                 pass
         except Exception as ex:
-            logger.debug("new_project_clicked error: {}".format(ex))
+            self._fail_action(u"Projects · New project", ex)
 
     def project_save_clicked(self, sender, e):
         try:
@@ -2029,7 +2066,7 @@ class LLMSettingWindow(T3WPFWindow):
             self._load_projects_tab(select_pid=pid)
             self._flash_hint(self.project_saved_hint)
         except Exception as ex:
-            logger.debug("project_save_clicked error: {}".format(ex))
+            self._fail_action(u"Projects · Save", ex)
 
     def project_delete_clicked(self, sender, e):
         try:
@@ -2075,7 +2112,7 @@ class LLMSettingWindow(T3WPFWindow):
                              u"Could not delete project '{}': a file may be "
                              u"open in another program.".format(name))
         except Exception as ex:
-            logger.debug("project_delete_clicked error: {}".format(ex))
+            self._fail_action(u"Projects · Delete", ex)
 
     # ── Projects: context files ──────────────────────────────────────────────
 
@@ -2175,7 +2212,7 @@ class LLMSettingWindow(T3WPFWindow):
                     self._plural(extra, u"file"))
                 panel.Children.Add(t)
         except Exception as ex:
-            logger.debug("_render_project_files error: {}".format(ex))
+            self._fail_action(u"Projects · listing files", ex, u"close and reopen LLMs Setting")
 
     def _remove_project_file(self, pid, f):
         """Delete one file from files/ after a P5 confirm, then re-index."""
@@ -2201,7 +2238,7 @@ class LLMSettingWindow(T3WPFWindow):
             if ps.get_active_project_id() == pid:
                 self._kick_knowledge_scan()
         except Exception as ex:
-            logger.debug("_remove_project_file error: {}".format(ex))
+            self._fail_action(u"Projects · removing a file", ex)
 
     # ── Projects: CONTEXT block (counter line + linked-folder rows) ─────────
     #
@@ -2273,32 +2310,10 @@ class LLMSettingWindow(T3WPFWindow):
             _apply(self._collect_project_context(pid))
 
     def _collect_project_context(self, pid):
-        """Read the counter + one digest-stats dict per linked folder.
-
-        BACKGROUND THREAD — must not touch any WPF element.
-        """
-        info = {'pid': pid, 'summary': u'', 'rows': []}
-        ps = None
-        dirs = []
-        try:
-            from config.project_store import ProjectStore
-            ps = ProjectStore()
-            info['summary'] = ps.describe_documents(pid, cap=99)
-            dirs = ps.get_knowledge_dirs(pid)
-        except Exception as ex:
-            logger.debug("_collect_project_context error: {}".format(ex))
-        for path in dirs:
-            row = {'path': path, 'stats': None,
-                   'missing': not os.path.isdir(path)}
-            # linked_dir_stats is the same TTL-cached read describe_documents
-            # just did, so the rows cost no extra share round trips.
-            if ps is not None and not row['missing']:
-                try:
-                    row['stats'] = ps.linked_dir_stats(path)
-                except Exception:
-                    pass
-            info['rows'].append(row)
-        return info
+        """Counter + per-folder digest stats. BACKGROUND THREAD — no WPF."""
+        return _svc.collect_project_context(
+            pid, on_error=lambda ex: self._fail_action(
+                u"Projects · reading project context", ex))
 
     def project_add_files_clicked(self, sender, e):
         """Copy picked documents into the project's knowledge folder."""
@@ -2345,7 +2360,7 @@ class LLMSettingWindow(T3WPFWindow):
             except Exception:
                 pass
         except Exception as ex:
-            logger.debug("project_add_files_clicked error: {}".format(ex))
+            self._fail_action(u"Projects · adding files", ex)
 
     def project_open_folder_clicked(self, sender, e):
         try:
@@ -2366,7 +2381,7 @@ class LLMSettingWindow(T3WPFWindow):
                 except Exception:
                     pass
         except Exception as ex:
-            logger.debug("project_open_folder_clicked error: {}".format(ex))
+            self._fail_action(u"Projects · opening the folder", ex)
 
     # ── Projects: linked external knowledge folders ─────────────────────────
 
@@ -2515,7 +2530,7 @@ class LLMSettingWindow(T3WPFWindow):
                             if ps.get_active_project_id() == _pid:
                                 self._kick_knowledge_scan()
                         except Exception as uex:
-                            logger.debug("unlink dir error: {}".format(uex))
+                            self._fail_action(u"Projects · unlinking a folder", uex)
                     return _unlink
                 btn.Click += _make_unlink(path, pid)
                 Grid.SetColumn(btn, 2)
@@ -2524,7 +2539,7 @@ class LLMSettingWindow(T3WPFWindow):
                 row.Child = grid
                 panel.Children.Add(row)
         except Exception as ex:
-            logger.debug("_paint_project_context error: {}".format(ex))
+            self._fail_action(u"Projects · showing linked folders", ex, u"close and reopen LLMs Setting")
 
     def project_link_folder_clicked(self, sender, e):
         """Link an external folder as project knowledge, write its CONTEXT.md
@@ -2558,7 +2573,7 @@ class LLMSettingWindow(T3WPFWindow):
             self._refresh_project_context(pid, force=True)
             self._build_context_digest([dlg.SelectedPath], pid)
         except Exception as ex:
-            logger.debug("project_link_folder_clicked error: {}".format(ex))
+            self._fail_action(u"Projects · linking a folder", ex)
             self._set_project_status(
                 u"Link folder failed: {}".format(ex))
 
@@ -2603,74 +2618,12 @@ class LLMSettingWindow(T3WPFWindow):
                 pass
 
         def _work():
-            results = []
-            ctx_info = []
-            try:
-                from Intelligence.knowledge import context_digest
-                for i, folder in enumerate(todo, start=1):
-                    if not os.path.isdir(folder):
-                        continue
-                    label = os.path.basename(folder.rstrip(u'\\/')) or folder
-                    prefix = (u"[{}/{}] ".format(i, len(todo))
-                              if len(todo) > 1 else u"")
-
-                    def _prog(name, _p=prefix, _l=label):
-                        _set_status(u"{}{}: {}".format(_p, _l[:18], name[:26]))
-                    _set_status(u"{}Reading {}…".format(prefix, label[:24]))
-                    try:
-                        res = context_digest.build_context_file(
-                            folder, progress_cb=_prog)
-                    except Exception as bex:
-                        logger.debug("digest {} error: {}".format(folder, bex))
-                        res = None
-                    if res:
-                        results.append(res)
-            except Exception as wex:
-                logger.debug("context digest error: {}".format(wex))
-
-            # ── project-wide BIM context (steps 3+4 of the RAG cycle) ──────
-            # Per-folder digests summarise ONE file at a time; this pass asks
-            # the indexed corpus a fixed set of BIM-standard questions and
-            # answers each from the best passages across ALL linked folders,
-            # with file+page citations.
-            if pid and project_ctx:
-                try:
-                    _set_status(u"Indexing for project context…")
-                    from config.project_store import ProjectStore as _PS
-                    from Intelligence.knowledge import project_context as _pc
-                    ps = _PS()
-                    store = ps.knowledge_store_for(pid)
-                    if store is not None:
-                        store.scan()
-                        embedder = None
-                        try:
-                            from Intelligence.knowledge.embeddings import (
-                                get_default_embedder)
-                            emb = get_default_embedder()
-                            if emb is not None and emb.is_available():
-                                store.embed_pending(emb, budget_sec=120)
-                                embedder = emb
-                        except Exception:
-                            embedder = None
-                        chat = None
-                        try:
-                            from Intelligence.knowledge.context_digest import (
-                                _default_chat_fn)
-                            chat = _default_chat_fn()
-                        except Exception:
-                            chat = None
-
-                        def _tprog(topic):
-                            _set_status(u"Context: {}".format(topic[:34]))
-                        ctx = _pc.build_project_context(
-                            store, chat, embedder=embedder,
-                            progress_cb=_tprog)
-                        out_dir = os.path.join(ps.project_dir(pid), 'files')
-                        ctx_path = _pc.write_project_context(out_dir, ctx)
-                        if ctx_path:
-                            ctx_info.append(ctx)
-                except Exception as pex:
-                    logger.debug("project context error: {}".format(pex))
+            def _err(ex):
+                self._fail_action(u"Projects · summarising the linked folder",
+                                  ex, u"click Rescan to try again")
+            results, ctx_info = _svc.build_context_digests(
+                todo, pid, project_ctx, set_status=_set_status, on_error=_err,
+                debug=logger.debug)
 
             def _done():
                 self._ctx_busy = False
@@ -2679,31 +2632,9 @@ class LLMSettingWindow(T3WPFWindow):
                 except Exception:
                     pass
                 try:
-                    if results:
-                        docs = sum(r.get('files') or 0 for r in results)
-                        n_llm = sum(r.get('llm') or 0 for r in results)
-                        n_pg = sum(r.get('pages') or 0 for r in results)
-                        n_bad = sum(r.get('skipped') or 0 for r in results)
-                        n_re = sum(r.get('reused') or 0 for r in results)
-                        msg = (u"Context rebuilt: {} doc(s), {} page(s) read "
-                               u"in {} folder(s){}"
-                               .format(docs, n_pg, len(results),
-                                       u" · LLM {}".format(n_llm) if n_llm
-                                       else u" · excerpt only (no LLM)"))
-                        if n_re:
-                            msg += u" · {} unchanged (reused)".format(n_re)
-                        if n_bad:
-                            msg += u" · {} unreadable (see CONTEXT.md)".format(
-                                n_bad)
-                        if ctx_info:
-                            c = ctx_info[0]
-                            msg += u" · PROJECT_CONTEXT {}/{} topics".format(
-                                c.get('topics_found') or 0,
-                                c.get('topics_total') or 0)
+                    msg = _svc.digest_summary(results, ctx_info, todo)
+                    if msg:
                         self.project_files_status.Text = msg
-                    elif todo:
-                        self.project_files_status.Text = (
-                            u"Nothing indexable found in the linked folder(s).")
                     if pid:
                         from config.project_store import ProjectStore
                         # the digests were just rewritten — drop the TTL cache
@@ -2753,7 +2684,7 @@ class LLMSettingWindow(T3WPFWindow):
                 return
             self._build_context_digest(dirs, pid)
         except Exception as ex:
-            logger.debug("project_rescan_clicked error: {}".format(ex))
+            self._fail_action(u"Projects · Rescan", ex)
 
     # ── Projects: scheduled daily prompts ────────────────────────────────────
 
@@ -2783,7 +2714,7 @@ class LLMSettingWindow(T3WPFWindow):
                 t = TextBlock()
                 t.Text = u"No scheduled prompts yet."
                 t.FontSize = 11
-                t.Foreground = _MUTED
+                t.Foreground = self._t("T3.TextMuted")
                 t.Margin = Thickness(1, 0, 0, 4)
                 panel.Children.Add(t)
                 return
@@ -2797,7 +2728,7 @@ class LLMSettingWindow(T3WPFWindow):
                     note.Text = (u"These run only while this project is the "
                                  u"active one, with the assistant open.")
                     note.FontSize = 10.5
-                    note.Foreground = _brush(217, 119, 87)
+                    note.Foreground = self._t("T3.Warning.Text")
                     note.TextWrapping = TextWrapping.Wrap
                     note.Margin = Thickness(1, 0, 0, 6)
                     panel.Children.Add(note)
@@ -2839,7 +2770,7 @@ class LLMSettingWindow(T3WPFWindow):
                         _PS().set_schedule_enabled(_pid, _tid,
                                                    bool(s.IsChecked))
                     except Exception as tex:
-                        logger.debug("sched toggle error: {}".format(tex))
+                        self._fail_action(u"Projects · switching a schedule", tex)
                     self._render_project_sched(_pid)
                 cb.Checked += _toggle
                 cb.Unchecked += _toggle
@@ -2855,7 +2786,7 @@ class LLMSettingWindow(T3WPFWindow):
                     it.get('time') or u'?', _pv,
                     u"   (last run {})".format(_last) if _last else u"")
                 lbl.FontSize = 12
-                lbl.Foreground = _brush(82, 82, 91) if _on else _MUTED
+                lbl.Foreground = self._t("T3.TextSecondary") if _on else self._t("T3.TextMuted")
                 lbl.TextWrapping = TextWrapping.Wrap
                 lbl.VerticalAlignment = System.Windows.VerticalAlignment.Center
                 Grid.SetColumn(lbl, 1)
@@ -2869,7 +2800,7 @@ class LLMSettingWindow(T3WPFWindow):
                     x.FontFamily = System.Windows.Media.FontFamily(
                         "Segoe MDL2 Assets")
                     x.FontSize = 11
-                    x.Foreground = _MUTED
+                    x.Foreground = self._t("T3.TextMuted")
                 x.Cursor = Cursors.Hand
                 x.Margin = Thickness(10, 2, 2, 0)
                 x.ToolTip = u"Remove"
@@ -2879,7 +2810,7 @@ class LLMSettingWindow(T3WPFWindow):
                         from config.project_store import ProjectStore as _PS
                         _PS().remove_schedule(_pid, _tid)
                     except Exception as rex:
-                        logger.debug("sched remove error: {}".format(rex))
+                        self._fail_action(u"Projects · removing a schedule", rex)
                     self._render_project_sched(_pid)
 
                 x.MouseLeftButtonUp += _rm
@@ -2887,7 +2818,7 @@ class LLMSettingWindow(T3WPFWindow):
                 g.Children.Add(x)
                 panel.Children.Add(g)
         except Exception as ex:
-            logger.debug("_render_project_sched error: {}".format(ex))
+            self._fail_action(u"Projects · listing schedules", ex, u"close and reopen LLMs Setting")
 
     def project_sched_add_clicked(self, sender, e):
         """Validate + append one scheduled daily prompt."""
@@ -2904,13 +2835,13 @@ class LLMSettingWindow(T3WPFWindow):
             hhmm = ps.validate_schedule_time(time_txt)
             if not prompt or not hhmm:
                 (self.project_sched_time_box if prompt
-                 else self.project_sched_prompt_box).BorderBrush = _RED
+                 else self.project_sched_prompt_box).BorderBrush = self._t("T3.Danger.Text")
                 self.project_files_status.Text = (
                     u"Enter a prompt and a time as HH:MM (00:00–23:59)."
                     if prompt else u"Enter the prompt to run.")
                 return
-            self.project_sched_prompt_box.BorderBrush = _brush(203, 213, 225)
-            self.project_sched_time_box.BorderBrush = _brush(203, 213, 225)
+            self.project_sched_prompt_box.BorderBrush = self._t("T3.Border")
+            self.project_sched_time_box.BorderBrush = self._t("T3.Border")
             if ps.add_schedule(pid, prompt, hhmm) is None:
                 self.project_files_status.Text = (
                     u"Could not save the scheduled prompt.")
@@ -2918,7 +2849,7 @@ class LLMSettingWindow(T3WPFWindow):
             self.project_sched_prompt_box.Text = u''
             self._render_project_sched(pid)
         except Exception as ex:
-            logger.debug("project_sched_add_clicked error: {}".format(ex))
+            self._fail_action(u"Projects · adding a schedule", ex)
 
     # ─── TAB: Knowledge ─────────────────────────────────────────────────────
 
@@ -2948,7 +2879,7 @@ class LLMSettingWindow(T3WPFWindow):
             finally:
                 self._embed_guard = False
         except Exception as ex:
-            logger.debug("_load_knowledge_tab error: {}".format(ex))
+            self._fail_action(u"Loading the Knowledge tab", ex, u"close and reopen LLMs Setting")
 
     def _refresh_knowledge_dirs_panel(self):
         """Rebuild the knowledge directory rows. UI THREAD."""
@@ -3016,7 +2947,7 @@ class LLMSettingWindow(T3WPFWindow):
                                 self._refresh_knowledge_dirs_panel()
                                 self._kick_knowledge_scan()
                             except Exception as rex:
-                                logger.debug("remove dir error: {}".format(rex))
+                                self._fail_action(u"Knowledge · removing a folder", rex)
                         return _remove
                     btn.Click += _make_remove(path)
                     Grid.SetColumn(btn, 1)
@@ -3025,7 +2956,7 @@ class LLMSettingWindow(T3WPFWindow):
                 row.Child = grid
                 panel.Children.Add(row)
         except Exception as ex:
-            logger.debug("_refresh_knowledge_dirs_panel error: {}".format(ex))
+            self._fail_action(u"Knowledge · listing folders", ex, u"close and reopen LLMs Setting")
 
     def _kick_knowledge_scan(self):
         """(Re)scan the active knowledge store on a background thread."""
@@ -3062,7 +2993,7 @@ class LLMSettingWindow(T3WPFWindow):
                     except Exception:
                         pass
             except Exception as ex:
-                logger.debug("knowledge scan error: {}".format(ex))
+                self._fail_action(u"Knowledge · indexing", ex, u"click Reindex to try again")
             finally:
                 self._kn_scan_busy = False
                 self._ui_invoke(self._load_knowledge_tab)
@@ -3089,7 +3020,7 @@ class LLMSettingWindow(T3WPFWindow):
                 self._refresh_knowledge_dirs_panel()
                 self._kick_knowledge_scan()
         except Exception as ex:
-            logger.debug("add_knowledge_dir_clicked error: {}".format(ex))
+            self._fail_action(u"Knowledge · adding a folder", ex)
             try:
                 self.knowledge_index_status.Text = (
                     u"Add folder failed: {}".format(ex))
@@ -3101,7 +3032,7 @@ class LLMSettingWindow(T3WPFWindow):
         try:
             self._kick_knowledge_scan()
         except Exception as ex:
-            logger.debug("reindex_clicked error: {}".format(ex))
+            self._fail_action(u"Knowledge · Reindex", ex)
 
     def knowledge_embed_toggled(self, sender, e):
         """Persist the semantic-search switch; pull the embed model when
@@ -3137,10 +3068,10 @@ class LLMSettingWindow(T3WPFWindow):
                         store.embed_pending(emb, budget_sec=300)
                     self._ui_invoke(self._load_knowledge_tab)
                 except Exception as ex2:
-                    logger.debug("embed enable error: {}".format(ex2))
+                    self._fail_action(u"Knowledge · semantic search", ex2)
             self._start_worker(_ensure)
         except Exception as ex:
-            logger.debug("knowledge_embed_toggled error: {}".format(ex))
+            self._fail_action(u"Knowledge · semantic search", ex)
 
     # ─── TAB: Skills ────────────────────────────────────────────────────────
 
@@ -3198,7 +3129,7 @@ class LLMSettingWindow(T3WPFWindow):
             except panel.UserError as ex:
                 error = u"{}".format(ex)
             except Exception as ex:
-                logger.debug("toolhub worker error: {}".format(ex))
+                self._fail_action(u"Tool Hub · loading", ex, u"check your connection, then reopen the tab")
                 error = (u"The Tool Hub did not answer ({}). Check the network "
                          u"and try again.".format(ex))
 
@@ -3466,7 +3397,7 @@ class LLMSettingWindow(T3WPFWindow):
                             get_skills_engine().set_enabled(
                                 sid, bool(box.IsChecked))
                         except Exception as tex:
-                            logger.debug("skill toggle error: {}".format(tex))
+                            self._fail_action(u"Skills · switching a skill", tex)
                     return _toggled
                 handler = _make_toggle(meta['id'], cb)
                 cb.Checked += handler
@@ -3477,7 +3408,7 @@ class LLMSettingWindow(T3WPFWindow):
                 row.Child = grid
                 panel.Children.Add(row)
         except Exception as ex:
-            logger.debug("_load_skills_tab error: {}".format(ex))
+            self._fail_action(u"Loading the Skills tab", ex, u"close and reopen LLMs Setting")
 
     def refresh_skills_clicked(self, sender, e):
         """Rescan skill folders and rebuild the list."""
@@ -3486,7 +3417,7 @@ class LLMSettingWindow(T3WPFWindow):
             get_skills_engine().scan()
             self._load_skills_tab()
         except Exception as ex:
-            logger.debug("refresh_skills_clicked error: {}".format(ex))
+            self._fail_action(u"Skills · Refresh", ex)
 
     def open_skills_dir_clicked(self, sender, e):
         """Open the user skills folder in Explorer."""
@@ -3494,7 +3425,7 @@ class LLMSettingWindow(T3WPFWindow):
             from Intelligence.skills_engine import _user_skills_dir
             _open_in_explorer(_user_skills_dir())
         except Exception as ex:
-            logger.debug("open_skills_dir_clicked error: {}".format(ex))
+            self._fail_action(u"Skills · opening the skills folder", ex)
 
     def install_skills_clicked(self, sender, e):
         """Ask for a GitHub repo link and install the Claude skills in it.
@@ -3504,27 +3435,30 @@ class LLMSettingWindow(T3WPFWindow):
         """
         try:
             from Intelligence import skill_installer as installer
-            url = forms.ask_for_string(
-                prompt="Paste a GitHub repo link (a /tree/<branch>/<folder> "
-                       "link installs just that folder):",
-                default="https://github.com/",
-                title="Install skills from GitHub")
+            url = T3Dialog.ask_for_string(
+                u"Paste a GitHub repo link (a /tree/<branch>/<folder> link "
+                u"installs just that folder):",
+                default=u"https://github.com/",
+                title=u"Install skills from GitHub", owner=self)
             if not url or not url.strip():
                 return
             source = installer.parse_repo_url(url)
             if not source:
-                forms.alert("That is not a GitHub repo link.\n\n"
-                            "Expected something like "
-                            "https://github.com/owner/repo",
-                            title="Install skills")
+                T3Dialog.show_warning(
+                    u"That is not a GitHub repo link.",
+                    title=u"Install skills", owner=self,
+                    details=u"Expected something like https://github.com/owner/repo")
                 return
             report = installer.install_from_github(source)
             self.refresh_skills_clicked(None, None)
-            forms.alert(_plain_report(report), title="Install skills")
+            T3Dialog.show_info(_svc.plain_report(report), title=u"Install skills",
+                               owner=self)
         except Exception as ex:
             logger.debug("install_skills_clicked error: {}".format(ex))
-            forms.alert("Install failed: {}".format(ex),
-                        title="Install skills")
+            T3Dialog.show_error(
+                u"Installing skills from GitHub failed.", title=u"Install skills",
+                owner=self, details=u"{}\n\nCheck the link and your internet "
+                                    u"connection, then try again.".format(ex))
 
     def update_skills_clicked(self, sender, e):
         """Re-pull every skill that was installed from a repo."""
@@ -3532,34 +3466,21 @@ class LLMSettingWindow(T3WPFWindow):
             from Intelligence import skill_installer as installer
             installed = installer.list_installed()
             if not installed:
-                forms.alert("No skills were installed from GitHub yet.\n\n"
-                            "Use 'Install from GitHub' first.",
-                            title="Update skills")
+                T3Dialog.show_info(
+                    u"No skills were installed from GitHub yet.",
+                    title=u"Update skills", owner=self,
+                    details=u"Use 'Install from GitHub' first.")
                 return
             report = installer.update_all()
             self.refresh_skills_clicked(None, None)
-            forms.alert(_plain_report(report), title="Update skills")
+            T3Dialog.show_info(_svc.plain_report(report), title=u"Update skills",
+                               owner=self)
         except Exception as ex:
             logger.debug("update_skills_clicked error: {}".format(ex))
-            forms.alert("Update failed: {}".format(ex),
-                        title="Update skills")
-
-
-def _plain_report(report):
-    """Installer report as plain text for a pyRevit alert (no markdown)."""
-    report = report or {}
-    lines = []
-    for entry in (report.get('installed') or []):
-        lines.append(u"installed  /{}".format(entry['id']))
-    for entry in (report.get('updated') or []):
-        lines.append(u"updated    /{}".format(entry['id']))
-    for sid, why in (report.get('skipped') or [])[:6]:
-        lines.append(u"skipped    {} ({})".format(sid, why))
-    for err in (report.get('errors') or [])[:4]:
-        lines.append(u"error      {}".format(err))
-    if not lines:
-        lines.append(u"Nothing changed.")
-    return u"\n".join(lines)
+            T3Dialog.show_error(
+                u"Updating skills failed.", title=u"Update skills", owner=self,
+                details=u"{}\n\nCheck your internet connection, then try "
+                        u"again.".format(ex))
 
 
 def show_llm_setting_dialog():

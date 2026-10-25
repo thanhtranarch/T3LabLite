@@ -18,9 +18,11 @@ import json
 import re as _re
 
 from Intelligence.context_budget import fit_history
-from Intelligence.llm_provider import (BaseLLMProvider, http_post, http_post_stream,
+from Intelligence.llm_provider import (BaseLLMProvider, text_history,
+                                       http_post, http_post_stream,
                                        http_get_auth, parse_openai_stream_line,
-                                       openai_chat_agent, openai_agent_tool_results)
+                                       openai_chat_agent, openai_agent_tool_results,
+                                       RequestCancelled)
 
 
 # DeepSeek is OpenAI-compatible. Base URL https://api.deepseek.com works for both
@@ -178,16 +180,9 @@ class DeepSeekProvider(BaseLLMProvider):
         msgs  = []
         if system_prompt:
             msgs.append({"role": "system", "content": system_prompt})
-        for h in fit_history(messages, self, system_prompt=system_prompt,
-                             user=text, reply_tokens=max_tokens):
-            role    = h.get("role", "user")
-            content = h.get("content", "")
-            if role not in ("user", "assistant"):
-                continue
-            if isinstance(content, list):
-                content = self.blocks_to_text(content)
-            if content:
-                msgs.append({"role": role, "content": content})
+        history = fit_history(messages, self, system_prompt=system_prompt,
+                              user=text, reply_tokens=max_tokens)
+        msgs.extend(text_history(self, history))
         msgs.append({"role": "user", "content": text})
 
         payload = {
@@ -233,16 +228,9 @@ class DeepSeekProvider(BaseLLMProvider):
         msgs  = []
         if system_prompt:
             msgs.append({"role": "system", "content": system_prompt})
-        for h in fit_history(messages, self, system_prompt=system_prompt,
-                             user=text, reply_tokens=max_tokens):
-            role    = h.get("role", "user")
-            content = h.get("content", "")
-            if role not in ("user", "assistant"):
-                continue
-            if isinstance(content, list):
-                content = self.blocks_to_text(content)
-            if content:
-                msgs.append({"role": role, "content": content})
+        history = fit_history(messages, self, system_prompt=system_prompt,
+                              user=text, reply_tokens=max_tokens)
+        msgs.extend(text_history(self, history))
         msgs.append({"role": "user", "content": text})
 
         payload = {
@@ -318,7 +306,10 @@ class DeepSeekProvider(BaseLLMProvider):
                 _BASE_URL + "/chat/completions",
                 {"Authorization": "Bearer " + api_key},
                 model,
-                system_prompt, messages, tools, max_tokens)
+                system_prompt, messages, tools, max_tokens,
+                cancel=kwargs.get("cancel"), echo_reasoning=True)
+        except RequestCancelled:
+            raise
         except Exception as ex:
             self._record_error(u"chat_agent() failed: {}".format(ex))
             return None

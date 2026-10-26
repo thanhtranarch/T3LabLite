@@ -236,6 +236,28 @@ class PolicyTests(unittest.TestCase):
         finally:
             _clear_policy()
 
+    def test_dont_ask_again_only_on_the_code_dialog(self):
+        self.assertTrue(mp.dont_ask_text('send_code_to_revit'))
+        self.assertIsNone(mp.dont_ask_text('delete_element'))
+        self.assertIsNone(mp.dont_ask_text('run_batch'))
+
+    def test_dont_ask_again_switches_code_to_allow(self):
+        try:
+            mp.save_policy(code_execution='ask')
+            # No, an unticked box, or a non-code tool changes nothing.
+            self.assertFalse(mp.remember_answer('send_code_to_revit', False, True))
+            self.assertFalse(mp.remember_answer('send_code_to_revit', True, False))
+            self.assertFalse(mp.remember_answer('delete_element', True, True))
+            self.assertEqual(mp.load_policy()['code_execution'], 'ask')
+            self.assertTrue(mp.remember_answer('send_code_to_revit', True, True))
+            policy = mp.load_policy()
+            self.assertEqual(policy['code_execution'], 'allow')
+            ro = frozenset(['get_project_info'])
+            self.assertEqual(mp.check_call('send_code_to_revit', policy, ro, True),
+                             ('run', None))
+        finally:
+            _clear_policy()
+
 
 class CallSummaryTests(unittest.TestCase):
 

@@ -142,7 +142,12 @@ class IndexTree(object):
 
 
 def _text(raw):
-    return raw.decode('utf-8', 'replace') if raw is not None else None
+    """Decoded file with LF line ends: a Windows checkout (core.autocrlf)
+    has CRLF on disk while the index has LF, and `$` under re.M does not
+    match before '\\r'."""
+    if raw is None:
+        return None
+    return raw.decode('utf-8', 'replace').replace('\r\n', '\n')
 
 
 # ── report ───────────────────────────────────────────────────────────────────

@@ -36,11 +36,14 @@ class T3Dialog(_WPFWindow):
     MODE_WARNING = "warning"
     MODE_ERROR = "error"
     MODE_CONFIRM = "confirm"
+    MODE_PROMPT = "prompt"      # confirm + one-line text answer (ask_for_string)
 
     def __init__(self, message, title="Notification", details=None,
-                 mode="info", ok_text="OK", cancel_text="Cancel", danger=False, owner=None):
+                 mode="info", ok_text="OK", cancel_text="Cancel", danger=False, owner=None,
+                 default_text=u""):
         _WPFWindow.__init__(self, _XAML)
         self.result = False
+        self.value = None
         self._mode = mode
         self._danger = danger
 
@@ -66,6 +69,14 @@ class T3Dialog(_WPFWindow):
 
         # Configure Style & Icon based on mode
         self._configure_appearance(mode, ok_text, cancel_text, danger)
+        if mode == self.MODE_PROMPT and getattr(self, 'txt_input', None) is not None:
+            self.txt_input.Text = default_text or u""
+            self.txt_input.Visibility = _Visibility.Visible
+            try:
+                self.txt_input.Focus()
+                self.txt_input.SelectAll()
+            except Exception:
+                pass
 
         # Wire Events
         if hasattr(self, 'btn_ok') and self.btn_ok:
@@ -86,7 +97,7 @@ class T3Dialog(_WPFWindow):
 
         if hasattr(self, 'btn_cancel') and self.btn_cancel:
             self.btn_cancel.Content = cancel_text
-            if mode == self.MODE_CONFIRM:
+            if mode in (self.MODE_CONFIRM, self.MODE_PROMPT):
                 self.btn_cancel.Visibility = _Visibility.Visible
             else:
                 self.btn_cancel.Visibility = _Visibility.Collapsed
@@ -124,6 +135,8 @@ class T3Dialog(_WPFWindow):
 
     def _on_ok(self, sender, e):
         self.result = True
+        if getattr(self, 'txt_input', None) is not None:
+            self.value = self.txt_input.Text
         self.Close()
 
     def _on_cancel(self, sender, e):
@@ -204,3 +217,14 @@ def confirm(message, title="Confirm Action", ok_text="Proceed", cancel_text="Can
                                  cancel_text=cancel_text, danger=danger,
                                  owner=owner),
                 message, title, details, buttons=2)
+
+
+def ask_for_string(message, default=u"", title="Input", owner=None):
+    """One line of text from the user, or None on Cancel / no dialog."""
+    try:
+        dlg = T3Dialog(message, title=title, mode=T3Dialog.MODE_PROMPT,
+                       ok_text="OK", owner=owner, default_text=default)
+        dlg.ShowDialog()
+        return dlg.value if dlg.result else None
+    except Exception:
+        return None

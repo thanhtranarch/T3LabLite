@@ -136,8 +136,12 @@ class AIModeBridge(object):
         if active_info.get("available"):
             return True
 
-        # Check if any provider in fallback chain is available
-        return any(info.get("available") for info in status.values())
+        # Other providers count only when the router may fall back to them.
+        try:
+            candidates = router.get_fallback_candidates()
+        except Exception:
+            candidates = []
+        return any(status.get(n, {}).get("available") for n in candidates)
 
     def get_active_provider_info(self):
         """Return dict with provider name, model, and display status."""

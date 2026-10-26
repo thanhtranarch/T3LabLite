@@ -101,8 +101,16 @@ class _ProjectCase(unittest.TestCase):
 class ClaudeCodeSourceTests(_ProjectCase):
 
     def test_encoding_matches_claude_code(self):
-        self.assertEqual(mh.encode_project_dir('/home/u/T3Lab Lite'),
-                         '-home-u-T3Lab-Lite')
+        # Real folder names under ~/.claude/projects. A POSIX path is not
+        # absolute on Windows (abspath adds the current drive), so each OS
+        # gets its own.
+        if os.name == 'nt':
+            self.assertEqual(
+                mh.encode_project_dir(r'D:\01. T3Lab\T3LabLite\.claude\worktrees\x'),
+                'D--01--T3Lab-T3LabLite--claude-worktrees-x')
+        else:
+            self.assertEqual(mh.encode_project_dir('/home/u/T3Lab Lite'),
+                             '-home-u-T3Lab-Lite')
         self.assertNotRegex(mh.encode_project_dir(self.folder), r'[^A-Za-z0-9-]')
 
     def test_finds_claude_md_and_auto_memory(self):

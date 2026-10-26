@@ -23,6 +23,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check tools and tracking hooks
         run: python3 lite_guard/guard.py
+      - name: Test the guard itself (CRLF and LF checkouts)
+        run: python3 lite_guard/test_guard.py
       - name: Test the automatic update schedule
         run: python3 lite_guard/test_update_schedule.py
       - name: Test the old ribbon folder cleanup

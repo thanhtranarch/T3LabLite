@@ -20,6 +20,7 @@ import sys
 
 from Intelligence.llm_provider import (BaseLLMProvider, http_post, http_post_stream,
                                        http_get_auth, parse_anthropic_stream_line,
+                                       RequestCancelled,
                                        HAS_HTTP)
 
 
@@ -32,10 +33,12 @@ ANTHROPIC_API_VER = "2023-06-01"
 # NO hardcoded model names: the models an account can use come exclusively
 # from the live /v1/models endpoint after the key is verified. Defaults are
 # picked from that live list by substring preference only.
-_PREF_TEXT    = ("haiku", "sonnet", "opus")   # cheap-first for plain chat
-_PREF_VISION  = ("sonnet", "opus", "haiku")   # capable-first for images/agent
-_PREF_FAST    = ("haiku", "sonnet")           # latency-first for classify calls
-_PREF_QUALITY = ("opus", "sonnet", "haiku")   # Opus-parity mode: most capable first
+# Fable (top tier, ~2.5x Opus price) comes after Opus: never an automatic
+# default while Opus is listed; pin it per role (model_roles) to use it.
+_PREF_TEXT    = ("haiku", "sonnet", "opus", "fable")   # cheap-first for plain chat
+_PREF_VISION  = ("sonnet", "opus", "fable", "haiku")   # capable-first for images/agent
+_PREF_FAST    = ("haiku", "sonnet")                    # latency-first for classify calls
+_PREF_QUALITY = ("opus", "fable", "sonnet", "haiku")   # Opus-parity mode
 
 # Extended-thinking config for agent turns (agents.extended_thinking).
 #
@@ -76,6 +79,11 @@ _MCP_BETA = "mcp-client-2025-11-20"
 # response headers, ReadWriteTimeout is per read — a 32k-token answer at
 # ~80 tok/s streams for ~7 minutes, so both get 10 minutes.
 _AGENT_TIMEOUT_MS = 600000
+
+# Error types that are never the thinking-shape 400 (_thinking_rejected).
+_NOT_A_SHAPE_ERROR = ("overloaded_error", "rate_limit_error", "api_error",
+                      "authentication_error", "permission_error",
+                      "not_found_error", "timed out", "timeout")
 
 
 # ─── Provider ──────────────────────────────────────────────────────────────────
@@ -200,15 +208,18 @@ class ClaudeProvider(BaseLLMProvider):
 
     @staticmethod
     def _version_key(model_id):
-        """Sort key: the generation numbers after the family word, so
-        claude-sonnet-5-5 (5, 5) beats claude-sonnet-4-6 (4, 6). A dated
-        snapshot (claude-sonnet-4-5-20250929) carries no extra weight; ids
-        without a parseable version sort last."""
-        m = re.search(r"(?:haiku|sonnet|opus|fable|mythos)-(\d+)(?:-(\d+))?",
-                      u"{}".format(model_id or u""))
-        if not m:
+        """Sort key (major, minor), so claude-sonnet-5-5 beats claude-sonnet-4-6.
+
+        Reads both id orders — claude-opus-4-1 and legacy claude-3-5-haiku —
+        and ignores 8-digit date snapshots (claude-opus-4-20250514 is (4, 0)).
+        Ids without a family word or a version sort last."""
+        mid = u"{}".format(model_id or u"").lower()
+        if not re.search(r"(?:haiku|sonnet|opus|fable|mythos)", mid):
             return (-1, -1)
-        return (int(m.group(1)), int(m.group(2) or 0))
+        nums = [int(t) for t in mid.split(u"-") if t.isdigit() and len(t) <= 3]
+        if not nums:
+            return (-1, -1)
+        return (nums[0], nums[1] if len(nums) > 1 else 0)
 
     @classmethod
     def _pick_model(cls, models, prefs):
@@ -425,6 +436,10 @@ class ClaudeProvider(BaseLLMProvider):
         chunks = []
 
         def _on_line(line):
+            err = anthropic_stream_error(line)
+            if err:
+                # Into the except below: continuation or blocking retry.
+                raise RuntimeError(u"stream error event: {}".format(err))
             delta = parse_anthropic_stream_line(line)
             if delta:
                 chunks.append(delta)
@@ -487,8 +502,7 @@ class ClaudeProvider(BaseLLMProvider):
             }
             resp_text  = http_post(CLAUDE_API_URL, payload, headers,
                                    timeout_ms=timeout_ms)
-            api_result = json.loads(resp_text)
-            cont = api_result["content"][0]["text"]
+            cont = _first_text(json.loads(resp_text))
             if cont and on_delta:
                 try:
                     on_delta(cont)
@@ -665,10 +679,15 @@ class ClaudeProvider(BaseLLMProvider):
 
     @staticmethod
     def _thinking_rejected(ex):
-        """True if `ex` looks like the API rejecting the `thinking` param
-        shape (wrong type for this model generation) rather than some other
-        failure (network, auth, rate limit) that a retry wouldn't fix."""
-        return "thinking" in u"{}".format(ex).lower()
+        """True only for the 400 invalid_request_error that rejects the
+        `thinking` shape for this model (adaptive / budget_tokens). Anything
+        else — overloaded, rate limit, a message that merely mentions
+        thinking — must not flip the model to legacy for the session."""
+        msg = u"{}".format(ex).lower()
+        if u"thinking" not in msg or any(t in msg for t in _NOT_A_SHAPE_ERROR):
+            return False
+        return any(k in msg for k in (u"adaptive", u"budget_tokens", u"disabled",
+                                      u"thinking.type", u"thinking type"))
 
     @staticmethod
     def _cache_marked_messages(messages):
@@ -704,6 +723,7 @@ class ClaudeProvider(BaseLLMProvider):
         """
         if not HAS_HTTP:
             return self._fail_no_http("chat_agent()")
+        cancel = kwargs.get("cancel")
         api_key = self._get_api_key()
         if not api_key:
             return self._fail_no_key("chat_agent()")
@@ -753,6 +773,7 @@ class ClaudeProvider(BaseLLMProvider):
             # the only way to tell whether prompt caching is actually working);
             # `message_delta` carries the final output_tokens.
             "usage":       {},
+            "error":       None,   # SSE `error` event: the answer is truncated
         }
 
         def _on_line(line):
@@ -854,19 +875,24 @@ class ClaudeProvider(BaseLLMProvider):
                 except Exception:
                     pass
 
+            elif etype == "error":
+                state["error"] = _error_text(obj)
+
         def _stream_once():
             payload = self._agent_payload(model, system_prompt, messages, tools,
                                           max_tokens, stream=True,
                                           thinking_mode=thinking_mode,
                                           context_edit=self._context_edit_on(model))
             http_post_stream(CLAUDE_API_URL, payload, _headers(thinking_mode),
-                             _on_line, timeout_ms=_AGENT_TIMEOUT_MS)
+                             _on_line, timeout_ms=_AGENT_TIMEOUT_MS, cancel=cancel)
             return bool(state["blocks"]) or state["stop_reason"] is not None
 
         streamed_ok = False
         try:
             self._clear_error()
             streamed_ok = _stream_once()
+        except RequestCancelled:
+            raise
         except Exception as ex:
             if self._mcp_on(model) and self._mcp_rejected(ex):
                 # A remote MCP server was refused: answer without them for
@@ -883,8 +909,11 @@ class ClaudeProvider(BaseLLMProvider):
                 # this model and retry once.
                 self._context_edit_mode[model] = "off"
                 state["blocks"], state["cur"], state["stop_reason"] = [], None, None
+                state["error"] = None
                 try:
                     streamed_ok = _stream_once()
+                except RequestCancelled:
+                    raise
                 except Exception as ex2:
                     self._record_error(u"chat_agent stream failed: {}".format(ex2))
             elif self._uses_tool_search(tools) and self._tool_search_rejected(ex):
@@ -893,14 +922,17 @@ class ClaudeProvider(BaseLLMProvider):
                 self._tool_search_mode[model] = "off"
                 tools = self._plain_tools(tools)
                 state["blocks"], state["cur"], state["stop_reason"] = [], None, None
+                state["error"] = None
                 try:
                     payload = self._agent_payload(model, system_prompt, messages,
                                                   tools, max_tokens, stream=True,
                                                   thinking_mode=thinking_mode)
                     http_post_stream(CLAUDE_API_URL, payload, _headers(thinking_mode),
-                                     _on_line, timeout_ms=_AGENT_TIMEOUT_MS)
+                                     _on_line, timeout_ms=_AGENT_TIMEOUT_MS, cancel=cancel)
                     streamed_ok = (bool(state["blocks"])
                                   or state["stop_reason"] is not None)
+                except RequestCancelled:
+                    raise
                 except Exception as ex2:
                     self._record_error(u"chat_agent stream failed: {}".format(ex2))
             elif thinking_mode == "adaptive" and self._thinking_rejected(ex):
@@ -909,18 +941,37 @@ class ClaudeProvider(BaseLLMProvider):
                 # future calls on this model skip straight to it.
                 self._thinking_mode[model] = thinking_mode = "legacy"
                 state["blocks"], state["cur"], state["stop_reason"] = [], None, None
+                state["error"] = None
                 try:
                     payload = self._agent_payload(model, system_prompt, messages,
                                                   tools, max_tokens, stream=True,
                                                   thinking_mode=thinking_mode)
                     http_post_stream(CLAUDE_API_URL, payload, _headers(thinking_mode),
-                                     _on_line, timeout_ms=_AGENT_TIMEOUT_MS)
+                                     _on_line, timeout_ms=_AGENT_TIMEOUT_MS, cancel=cancel)
                     streamed_ok = (bool(state["blocks"])
                                   or state["stop_reason"] is not None)
+                except RequestCancelled:
+                    raise
                 except Exception as ex2:
                     self._record_error(u"chat_agent stream failed: {}".format(ex2))
             else:
                 self._record_error(u"chat_agent stream failed: {}".format(ex))
+
+        if state["error"]:
+            # Mid-stream error: whatever arrived is incomplete, never end_turn.
+            # A half-streamed tool_use is dropped (its JSON is truncated).
+            self._record_error(u"chat_agent stream error event: {}".format(
+                state["error"]))
+            cur = state["cur"]
+            if cur is not None and cur["type"] == "text" and cur["parts"]:
+                state["blocks"].append(cur)
+            state["cur"] = None
+            if state["blocks"]:
+                result = self._agent_result_from_blocks(
+                    state["blocks"], "error", state["usage"])
+                result["incomplete"] = True
+                return self._with_model(result, model)
+            streamed_ok = False     # nothing shown yet: blocking retry below
 
         if streamed_ok:
             return self._with_model(self._agent_result_from_blocks(
@@ -933,7 +984,7 @@ class ClaudeProvider(BaseLLMProvider):
                                              thinking_mode=mode,
                                              context_edit=self._context_edit_on(model))
             resp_text  = http_post(CLAUDE_API_URL, payload, _headers(mode),
-                                   timeout_ms=_AGENT_TIMEOUT_MS)
+                                   timeout_ms=_AGENT_TIMEOUT_MS, cancel=cancel)
             api_result = json.loads(resp_text)
             blocks = []
             for b in api_result.get("content", []) or []:
@@ -970,6 +1021,8 @@ class ClaudeProvider(BaseLLMProvider):
             blocks, stop_reason, usage = _do_blocking(thinking_mode)
             return self._with_model(self._agent_result_from_blocks(
                 blocks, stop_reason, usage), model)
+        except RequestCancelled:
+            raise
         except Exception as ex:
             if self._mcp_on(model) and self._mcp_rejected(ex):
                 self._mcp_mode[model] = "off"
@@ -987,6 +1040,8 @@ class ClaudeProvider(BaseLLMProvider):
                     blocks, stop_reason, usage = _do_blocking(thinking_mode)
                     return self._with_model(self._agent_result_from_blocks(
                         blocks, stop_reason, usage), model)
+                except RequestCancelled:
+                    raise
                 except Exception as ex2:
                     self._record_error(u"chat_agent() failed: {}".format(ex2))
                     return None
@@ -997,6 +1052,8 @@ class ClaudeProvider(BaseLLMProvider):
                     blocks, stop_reason, usage = _do_blocking(thinking_mode)
                     return self._with_model(self._agent_result_from_blocks(
                         blocks, stop_reason, usage), model)
+                except RequestCancelled:
+                    raise
                 except Exception as ex2:
                     self._record_error(u"chat_agent() failed: {}".format(ex2))
                     return None
@@ -1006,6 +1063,8 @@ class ClaudeProvider(BaseLLMProvider):
                     blocks, stop_reason, usage = _do_blocking(thinking_mode)
                     return self._with_model(self._agent_result_from_blocks(
                         blocks, stop_reason, usage), model)
+                except RequestCancelled:
+                    raise
                 except Exception as ex2:
                     self._record_error(u"chat_agent() failed: {}".format(ex2))
                     return None
@@ -1115,6 +1174,41 @@ class ClaudeProvider(BaseLLMProvider):
                 "content":     _tool_result_content(res),
             })
         return [{"role": "user", "content": blocks}]
+
+
+def _first_text(api_result):
+    """Text of the first `text` block of a Messages response, or ""."""
+    for blk in (api_result or {}).get("content") or []:
+        if isinstance(blk, dict) and blk.get("type", "text") == "text":
+            return blk.get("text") or u""
+    return u""
+
+
+def _error_text(obj):
+    err = obj.get("error") or {}
+    if not isinstance(err, dict):
+        return u"{}".format(err)
+    return u"{}: {}".format(err.get("type") or u"error",
+                            err.get("message") or u"no message")
+
+
+def anthropic_stream_error(line):
+    """Message of an Anthropic SSE `error` event line, or None."""
+    if not line:
+        return None
+    line = line.strip()
+    if not line.startswith("data:"):
+        return None
+    data = line[5:].strip()
+    if u'"error"' not in data:
+        return None
+    try:
+        obj = json.loads(data)
+    except Exception:
+        return None
+    if not isinstance(obj, dict) or obj.get("type") != "error":
+        return None
+    return _error_text(obj)
 
 
 def _tool_result_content(res):

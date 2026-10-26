@@ -5712,7 +5712,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                         (u"The active document changed — request cancelled "
                          u"to avoid editing the wrong model."),
                         icon=_ICON_WARNING, icon_color=_ICON_AMBER)
-                elif st == "failed":
+                elif st in ("failed", "incomplete"):
                     label = get_provider_display_label()
                     detail = u""
                     try:

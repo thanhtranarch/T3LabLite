@@ -13,17 +13,20 @@ __author__ = "Tran Tien Thanh"
 __title__  = "LLM Provider"
 
 import json
+import random
 import re
+import threading
+import time
 
 # ─── Shared HTTP backend ───────────────────────────────────────────────────────
-# IronPython/pyRevit: use .NET WebClient.
+# Revit (pythonnet / IronPython): .NET HttpWebRequest.
 # CPython (testing): fall back to urllib.
 
 _USE_NET = False
 try:
     import clr
     clr.AddReference('System.Net')
-    from System.Net import WebClient
+    from System.Net import HttpWebRequest
     from System.Text import Encoding as _NetEncoding
     _USE_NET = True
 except Exception:
@@ -88,227 +91,348 @@ def _raise_with_detail(ex):
     raise ex
 
 
-def http_get_auth(url, headers=None, timeout_ms=8000):
+# ─── Cancel + retry ────────────────────────────────────────────────────────────
+
+class RequestCancelled(Exception):
+    """The run was cancelled (user Stop or time budget) while a request was
+    in flight. Providers re-raise it instead of falling back to a retry."""
+
+
+class CancelToken(object):
+    """Cancel flag shared by an agent run and its in-flight HTTP request.
+
+    cancel() also aborts the request (HttpWebRequest.Abort), so a read with a
+    600 s timeout stops at once. `reason` is "cancelled" or "timeout".
     """
-    Authenticated GET request with optional headers.
-    Returns response text string, or None on error.
-    Mirrors http_post's dual .NET / urllib backend.
-    """
-    if _USE_NET:
-        try:
-            from System.Net import WebClient
-            client = WebClient()
+
+    def __init__(self):
+        self._evt    = threading.Event()
+        self._lock   = threading.Lock()
+        self._aborts = []
+        self.reason  = None
+
+    def cancel(self, reason="cancelled"):
+        with self._lock:
+            if self._evt.is_set():
+                return
+            self.reason = reason
+            self._evt.set()
+            aborts = list(self._aborts)
+        for fn in aborts:
             try:
-                client.Encoding = _NetEncoding.UTF8
-                if headers:
-                    for k, v in headers.items():
-                        client.Headers.Add(k, v)
-                return client.DownloadString(url)
-            finally:
-                try:
-                    client.Dispose()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                fn()
+            except Exception:
+                pass
 
-    if _HAS_URLLIB:
+    def is_cancelled(self):
+        return self._evt.is_set()
+
+    def wait(self, seconds):
+        """Sleep up to `seconds`; True if cancelled meanwhile."""
+        return self._evt.wait(seconds)
+
+    def check(self):
+        if self._evt.is_set():
+            raise RequestCancelled(self.reason or "cancelled")
+
+    def on_cancel(self, fn):
+        """Call fn on cancel() (now, if already cancelled). Returns an
+        unregister callable."""
+        with self._lock:
+            if not self._evt.is_set():
+                self._aborts.append(fn)
+
+                def _off():
+                    with self._lock:
+                        try:
+                            self._aborts.remove(fn)
+                        except ValueError:
+                            pass
+                return _off
         try:
-            req = Request(url)
-            if headers:
-                for k, v in headers.items():
-                    req.add_header(k, v)
-            timeout_sec = float(timeout_ms) / 1000.0
-            resp = urlopen(req, timeout=timeout_sec)
-            raw = resp.read()
-            return raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            fn()
         except Exception:
             pass
+        return lambda: None
 
-    return None
+
+# 408/409/429/5xx + Anthropic's 529 overloaded — the statuses the official SDKs
+# retry. A request is retried only before any response line reached a caller.
+RETRY_STATUSES  = (408, 409, 429, 500, 502, 503, 504, 529)
+MAX_RETRIES     = 2
+_BACKOFF_BASE_S = 1.0
+_BACKOFF_CAP_S  = 20.0
 
 
-def http_post(url, payload, headers=None, timeout_ms=60000):
-    """
-    POST a JSON-serialisable payload and return the response string.
+def _http_status(ex):
+    """HTTP status of a failed request (.NET WebException or urllib HTTPError)."""
+    resp = getattr(ex, "Response", None)
+    if resp is not None:
+        try:
+            return int(resp.StatusCode)
+        except Exception:
+            try:
+                from System import Convert
+                return int(Convert.ToInt32(resp.StatusCode))
+            except Exception:
+                return None
+    code = getattr(ex, "code", None)
+    try:
+        return int(code) if code is not None else None
+    except Exception:
+        return None
 
-    Args:
-        url: target URL string.
-        payload: dict to serialise as JSON.
-        headers: optional dict of extra request headers.
-        timeout_ms: request timeout in milliseconds. Default 60000 (60s) —
-            fine for cloud APIs. Local providers (Ollama/LM Studio) doing
-            CPU inference on a multi-billion-parameter model routinely need
-            much longer; callers there should pass a larger value.
-            IMPORTANT: plain System.Net.WebClient has NO Timeout property,
-            so without explicitly building the request via HttpWebRequest
-            (as done below), every local-model call silently inherited
-            .NET's ~100s default and failed on any slower model/machine —
-            indistinguishable from "the model answered badly", when in fact
-            the request never completed at all.
 
-    Returns:
-        str: response body, or raises RuntimeError on failure.
-    """
-    body = json.dumps(payload, ensure_ascii=False)
-    if _USE_NET:
-        from System.Net import HttpWebRequest
-        from System.IO import StreamReader
-        body_bytes = _NetEncoding.UTF8.GetBytes(body)
-        req = HttpWebRequest.Create(url)
-        req.Method           = "POST"
-        req.ContentType      = "application/json; charset=utf-8"
-        req.Timeout          = timeout_ms
-        req.ReadWriteTimeout  = timeout_ms
-        if headers:
-            for k, v in headers.items():
-                req.Headers.Add(k, v)
+def _retry_after_s(ex):
+    """`retry-after` in seconds, or None (absent, or the HTTP-date form)."""
+    val = None
+    resp = getattr(ex, "Response", None)
+    if resp is not None:
+        try:
+            val = resp.Headers["retry-after"]
+        except Exception:
+            val = None
+    if val is None:
+        hdrs = getattr(ex, "headers", None)
+        try:
+            val = hdrs.get("retry-after") if hdrs is not None else None
+        except Exception:
+            val = None
+    try:
+        return max(0.0, float(val))
+    except Exception:
+        return None
+
+
+def retry_delay_s(attempt, ex):
+    """retry-after when given (capped), else exponential backoff with jitter."""
+    after = _retry_after_s(ex)
+    if after is not None:
+        return min(after, _BACKOFF_CAP_S)
+    base = min(_BACKOFF_CAP_S, _BACKOFF_BASE_S * (2 ** attempt))
+    return base * (0.5 + random.random() / 2.0)
+
+
+def _should_retry(ex, attempt):
+    return attempt < MAX_RETRIES and _http_status(ex) in RETRY_STATUSES
+
+
+def _backoff(attempt, ex, cancel):
+    resp = getattr(ex, "Response", None)
+    if resp is not None:
+        try:
+            resp.Close()          # free the pooled connection before retrying
+        except Exception:
+            pass
+    delay = retry_delay_s(attempt, ex)
+    if cancel is not None:
+        if cancel.wait(delay):
+            raise RequestCancelled(cancel.reason or "cancelled")
+    elif delay > 0:
+        time.sleep(delay)
+
+
+def _send(once, cancel, retry_if=None):
+    """Run once() with retry on RETRY_STATUSES; transport errors go through
+    _raise_with_detail. retry_if() False → no retry (e.g. data streamed)."""
+    attempt = 0
+    while True:
+        if cancel is not None:
+            cancel.check()
+        try:
+            return once()
+        except RequestCancelled:
+            raise
+        except Exception as ex:
+            if cancel is not None and cancel.is_cancelled():
+                raise RequestCancelled(cancel.reason or "cancelled")
+            if (retry_if is None or retry_if()) and _should_retry(ex, attempt):
+                _backoff(attempt, ex, cancel)
+                attempt += 1
+                continue
+            _raise_with_detail(ex)
+
+
+def _net_request(method, url, headers, timeout_ms, body_bytes=None,
+                 content_type=None):
+    from System.Net import HttpWebRequest
+    req = HttpWebRequest.Create(url)
+    req.Method           = method
+    req.Timeout          = int(timeout_ms)
+    req.ReadWriteTimeout = int(timeout_ms)
+    if content_type:
+        req.ContentType = content_type
+    if headers:
+        for k, v in headers.items():
+            req.Headers.Add(k, v)
+    if body_bytes is not None:
         req.ContentLength = body_bytes.Length
         rs = req.GetRequestStream()
         try:
             rs.Write(body_bytes, 0, body_bytes.Length)
         finally:
             rs.Close()
+    return req
+
+
+def _read_all(resp):
+    from System.IO import StreamReader
+    try:
+        reader = StreamReader(resp.GetResponseStream(), _NetEncoding.UTF8)
         try:
-            resp = req.GetResponse()
-        except Exception as ex:
-            _raise_with_detail(ex)
-        try:
-            reader = StreamReader(resp.GetResponseStream(), _NetEncoding.UTF8)
-            try:
-                return reader.ReadToEnd()
-            finally:
-                reader.Close()
+            return reader.ReadToEnd()
         finally:
-            resp.Close()
+            reader.Close()
+    finally:
+        resp.Close()
 
-    if _HAS_URLLIB:
-        if isinstance(body, type(u"")):
-            body_bytes = body.encode("utf-8")
-        else:
-            body_bytes = body
-        req_headers = {"Content-Type": "application/json; charset=utf-8"}
-        if headers:
-            req_headers.update(headers)
-        req = Request(url, body_bytes, req_headers)
-        try:
-            resp = urlopen(req, timeout=float(timeout_ms) / 1000.0)
-        except Exception as ex:
-            _raise_with_detail(ex)
-        raw = resp.read()
-        return raw.decode("utf-8") if isinstance(raw, bytes) else raw
 
-    raise RuntimeError("No HTTP client available")
+def _get(url, headers, timeout_ms):
+    """One GET with retry; raises on failure."""
+    def once():
+        if _USE_NET:
+            return _read_all(_net_request("GET", url, headers, timeout_ms)
+                             .GetResponse())
+        if _HAS_URLLIB:
+            req = Request(url)
+            for k, v in (headers or {}).items():
+                req.add_header(k, v)
+            raw = urlopen(req, timeout=float(timeout_ms) / 1000.0).read()
+            return raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        raise RuntimeError("No HTTP client available")
+    return _send(once, None)
+
+
+def http_get_auth(url, headers=None, timeout_ms=8000):
+    """
+    Authenticated GET request with optional headers.
+    Returns response text string, or None on error.
+    HttpWebRequest, not WebClient: WebClient has no timeout (~100 s default).
+    """
+    try:
+        return _get(url, headers, timeout_ms)
+    except Exception:
+        return None
+
+
+def http_post(url, payload, headers=None, timeout_ms=60000, cancel=None):
+    """
+    POST a JSON-serialisable payload and return the response string.
+
+    timeout_ms: Timeout + ReadWriteTimeout (WebClient has none; local CPU
+    inference needs far more than the 60 s cloud default — callers pass it).
+    cancel: optional CancelToken; cancel() aborts the request.
+    Retries 429/5xx/529 (MAX_RETRIES, backoff, retry-after).
+
+    Returns:
+        str: response body, or raises RuntimeError on failure.
+    """
+    body = json.dumps(payload, ensure_ascii=False)
+
+    def once():
+        if _USE_NET:
+            data = _NetEncoding.UTF8.GetBytes(body)
+            req = _net_request("POST", url, headers, timeout_ms, data,
+                               "application/json; charset=utf-8")
+            off = cancel.on_cancel(req.Abort) if cancel is not None else None
+            try:
+                return _read_all(req.GetResponse())
+            finally:
+                if off:
+                    off()
+        if _HAS_URLLIB:
+            body_bytes = body.encode("utf-8") if isinstance(body, type(u"")) else body
+            req_headers = {"Content-Type": "application/json; charset=utf-8"}
+            if headers:
+                req_headers.update(headers)
+            resp = urlopen(Request(url, body_bytes, req_headers),
+                           timeout=float(timeout_ms) / 1000.0)
+            raw = resp.read()
+            return raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        raise RuntimeError("No HTTP client available")
+
+    return _send(once, cancel)
 
 
 def http_get(url, timeout_ms=4000):
     """GET url; return response string or None. Times out after timeout_ms."""
     try:
-        if _USE_NET:
-            from System.Net import HttpWebRequest
-            from System.IO import StreamReader
-            req = HttpWebRequest.Create(url)
-            req.Method  = "GET"
-            req.Timeout = timeout_ms
-            resp = req.GetResponse()
-            try:
-                reader = StreamReader(resp.GetResponseStream(), _NetEncoding.UTF8)
-                try:
-                    return reader.ReadToEnd()
-                finally:
-                    reader.Close()
-            finally:
-                resp.Close()
-        if _HAS_URLLIB:
-            resp = urlopen(url, timeout=4)
-            raw = resp.read()
-            return raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        return _get(url, None, timeout_ms)
     except Exception:
         return None
 
 
 # ─── Streaming (Server-Sent Events) backend ────────────────────────────────────
 
-def http_post_stream(url, payload, headers=None, on_line=None, timeout_ms=120000):
+def http_post_stream(url, payload, headers=None, on_line=None, timeout_ms=120000,
+                     cancel=None):
     """
     POST a JSON payload and stream the response back line-by-line.
 
-    Each decoded text line of the response is passed to on_line(line) as it
-    arrives. Used for SSE endpoints (request payloads carry "stream": true).
-
-    Args:
-        url: target URL string.
-        payload: dict to serialise as JSON.
-        headers: optional dict of extra request headers.
-        on_line: callable(str) invoked once per response line.
-        timeout_ms: socket timeout in milliseconds.
+    Each decoded text line goes to on_line(line) as it arrives (SSE / NDJSON).
+    429/5xx are retried only before the first line; once a line reached the
+    caller nothing is retried. cancel (CancelToken) is checked between lines
+    and aborts the request.
 
     Returns:
         bool: True when the stream completes. Raises on transport failure so the
-        caller can fall back to a blocking request.
+        caller can fall back to a blocking request; RequestCancelled on cancel.
     """
     body = json.dumps(payload, ensure_ascii=False)
+    delivered = [False]
 
-    if _USE_NET:
-        # .NET HttpWebRequest streams the response without buffering it whole.
-        from System.Net import HttpWebRequest
-        from System.IO import StreamReader
+    def _emit(line):
+        if cancel is not None and cancel.is_cancelled():
+            raise RequestCancelled(cancel.reason or "cancelled")
+        delivered[0] = True
+        if on_line is not None:
+            on_line(line)
 
-        req = HttpWebRequest.Create(url)
-        req.Method          = "POST"
-        req.ContentType     = "application/json; charset=utf-8"
-        req.Timeout         = timeout_ms
-        req.ReadWriteTimeout = timeout_ms
-        if headers:
-            for k, v in headers.items():
-                # Content-Type is set via the property above; everything else
-                # (x-api-key, Authorization, anthropic-version, …) is unrestricted.
-                req.Headers.Add(k, v)
-
-        data = _NetEncoding.UTF8.GetBytes(body)
-        req.ContentLength = data.Length
-        rs = req.GetRequestStream()
-        try:
-            rs.Write(data, 0, data.Length)
-        finally:
-            rs.Close()
-
-        try:
-            resp = req.GetResponse()
-        except Exception as ex:
-            _raise_with_detail(ex)
-        try:
-            reader = StreamReader(resp.GetResponseStream(), _NetEncoding.UTF8)
+    def once():
+        if _USE_NET:
+            from System.IO import StreamReader
+            data = _NetEncoding.UTF8.GetBytes(body)
+            req = _net_request("POST", url, headers, timeout_ms, data,
+                               "application/json; charset=utf-8")
+            off = cancel.on_cancel(req.Abort) if cancel is not None else None
             try:
-                while True:
-                    line = reader.ReadLine()
-                    if line is None:
-                        break
-                    if on_line is not None:
-                        on_line(line)
+                resp = req.GetResponse()
+                try:
+                    reader = StreamReader(resp.GetResponseStream(), _NetEncoding.UTF8)
+                    try:
+                        while True:
+                            line = reader.ReadLine()
+                            if line is None:
+                                break
+                            _emit(line)
+                    finally:
+                        reader.Close()
+                finally:
+                    resp.Close()
             finally:
-                reader.Close()
-        finally:
-            resp.Close()
-        return True
+                if off:
+                    off()
+            return True
+        if _HAS_URLLIB:
+            body_bytes = body.encode("utf-8") if isinstance(body, type(u"")) else body
+            req_headers = {"Content-Type": "application/json; charset=utf-8"}
+            if headers:
+                req_headers.update(headers)
+            resp = urlopen(Request(url, body_bytes, req_headers),
+                           timeout=float(timeout_ms) / 1000.0)
+            off = cancel.on_cancel(resp.close) if cancel is not None else None
+            try:
+                for raw_line in resp:
+                    line = (raw_line.decode("utf-8") if isinstance(raw_line, bytes)
+                            else raw_line)
+                    _emit(line.rstrip("\n"))
+            finally:
+                if off:
+                    off()
+            return True
+        raise RuntimeError("No HTTP client available")
 
-    if _HAS_URLLIB:
-        body_bytes = body.encode("utf-8") if isinstance(body, type(u"")) else body
-        req_headers = {"Content-Type": "application/json; charset=utf-8"}
-        if headers:
-            req_headers.update(headers)
-        req = Request(url, body_bytes, req_headers)
-        try:
-            resp = urlopen(req, timeout=120)
-        except Exception as ex:
-            _raise_with_detail(ex)
-        for raw_line in resp:
-            line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
-            if on_line is not None:
-                on_line(line.rstrip("\n"))
-        return True
-
-    raise RuntimeError("No HTTP client available")
+    return _send(once, cancel, retry_if=lambda: not delivered[0])
 
 
 def parse_anthropic_stream_line(line):
@@ -399,25 +523,38 @@ def local_sampling_params(model_name):
     return {"temperature": 0.0, "top_p": 0.9}
 
 
-def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
-                      max_tokens=1500, timeout_ms=180000, extra_payload=None,
-                      token_param="max_tokens"):
-    """One blocking agentic turn against an OpenAI-compatible /chat/completions.
+def openai_usage(usage):
+    """OpenAI-format usage → the Anthropic shape telemetry.add_usage reads
+    (input_tokens excludes cache hits). {} when the server sent none."""
+    if not isinstance(usage, dict):
+        return {}
+    try:
+        prompt = int(usage.get("prompt_tokens") or 0)
+        cached = int((usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+                     or usage.get("prompt_cache_hit_tokens") or 0)   # DeepSeek
+        return {"input_tokens":            max(0, prompt - cached),
+                "output_tokens":           int(usage.get("completion_tokens") or 0),
+                "cache_read_input_tokens": cached}
+    except Exception:
+        return {}
 
-    `messages` must be OpenAI-native (may contain assistant tool_calls and
-    role:"tool" results from earlier iterations) and already end with the
-    latest user / tool turn. Raises on transport failure — callers wrap.
-    `token_param` names the output cap: OpenAI reasoning models (o-series,
-    gpt-5+) reject "max_tokens" and need "max_completion_tokens".
 
-    Returns the uniform chat_agent dict:
-        {"text", "tool_calls":[{"id","name","args"}], "assistant_msg", "stop_reason"}
-    """
+def ollama_usage(obj):
+    """Ollama's final chunk / response counts → telemetry's Anthropic shape."""
+    try:
+        return {"input_tokens":  int(obj.get("prompt_eval_count") or 0),
+                "output_tokens": int(obj.get("eval_count") or 0)}
+    except Exception:
+        return {}
+
+
+def _openai_payload(model, system_prompt, messages, tools, max_tokens,
+                    token_param, extra_payload):
     msgs = []
     if system_prompt:
         msgs.append({"role": "system", "content": system_prompt})
     msgs.extend(list(messages or []))
-
+    # token_param: OpenAI reasoning / GPT-5 models reject max_tokens.
     payload = {"model": model, "messages": msgs, token_param: max_tokens}
     if tools:
         payload["tools"] = tools
@@ -425,10 +562,41 @@ def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
     # reasoning models, tool_choice, ...) without changing OpenAI's defaults.
     if extra_payload:
         payload.update(extra_payload)
+    return payload
 
-    resp_text = http_post(url, payload, headers, timeout_ms=timeout_ms)
-    data = json.loads(resp_text)
-    msg  = (data.get("choices") or [{}])[0].get("message", {}) or {}
+
+def _openai_assistant_msg(content, raw_calls, reasoning, echo_reasoning):
+    msg = {"role": "assistant", "content": content or None}
+    if raw_calls:
+        msg["tool_calls"] = raw_calls
+    # DeepSeek thinking mode + tools: reasoning_content must go back on every
+    # follow-up request or the API 400s (api-docs.deepseek.com, thinking mode).
+    # OpenAI rejects the unknown field, so only providers that opt in echo it.
+    if echo_reasoning and reasoning:
+        msg["reasoning_content"] = reasoning
+    return msg
+
+
+def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
+                      max_tokens=1500, timeout_ms=180000, extra_payload=None,
+                      token_param="max_tokens", cancel=None, echo_reasoning=False):
+    """One blocking agentic turn against an OpenAI-compatible /chat/completions.
+
+    `messages` must be OpenAI-native (may contain assistant tool_calls and
+    role:"tool" results from earlier iterations) and already end with the
+    latest user / tool turn. Raises on transport failure — callers wrap.
+
+    Returns the uniform chat_agent dict:
+        {"text", "tool_calls":[{"id","name","args"}], "assistant_msg",
+         "stop_reason", "usage"}
+    """
+    payload = _openai_payload(model, system_prompt, messages, tools, max_tokens,
+                              token_param, extra_payload)
+    resp_text = http_post(url, payload, headers, timeout_ms=timeout_ms,
+                          cancel=cancel)
+    data   = json.loads(resp_text)
+    choice = (data.get("choices") or [{}])[0] or {}
+    msg    = choice.get("message", {}) or {}
 
     text = msg.get("content") or u""
     # Reasoning models may in-line their chain of thought — never show it.
@@ -449,42 +617,39 @@ def openai_chat_agent(url, headers, model, system_prompt, messages, tools,
         tool_calls.append({"id": c.get("id", ""),
                            "name": fn.get("name", ""), "args": args})
 
-    assistant_msg = {"role": "assistant", "content": msg.get("content") or None}
-    if raw_calls:
-        assistant_msg["tool_calls"] = raw_calls
-
     return {
         "text":          text,
         "tool_calls":    tool_calls,
-        "assistant_msg": assistant_msg,
-        "stop_reason":   "tool_use" if tool_calls else "end_turn",
+        "assistant_msg": _openai_assistant_msg(
+            msg.get("content"), raw_calls, msg.get("reasoning_content"),
+            echo_reasoning),
+        "stop_reason":   _agent_stop_reason(choice.get("finish_reason"), tool_calls),
+        "usage":         openai_usage(data.get("usage")),
     }
 
 
 def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools,
                              max_tokens=1500, timeout_ms=180000, on_delta=None,
-                             extra_payload=None, token_param="max_tokens"):
+                             extra_payload=None, token_param="max_tokens",
+                             cancel=None, echo_reasoning=False,
+                             include_usage=False):
     """Streaming variant of openai_chat_agent for OpenAI-compatible servers.
 
     Streams visible text through on_delta as it arrives AND accumulates the
     tool_call deltas (which arrive fragmented by index, with `arguments`
     streamed as partial JSON strings) into whole calls. Returns the same
     uniform chat_agent dict. Raises on transport failure so callers can fall
-    back to the blocking openai_chat_agent.
+    back to the blocking openai_chat_agent. include_usage asks for the final
+    usage chunk (stream_options); a server that sends one anyway is read too.
     """
-    msgs = []
-    if system_prompt:
-        msgs.append({"role": "system", "content": system_prompt})
-    msgs.extend(list(messages or []))
+    payload = _openai_payload(model, system_prompt, messages, tools, max_tokens,
+                              token_param, extra_payload)
+    payload["stream"] = True
+    if include_usage:
+        payload["stream_options"] = {"include_usage": True}
 
-    payload = {"model": model, "messages": msgs,
-               token_param: max_tokens, "stream": True}
-    if tools:
-        payload["tools"] = tools
-    if extra_payload:
-        payload.update(extra_payload)
-
-    state = {"text": [], "tool": {}, "order": [], "finish": None}
+    state = {"text": [], "reasoning": [], "tool": {}, "order": [],
+             "finish": None, "usage": None}
 
     def _on_line(line):
         if not line:
@@ -499,6 +664,8 @@ def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools
             obj = json.loads(data)
         except Exception:
             return
+        if obj.get("usage"):
+            state["usage"] = obj["usage"]
         choices = obj.get("choices") or []
         if not choices:
             return
@@ -513,6 +680,8 @@ def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools
                     on_delta(c)
                 except Exception:
                     pass
+        if delta.get("reasoning_content"):
+            state["reasoning"].append(delta["reasoning_content"])
 
         for tc in (delta.get("tool_calls") or []):
             idx  = tc.get("index", 0)
@@ -537,7 +706,8 @@ def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools
         if ch.get("finish_reason"):
             state["finish"] = ch["finish_reason"]
 
-    http_post_stream(url, payload, headers, _on_line, timeout_ms=timeout_ms)
+    http_post_stream(url, payload, headers, _on_line, timeout_ms=timeout_ms,
+                     cancel=cancel)
 
     raw_text = u"".join(state["text"])
     text     = re.sub(r"<think>[\s\S]*?</think>", "", raw_text).strip()
@@ -559,16 +729,26 @@ def openai_chat_agent_stream(url, headers, model, system_prompt, messages, tools
             raw_call["extra_content"] = slot["extra"]
         raw_calls.append(raw_call)
 
-    assistant_msg = {"role": "assistant", "content": raw_text or None}
-    if raw_calls:
-        assistant_msg["tool_calls"] = raw_calls
-
     return {
         "text":          text,
         "tool_calls":    tool_calls,
-        "assistant_msg": assistant_msg,
-        "stop_reason":   "tool_use" if tool_calls else (state["finish"] or "end_turn"),
+        "assistant_msg": _openai_assistant_msg(
+            raw_text, raw_calls, u"".join(state["reasoning"]), echo_reasoning),
+        "stop_reason":   _agent_stop_reason(state["finish"], tool_calls),
+        "usage":         openai_usage(state["usage"]),
     }
+
+
+def _agent_stop_reason(finish_reason, tool_calls):
+    """OpenAI finish_reason → uniform stop_reason. "length" is max_tokens even
+    with tool calls: their arguments may be cut off (agent_loop won't run them)."""
+    if finish_reason == "length":
+        return "max_tokens"
+    if tool_calls:
+        return "tool_use"
+    if not finish_reason or finish_reason == "stop":
+        return "end_turn"
+    return finish_reason
 
 
 def openai_agent_tool_results(tool_calls, result_strs):
@@ -652,6 +832,23 @@ class StreamingJSONExtractor(object):
         return u"".join(out)
 
 
+def text_history(provider, messages):
+    """Plain-text chat history: user/assistant turns only, content blocks
+    flattened (provider.blocks_to_text), empty turns dropped. One copy of the
+    loop every chat()/chat_stream() used to repeat."""
+    out = []
+    for h in (messages or []):
+        role    = h.get("role", "user")
+        content = h.get("content", "")
+        if role not in ("user", "assistant"):
+            continue
+        if isinstance(content, list):
+            content = provider.blocks_to_text(content)
+        if content:
+            out.append({"role": role, "content": content})
+    return out
+
+
 # ─── Abstract base provider ────────────────────────────────────────────────────
 
 class BaseLLMProvider(object):
@@ -669,6 +866,28 @@ class BaseLLMProvider(object):
     # True if this provider can handle image content blocks
     SUPPORTS_VISION = False
 
+    # chat_agent(..., cancel=CancelToken) aborts the in-flight request on
+    # cancel(). agent_loop passes `cancel` only when this is True.
+    SUPPORTS_CANCEL = True
+
+    # True: chat_agent()/agent_tool_results() below are implemented and the
+    # Assistant routes tool turns here (T3LabAssistantDialog checks the flag).
+    SUPPORTS_NATIVE_TOOLS = False
+
+    def chat_agent(self, system_prompt, messages, tools, on_delta=None,
+                   max_tokens=1500, **kwargs):
+        """One agentic turn. Returns {"text", "tool_calls": [{"id", "name",
+        "args"}], "assistant_msg", "stop_reason", "usage"} or None (reason in
+        get_last_error). kwargs: cancel (CancelToken), provider extras."""
+        return self._fail(u"chat_agent(): {} has no native tool calling"
+                          .format(self.DISPLAY_NAME))
+
+    @staticmethod
+    def agent_tool_results(tool_calls, result_strs):
+        """Messages answering every tool call of the last turn, in this
+        provider's wire format. Only called when SUPPORTS_NATIVE_TOOLS."""
+        raise NotImplementedError("agent_tool_results needs SUPPORTS_NATIVE_TOOLS")
+
     def _record_error(self, msg):
         """Remember the most recent failure AND debug-log it.
 
@@ -685,6 +904,21 @@ class BaseLLMProvider(object):
     def get_last_error(self):
         """Most recent failure message, or None. Cleared on each new call."""
         return getattr(self, "_last_error", None)
+
+    def validate_key(self, api_key):
+        """Live model list for an UNSAVED key, or [] (so a bad key is never
+        saved). Leaves the saved key and the model cache as they were."""
+        saved_cache = getattr(self, "_cached_models", None)
+        self._get_api_key = lambda: api_key     # shadows the method
+        self._cached_models = None
+        try:
+            return list(self.get_models() or [])
+        except Exception as ex:
+            self._record_error(u"key check failed: {}".format(ex))
+            return []
+        finally:
+            del self._get_api_key
+            self._cached_models = saved_cache
 
     # ── Silent-failure guards ─────────────────────────────────────────────────
     # chat()/chat_stream()/chat_agent() all bail out with a bare `return None`

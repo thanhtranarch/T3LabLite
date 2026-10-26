@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-25
+
+LLM fixes from `t3lab-revit-api` (no silent switch to another AI vendor, real timeouts and retries, API keys that work in both T3Lab builds), Gemini and Custom providers, project memory shared with Claude, and MCP protocol 2026-07-28.
+
 ### Added
 - **Project memory shared with Claude:** the T3Lab Assistant and AI apps (Claude Desktop, Claude Code ...) now use one project memory. AI apps search it with the new MCP tool `t3lab_memory` (also the resource `t3lab://memory/project`) and save conventions with `t3lab_memory_save`; the Assistant sees them in its next chat. Claude Code's memory of the folders linked to the project (CLAUDE.md, auto memory) is searched too, read only — switch it off in LLMs Setting → General.
 - **T3Lab Assistant — smaller prompts:** a long memory, or one with Claude Code notes, now reaches the prompt as an index (newest facts + counts) and the Assistant looks up the rest with `recall_memory` when the task needs it, instead of carrying every fact in every message.
@@ -36,6 +40,11 @@ Releasing a new version:
 - **Construction wiki & drawing rules for AI apps:** 8 new pages — when a sheet is finished and how to finish it with T3Lab tools, what architectural, structural (rebar notation, bar schedule) and MEP drawings must show, a check before issuing drawings, paper sizes / scales / line weights / symbols / title block, drawing set order and design stages, and a Vietnamese–English–Revit glossary. AI apps read them with the new read-only `t3lab_wiki` tool, and Revit's MCP server now tells them to read the drawing rules before drawing work. The T3Lab Assistant uses the same pages as skills.
 
 ### Changed
+- **LLMs Setting — Save Key checks the key first:** a key the vendor rejects is never saved. The key box shows only the last 4 characters (`••••••••abcd`), a failure says what failed, where and what to do next, and you are warned if Windows could not encrypt the key. Picking a model saves it (no Save Model button).
+- **LLMs Setting — keys from environment variables:** with no key saved, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `DEEPSEEK_API_KEY` is used (read only, never written to settings.json).
+- **API keys:** plain keys left by an older build are encrypted once when Revit starts, not on every read.
+- **Token usage and cost** are recorded for OpenAI streamed agent turns and for DeepSeek, Ollama and LM Studio too.
+- **Tool Hub:** unchanged since 2.1.0 (the LLMs Setting tab and `/toolhub` keep working with the new key handling).
 - **OpenAI:** agent replies stream live; GPT-5 / o-series reasoning models get the right token-limit parameter and Deep reasoning → high effort; image, audio and codex models are hidden from the list. A provider that rejects a request parameter is retried without it instead of failing the turn.
 - **T3Lab Assistant dead code removed (~400 lines):** the switched-off reply action bar ("Try again", 👍/👎), the unwired Reset Chat handler, and the never-called `parse_command` / `parse_command_local` chain with the local model's old JSON prompt. No visible change.
 - **T3Lab Assistant code split:** `T3LabAssistantDialog.py` went from 11,930 to about 6,740 lines; helpers and seven method groups (sessions, projects, commands, documents, plans, spellcheck, tool cards) moved to `lib/GUI/assistant/`. No behaviour change intended. `docs/assistant-request-paths.md` maps every path a chat message can take.
@@ -49,6 +58,10 @@ Releasing a new version:
 - **MCP point cloud tools** (`list_point_clouds`, `analyze_point_cloud`, `detect_point_cloud_elements`): no AI app called them since usage tracking began. Scan-to-BIM stays in the **Point Cloud to Model** button.
 
 ### Fixed
+- **API key shared with t3lab-revit-api no longer fails with 401:** both builds keep keys in `%APPDATA%\T3LabAI\settings.json`. Lite 2.0.0 sent the encrypted `dpapi:` text to the vendor as the key and saved plain keys over encrypted ones. Lite now reads and writes the same Windows-encrypted keys (DPAPI, current Windows user) as t3lab-revit-api, and a key saved on another Windows account says "Saved key can't be read on this Windows account — paste it again" instead of being sent.
+- **No silent switch to another AI vendor:** when the chosen provider fails, the Assistant shows the error instead of sending your Revit context to a provider you did not pick. A local model (Ollama, LM Studio) never falls back to a cloud one.
+- **Timeouts and retries:** every request has a real timeout; 408 / 429 / 5xx / "overloaded" replies are retried twice with backoff (`Retry-After` honoured). **Stop** in the Assistant aborts the request at once, and the agent's time budget ends a hung request as a timeout.
+- **Dropped streams:** an answer cut off mid-stream continues from where it stopped instead of starting again; an agent turn the server ended early shows the "dropped mid-request" warning with Retry.
 - **T3Lab Assistant:** when its language module cannot load (a broken install), a message the Assistant cannot answer gets the setup guidance instead of an error bubble (`keyword_parse` was undefined there).
 - **T3Lab Assistant:** opening the Assistant no longer logs "Local engine offer failed" every time (it called a method that never existed).
 - **MCP:** the port set in MCP Control is used again (48884–48894); the Manual Config snippet is valid JSON and matches the app setup; `tools/list` no longer waits behind a slow tool call; a call that timed out says whether it may still finish; failed tools are flagged `isError`; Claude no longer needs a restart when Revit created the token after it.

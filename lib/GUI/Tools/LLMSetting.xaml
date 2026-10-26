@@ -2020,18 +2020,9 @@
                                     <TextBlock x:Name="model_saved_hint" Text="" HorizontalAlignment="Right"
                                                Style="{StaticResource T3.Caption}" Foreground="{StaticResource T3.Success.Text}"/>
                                 </Grid>
-                                <Grid Margin="0,0,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="8"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <ComboBox x:Name="model_combo" Grid.Column="0" Style="{StaticResource T3.ComboBox}"
-                                              SelectionChanged="model_changed"/>
-                                    <Button x:Name="save_model_btn" Grid.Column="2"
-                                            Style="{StaticResource T3.Button.Secondary}"
-                                            Content="Save Model" Click="save_model_clicked"/>
-                                </Grid>
+                                <ComboBox x:Name="model_combo" Style="{StaticResource T3.ComboBox}"
+                                          Margin="0,0,0,4" SelectionChanged="model_changed"
+                                          ToolTip="Saved as soon as you pick it"/>
                             </StackPanel>
                         </Border>
 
@@ -2044,13 +2035,18 @@
                                     <Button x:Name="get_api_key_link" HorizontalAlignment="Right"
                                             Style="{StaticResource T3.Button.Ghost}" Height="24" Padding="8,0"
                                             Click="get_api_key_clicked" ToolTip="Get API Key online">
-                                        <TextBlock Text="Get API key ↗" Style="{StaticResource T3.Caption}" Foreground="{StaticResource T3.Ink}"/>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE774;" Style="{StaticResource T3.Icon}" Margin="0,0,4,0"/>
+                                            <TextBlock Text="Get API key" Style="{StaticResource T3.Caption}" Foreground="{StaticResource T3.Ink}"
+                                                       VerticalAlignment="Center"/>
+                                        </StackPanel>
                                     </Button>
                                 </Grid>
                                 <TextBox x:Name="api_key_box" Style="{StaticResource T3.TextBox}" Margin="0,0,0,8"/>
-                                <Button x:Name="save_key_btn" Style="{StaticResource T3.Button.Primary}"
+                                <Button x:Name="save_key_btn" Style="{StaticResource T3.Button.Secondary}"
                                         Content="Save API Key" Click="save_key_clicked"
-                                        IsDefault="True" Margin="0,0,0,8"/>
+                                        ToolTip="Checks the key with the provider, then saves it (encrypted for this Windows account)"
+                                        Margin="0,0,0,8"/>
 
                                 <!-- Local Host Panel (Ollama / LM Studio) -->
                                 <StackPanel x:Name="host_panel" Visibility="Collapsed" Margin="0,4,0,0">

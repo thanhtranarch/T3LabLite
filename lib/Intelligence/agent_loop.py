@@ -32,6 +32,7 @@ import threading
 import time
 
 from core import jsonsafe
+from Intelligence.llm_provider import CancelToken
 from Intelligence.tool_schema import (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME,
                                       PAST_CHATS_TOOL_NAME, RECALL_TOOL_NAME,
                                       is_file_output_only, is_model_modifying)
@@ -682,6 +683,8 @@ class AgentLoop(object):
         self._max_tokens     = max_tokens
         self._time_budget    = time_budget_sec
         self._cancelled      = False
+        # Aborts the in-flight model request on cancel() or budget expiry.
+        self._cancel_token   = CancelToken()
         # User-wait seconds, excluded from the budget (pause() / resume()).
         self._paused_total   = 0.0
         self._paused_since   = None
@@ -691,9 +694,10 @@ class AgentLoop(object):
     # ── Cancellation ──────────────────────────────────────────────────────────
 
     def cancel(self):
-        """Request a stop after the current model turn / tool (a Transaction
-        mid-flight cannot be safely aborted)."""
+        """Request a stop: aborts an in-flight model request; a running tool
+        finishes first (a Transaction mid-flight cannot be safely aborted)."""
         self._cancelled = True
+        self._cancel_token.cancel("cancelled")
 
     def is_cancelled(self):
         return self._cancelled
@@ -716,6 +720,29 @@ class AgentLoop(object):
         if self._paused_since is not None:
             paused += time.time() - self._paused_since
         return (time.time() - started) - paused
+
+    def _call_model(self, system_prompt, messages, on_delta, started):
+        """One chat_agent call, or None. Providers with SUPPORTS_CANCEL get
+        the run's CancelToken; a watchdog cancels it when the time budget runs
+        out mid-request (the request timeout alone is 600 s)."""
+        kwargs = {"on_delta": on_delta, "max_tokens": self._max_tokens}
+        watchdog = None
+        if getattr(self._provider, "SUPPORTS_CANCEL", False):
+            kwargs["cancel"] = self._cancel_token
+            left = self._time_budget - self._elapsed(started)
+            if left > 0:
+                watchdog = threading.Timer(
+                    left, self._cancel_token.cancel, args=("timeout",))
+                watchdog.daemon = True
+                watchdog.start()
+        try:
+            return self._provider.chat_agent(system_prompt, messages,
+                                             self._tools, **kwargs)
+        except Exception:
+            return None
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
 
     def _guard_tripped(self):
         """True when the optional guard_check callback says the context is
@@ -870,7 +897,7 @@ class AgentLoop(object):
 
         Returns:
             {"status": "done"|"cancelled"|"failed"|"max_iterations"|"timeout"
-                       |"doc_changed",
+                       |"doc_changed"|"incomplete",
              "text": <last user-visible text>,
              "launch_intent": <str|None>,   # open_t3lab_tool target, terminal
              "iterations": int, "tool_runs": int}
@@ -923,12 +950,11 @@ class AgentLoop(object):
                 except Exception:
                     pass
 
-            try:
-                resp = self._provider.chat_agent(
-                    system_prompt, messages, self._tools,
-                    on_delta=_on_delta, max_tokens=self._max_tokens)
-            except Exception:
-                resp = None
+            resp = self._call_model(system_prompt, messages, _on_delta, started)
+            if resp is None and self._cancel_token.is_cancelled():
+                status = ("timeout" if self._cancel_token.reason == "timeout"
+                          else "cancelled")
+                return self._finish(status, last_text, None, iteration, tool_runs)
 
             if resp is None:
                 # Later turns failing still leave earlier work worth reporting.
@@ -965,6 +991,19 @@ class AgentLoop(object):
                 elif _tc:
                     phantom = _tc
                     text    = _tc["prose"]
+
+            # Output cut off (max_tokens) or stream error: tool args may be
+            # truncated, so nothing runs; the user gets the warning + Retry.
+            stop_reason = resp.get("stop_reason")
+            if stop_reason == "error" or (calls and stop_reason == "max_tokens"):
+                if text:
+                    last_text = text
+                    if not turn["streamed"]:
+                        self._emit("on_text_delta", text)
+                    self._emit("on_turn_text", text, True)
+                self._note_incomplete(stop_reason, len(calls))
+                return self._finish("incomplete", last_text, None,
+                                    iteration, tool_runs)
 
             # Phantom (usually `apply_playbook` from a /slash skill): correct
             # and retry, bounded; falling through leaves an empty turn, which
@@ -1116,6 +1155,24 @@ class AgentLoop(object):
 
         return self._finish("max_iterations", last_text, None,
                             self._max_iterations, tool_runs)
+
+    def _note_incomplete(self, stop_reason, n_calls):
+        """Record why a turn stopped on the provider (dialog shows Detail)."""
+        if stop_reason == "max_tokens":
+            msg = (u"the reply hit the output token limit; {} tool call(s) "
+                   u"were not run".format(n_calls))
+        else:
+            msg = (u"the reply stream ended with an error; {} tool call(s) "
+                   u"were not run".format(n_calls))
+            prev = getattr(self._provider, "get_last_error", lambda: None)()
+            if prev:
+                msg = u"{} ({})".format(msg, prev)
+        record = getattr(self._provider, "_record_error", None)
+        if callable(record):
+            try:
+                record(msg)
+            except Exception:
+                pass
 
     def _finish(self, status, text, launch_intent, iterations, tool_runs):
         if self._timer is not None:

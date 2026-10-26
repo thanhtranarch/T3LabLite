@@ -29,6 +29,14 @@ MAX_USER_INSTRUCTIONS_CHARS = 2000
 # Values `agents.reply_language` accepts (get/set_reply_language below).
 REPLY_LANGUAGES = ('auto', 'en', 'vi')
 
+# First-run provider (local: privacy + zero API cost) and the fallback when
+# settings.json has no active_provider — one value for both.
+DEFAULT_PROVIDER = 'ollama'
+
+# Read-only fallback when no key is saved; never written to settings.json.
+API_KEY_ENV_VARS = {'Claude': 'ANTHROPIC_API_KEY', 'OpenAI': 'OPENAI_API_KEY',
+                    'DeepSeek': 'DEEPSEEK_API_KEY'}
+
 
 def _clean_instructions(text):
     """Normalise personal-instruction text: str, LF newlines, trimmed, capped.
@@ -71,6 +79,7 @@ class T3LabAISettings(object):
         self._load_error    = None
         self._settings = self._load_settings()
         self._initialized = True
+        self.migrate_plaintext_keys()
 
     def _get_settings_path(self):
         """Get the path to settings file"""
@@ -164,9 +173,9 @@ class T3LabAISettings(object):
             'api_keys': {},
             # Default to the local Ollama+Qwen runtime (privacy + zero API cost).
             # This is only the FIRST-RUN seed — a saved choice always wins on
-            # restore, and the fallback chain still reaches Claude/OpenAI when
-            # Ollama is unreachable, so the assistant works even with no model.
-            'active_provider': 'ollama',
+            # restore. A local provider never falls back to a cloud one
+            # (LLMRouter.get_fallback_candidates).
+            'active_provider': DEFAULT_PROVIDER,
             'model_preferences': {},
             # Per-role model pins, validated against the provider's live
             # list: {"claude": {"fast": "", "agent": "", "quality": ""}}.
@@ -302,19 +311,50 @@ class T3LabAISettings(object):
 
 
     def get_api_key(self, provider_name):
-        """Get API key for a provider — always reads fresh from the in-memory dict.
+        """API key for a provider, or None. Read only: never writes the file.
 
-        The dict is kept in sync with the file by reload() / set_api_key().
+        No saved key → the provider's env var (API_KEY_ENV_VARS), if set. A
+        DPAPI blob this Windows account cannot open reads as None
+        (api_key_source() tells the UI why).
         """
         stored = self._settings.get('api_keys', {}).get(provider_name)
         if not stored:
-            return stored
+            return self._env_api_key(provider_name) or stored
         if secrets.is_protected(stored):
             return secrets.unprotect(stored)
-        # Plaintext from before DPAPI: encrypt it once, in place.
-        if secrets.available():
-            self.set_api_key(provider_name, stored)
         return stored
+
+    @staticmethod
+    def _env_api_key(provider_name):
+        var = API_KEY_ENV_VARS.get(provider_name)
+        return (os.environ.get(var) or u'').strip() or None if var else None
+
+    def api_key_source(self, provider_name):
+        """'saved' | 'env' | 'unreadable' (DPAPI blob from another account or
+        PC) | None — what get_api_key() would return a key from."""
+        stored = self._settings.get('api_keys', {}).get(provider_name)
+        if stored:
+            if secrets.is_protected(stored) and secrets.unprotect(stored) is None:
+                return 'unreadable'
+            return 'saved'
+        return 'env' if self._env_api_key(provider_name) else None
+
+    def migrate_plaintext_keys(self):
+        """Encrypt plaintext keys left by a pre-DPAPI build, once per session
+        (not in the getter: a read must never rewrite settings.json)."""
+        if not self._load_ok or not secrets.available():
+            return False
+        keys = self._settings.get('api_keys', {}) or {}
+        plain = [k for k, v in keys.items() if v and not secrets.is_protected(v)]
+        if not plain:
+            return False
+
+        def _m(s):
+            for k in plain:
+                v = s.setdefault('api_keys', {}).get(k)
+                if v and not secrets.is_protected(v):
+                    s['api_keys'][k] = secrets.protect(v)
+        return self._update(_m)
 
     def set_api_key(self, provider_name, api_key):
         """Set API key for a provider.
@@ -328,8 +368,8 @@ class T3LabAISettings(object):
         return self._update(_m)
 
     def get_active_provider(self):
-        """Return the name of the last-selected LLM provider ('claude', 'openai', 'ollama')."""
-        return self._settings.get('active_provider', 'claude')
+        """Name of the last-selected LLM provider (DEFAULT_PROVIDER if unset)."""
+        return self._settings.get('active_provider') or DEFAULT_PROVIDER
 
     def set_active_provider(self, name):
         """Persist the active provider name."""

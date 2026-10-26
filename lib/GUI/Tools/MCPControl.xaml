@@ -2039,6 +2039,12 @@
                                        Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,4,0,12"/>
                             <CheckBox x:Name="code_exec_toggle" Style="{StaticResource T3.CheckBox}"
                                       Content="Let AI apps run Python code in Revit"/>
+                            <!-- Off = "allow": code runs with no Revit dialog. Only enabled
+                                 while code_exec_toggle is on (core/mcp_policy.py CODE_MODES). -->
+                            <CheckBox x:Name="code_ask_toggle" Style="{StaticResource T3.CheckBox}"
+                                      Content="Ask in Revit before each run"
+                                      ToolTip="Untick to run AI code without the confirmation dialog"
+                                      Margin="24,8,0,0"/>
                             <TextBlock x:Name="code_exec_hint_label"
                                        Text="Revit shows the code and asks before each run."
                                        Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="24,4,0,12"/>

@@ -19,6 +19,9 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Added
+- **MCP — turn off the code dialog:** MCP Control → Advanced → Security has a new "Ask in Revit before each run" box under "Let AI apps run Python code". Untick it and code from AI apps runs with no Yes/No dialog in Revit. The code dialog itself also has a "Don't ask again for AI code" tick box; tick it and click Yes to stop the dialog. Tick "Ask" again to bring it back.
+
 ## [2.2.0] - 2026-10-25
 
 LLM fixes from `t3lab-revit-api` (no silent switch to another AI vendor, real timeouts and retries, API keys that work in both T3Lab builds), Gemini and Custom providers, project memory shared with Claude, and MCP protocol 2026-07-28.

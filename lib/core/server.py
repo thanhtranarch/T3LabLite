@@ -237,6 +237,12 @@ def _ask_user_to_confirm(task):
     with task._claim_lock:
         task.awaiting_user = True
     approved = False
+    dont_ask = False
+    try:
+        from core import mcp_policy
+        dont_ask_text = mcp_policy.dont_ask_text(task.tool_name)
+    except Exception:
+        mcp_policy, dont_ask_text = None, None
     try:
         from Autodesk.Revit.UI import (TaskDialog, TaskDialogCommonButtons,
                                        TaskDialogResult)
@@ -246,11 +252,20 @@ def _ask_user_to_confirm(task):
         dlg.MainContent = content
         if expanded:
             dlg.ExpandedContent = expanded
+        if dont_ask_text:
+            dlg.VerificationText = dont_ask_text
         dlg.CommonButtons = TaskDialogCommonButtons.Yes | TaskDialogCommonButtons.No
         dlg.DefaultButton = TaskDialogResult.No
         approved = dlg.Show() == TaskDialogResult.Yes
+        if dont_ask_text:
+            dont_ask = bool(dlg.WasVerificationChecked())
     except Exception:
         approved = False
+    if mcp_policy is not None:
+        try:
+            mcp_policy.remember_answer(task.tool_name, approved, dont_ask)
+        except Exception:
+            pass
     still_waiting = task.proceed_after_confirm()
     if not approved:
         return {'error': ('The user declined {} in Revit, so it was not run. '

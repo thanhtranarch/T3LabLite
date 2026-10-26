@@ -286,6 +286,7 @@ class MCPControlWindow(T3WPFWindow):
         self._read_only_toggle   = self.FindName('read_only_toggle')
         self._confirm_toggle     = self.FindName('confirm_destructive_toggle')
         self._code_exec_toggle   = self.FindName('code_exec_toggle')
+        self._code_ask_toggle    = self.FindName('code_ask_toggle')
         self._code_exec_hint     = self.FindName('code_exec_hint_label')
         self._toolset_cb         = self.FindName('toolset_cb')
         self._toolset_hint       = self.FindName('toolset_hint_label')
@@ -296,6 +297,8 @@ class MCPControlWindow(T3WPFWindow):
             self._confirm_toggle.Click += self._on_confirm_toggle
         if self._code_exec_toggle:
             self._code_exec_toggle.Click += self._on_code_exec_toggle
+        if self._code_ask_toggle:
+            self._code_ask_toggle.Click += self._on_code_ask_toggle
         if self._toolset_cb:
             self._toolset_cb.SelectionChanged += self._on_toolset_changed
 
@@ -725,7 +728,8 @@ class MCPControlWindow(T3WPFWindow):
     _CODE_HINTS = {
         'off':   'Off: AI apps do not see the code tool at all.',
         'ask':   'Revit shows the code and asks before each run.',
-        'allow': 'Runs without asking ("mcp_code_execution": "allow" in mcp_paths.json).',
+        'allow': ('Runs at once, with no dialog in Revit. Any connected AI app can '
+                  'change the model through code; tick "Ask" again to review each run.'),
     }
 
     # ComboBox item order in MCPControl.xaml (toolset_cb).
@@ -739,7 +743,8 @@ class MCPControlWindow(T3WPFWindow):
 
     def _refresh_security(self):
         toggles = (self._read_only_toggle, self._confirm_toggle,
-                   self._code_exec_toggle, self._toolset_cb)
+                   self._code_exec_toggle, self._code_ask_toggle,
+                   self._toolset_cb)
         if not HAS_SERVICE:
             for t in toggles:
                 if t is not None:
@@ -753,6 +758,9 @@ class MCPControlWindow(T3WPFWindow):
         mode = policy.get('code_execution') or 'ask'
         if self._code_exec_toggle is not None:
             self._code_exec_toggle.IsChecked = mode != 'off'
+        if self._code_ask_toggle is not None:
+            self._code_ask_toggle.IsChecked = mode != 'allow'
+            self._code_ask_toggle.IsEnabled = mode != 'off'
         if self._code_exec_hint is not None:
             self._code_exec_hint.Text = self._CODE_HINTS.get(mode, '')
         toolset = policy.get('toolset') or 'full'
@@ -787,6 +795,11 @@ class MCPControlWindow(T3WPFWindow):
         # Turning it back on means "ask"; an "allow" set by hand is kept.
         current = MCPService.mcp_policy().get('code_execution') if HAS_SERVICE else 'ask'
         self._save_security(code_execution='allow' if current == 'allow' else 'ask')
+
+    def _on_code_ask_toggle(self, sender, e):
+        # Unticked = "allow": AI code runs with no confirmation dialog.
+        self._save_security(code_execution='ask' if bool(self._code_ask_toggle.IsChecked)
+                            else 'allow')
 
     def _on_toolset_changed(self, sender, e):
         if self._toolset_loading or self._toolset_cb is None:

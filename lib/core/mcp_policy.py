@@ -22,6 +22,8 @@ Advanced > Security):
   mcp_code_execution       "ask"   send_code_to_revit: "off" (hidden and
                                    refused), "ask" (Revit shows the code and
                                    asks each time), "allow" (runs at once).
+                                   Also set to "allow" by "Don't ask again"
+                                   on the code dialog.
   mcp_toolset              "full"  Which tools external clients see:
                                    "full" (all), "standard" (no teaching /
                                    training tools), "documentation" (read
@@ -394,6 +396,28 @@ def save_policy(read_only=None, confirm_destructive=None, code_execution=None,
         data[CODE_KEY] = mode
     paths.save_settings(data)
     return policy_from_settings(data)
+
+
+# Tick box under the Yes/No dialog for code (TaskDialog.VerificationText):
+# ticked + Yes switches code execution to "allow".
+CODE_DONT_ASK_TEXT = (u'Don\'t ask again for AI code (turn it back on in MCP '
+                      u'Control > Advanced > Security)')
+
+
+def dont_ask_text(tool_name):
+    """The "don't ask again" tick box text for the confirmation of
+    `tool_name`, or None when that dialog has none (only code has one)."""
+    return CODE_DONT_ASK_TEXT if tool_name in CODE_TOOLS else None
+
+
+def remember_answer(tool_name, approved, dont_ask):
+    """After the user answered the confirmation of `tool_name`: Yes with the
+    tick box ticked stops asking for code from the next call on. No never
+    changes anything. Returns True when the policy was changed."""
+    if not (approved and dont_ask and tool_name in CODE_TOOLS):
+        return False
+    save_policy(code_execution=CODE_ALLOW)
+    return True
 
 
 def tool_visible(tool_name, policy, read_only_names):

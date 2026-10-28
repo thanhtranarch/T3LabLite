@@ -3698,6 +3698,9 @@ class T3LabAssistantWindow(T3WPFWindow):
                 except Exception:
                     pass
 
+            if self._try_instant_smalltalk(raw, attached):
+                return
+
             # Lock UI + typing indicator IMMEDIATELY; routing (PDF extraction,
             # Ollama probe, NLU scoring: ms to SECONDS) runs on a worker thread.
             self._set_busy(True)
@@ -3749,6 +3752,45 @@ class T3LabAssistantWindow(T3WPFWindow):
         except Exception as ex:
             # UI thread: Dispatcher.Invoke runs inline, no deadlock
             self._report_error(u"_process_input", ex)
+
+    def _try_instant_smalltalk(self, raw, attached):
+        """Answer pure small talk ("hello", "cảm ơn") here, with no worker turn.
+        UI THREAD. True when the reply is on screen.
+
+        Same verdict as _route_input's deterministic stage (NLU `_instant`,
+        not an answer to a clarifying question, no learned pattern winning),
+        minus the thread start and, docked, the GIL-pump wait. The NLU is pure
+        Python (< 1 ms). Test: lite_guard/test_assistant_smalltalk.py.
+        """
+        if attached or not raw or not HAS_NLP \
+                or getattr(self, '_forced_skill_id', None):
+            return False
+        try:
+            from Intelligence.nlu_engine import is_pure_smalltalk
+            if not is_pure_smalltalk(raw):
+                return False
+            history = list(self._conversation_history[:-1])
+            last_bot = u''
+            for h in reversed(history):
+                if h.get('role') == 'assistant':
+                    last_bot = u'{}'.format(h.get('content') or u'')
+                    break
+            if routing.is_continuation(
+                    last_bot, raw, getattr(self, '_prev_agent_decision', None)):
+                return False
+            result = parse_command_nlu(raw, history)
+            if not result or not result.get('_instant'):
+                return False
+            learned = find_learned_match(raw)
+            if learned and routing.learned_pattern_wins(learned, result,
+                                                        raw=raw):
+                return False
+        except Exception as ex:
+            logger.debug(u"instant small talk: {}".format(_exc_text(ex)))
+            return False
+        self._log_activity(u"User: {}".format(raw))
+        self._execute_result(result)
+        return True
 
     def _auto_route_model(self, raw, history, attached, continuation):
         """Pick Haiku / Sonnet / Opus for this turn. WORKER THREAD.
@@ -3946,8 +3988,17 @@ class T3LabAssistantWindow(T3WPFWindow):
 
             history  = list(self._conversation_history[:-1])
 
-            use_local        = HAS_NLP and has_local_llm()
-            use_claude       = HAS_NLP and has_api_key()   # True for any configured provider
+            # Provider checks are HTTP probes for Ollama / LM Studio (800 ms
+            # timeout per host): run only once a turn needs a model, never for
+            # what the NLU answers on its own (small talk, tool commands).
+            _llm = {}
+
+            def _llm_ready():
+                if not _llm:
+                    _llm['local'] = HAS_NLP and has_local_llm()
+                    # True for any configured provider
+                    _llm['cloud'] = HAS_NLP and has_api_key()
+                return _llm['local'] or _llm['cloud']
 
             # A /slash skill must reach the agent with its playbook — learned
             # patterns / NLU would hijack it (e.g. "/english-spellcheck").
@@ -4022,11 +4073,11 @@ class T3LabAssistantWindow(T3WPFWindow):
                 if nlu_result["intent"] not in ("chat", "help") \
                         or nlu_result.get("_authoritative") \
                         or nlu_result.get("_instant") \
-                        or not (use_local or use_claude):
+                        or not _llm_ready():
                     # Configured provider that failed its health probe: the
                     # canned "connect an AI in Settings" is wrong — say why.
                     if nlu_result["intent"] in ("chat", "help") \
-                            and not (use_local or use_claude):
+                            and not _llm_ready():
                         _note = self._provider_unreachable_note(
                             viet=_is_viet_text(raw))
                         if _note:
@@ -4036,6 +4087,10 @@ class T3LabAssistantWindow(T3WPFWindow):
                         self._execute_result(_r)
                     self.Dispatcher.Invoke(Action(_run_nlu))
                     return
+
+            _llm_ready()
+            use_local        = _llm['local']
+            use_claude       = _llm['cloud']
 
             # ── 2.5 Specialist dispatch (multi-agent layer) ──
             # Keywords always; one tiny LLM classify only for non-chat messages

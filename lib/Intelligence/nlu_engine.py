@@ -631,6 +631,9 @@ def _build_conversational_words():
         "morning", "afternoon", "evening", "night", "yo", "sup",
         "gm", "gn", "haha", "hihi", "lol", "ban", "buoi",
         "please", "welcome", "greetings",
+        # who the greeting is addressed to ("hey there", "chào em", "hi T3Lab")
+        "there", "t3lab", "assistant", "bot", "em", "anh", "chi", "bro",
+        "buddy", "friend", "team", "everyone", "moi", "nguoi",
     })
     return words - _COMMAND_WORDS
 
@@ -655,6 +658,13 @@ def is_conversational(user_input):
     if not meaningful:
         return True
     return all(t in _CONVERSATIONAL_WORDS for t in meaningful)
+
+
+def is_pure_smalltalk(user_input):
+    """True when the WHOLE message is small talk — "hello", "chào em", "how
+    are you" — not a request that opens politely ("hi, export the G sheets")."""
+    return bool(is_conversational(user_input)
+                or _match_english_smalltalk(user_input))
 
 
 # ─── Slot extraction ──────────────────────────────────────────────────────────
@@ -1646,7 +1656,8 @@ _REACTION_MAX_WORDS = 6
 
 # ─── Small-talk keyword tables (shared by classify() and _build_message) ─────
 _FAREWELL_KWS = ["tam biet", "tạm biệt", "bye", "bai", "bài",
-                 "see you", "hen gap", "hẹn gặp", "goodbye"]
+                 "see you", "hen gap", "hẹn gặp", "goodbye", "good night",
+                 "chuc ngu ngon", "chúc ngủ ngon"]
 _INSULT_KWS   = ["stupid", "dumb", "useless", "garbage", "trash", "suck",
                  "ngu", "vo dung", "vô dụng", "te qua", "tệ quá",
                  "qua te", "quá tệ"]
@@ -1779,6 +1790,11 @@ def _build_message(intent, slots, viet, raw_input=""):
             part = " {} sheet".format(filt) if filt else ""
             return "Opening BatchOut{} ({})...".format(part, fmt)
 
+    # "bye" scores as greet; answering it "Hello!" was wrong.
+    if intent == "greet" and \
+            _chat_smalltalk_kind(raw_input, normed_raw) == "farewell":
+        return (_MESSAGES_VI if viet else _MESSAGES_EN)["farewell"]
+
     # ── Chat replies: wording only, _chat_smalltalk_kind() categorises ──
     if intent == "chat":
         if _match_english_smalltalk(raw_input):
@@ -1883,6 +1899,11 @@ def classify(user_input, history=None):
 
     slots = _extract_slots(user_input)
     best = _disambiguate(dict(scores), unigrams, bigrams, slots)
+    # A greeting opener never swallows the request after it: "hi, export the
+    # G sheets" was answered "Hello!" (greet is canned and _instant).
+    if best == "greet" and not is_pure_smalltalk(user_input):
+        scores.pop("greet", None)
+        best = _disambiguate(dict(scores), unigrams, bigrams, slots)
 
     # ── No trigger matched: ranked resolver; ambiguous "open X" asks to pick ──
     if best is None:

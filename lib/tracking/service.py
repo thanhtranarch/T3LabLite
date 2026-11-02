@@ -9,14 +9,22 @@ Records worldwide usage metrics for T3Lab Lite:
 Data is sent asynchronously in a background thread to the T3Lab Space backend
 (default: https://t3lab.space/api/revit/tracking).
 
-Privacy & Reliability:
-  - Anonymized user/machine hash (SHA-256) -- no sensitive PII collected.
-  - MCP arguments are redacted before they leave the machine: code
-    (send_code_to_revit) and secrets are never sent, file/folder paths only
-    as the file name (see redact_arguments).
+Privacy (see docs/PRIVACY.md and docs/compliance/):
+  - Nothing is sent without the user's explicit "Allow" (tracking/consent.py).
+    Silence is not consent (Luat 91/2025/QH15, Art. 9).
+  - The rows are still personal data (pseudonymous ID + the IP the server
+    sees), so keep the minimum:
+      * user_hash is a random ID made on this machine, not derived from the
+        Windows user or computer name;
+      * doc_name is a salted code of the model title, never the title (a
+        local copy's title ends with the Windows user name, and project names
+        are client information);
+      * MCP arguments go through redact_arguments: no code, secrets, free
+        text (prompts, descriptions, messages), personal fields, full paths;
+        e-mails, phone numbers and user folders are scrubbed from the rest
+        and from error messages.
   - Zero-latency: never blocks Revit UI or MCP execution.
   - Fail-safe: all network exceptions are caught and silenced.
-  - Opt-out: set "tracking_enabled": false in %APPDATA%/T3LabAI/mcp_paths.json.
 
 Lite only. The rest of the extension calls it through tracking/hooks.py.
 """
@@ -27,6 +35,8 @@ import os
 import sys
 import json
 import time
+import re
+import uuid
 import hashlib
 import threading
 from datetime import datetime
@@ -51,6 +61,44 @@ _SECRET_HINTS = ("password", "passwd", "token", "secret", "api_key", "apikey")
 # Keys holding a path: only the last part (file or folder name) is sent, so
 # Windows user names and client folder structures stay local.
 _PATH_HINTS = ("path", "folder", "directory", "dir", "file")
+# Free text written by the user or the AI (prompts, goals, notes): it can hold
+# anything, names and client details included, so only its length is sent.
+_FREE_TEXT_KEYS = ("goal", "instruction", "prompt", "purpose", "description",
+                   "query", "reason", "message", "text", "comment", "note",
+                   "question", "content", "body", "summary")
+# Keys that name or reach a person.
+_PERSONAL_HINTS = ("email", "e_mail", "phone", "mobile", "user", "author",
+                   "owner", "person", "address", "contact")
+_MAX_TEXT = 300
+
+# Scrubbed from every string that is still sent, error messages included.
+_SCRUBBERS = (
+    (re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+"), "(email)"),
+    (re.compile(r"(?<![\w.])(\+?84|0)[\s.-]?\d{2,3}([\s.-]?\d{3}){2}(?![\w.])"), "(phone)"),
+    (re.compile(r"([A-Za-z]:[\\/]+(Users|Documents and Settings)[\\/]+)[^\\/\s\"']+", re.I), r"\1(user)"),
+    (re.compile(r"(/(home|Users)/)[^/\s\"']+"), r"\1(user)"),
+)
+
+
+def scrub_text(text, limit=_MAX_TEXT):
+    """Remove e-mails, phone numbers and user folder names; cap the length."""
+    if not isinstance(text, str):
+        return text
+    for pattern, repl in _SCRUBBERS:
+        text = pattern.sub(repl, text)
+    if limit and len(text) > limit:
+        text = text[:limit - 3] + "..."
+    return text
+
+
+def _scrub_any(value):
+    if isinstance(value, str):
+        return scrub_text(value)
+    if isinstance(value, (list, tuple)):
+        return [_scrub_any(v) for v in value]
+    if isinstance(value, dict):
+        return redact_arguments(value)      # nested keys get the same rules
+    return value
 
 
 def _last_path_part(text):
@@ -65,12 +113,18 @@ def _redact_value(key, value):
         return "(code not sent, {} lines)".format(len(text.splitlines()) or 1)
     if any(h in k for h in _SECRET_HINTS):
         return "(not sent)"
+    if k in _FREE_TEXT_KEYS:
+        text = value if isinstance(value, str) else str(value or "")
+        return "(text not sent, {} chars)".format(len(text))
+    if any(h in k for h in _PERSONAL_HINTS):
+        return "(not sent)"
     if any(h in k for h in _PATH_HINTS):
         if isinstance(value, str):
-            return _last_path_part(value)
+            return scrub_text(_last_path_part(value))
         if isinstance(value, (list, tuple)):
-            return [_last_path_part(v) if isinstance(v, str) else v for v in value]
-    return value
+            return [scrub_text(_last_path_part(v)) if isinstance(v, str) else v
+                    for v in value]
+    return _scrub_any(value)
 
 
 def redact_arguments(arguments):
@@ -88,22 +142,21 @@ def redact_arguments(arguments):
     return out
 
 
+INSTALL_ID_KEY = "tracking_install_id"
+
+
 class TelemetryService(object):
     _cached_user_hash = None
     _cached_revit_version = None
 
     @classmethod
     def is_enabled(cls):
-        """Check if telemetry is enabled in settings."""
+        """True only after the user chose "Allow" (tracking/consent.py)."""
         try:
-            from core import paths as _paths
-            settings = _paths.load_settings()
-            enabled = settings.get("tracking_enabled")
-            if enabled is None:
-                return True
-            return bool(enabled)
+            from tracking.consent import has_consent
+            return has_consent()
         except Exception:
-            return True
+            return False
 
     @classmethod
     def get_tracking_url(cls):
@@ -117,20 +170,32 @@ class TelemetryService(object):
 
     @classmethod
     def get_user_hash(cls):
-        """Generate a stable anonymous machine/user hash (SHA-256 truncated)."""
+        """Random ID made once on this machine and kept in mcp_paths.json.
+
+        Not derived from the Windows user or computer name, so it cannot be
+        turned back into either. Delete "tracking_install_id" to get a new one.
+        """
         if cls._cached_user_hash:
             return cls._cached_user_hash
-
         try:
-            import socket
-            hostname = socket.gethostname() or ""
-            username = os.environ.get("USERNAME") or os.environ.get("USER") or ""
-            raw_id = "{}_{}".format(hostname, username)
-            h = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:16]
-            cls._cached_user_hash = h
-            return h
+            from core import paths as _paths
+            value = _paths.load_settings().get(INSTALL_ID_KEY)
+            if not (isinstance(value, str) and re.match(r"^[0-9a-f]{16}$", value)):
+                value = uuid.uuid4().hex[:16]
+                _paths.set_setting(INSTALL_ID_KEY, value)
+            cls._cached_user_hash = value
+            return value
         except Exception:
             return "anon_user"
+
+    @classmethod
+    def doc_code(cls, title):
+        """Salted code of a model title: the same model gives the same code on
+        this machine, but the title itself never leaves it."""
+        if not title:
+            return ""
+        raw = "{}|{}".format(cls.get_user_hash(), title)
+        return "doc_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 
     @classmethod
     def get_revit_context(cls):
@@ -163,13 +228,8 @@ class TelemetryService(object):
         if not arguments or not isinstance(arguments, dict):
             arguments = {}
 
-        # 1. Explicit goal / prompt / instruction / purpose in arguments
-        for key in ("goal", "instruction", "prompt", "purpose", "description", "query", "reason"):
-            val = arguments.get(key)
-            if val and isinstance(val, (str, bytes)):
-                val_str = str(val).strip()
-                if val_str:
-                    return val_str[:250]
+        # 1. Free text (goal, prompt, description...) is never sent
+        #    (redact_arguments), so the purpose comes from the tool alone.
 
         # 2. Code execution tool
         if tool_name == "send_code_to_revit":
@@ -252,7 +312,7 @@ class TelemetryService(object):
         if isinstance(result, dict):
             if result.get("isError") or result.get("error"):
                 status = "error"
-                err_msg = str(result.get("error") or "Execution failed")
+                err_msg = scrub_text(str(result.get("error") or "Execution failed"))
 
         arguments = redact_arguments(arguments)
         purpose = cls.extract_mcp_purpose(tool_name, arguments)
@@ -296,7 +356,7 @@ class TelemetryService(object):
             "purpose": purpose or "Người dùng kích hoạt nút trên Revit Ribbon",
             "details": details or {},
             "status": status,
-            "error_message": error_message,
+            "error_message": scrub_text(error_message) if error_message else error_message,
             "execution_time_ms": duration_ms,
         })
 
@@ -307,7 +367,7 @@ class TelemetryService(object):
             try:
                 revit_ver, doc_title = cls.get_revit_context()
                 payload["revit_version"] = revit_ver
-                payload["doc_name"] = doc_title
+                payload["doc_name"] = cls.doc_code(doc_title)
                 payload["user_hash"] = cls.get_user_hash()
                 payload["timestamp"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 

@@ -33,8 +33,8 @@
     },
     {
       "file": "startup.py",
-      "pattern": "^\\s+track_session_start\\(\\)",
-      "why": "startup.py must call track_session_start() on every Revit start"
+      "pattern": "^\\s+track_session_start\\(_revit_handle\\(\\)\\)",
+      "why": "startup.py must call track_session_start(_revit_handle()) on every Revit start -- it also asks for tracking consent"
     },
     {
       "file": "startup.py",
@@ -111,6 +111,21 @@
       "file": "startup.py",
       "pattern": "^\\s+get_task_watcher\\(\\)\\.start_if_enabled\\(\\)",
       "why": "startup.py must not start the file task watcher unless the user opted in"
+    },
+    {
+      "file": "lib/tracking/service.py",
+      "pattern": "^\\s+return has_consent\\(\\)",
+      "why": "usage tracking may only send after the user chose Allow (Luat 91/2025/QH15 Art. 9: silence is not consent)"
+    },
+    {
+      "file": "lib/tracking/consent.py",
+      "pattern": "^def has_consent\\(",
+      "why": "consent gate for usage tracking"
+    },
+    {
+      "file": "lib/tracking/service.py",
+      "pattern": "^\\s+payload\\[\"doc_name\"\\] = cls\\.doc_code\\(doc_title\\)",
+      "why": "the model title (it ends with the Windows user name on a local copy) must never be sent"
     },
     {
       "file": "lib/tracking/service.py",

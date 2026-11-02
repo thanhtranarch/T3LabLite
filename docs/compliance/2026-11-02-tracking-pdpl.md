@@ -74,6 +74,17 @@ key do người dùng tự cấu hình (Luật 134/2025/QH15 Điều 11 khoản 
 riêng Assistant: kiểm tra nhãn nội dung AI tạo (Điều 11 khoản 3, NĐ 142/2026 Điều 18) và
 thời hạn chuyển tiếp 12 tháng (Điều 35, tới 01/03/2027 cho hệ thống đã chạy trước 01/03/2026).
 
+## Cập nhật 02/11/2026 — phía server (repo `t3lab-space`)
+
+| # | Đã làm |
+|---|---|
+| T04 | `lib/supabase/tracking-cleanup-2026-11.sql`: đổi khoá `user_hash`/`doc_name` bằng salt ngẫu nhiên không lưu lại, xoá city/ip, xoá purpose của MCP, lọc details/error_message. Chạy một lần, không hoàn tác được. |
+| T06 | `docs/PRIVACY.md` đã điền: Vercel `iad1` + Supabase `us-east-1` (Mỹ), không lưu IP/thành phố, giữ 12 tháng. |
+| T08 | Đã xác nhận **có** chuyển dữ liệu ra nước ngoài (Mỹ). Hồ sơ Điều 20 vẫn cần chủ sở hữu/luật sư quyết (miễn trừ Điều 39 cho cá nhân: CHƯA XÁC MINH). |
+| T10 | Trigger `toolhub.tracking_scrub` (`lib/supabase/tracking-privacy.sql`): bỏ IP + city, lọc email/thư mục user, bỏ key văn bản tự do, cắt 300 ký tự. pg_cron xoá dòng > 12 tháng mỗi đêm. |
+| Mới | Client cũ (chưa có hộp thoại) vẫn gửi → `/api/revit/tracking` bỏ qua mọi dòng không có `consent_version` (trả 202, không lưu). Client mới gửi `consent_version`. |
+| Mới (bảo mật) | `auth/route.ts` có mật khẩu admin mặc định viết thẳng trong code (`TRACKING_ADMIN_PASSWORD || '…'`). Nếu biến môi trường chưa đặt, ai cũng đọc được toàn bộ dữ liệu. Đã bỏ giá trị mặc định, so sánh timing-safe. |
+
 ## Ảnh hưởng tới dashboard (do các sửa đổi)
 
 - Số dòng sẽ giảm mạnh: chỉ máy đã bấm *Allow* mới gửi.

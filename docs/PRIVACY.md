@@ -6,12 +6,9 @@ This notice covers **only the usage statistics** T3Lab Lite sends to
 `t3lab.space`. Other network traffic (auto-update, the AI provider you set up,
 cloud links) is listed in [README → Network Traffic](../README.md#network-traffic).
 
-> Items marked **[owner to confirm]** depend on the t3lab.space server and must
-> be filled in by the T3Lab owner before this notice is final.
-
 ## 1. Who handles the data
 
-- Controller: T3Lab (Tran Tien Thanh) — **[owner to confirm: legal name / business registration]**
+- Controller: T3Lab — Trần Tiến Thanh (individual developer)
 - Contact for every request below: **trantienthanh909@gmail.com**
 
 ## 2. Nothing is sent without your consent
@@ -44,7 +41,7 @@ shared with third parties for their own use.
 | Install ID | `3f9a0c…` (16 hex) | random, made on this computer; **not** your name or computer name. Delete `tracking_install_id` in `mcp_paths.json` to get a new one |
 | Model code | `doc_1a2b3c4d5e6f` | a salted code of the model title; the title itself is **not** sent |
 | Time | UTC timestamp | |
-| IP address | | seen by the server with every request. **[owner to confirm: whether the full IP is stored, or only country / city]** |
+| Country | `VN` | worked out from the IP by the hosting provider (Vercel). The IP address and city are **not stored** |
 
 **Never sent:** model geometry or data, code sent to Revit, full file paths,
 prompts and other free text (goal, description, query, message, comment …),
@@ -53,10 +50,13 @@ passwords, tokens.
 
 ## 4. Where it is stored and for how long
 
-- Server: `t3lab.space` — **[owner to confirm: hosting provider and country/region]**.
-  If the server is outside Vietnam this is a cross-border transfer (Luật 91/2025/QH15, Điều 20).
-- Kept for: **[owner to confirm, e.g. 12 months]**, then deleted or aggregated so
-  no install ID remains.
+- Server: `t3lab.space` runs on Vercel (region `iad1`, Washington D.C., USA);
+  records are stored in Supabase (region `us-east-1`, USA). This is a transfer
+  of personal data outside Vietnam (Luật 91/2025/QH15, Điều 20).
+- The server drops the IP address and city before storing, removes e-mails and
+  user folder names from every text field, and stores nothing from T3Lab Lite
+  versions that never asked for consent.
+- Kept for **12 months**, then deleted automatically every night.
 
 ## 5. Your rights
 
@@ -73,9 +73,10 @@ its processing, withdraw consent, and complain (Luật 91/2025/QH15, Điều 4).
 
 ## 6. Security
 
-Records are sent over HTTPS. **[owner to confirm: access control on the
-dashboard, breach procedure — notify the authority within 72 hours (Luật
-91/2025/QH15, Điều 23)].**
+Records are sent over HTTPS. Only the T3Lab owner can read them: the
+dashboard needs an admin password, and the database allows inserts only
+(no public read). If the data leaks, T3Lab notifies the authority within 72
+hours (Luật 91/2025/QH15, Điều 23) and posts a notice in this repository.
 
 ---
 
@@ -84,7 +85,8 @@ dashboard, breach procedure — notify the authority within 72 hours (Luật
 - T3Lab Lite **chỉ gửi thống kê sử dụng khi bạn bấm "Allow"**. Không trả lời
   = không gửi.
 - Gửi: tên công cụ, kết quả, phiên bản Revit, một ID ngẫu nhiên của máy, mã
-  hoá của tên model. Server thấy địa chỉ IP.
+  hoá của tên model. Server chỉ lưu quốc gia, không lưu IP và thành phố.
+- Lưu trên Vercel + Supabase tại Mỹ, giữ 12 tháng rồi tự xoá.
 - Không gửi: model, code, đường dẫn đầy đủ, prompt/văn bản bạn gõ, email,
   số điện thoại, API key.
 - Rút lại đồng ý: đặt `"tracking_enabled": false` trong

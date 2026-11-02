@@ -369,6 +369,11 @@ class TelemetryService(object):
                 payload["revit_version"] = revit_ver
                 payload["doc_name"] = cls.doc_code(doc_title)
                 payload["user_hash"] = cls.get_user_hash()
+                # The server stores no row without it (t3lab-space
+                # app/api/revit/tracking/route.ts), so pre-consent clients
+                # that are still installed send nothing that is kept.
+                from tracking.consent import CONSENT_VERSION
+                payload["consent_version"] = CONSENT_VERSION
                 payload["timestamp"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
                 url = cls.get_tracking_url()

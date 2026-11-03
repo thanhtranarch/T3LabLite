@@ -23,7 +23,7 @@ with t3lab_dev, and `markers` checks each one:
 
 | File | Call | Records |
 |---|---|---|
-| `startup.py` | `track_session_start()` | One row per Revit start / pyRevit reload |
+| `startup.py` | `track_session_start(_revit_handle())` | One row per Revit start / pyRevit reload; asks for consent first (`lib/tracking/consent.py`) |
 | `lib/_cpython_bootstrap.py` | `init_cpython_paths()` -> `track_ribbon_click()` | Every ribbon button click (every `script.py` calls `init_cpython_paths()`) |
 | `lib/core/server.py` | `_handle_tool_call()` -> `_record_mcp_telemetry()` -> `track_mcp_call()` | Every MCP tool call, success and error |
 

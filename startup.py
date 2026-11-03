@@ -32,7 +32,7 @@ Responsibilities:
   8. Deploy the MCP bridge to %APPDATA%/T3LabAI/bridge.py and auto-start the
      MCP server (lib/Services/mcp_service.py).
   9. Run the once-a-week update check against GitHub (lib/core/updater.py).
- 10. Record session start telemetry (lib/tracking/).
+ 10. Record session start telemetry (lib/tracking/), after asking for consent.
 
 Runs under IronPython 2.7 / 3.4. No f-strings or Python-3-only syntax.
 Never raises: a startup failure must not prevent Revit from opening.
@@ -573,10 +573,12 @@ def main():
     except Exception:
         pass
 
-    # ─── 10. Usage tracking: session start (Lite only) ─────────────────────────
+    # ─── 10. Usage tracking: session start (Lite only, consent first) ─────────
+    # Nothing is sent before the user chose "Allow"; when never asked, Revit
+    # asks on the first Idling (lib/tracking/consent.py).
     try:
         from tracking import track_session_start
-        track_session_start()
+        track_session_start(_revit_handle())
     except Exception:
         pass
 

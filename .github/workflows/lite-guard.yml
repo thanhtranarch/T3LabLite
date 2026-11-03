@@ -9,7 +9,8 @@
 # and the Assistant's remote MCP server tests (lite_guard/test_assistant_mcp.py)
 # and the Assistant window split tests (lite_guard/test_assistant_structure.py)
 # and the shared project memory tests (lite_guard/test_memory_hub.py)
-# and the instant small-talk tests (lite_guard/test_assistant_smalltalk.py).
+# and the instant small-talk tests (lite_guard/test_assistant_smalltalk.py)
+# and the usage tracking privacy tests (lite_guard/test_tracking_privacy.py).
 name: Lite guard
 
 on:
@@ -46,3 +47,5 @@ jobs:
         run: python3 lite_guard/test_memory_hub.py
       - name: Test instant small talk (greetings skip the worker turn)
         run: python3 lite_guard/test_assistant_smalltalk.py
+      - name: Test usage tracking privacy (consent first, minimum data)
+        run: python3 lite_guard/test_tracking_privacy.py

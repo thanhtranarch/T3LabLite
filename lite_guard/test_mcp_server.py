@@ -1211,12 +1211,14 @@ class TelemetryTests(unittest.TestCase):
         orig = TelemetryService._dispatch_async
         # Sending is stubbed out, so tracking can be on for this one call.
         TelemetryService._dispatch_async = classmethod(lambda cls, p: sent.append(p))
-        _set_settings(tracking_enabled=True)
+        from tracking import consent
+        _set_settings(tracking_enabled=None, tracking_consent={
+            'value': True, 'version': consent.CONSENT_VERSION})
         try:
             TelemetryService.record_mcp_call(
                 'send_code_to_revit', {'code': 'SECRET_MARKER = 1'}, {'success': True}, 5)
         finally:
-            _set_settings(tracking_enabled=False)
+            _set_settings(tracking_enabled=False, tracking_consent=None)
             TelemetryService._dispatch_async = orig
         self.assertEqual(len(sent), 1)
         self.assertNotIn('SECRET_MARKER', json.dumps(sent[0]))

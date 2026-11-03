@@ -199,8 +199,10 @@ Supports combined PDF, custom naming patterns, sheet ordering, and revision trac
 ### Network Traffic
 
 Every connection is **user-initiated**, the weekly update check, or
-usage tracking. Both of the last two can be switched off (see
-[Staying up to date](#staying-up-to-date) and the table below).
+usage tracking. The update check can be switched off (see
+[Staying up to date](#staying-up-to-date)); usage tracking is off until you
+choose **Allow** in the question Revit shows once (see
+[docs/PRIVACY.md](docs/PRIVACY.md)).
 
 | Component | Destination | When |
 |---|---|---|
@@ -210,7 +212,7 @@ usage tracking. Both of the last two can be switched off (see
 | Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
 | Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |
 | MCP Server | `127.0.0.1:48884`–`48894` only (never reachable from the network), bearer token from `%APPDATA%\T3LabAI\mcp_token.txt` | Only while the MCP server is running |
-| Usage tracking | `t3lab.space/api/revit/tracking` — a hashed machine/user id, Revit version, document name, ribbon button or MCP tool name with its purpose and arguments; the server also records the sender's IP address and approximate location (country, city). Code, secrets and full paths are never sent (paths go as the file name only) | Revit start, ribbon click, MCP tool call — unless `"tracking_enabled": false` in `%APPDATA%\T3LabAI\mcp_paths.json` |
+| Usage tracking | `t3lab.space/api/revit/tracking` — a random install ID made on this computer, Revit version, a salted code of the model title (not the title), ribbon button or MCP tool name, result and redacted arguments; the server also sees the sender's IP address. This is still personal data (pseudonymous). Never sent: code, secrets, full paths, prompts and other free text, e-mails, phone numbers, user names. See [docs/PRIVACY.md](docs/PRIVACY.md) | Revit start, ribbon click, MCP tool call — **only after you choose Allow** (asked once on the first Revit start). Withdraw with `"tracking_enabled": false` in `%APPDATA%\T3LabAI\mcp_paths.json` |
 | ManaFami (Cloud) | User-configured Vercel URL in `~/.t3lab/family_loader_config.json` | User opens the cloud family catalogue |
 | Feedback | None — opens a `mailto:` link in the default email client | User sends feedback |
 | Cloud Links | `acc.autodesk.com` / `health.autodesk.com` / `status.bluebeam.com` / `pdf.t3lab.space` | Opens in the default browser on click |

@@ -8,6 +8,8 @@ Usage tracking entry points -- the only functions the rest of T3Lab calls.
   track_mcp_call()       core/server.py _handle_tool_call(), success and error
 
 None of them ever raises or blocks: TelemetryService sends on a daemon thread.
+None of them sends anything until the user chose "Allow" in the consent
+question (tracking/consent.py), which track_session_start() arms.
 
 Lite only. The call sites live in files shared with t3lab_dev, so a copy from
 dev can drop them; lite_guard/manifest.json fails the commit when that happens.
@@ -24,14 +26,29 @@ def _service():
     return TelemetryService
 
 
-def track_session_start():
-    """One row per Revit start / pyRevit reload."""
+def _send_session_row():
+    _service().record_tool_usage(
+        tool_name='session_start',
+        tool_type='startup',
+        purpose='Khởi động phiên làm việc Revit / pyRevit'
+    )
+
+
+def track_session_start(revit_handle=None):
+    """One row per Revit start / pyRevit reload -- only with consent.
+
+    When this version of the consent question was never answered, Revit asks
+    on the first Idling (tracking/consent.py) and sends this session's row
+    right after an "Allow". Nothing is sent before that.
+    """
     try:
-        _service().record_tool_usage(
-            tool_name='session_start',
-            tool_type='startup',
-            purpose='Khởi động phiên làm việc Revit / pyRevit'
-        )
+        from tracking import consent
+        answer = consent.current_answer()
+        if answer is None:
+            consent.ask_when_idle(revit_handle, on_allow=_send_session_row)
+            return
+        if answer:
+            _send_session_row()
     except Exception:
         pass
 

@@ -19,6 +19,9 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Changed
+- **Usage statistics now ask first:** nothing is sent until you choose **Allow** in a one-time question on the first Revit start (Vietnam's Personal Data Protection Law 91/2025/QH15). What is sent is smaller too: a random install ID instead of one built from your Windows user and computer name, a code instead of the model name, and no prompts, free text, e-mails, phone numbers or user folders. See [docs/PRIVACY.md](https://github.com/thanhtranarch/T3LabLite/blob/main/docs/PRIVACY.md).
+
 ### Added
 - **MCP — turn off the code dialog:** MCP Control → Advanced → Security has a new "Ask in Revit before each run" box under "Let AI apps run Python code". Untick it and code from AI apps runs with no Yes/No dialog in Revit. The code dialog itself also has a "Don't ask again for AI code" tick box; tick it and click Yes to stop the dialog. Tick "Ask" again to bring it back.
 

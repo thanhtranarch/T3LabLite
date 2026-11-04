@@ -2550,10 +2550,34 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
-                            <!-- Output Folder -->
+                            <!-- Profile: saved settings, importable from a shared folder -->
                             <Grid Grid.Row="0" Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Profile:" VerticalAlignment="Center"
+                                           FontWeight="Medium" FontSize="13"/>
+                                <ComboBox x:Name="profile_combo" Grid.Column="1" Height="28" Margin="4,0"
+                                          Style="{StaticResource T3.ComboBox}" HorizontalAlignment="Stretch"
+                                          SelectionChanged="profile_selected"
+                                          ToolTip="Apply a saved profile: formats, PDF/CAD settings, output folder, naming and report."/>
+                                <Button Grid.Column="2" Content="Import" Height="28" Padding="12,0" FontSize="13" Margin="0,0,4,0"
+                                        Style="{StaticResource T3.Button.Secondary}" Click="import_profile_clicked"
+                                        ToolTip="Import a profile .json from any folder, e.g. a shared team drive."/>
+                                <Button Grid.Column="3" Content="Save As" Height="28" Padding="12,0" FontSize="13"
+                                        Style="{StaticResource T3.Button.Secondary}" Click="save_profile_clicked"
+                                        ToolTip="Save the current settings as a profile .json. Save it to a shared folder so teammates can import it."/>
+                            </Grid>
+
+                            <!-- Output Folder -->
+                            <Grid Grid.Row="1" Margin="0,0,0,8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="100"/>
                                     <ColumnDefinition Width="*"/>
@@ -2569,7 +2593,7 @@
                             </Grid>
 
                             <!-- Organize + Reverse on one row -->
-                            <Grid Grid.Row="1">
+                            <Grid Grid.Row="2" Margin="0,0,0,8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="Auto"/>
@@ -2589,6 +2613,28 @@
                                 <CheckBox x:Name="reverse_order" Grid.Column="3" Content="Reverse order"
                                           VerticalAlignment="Center"
                                           Checked="reverse_order_changed" Unchecked="reverse_order_changed"/>
+                            </Grid>
+
+                            <!-- Export report: one row per item and format -->
+                            <Grid Grid.Row="3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="100"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Report:" VerticalAlignment="Center"
+                                           FontWeight="Medium" FontSize="13"/>
+                                <CheckBox x:Name="write_report" Grid.Column="1" Content="Write export report"
+                                          IsChecked="True" VerticalAlignment="Center" Margin="4,0,12,0"
+                                          ToolTip="After each export, save a report (number, name, revision, format, status, reason, file) in the output folder."/>
+                                <ComboBox x:Name="report_format" Grid.Column="2" Height="28" Width="80" SelectedIndex="0"
+                                          Style="{StaticResource T3.ComboBox}"
+                                          IsEnabled="{Binding IsChecked, ElementName=write_report}"
+                                          ToolTip="XLSX opens in Excel in any regional setting. CSV suits scripts and other tools.">
+                                    <ComboBoxItem Content="XLSX"/>
+                                    <ComboBoxItem Content="CSV"/>
+                                </ComboBox>
                             </Grid>
                         </Grid>
                     </Border>

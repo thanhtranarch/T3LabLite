@@ -49,3 +49,5 @@ jobs:
         run: python3 lite_guard/test_assistant_smalltalk.py
       - name: Test usage tracking privacy (consent first, minimum data)
         run: python3 lite_guard/test_tracking_privacy.py
+      - name: Test the BatchOut export report and profile files
+        run: python3 lite_guard/test_batchout_report.py

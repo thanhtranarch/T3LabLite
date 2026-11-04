@@ -42,7 +42,8 @@ clr.AddReference('PresentationFramework')
 clr.AddReference('PresentationCore')
 clr.AddReference('WindowsBase')
 clr.AddReference('System')
-from System.Windows.Forms import FolderBrowserDialog, DialogResult
+from System.Windows.Forms import (FolderBrowserDialog, DialogResult,
+                                  OpenFileDialog, SaveFileDialog)
 from System.Windows import Visibility, WindowState
 from System.Windows.Media.Imaging import BitmapImage
 from System import Uri, UriKind, Action, GC
@@ -74,6 +75,8 @@ if lib_dir not in sys.path:
 
 from Snippets._compat import eid_value, make_eid
 from core.paths import user_data_path
+from Services import batchout_report, batchout_profiles
+from Services.batchout_report import DEFAULT_COLUMNS as REPORT_DEFAULT_COLUMNS
 
 try:
     from Intelligence.api_learner import SmartAPIAdapter, RevitAPILearner
@@ -579,6 +582,9 @@ class ExportPreviewItem(object):
             self.SheetName = "Unknown"
             self.ItemName = "Unknown"
 
+        # Views alias Revision to Phase, so only a sheet's revision is reported.
+        self.Revision = getattr(item, 'Revision', '') if hasattr(item, 'Sheet') else ''
+        self.OutputFile = ''  # set on a confirmed export; read by the report
         self.Format = format_name
         self.Size = size
         self.Orientation = orientation
@@ -670,6 +676,12 @@ class ExportProfile(object):
         # Naming pattern - default to SheetNumber only for DWG batch export
         self.NamingPattern = "{SheetNumber}"
 
+        # Export report (Services/batchout_report.py); ReportColumns has no UI —
+        # edit it in the profile JSON to pick/reorder columns.
+        self.WriteReport = True
+        self.ReportFormat = "XLSX"
+        self.ReportColumns = list(REPORT_DEFAULT_COLUMNS)
+
     def to_dict(self):
         """Convert profile to dictionary for JSON serialization."""
         return {
@@ -700,7 +712,10 @@ class ExportProfile(object):
             'OutputFolder': self.OutputFolder,
             'SplitByFormat': self.SplitByFormat,
             'ReverseOrder': self.ReverseOrder,
-            'NamingPattern': self.NamingPattern
+            'NamingPattern': self.NamingPattern,
+            'WriteReport': self.WriteReport,
+            'ReportFormat': self.ReportFormat,
+            'ReportColumns': list(self.ReportColumns),
         }
 
     @staticmethod
@@ -825,6 +840,10 @@ class ExportManagerWindow(T3WPFWindow):
             self._export_running = False
             self.selection_mode = "sheets"  # "sheets" or "views"
             self.profiles = []  # List of ExportProfile objects
+            self._filling_profiles = False
+            self._report_columns = list(REPORT_DEFAULT_COLUMNS)
+            self._failure_reasons = {}
+            self._last_output_file = ''
             self.profiles_folder = os.path.join(os.path.expanduser('~'), 'Documents', 'T3Lab_BatchOut_Profiles')
             self.latest_setup_file = os.path.join(self.profiles_folder, self.LATEST_SETUP_FILENAME)
 
@@ -935,46 +954,111 @@ class ExportManagerWindow(T3WPFWindow):
             raise
 
 
-    def load_profiles(self):
-        """Load all saved profiles from disk."""
+    def load_profiles(self, select_name=None):
+        """Fill the profile picker from the profiles folder; stray JSON is skipped."""
+        self.profiles = []
         try:
-            # Create profiles folder if it doesn't exist
             if not os.path.exists(self.profiles_folder):
                 os.makedirs(self.profiles_folder)
-
-            # Load all JSON files from profiles folder
-            self.profiles = []
-            if os.path.exists(self.profiles_folder):
-                for filename in os.listdir(self.profiles_folder):
-                    # Internal bookkeeping files (latest setup; the crash
-                    # marker/history of older builds) share this folder but
-                    # are not profiles.
-                    if filename.startswith('_'):
-                        continue
-                    if filename.endswith('.json'):
-                        filepath = os.path.join(self.profiles_folder, filename)
-                        try:
-                            with open(filepath, 'r') as f:
-                                data = json.load(f)
-                            # Shape check, not just the '_' name check above:
-                            # any stray JSON dropped in this folder must be
-                            # skipped silently, never reported as a broken
-                            # profile.
-                            if not isinstance(data, dict) or 'Name' not in data:
-                                logger.debug(
-                                    "Skipping non-profile JSON {}".format(filename))
-                                continue
-                            self.profiles.append(ExportProfile.from_dict(data))
-                        except Exception as file_ex:
-                            logger.debug("Could not load profile {}: {}".format(filename, file_ex))
-
-            # Update profiles listview (only if dialog is open)
-            if hasattr(self, 'profiles_listview') and self.profiles_listview:
-                self.profiles_listview.ItemsSource = to_items_source(self.profiles)
+            for name, _path, data in batchout_profiles.list_profiles(self.profiles_folder):
+                profile = ExportProfile.from_dict(data)
+                profile.Name = name
+                self.profiles.append(profile)
             logger.info("Loaded {} profiles".format(len(self.profiles)))
-
         except Exception as ex:
             logger.error("Error loading profiles: {}".format(ex))
+
+        # Filling the combo raises SelectionChanged; it must not apply a profile.
+        self._filling_profiles = True
+        try:
+            self.profile_combo.Items.Clear()
+            selected = -1
+            for index, profile in enumerate(self.profiles):
+                self.profile_combo.Items.Add(profile.Name)
+                if select_name is not None and profile.Name == select_name:
+                    selected = index
+            self.profile_combo.SelectedIndex = selected
+        except Exception as ex:
+            logger.debug("Profile picker not filled: {}".format(ex))
+        finally:
+            self._filling_profiles = False
+
+    def profile_selected(self, sender, e):
+        if self._filling_profiles:
+            return
+        index = self.profile_combo.SelectedIndex
+        if 0 <= index < len(self.profiles):
+            profile = self.profiles[index]
+            self.apply_profile_to_ui(profile)
+            self.status_text.Text = "Profile '{}' applied".format(profile.Name)
+
+    def import_profile_clicked(self, sender, e):
+        """Copy a profile JSON from any folder (shared drive, email) into the picker."""
+        dialog = OpenFileDialog()
+        dialog.Title = "Import BatchOut Profile"
+        dialog.Filter = "BatchOut profile (*.json)|*.json"
+        if dialog.ShowDialog() != DialogResult.OK:
+            return
+        source = dialog.FileName
+        try:
+            data = batchout_profiles.read_profile_file(source)
+        except (OSError, ValueError) as ex:
+            forms.alert("'{}' was not imported: {}.\n\nChoose a .json file saved with "
+                        "BatchOut's Save As button.".format(os.path.basename(source), ex),
+                        title="Profile Not Imported")
+            return
+        try:
+            same_folder = os.path.normcase(os.path.dirname(os.path.abspath(source))) == \
+                os.path.normcase(os.path.abspath(self.profiles_folder))
+            if same_folder:
+                name = str(data['Name']).strip()
+            else:
+                name = batchout_profiles.unique_profile_name(
+                    [p.Name for p in self.profiles], data['Name'])
+                data['Name'] = name
+                batchout_profiles.write_profile_file(
+                    batchout_profiles.unique_profile_path(self.profiles_folder, name), data)
+        except (OSError, ValueError) as ex:
+            forms.alert("The profile was read but could not be saved to\n{}\n\n{}\n\n"
+                        "Check that the folder is writable, then import again.".format(
+                            self.profiles_folder, ex), title="Profile Not Imported")
+            return
+        self.load_profiles(select_name=name)
+        self.apply_profile_to_ui(ExportProfile.from_dict(data))
+        self.status_text.Text = "Profile '{}' imported and applied".format(name)
+
+    def save_profile_clicked(self, sender, e):
+        """Save the current settings as a profile; any folder works (share it with the team)."""
+        dialog = SaveFileDialog()
+        dialog.Title = "Save BatchOut Profile"
+        dialog.Filter = "BatchOut profile (*.json)|*.json"
+        dialog.InitialDirectory = self.profiles_folder
+        index = self.profile_combo.SelectedIndex
+        dialog.FileName = batchout_profiles.safe_filename(
+            self.profiles[index].Name if 0 <= index < len(self.profiles) else "BatchOut Profile")
+        if dialog.ShowDialog() != DialogResult.OK:
+            return
+        path = dialog.FileName
+        folder = os.path.dirname(path)
+        # A leading '_' would hide the file from the picker (bookkeeping prefix).
+        stem = batchout_profiles.safe_filename(os.path.splitext(os.path.basename(path))[0])
+        path = os.path.join(folder, stem + batchout_profiles.PROFILE_EXT)
+        profile = self.get_current_settings_as_profile()
+        profile.Name = stem
+        profile.Description = "Saved on {}".format(datetime.now().strftime("%Y-%m-%d %H:%M"))
+        try:
+            batchout_profiles.write_profile_file(path, profile.to_dict())
+        except OSError as ex:
+            forms.alert("The profile was not saved to\n{}\n\n{}\n\nChoose a folder you can "
+                        "write to and try again.".format(path, ex), title="Profile Not Saved")
+            return
+        if os.path.normcase(os.path.abspath(folder)) == os.path.normcase(
+                os.path.abspath(self.profiles_folder)):
+            self.load_profiles(select_name=stem)
+            self.status_text.Text = "Profile '{}' saved".format(stem)
+        else:
+            self.status_text.Text = "Profile '{}' saved to {} — teammates can import it".format(
+                stem, folder)
 
 
     def save_latest_setup(self):
@@ -1106,7 +1190,15 @@ class ExportManagerWindow(T3WPFWindow):
         # Naming pattern
         profile.NamingPattern = self.naming_pattern.Text if self.naming_pattern.Text else "{SheetNumber}-{SheetName}"
 
+        profile.WriteReport = bool(self.write_report.IsChecked)
+        profile.ReportFormat = self._selected_report_format()
+        profile.ReportColumns = list(self._report_columns)
+
         return profile
+
+    def _selected_report_format(self):
+        item = self.report_format.SelectedItem
+        return batchout_report.normalize_format(item.Content if item is not None else None)
 
     def apply_profile_to_ui(self, profile):
         """Apply profile settings to UI controls."""
@@ -1177,6 +1269,14 @@ class ExportManagerWindow(T3WPFWindow):
 
             # Naming pattern
             self.naming_pattern.Text = profile.NamingPattern
+
+            self.write_report.IsChecked = bool(profile.WriteReport)
+            report_format = batchout_report.normalize_format(profile.ReportFormat)
+            for i in range(self.report_format.Items.Count):
+                if str(self.report_format.Items[i].Content) == report_format:
+                    self.report_format.SelectedIndex = i
+                    break
+            self._report_columns = batchout_report.normalize_columns(profile.ReportColumns)
 
             self.status_text.Text = "Profile '{}' loaded successfully".format(profile.Name)
 
@@ -2031,6 +2131,10 @@ class ExportManagerWindow(T3WPFWindow):
         label = "{} ({})".format(sheet_number, fmt)
         if label not in self._skipped_fatal:
             self._skipped_fatal.append(label)
+        if not hasattr(self, '_failure_reasons'):
+            self._failure_reasons = {}
+        self._failure_reasons[(str(sheet_number), fmt)] = \
+            "skipped: crashed Revit's {} exporter on an earlier run".format(fmt)
         msg = "Skipped {} — this sheet crashed Revit's {} exporter before.".format(
             sheet_number, fmt)
         logger.warning(msg)
@@ -2090,6 +2194,8 @@ class ExportManagerWindow(T3WPFWindow):
         self._used_filenames = set()
         self._failed_items = []
         self._verify_misses = 0
+        self._failure_reasons = {}  # (item number, format) -> reason, for the report
+        self._last_output_file = ''  # last confirmed file; update_export_item_progress reads it
 
     def _native_output_stamp(self, path):
         """Snapshot one nonempty expected file, never a neighbouring export."""
@@ -2105,7 +2211,10 @@ class ExportManagerWindow(T3WPFWindow):
         previous_mtime = before[1] / 1000000000.0 if before is not None else None
         self._wait_for_export_file(path, previous_mtime, 3.0)
         after = self._native_output_stamp(path)
-        return after is not None and after != before
+        confirmed = after is not None and after != before
+        if confirmed:
+            self._last_output_file = path
+        return confirmed
 
     def _reserve_filename(self, folder, base, ext):
         """Return a filename in `folder` that no earlier item in this run has
@@ -2145,6 +2254,7 @@ class ExportManagerWindow(T3WPFWindow):
         timeout = 0.5 if getattr(self, '_verify_misses', 0) >= 2 else 3.0
         if self._wait_for_export_file(expected_file, prev_mtime, timeout):
             self._verify_misses = 0
+            self._last_output_file = expected_file
             return True
         try:
             import glob as _glob
@@ -2161,6 +2271,7 @@ class ExportManagerWindow(T3WPFWindow):
                             os.path.basename(expected_file), os.path.basename(path)))
                         self._verify_misses = 0
                         used.add(path.lower())
+                        self._last_output_file = path
                         return True
                 except Exception:
                     continue
@@ -2177,6 +2288,9 @@ class ExportManagerWindow(T3WPFWindow):
         entry = "{} ({}) — {}".format(label, fmt, reason)
         if entry not in self._failed_items:
             self._failed_items.append(entry)
+        if not hasattr(self, '_failure_reasons'):
+            self._failure_reasons = {}
+        self._failure_reasons[(str(label), fmt)] = reason
         logger.error("NOT exported: {}".format(entry))
         try:
             self.update_export_item_progress(label, fmt, 0, QUEUE_FAILED)
@@ -3594,6 +3708,7 @@ class ExportManagerWindow(T3WPFWindow):
                         item.Status = status
                     elif progress >= 100:
                         item.Status = QUEUE_EXPORTED
+                        item.OutputFile = getattr(self, '_last_output_file', '') or ''
                     elif progress > 0:
                         item.Status = QUEUE_EXPORTING
                     self.export_preview_list.Items.Refresh()
@@ -3837,6 +3952,7 @@ class ExportManagerWindow(T3WPFWindow):
 
             # Revit gets its input back before the summary dialog asks anything.
             self._end_live_progress()
+            report_note = self._write_export_report(output_folder)
 
             if not total_exported:
                 outcome = "No exports confirmed"
@@ -3891,8 +4007,8 @@ class ExportManagerWindow(T3WPFWindow):
                               "(e.g. a schedule to DWG) and will always fail here.")
 
             # Ask if user wants to open output folder
-            if forms.alert("{}{}{}{}\n\nDo you want to open the output folder?".format(
-                              summary, fail_note, safe_note, skip_note),
+            if forms.alert("{}{}{}{}{}\n\nDo you want to open the output folder?".format(
+                              summary, fail_note, safe_note, skip_note, report_note),
                           title=outcome,
                           yes=True, no=True):
                 os.startfile(output_folder)
@@ -3900,9 +4016,12 @@ class ExportManagerWindow(T3WPFWindow):
         except Exception as ex:
             logger.error("Export failed: {}".format(ex))
             self._end_live_progress()
+            report_note = ""
+            if getattr(self, '_export_started_at', None) and self.output_folder.Text:
+                report_note = self._write_export_report(self.output_folder.Text)
             forms.alert("Export stopped: {}\n\n{} earlier output(s) were confirmed. "
-                        "Existing output files were kept; review the output folder before retrying.".format(
-                            ex, total_exported), title="Export Error")
+                        "Existing output files were kept; review the output folder before retrying.{}".format(
+                            ex, total_exported, report_note), title="Export Error")
             self.status_text.Text = "Export failed"
             self.next_button.IsEnabled = True
             self.back_button.IsEnabled = True
@@ -3914,6 +4033,33 @@ class ExportManagerWindow(T3WPFWindow):
             finally:
                 self._export_running = False
                 self.IsEnabled = True
+
+    def _write_export_report(self, output_folder):
+        """Write this run's report into the output folder; returns a line for the summary.
+
+        Never raises: a report problem must not turn a finished export into "Export stopped".
+        """
+        try:
+            model = self.doc.Title
+        except Exception:
+            model = ""
+        try:
+            if not self.write_report.IsChecked or not self.export_items:
+                return ""
+            fmt = self._selected_report_format()
+            started = getattr(self, '_export_started_at', None)
+            when = datetime.fromtimestamp(started) if started else datetime.now()
+            rows = batchout_report.build_rows(
+                self.export_items, getattr(self, '_failure_reasons', {}), model, when)
+            path = batchout_report.write_report(
+                batchout_report.report_path(output_folder, fmt, when),
+                rows, self._report_columns, fmt)
+        except Exception as ex:
+            logger.error("Export report not written: {}".format(ex))
+            return ("\n\nThe export report was not written ({}). Check that the output "
+                    "folder is writable; the exported files are not affected.".format(ex))
+        logger.info("Export report: {}".format(path))
+        return "\n\nReport ({} rows): {}".format(len(rows), path)
 
     def export_to_dwg(self, items, output_folder):
         """Export items (sheets or views) to DWG format with version-aware API usage.
@@ -5006,6 +5152,7 @@ class ExportManagerWindow(T3WPFWindow):
                             int(self._overall_counter * 100.0 / max(1, self._overall_total)),
                             "Exported {} to Image".format(element_name)
                         )
+                        self._last_output_file = expected_file
                         self.update_export_item_progress(item.SheetNumber, "IMG", 100)
                     else:
                         self._note_failure(item.SheetNumber, "IMG",

@@ -23,6 +23,8 @@ Releasing a new version:
 - **Usage statistics now ask first:** nothing is sent until you choose **Allow** in a one-time question on the first Revit start (Vietnam's Personal Data Protection Law 91/2025/QH15). What is sent is smaller too: a random install ID instead of one built from your Windows user and computer name, a code instead of the model name, and no prompts, free text, e-mails, phone numbers or user folders. See [docs/PRIVACY.md](https://github.com/thanhtranarch/T3LabLite/blob/main/docs/PRIVACY.md).
 
 ### Added
+- **BatchOut — export report:** after each export, BatchOut saves `BatchOut_Report_<date_time>.xlsx` (or `.csv`) in the output folder, one row per sheet/view and format: number, name, revision, status, why it failed, file path and size. Turn it off or pick CSV in the Queue step → Report.
+- **BatchOut — profiles:** the Queue step has a Profile row. Pick a saved profile to apply it, **Save As** to keep the current settings (save to a shared folder for your team), **Import** to load a profile from any folder.
 - **MCP — turn off the code dialog:** MCP Control → Advanced → Security has a new "Ask in Revit before each run" box under "Let AI apps run Python code". Untick it and code from AI apps runs with no Yes/No dialog in Revit. The code dialog itself also has a "Don't ask again for AI code" tick box; tick it and click Yes to stop the dialog. Tick "Ask" again to bring it back.
 
 ## [2.2.0] - 2026-10-25

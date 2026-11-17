@@ -680,6 +680,30 @@ def _capabilities():
     return json.loads(json.dumps(SERVER_CAPABILITIES))
 
 
+# Name of the AI app (its initialize clientInfo), stamped on every forwarded
+# tools/call so the Revit side can tell agents apart (core/agent_cursors.py).
+AGENT_META = 't3lab/agent'
+
+
+def _remember_client(request, current):
+    info = (request.get('params') or {}).get('clientInfo')
+    name = info.get('name') if isinstance(info, dict) else None
+    if name:
+        current['client'] = '{}'.format(name).strip()[:40]
+
+
+def _stamp_agent(request, current):
+    """Copy of a tools/call request carrying the AI app's name in _meta."""
+    client = current.get('client')
+    if not client:
+        return request
+    params = dict(request.get('params') or {})
+    meta = dict(params['_meta']) if isinstance(params.get('_meta'), dict) else {}
+    meta.setdefault(AGENT_META, client)
+    params['_meta'] = meta
+    return dict(request, params=params)
+
+
 def _handle_initialize_local(request):
     """Answer initialize without touching Revit — attach always succeeds.
     Legacy handshake: never answers with a modern version."""
@@ -946,6 +970,7 @@ def _handle(request, current, token):
 def _dispatch(request, current, token):
     method = request.get('method')
     if method == 'initialize':
+        _remember_client(request, current)
         return _handle_initialize_local(request)
     if method == 'server/discover':
         return _handle_discover_local(request)
@@ -968,7 +993,7 @@ def _dispatch(request, current, token):
                 return _handle_list(request, current, token)
             if name == 'switch_active_document':
                 return _handle_switch(request, current, token)
-            return _forward(request, current, token)
+            return _forward(_stamp_agent(request, current), current, token)
         except Exception as e:
             if _is_conn_refused(e):
                 return _revit_down_response(request.get('id'))

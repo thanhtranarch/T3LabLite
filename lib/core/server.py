@@ -180,9 +180,13 @@ class _ToolTask(object):
     fallback grace period expires.
     """
 
-    def __init__(self, tool_name, arguments, confirm=None):
+    def __init__(self, tool_name, arguments, confirm=None, agent=None):
         self.tool_name = tool_name
         self.arguments = arguments
+        # AI app of an external call (bridge `t3lab/agent` = its MCP
+        # clientInfo name); None = the in-app Assistant. For agent cursors.
+        self.agent = agent
+        self.source = 'mcp' if agent else 'assistant'
         self.result = None
         self.exception = None
         self.done = threading.Event()
@@ -321,6 +325,12 @@ try:
                 is_write = task.tool_name in self.server._WRITE_TOOLS
                 if is_write:
                     self.server._write_in_progress = True
+                # Boxes a delete / move is about to change (agent cursors).
+                try:
+                    from core import agent_cursors
+                    agent_cursors.before(app, task)
+                except Exception:
+                    pass
                 try:
                     task.result = self.server._execute_tool_in_context(
                         task.tool_name, task.arguments, uiapp=app)
@@ -340,6 +350,13 @@ try:
                         except Exception:
                             pass
                     task.done.set()
+                # After the caller has its result; off unless the user turned
+                # it on (Settings > Agent Cursors).
+                try:
+                    from core import agent_cursors
+                    agent_cursors.notify(app, task)
+                except Exception:
+                    pass
 
         def GetName(self):
             return "T3Lab MCP External Event Handler"
@@ -3067,6 +3084,8 @@ class T3LabAIServer(object):
         """
         tool_name = params.get('name', '')
         arguments = params.get('arguments', {})
+        meta = params.get('_meta')
+        agent = (meta.get('t3lab/agent') if isinstance(meta, dict) else None) or 'claude-desktop'
 
         # A tool the machine's toolset hides is refused before anything else,
         # the teaching tools below included (MCP Control > Security).
@@ -3108,7 +3127,7 @@ class T3LabAIServer(object):
                           'tool': tool_name}
             else:
                 result = self._execute_tool(tool_name, arguments,
-                                            confirm=confirm)
+                                            confirm=confirm, agent=agent)
             self._teach_record_step(tool_name, arguments, result)
             _record_mcp_telemetry(tool_name, arguments, result, t_start)
             return self._tool_call_result(result)
@@ -4015,7 +4034,7 @@ class T3LabAIServer(object):
                 ', '.join(str(n) for n in failed))
         return out
 
-    def _execute_tool(self, tool_name, arguments, confirm=None):
+    def _execute_tool(self, tool_name, arguments, confirm=None, agent=None):
         """Execute a Revit tool in a thread-safe manner using External Events.
 
         `confirm` (external MCP calls only, see _external_policy_check) makes
@@ -4040,7 +4059,7 @@ class T3LabAIServer(object):
                               'Revit ExternalEvent is not ready.'.format(tool_name)),
                     'tool': tool_name}
         if self._external_event:
-            task = _ToolTask(tool_name, arguments, confirm=confirm)
+            task = _ToolTask(tool_name, arguments, confirm=confirm, agent=agent)
             self._event_handler.tasks.put(task)
             self._external_event.Raise()
 

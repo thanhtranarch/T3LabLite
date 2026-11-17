@@ -5752,12 +5752,12 @@ class T3LabAIServer(object):
             target_wall_type = None
             if wall_type_name_arg:
                 for wt in wall_types:
-                    if wt.Name == wall_type_name_arg:
+                    if elem_name(wt) == wall_type_name_arg:
                         target_wall_type = wt
                         break
                 if target_wall_type is None:
                     for wt in wall_types:
-                        if wall_type_name_arg.lower() in wt.Name.lower():
+                        if wall_type_name_arg.lower() in elem_name(wt).lower():
                             target_wall_type = wt
                             break
                 if target_wall_type is None:
@@ -5996,7 +5996,7 @@ class T3LabAIServer(object):
                     types_out.append({
                         'id': eid_value(sym.Id),
                         'family': family_name,
-                        'type': sym.Name,
+                        'type': elem_name(sym),
                         'category': cat_name,
                         'active': sym.IsActive,
                     })
@@ -6309,8 +6309,8 @@ class T3LabAIServer(object):
             partial = None
             for s in FilteredElementCollector(doc).OfClass(FamilySymbol):
                 try:
-                    full = '{}:{}'.format(s.Family.Name, s.Name) if s.Family else s.Name
-                    if s.Name == ftype_name or full == ftype_name:
+                    full = '{}:{}'.format(s.Family.Name, elem_name(s)) if s.Family else elem_name(s)
+                    if elem_name(s) == ftype_name or full == ftype_name:
                         sym = s
                         break
                     if partial is None and ftype_name.lower() in full.lower():
@@ -6384,7 +6384,7 @@ class T3LabAIServer(object):
                     inst = doc.Create.NewFamilyInstance(point, sym, target_level, struct_type)
                 t.Commit()
                 result = {'success': True, 'element_id': eid_value(inst.Id),
-                          'type': '{}:{}'.format(sym.Family.Name, sym.Name) if sym.Family else sym.Name,
+                          'type': '{}:{}'.format(sym.Family.Name, elem_name(sym)) if sym.Family else elem_name(sym),
                           'level': target_level.Name}
                 if host_elem is not None:
                     result['host_id'] = eid_value(host_elem.Id)
@@ -6411,8 +6411,8 @@ class T3LabAIServer(object):
             partial = None
             for s in FilteredElementCollector(doc).OfClass(FamilySymbol):
                 try:
-                    full = '{}:{}'.format(s.Family.Name, s.Name) if s.Family else s.Name
-                    if s.Name == ftype_name or full == ftype_name:
+                    full = '{}:{}'.format(s.Family.Name, elem_name(s)) if s.Family else elem_name(s)
+                    if elem_name(s) == ftype_name or full == ftype_name:
                         sym = s
                         break
                     if partial is None and ftype_name.lower() in full.lower():
@@ -6462,7 +6462,7 @@ class T3LabAIServer(object):
                 inst = doc.Create.NewFamilyInstance(curve, sym, target_level, struct_type)
                 t.Commit()
                 return {'success': True, 'element_id': eid_value(inst.Id),
-                        'type': '{}:{}'.format(sym.Family.Name, sym.Name) if sym.Family else sym.Name,
+                        'type': '{}:{}'.format(sym.Family.Name, elem_name(sym)) if sym.Family else elem_name(sym),
                         'level': target_level.Name}
             except Exception as e:
                 t.RollBack()
@@ -6521,10 +6521,10 @@ class T3LabAIServer(object):
                 picked = types[0] if types else None
                 if type_name:
                     for candidate in types:
-                        if candidate.Name == type_name:
+                        if elem_name(candidate) == type_name:
                             return candidate
                     for candidate in types:
-                        if type_name.lower() in candidate.Name.lower():
+                        if type_name.lower() in elem_name(candidate).lower():
                             return candidate
                 return picked
 
@@ -6547,7 +6547,7 @@ class T3LabAIServer(object):
                     profile = NetList[CurveLoop]()
                     profile.Add(loop)
                     new_elem = Ceiling.Create(doc, profile, ct.Id, target_level.Id)
-                    type_used = ct.Name
+                    type_used = elem_name(ct)
 
                 elif elem_type == 'roof':
                     from Autodesk.Revit.DB import RoofType, ModelCurveArray, BuiltInCategory as _BIC
@@ -6563,7 +6563,7 @@ class T3LabAIServer(object):
                         ca.Append(seg)
                     ma = ModelCurveArray()
                     new_elem = doc.Create.NewFootPrintRoof(ca, target_level, rt, ma)
-                    type_used = rt.Name
+                    type_used = elem_name(rt)
 
                 else:  # floor (default)
                     floor_types = list(FilteredElementCollector(doc).OfClass(FloorType).ToElements())
@@ -6583,7 +6583,7 @@ class T3LabAIServer(object):
                         for seg in segments:
                             ca.Append(seg)
                         new_elem = doc.Create.NewFloor(ca, ft, target_level, False)
-                    type_used = ft.Name
+                    type_used = elem_name(ft)
 
                 t.Commit()
                 return {'success': True, 'element_id': eid_value(new_elem.Id),
@@ -6740,18 +6740,18 @@ class T3LabAIServer(object):
             sym = None
             if beam_type:
                 for s in framing_syms:
-                    if s.Name == beam_type or (s.Family and s.Family.Name == beam_type):
+                    if elem_name(s) == beam_type or (s.Family and s.Family.Name == beam_type):
                         sym = s
                         break
                 if sym is None:
                     for s in framing_syms:
-                        full = '{}:{}'.format(s.Family.Name, s.Name) if s.Family else s.Name
+                        full = '{}:{}'.format(s.Family.Name, elem_name(s)) if s.Family else elem_name(s)
                         if beam_type.lower() in full.lower():
                             sym = s
                             break
                 if sym is None:
                     return {'error': 'Structural framing type "{}" not found. Available: {}'.format(
-                        beam_type, ', '.join(sorted(set(s.Name for s in framing_syms))[:20]) or '(none)')}
+                        beam_type, ', '.join(sorted(set(elem_name(s) for s in framing_syms))[:20]) or '(none)')}
             elif framing_syms:
                 sym = framing_syms[0]
             if sym is None:
@@ -9092,7 +9092,7 @@ class T3LabAIServer(object):
                 if tb_types:
                     if tb_name:
                         for tb in tb_types:
-                            if tb.Name == tb_name or (hasattr(tb, 'FamilyName') and tb.FamilyName == tb_name):
+                            if elem_name(tb) == tb_name or (hasattr(tb, 'FamilyName') and tb.FamilyName == tb_name):
                                 tb_id = tb.Id
                                 break
                     if tb_id == ElementId.InvalidElementId:
@@ -9204,12 +9204,12 @@ class T3LabAIServer(object):
                 tn_type = None
                 if type_name:
                     for tt in tn_types:
-                        if tt.Name == type_name:
+                        if elem_name(tt) == type_name:
                             tn_type = tt
                             break
                     if tn_type is None:
                         for tt in tn_types:
-                            if type_name.lower() in tt.Name.lower():
+                            if type_name.lower() in elem_name(tt).lower():
                                 tn_type = tt
                                 break
                 if tn_type is None and font_size:
@@ -10787,8 +10787,8 @@ class T3LabAIServer(object):
                 tbs = list(FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).OfClass(FamilySymbol))
                 if tb_name:
                     for s in tbs:
-                        full = '{}:{}'.format(s.Family.Name, s.Name) if s.Family else s.Name
-                        if s.Name == tb_name or full == tb_name or tb_name.lower() in full.lower():
+                        full = '{}:{}'.format(s.Family.Name, elem_name(s)) if s.Family else elem_name(s)
+                        if elem_name(s) == tb_name or full == tb_name or tb_name.lower() in full.lower():
                             tb = s; break
                 if tb is None and tbs:
                     tb = tbs[0]
@@ -11125,7 +11125,7 @@ class T3LabAIServer(object):
 
                 report = {
                     'unused_family_types': len(unused_syms),
-                    'unused_family_type_names': [s.Name for s in unused_syms[:30]],
+                    'unused_family_type_names': [elem_name(s) for s in unused_syms[:30]],
                     'unused_view_templates': len(unused_tpl),
                     'unused_view_template_names': [v.Name for v in unused_tpl[:30]],
                 }

@@ -131,7 +131,7 @@ def _get_mcp_tools():
     try:
         from core.server import get_t3labai_server
         srv = get_t3labai_server()
-        return srv._handle_tools_list().get('tools', [])
+        return getattr(srv, '_assistant_tools_list', srv._handle_tools_list)().get('tools', [])
     except Exception:
         return []
 

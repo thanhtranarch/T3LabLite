@@ -19,6 +19,7 @@ from __future__ import unicode_literals
 
 import io
 import os
+import time
 
 BRIDGE = 'bridge.py'
 # (lib/core name, deployed name). skills.json -> t3lab_capabilities;
@@ -59,10 +60,32 @@ def _copy(src, dst):
     tmp = dst + '.tmp'
     with io.open(tmp, 'wb') as f:
         f.write(data)
-    if os.path.exists(dst):
-        os.remove(dst)          # IronPython 2.7 has no os.replace
-    os.rename(tmp, dst)
+    try:
+        _swap(tmp, dst)
+    except (IOError, OSError):
+        time.sleep(0.25)        # antivirus / indexer holding a file: once more
+        _swap(tmp, dst)
     return True
+
+
+def _swap(tmp, dst):
+    """Move tmp over dst without a moment where dst is missing (a client
+    starting then would get "can't open file")."""
+    replace = getattr(os, 'replace', None)          # CPython 3
+    if replace is not None:
+        replace(tmp, dst)
+        return
+    try:                                            # IronPython 2.7
+        from System.IO import File
+    except ImportError:
+        File = None
+    if File is not None and os.path.exists(dst):
+        File.Copy(tmp, dst, True)
+        os.remove(tmp)
+        return
+    if os.path.exists(dst):
+        os.remove(dst)
+    os.rename(tmp, dst)
 
 
 def _same_dir(a, b):
@@ -78,7 +101,8 @@ def owner(target=None):
 def deploy(target=None, source=None):
     """Copy the bridge and its companions; take ownership.
 
-    Returns (bridge path or None, error or None, names written).
+    Returns (bridge path or None, error or None, names written). The path is
+    set whenever bridge.py itself is in place, even if a companion failed.
     """
     target, source = target or target_dir(), source or core_dir()
     written = []
@@ -90,18 +114,26 @@ def deploy(target=None, source=None):
             written.append(BRIDGE)
     except Exception as ex:
         return None, '{}'.format(ex), written
+    failed = []
     for src_name, dst_name in COMPANIONS:
+        src = os.path.join(source, src_name)
+        if not os.path.isfile(src):
+            continue            # not shipped by this extension: feature off
         try:
-            if _copy(os.path.join(source, src_name), os.path.join(target, dst_name)):
+            if _copy(src, os.path.join(target, dst_name)):
                 written.append(dst_name)
-        except Exception:
-            pass
+        except Exception as ex:
+            # A new bridge next to an old companion breaks the tool that
+            # reads it: say so instead of reporting "updated".
+            failed.append('{}: {}'.format(dst_name, ex))
     try:
         if not _same_dir(owner(target), source):
             with io.open(os.path.join(target, SOURCE_FILE), 'w', encoding='utf-8') as f:
                 f.write('{}\n'.format(source))
     except Exception:
         pass
+    if failed:
+        return dst, 'companion not updated - ' + '; '.join(failed), written
     return dst, None, written
 
 

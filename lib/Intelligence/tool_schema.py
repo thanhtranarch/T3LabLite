@@ -397,7 +397,7 @@ def get_server_tools():
     try:
         from core.server import get_t3labai_server
         srv   = get_t3labai_server()
-        tools = srv._handle_tools_list().get("tools", []) or []
+        tools = getattr(srv, "_assistant_tools_list", srv._handle_tools_list)().get("tools", []) or []
         # Keep only well-formed entries; never let one bad schema kill the list.
         # Drop the external-only teaching/training control tools: they exist for
         # the EXTERNAL MCP teacher (Claude Desktop) to frame trajectories and

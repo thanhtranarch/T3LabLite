@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.4.5] - 2026-11-17
+
+Agent Cursors show the right AI app name: Antigravity is no longer shown as Claude.
+
 ### Fixed
 - **Agent Cursors — the wrong AI app name:** Antigravity showed as "Claude". MCP Control's Connect now writes which app it connects (Claude Desktop, ChatGPT (Codex), Antigravity) into that app's settings, and the cursor and the bar use that name. Apps connected before this update show **Connect** again in MCP Control: click it once. An app that sends no name shows as "AI app" instead of a guess.
 

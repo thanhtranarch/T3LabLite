@@ -599,6 +599,22 @@ class ToolCallTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertFalse(self._call('list_levels')['isError'])
 
+    def test_policy_never_strips_the_assistant_catalogue(self):
+        # Read-only / toolsets are for external clients (mcp_policy.py); the
+        # Assistant's catalogue (tool_schema, t3lab_agent, Assistant dialog)
+        # used to come from the filtered tools/list.
+        _set_settings(**{mp.READ_ONLY_KEY: True, mp.CODE_KEY: 'off'})
+        external = {t['name'] for t in self.s._handle_tools_list()['tools']}
+        assistant = {t['name'] for t in self.s._assistant_tools_list()['tools']}
+        self.assertNotIn('create_level', external)
+        self.assertIn('create_level', assistant)
+        self.assertEqual(assistant, set(self.s._tools))
+        for rel in ('Intelligence/tool_schema.py', 'Intelligence/t3lab_agent.py',
+                    'GUI/T3LabAssistantDialog.py'):
+            with open(os.path.join(LIB, rel), encoding='utf-8') as f:
+                src = f.read()
+            self.assertIn('_assistant_tools_list', src, rel)
+
     def test_read_only_blocks_teaching_tools(self):
         # They are hidden from tools/list in read-only mode; a direct call
         # used to run anyway and rewrite settings (teaching_enabled,

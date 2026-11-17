@@ -4381,7 +4381,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                         try:
                             from core.server import get_t3labai_server
                             srv = get_t3labai_server()
-                            tools_list = srv._handle_tools_list().get('tools', [])
+                            tools_list = getattr(srv, '_assistant_tools_list', srv._handle_tools_list)().get('tools', [])
                             # Local models: essential subset only (as native path).
                             if tools_list and getattr(_provider, 'NAME', '') in ("ollama", "lmstudio"):
                                 from Intelligence.tool_schema import ESSENTIAL_TOOL_NAMES

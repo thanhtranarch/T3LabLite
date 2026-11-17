@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-11-17
+
+Agent Cursors no longer show an extra "Claude" cursor next to the AI app you use.
+
 ### Fixed
 - **Agent Cursors — an extra "Claude" / "AI app" cursor next to your AI app:** when a step failed, or the AI app listed or switched documents, the T3Lab connection made a check of its own ("Listing open documents") and it was drawn as a second AI app. That check no longer draws a cursor, and every step of your AI app carries its name.
 

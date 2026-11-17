@@ -367,28 +367,43 @@ try:
                         continue  # given up while the bar was asking
                 elif not task.claim('ui'):
                     continue  # read fallback or timeout already consumed it
-                if task.agent and not task.answered:
-                    agent_cursors.offer(app, task.agent)   # once per session, cursors off
-                if getattr(task, 'confirm', None) and not task.answered:
-                    if _ask_on_bar(self, app, task):
-                        continue  # Allow on the bar re-queues it
+                # The task is claimed: from here on every path must set
+                # task.done, or the caller waits 120 s holding
+                # _MCP_REQUEST_LOCK and every other tools/call queues behind.
+                # (agent_cursors is the module-level import: a local
+                # `from core import agent_cursors` anywhere in this method
+                # makes the name local and these calls raise
+                # UnboundLocalError.)
+                try:
+                    if task.agent and not task.answered:
+                        try:
+                            agent_cursors.offer(app, task.agent)   # once per session, cursors off
+                        except Exception:
+                            pass
+                    if getattr(task, 'confirm', None) and not task.answered:
+                        if _ask_on_bar(self, app, task):
+                            continue  # Allow on the bar re-queues it
 
-                    agent_cursors.waiting(task.agent, task.tool_name, task.arguments, True)
-                    try:
-                        refusal = _ask_user_to_confirm(task)
-                    finally:
-                        agent_cursors.waiting(task.agent, task.tool_name, task.arguments, False)
-                    if refusal is not None:
-                        task.result = refusal
-                        task.exception = None
-                        task.done.set()
-                        continue
+                        agent_cursors.waiting(task.agent, task.tool_name, task.arguments, True)
+                        try:
+                            refusal = _ask_user_to_confirm(task)
+                        finally:
+                            agent_cursors.waiting(task.agent, task.tool_name, task.arguments, False)
+                        if refusal is not None:
+                            task.result = refusal
+                            task.exception = None
+                            task.done.set()
+                            continue
+                except Exception as e:
+                    task.exception = e
+                    task.result = None
+                    task.done.set()
+                    continue
                 is_write = task.tool_name in self.server._WRITE_TOOLS
                 if is_write:
                     self.server._write_in_progress = True
                 # Boxes a delete / move is about to change (agent cursors).
                 try:
-                    from core import agent_cursors
                     agent_cursors.before(app, task)
                 except Exception:
                     pass
@@ -414,7 +429,6 @@ try:
                 # After the caller has its result; off unless the user turned
                 # it on (Settings > Agent Cursors).
                 try:
-                    from core import agent_cursors
                     agent_cursors.notify(app, task)
                 except Exception:
                     pass
@@ -5288,7 +5302,6 @@ class T3LabAIServer(object):
             # only, runs on the Revit main thread (routed like any read tool).
             from Autodesk.Revit.DB import (BuiltInCategory as _B,
                                            BuiltInParameter as _BP, StorageType)
-            from Snippets._compat import elem_name
             import re as _re
             items, counts = [], {}
             view_only = bool(arguments.get('view_only'))
@@ -5842,17 +5855,17 @@ class T3LabAIServer(object):
             for elem in collector:
                 try:
                     cat_name = elem.Category.Name if elem.Category else 'Unknown'
-                    elem_name = elem.Name if hasattr(elem, 'Name') else ''
+                    el_name = elem_name(elem) or ''
                     type_name = ''
                     try:
                         type_elem = doc.GetElement(elem.GetTypeId())
                         if type_elem is not None:
-                            type_name = type_elem.Name if hasattr(type_elem, 'Name') else ''
+                            type_name = elem_name(type_elem) or ''
                     except Exception:
                         pass
                     elements_out.append({
                         'id': eid_value(elem.Id),
-                        'name': elem_name,
+                        'name': el_name,
                         'category': cat_name,
                         'type_name': type_name
                     })
@@ -7115,7 +7128,6 @@ class T3LabAIServer(object):
                                            ElementTransformUtils, Group,
                                            ElementType)
             from System.Collections.Generic import List
-            from Snippets._compat import elem_name
             op      = (arguments.get('operation') or '').lower()
             ids     = arguments.get('element_ids', [])
             cat_arg = arguments.get('category')
@@ -7548,7 +7560,6 @@ class T3LabAIServer(object):
             from Autodesk.Revit.DB import (Transaction, RevitLinkType,
                                            RevitLinkInstance, CADLinkType,
                                            ImportInstance)
-            from Snippets._compat import elem_name
             op = (arguments.get('operation') or '').lower()
             if op not in ('list', 'reload', 'unload', 'delete', 'pin', 'unpin'):
                 return {'error': 'Unknown operation: {}'.format(op),
@@ -8044,7 +8055,6 @@ class T3LabAIServer(object):
             # Same probe the badgeometry preflight check runs — one source of
             # truth for the geometry that kills the PDF/DWG exporter.
             from Snippets._geometry_probe import probe_element
-            from Snippets._compat import elem_name
 
             deep = bool(arguments.get('deep_probe'))
             try:
@@ -8196,7 +8206,6 @@ class T3LabAIServer(object):
                                            FilledRegion, FilledRegionType,
                                            ElementTypeGroup, View)
             from System.Collections.Generic import List as NetList
-            from Snippets._compat import elem_name
             op = (arguments.get('operation') or '').lower()
             if op not in ('filled_region', 'detail_line'):
                 return {'error': 'Unknown operation: {}'.format(op),

@@ -19,6 +19,9 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Added
+- **MCP Control — Connect installs the AutoCAD add-in:** pick AutoCAD or Civil 3D and click Connect: MCP Control downloads the T3Lab add-in (T3LabCAD) from GitHub and installs it for every AutoCAD and Civil 3D from 2022 to 2027, then connects your AI app. Restart AutoCAD once after the first install. Step 1 also lists the versions found on this PC. Civil 3D uses the AutoCAD add-in (`t3lab-autocad`); Navisworks, 3ds Max and Inventor say plainly that their add-in does not exist yet.
+
 ## [2.4.1] - 2026-11-17
 
 MCP fixes: AI-app tool calls no longer hang, Connect never wipes your AI-app config, Vietnamese names reach Revit intact, and read-only mode is enforced everywhere.

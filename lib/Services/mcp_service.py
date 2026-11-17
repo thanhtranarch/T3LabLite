@@ -414,10 +414,13 @@ MCP_SERVER_NAME = 't3lab-revit'
 # the rest wait for their add-in (owner, 2026-11-17). Order = the tab's list.
 AUTODESK_APPS = (
     # key,         label,        server name,        %APPDATA% folder,   add-in hint
+    # A folder named in Services.addin_installer.PACKAGES is installed by Connect.
+    # Civil 3D runs the AutoCAD add-in (T3LabCAD loads in every AutoCAD-based
+    # product), so it shares AutoCAD's bridge and server entry.
     ('autocad',    'AutoCAD',    't3lab-autocad',    'T3LabCAD',
-     'run scripts/install.ps1 from t3lab_CADmcp first'),
-    ('civil3d',    'Civil 3D',   't3lab-civil3d',    'T3LabCivil3D',
-     'install the T3Lab Civil 3D add-in first'),
+     'Connect installs it (AutoCAD and Civil 3D 2022-2027)'),
+    ('civil3d',    'Civil 3D',   't3lab-autocad',    'T3LabCAD',
+     'Connect installs it (the AutoCAD add-in also runs in Civil 3D 2022-2027)'),
     ('navisworks', 'Navisworks', 't3lab-navisworks', 'T3LabNavisworks',
      'install the T3Lab Navisworks add-in first'),
     ('3dsmax',     '3ds Max',    't3lab-3dsmax',     'T3LabMax',
@@ -1360,12 +1363,49 @@ class MCPService(object):
         Is this Autodesk app's add-in bridge deployed on this machine?
 
         Returns:
-            dict: installed (bool), path (str), label, server, hint
+            dict: installed (bool), path (str), label, server, hint,
+            installable (Connect can install it), years (versions found on this PC)
         """
         spec = _APP_BY_KEY[app]
         path = _app_bridge_path(app)
+        try:
+            from Services import addin_installer
+            installable = spec[3] in addin_installer.PACKAGES
+            years = addin_installer.installed_years(app)
+        except Exception:
+            installable, years = False, []
         return {'installed': os.path.isfile(path), 'path': path, 'label': spec[1],
-                'server': spec[2], 'hint': spec[4]}
+                'server': spec[2], 'hint': spec[4], 'installable': installable,
+                'years': years}
+
+    @staticmethod
+    def install_addin(app='autocad'):
+        """
+        Download and install the app's T3Lab add-in (bundle + bridge) from its
+        GitHub release (Services/addin_installer.py).
+
+        Returns:
+            (success: bool, message: str)
+        """
+        spec = _APP_BY_KEY[app]
+        try:
+            from Services import addin_installer
+        except Exception as ex:
+            return False, 'Add-in installer unavailable: {}'.format(ex)
+        if spec[3] not in addin_installer.PACKAGES:
+            return False, ('There is no T3Lab add-in for {} yet — AutoCAD and Civil 3D '
+                           'are supported today.'.format(spec[1]))
+        try:
+            source = _get_paths_module().load_settings().get(spec[3] + '_addin_url')
+        except Exception:
+            source = None
+        try:
+            result = addin_installer.install(spec[3], source=source)
+        except addin_installer.InstallError as ex:
+            return False, '{} add-in not installed: {}'.format(spec[1], ex)
+        except Exception as ex:
+            return False, '{} add-in install failed: {}'.format(spec[1], ex)
+        return True, addin_installer.summary(result)
 
     @staticmethod
     def cad_bridge_status():
@@ -1433,6 +1473,10 @@ class MCPService(object):
                 port = 0
                 app = _APP_BY_KEY[server]
                 bridge = _app_bridge_path(server)
+                if not os.path.isfile(bridge):
+                    ok, msg = MCPService.install_addin(server)
+                    if not ok:
+                        return False, msg
                 if not os.path.isfile(bridge):
                     return False, ('{} add-in not installed ({} is missing) — {}'.format(
                         app[1], bridge, app[4]))

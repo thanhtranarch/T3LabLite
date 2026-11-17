@@ -13,7 +13,7 @@ import time
 from core.agent_cursors import (
     ACTIONS, BOX_HOLD_S, DWELL_MS, FEED_SIZE, MAX_STOPS, MOVE_MS, IDLE_HIDE_S,
     OPTIONS, OPTION_LABELS, REPLAY_SIZE, SUMMARY_S, action_style,
-    agent_style, classify_action, counts_text, describe_call, hop_ms, next_speed,
+    agent_style, classify_action, counts_text, describe_call, hop_ms, next_speed, plan_rows,
     offscreen_markers, options, review_points, set_enabled, set_option, set_speed,
     speed, speed_factor, summary_lines, tour_schedule)
 
@@ -141,6 +141,7 @@ class _Overlay(object):
         self.host = host
         self._owner = owner_hwnd
         self._goals = {}            # agent -> goal banner text
+        self._plans = {}            # agent -> {'tasks': [...], 'step': n} (t3lab_narrate)
         self._working = {}          # 'agent|action' -> (started, caption)
         self._waiting = {}          # 'agent|action' -> caption
         self._history = []          # replayable show() records, oldest first
@@ -209,6 +210,7 @@ class _Overlay(object):
             self._hook(self._front_timer, 'Tick', self._on_front_tick)
             self._front_timer.Start()
         self._wanted = False        # overlay should be visible when Revit is in front
+        self._resting = False       # idle with Keep bar on: summary shown, nothing hidden
 
     # ── plumbing ──────────────────────────────────────────────────────────────
 
@@ -429,12 +431,20 @@ class _Overlay(object):
             row.ToolTip = '{}: {}'.format(tag, counts_text(counts))
             self._agents_panel.Children.Add(row)
         self._goal_panel.Children.Clear()
-        for agent in sorted(self._goals):
-            if self._goals[agent]:
-                tag, color = agent_style(agent)
+        for agent in sorted(set(self._goals) | set(self._plans)):
+            tag, color = agent_style(agent)
+            if self._goals.get(agent):
                 line = self._glyph_label('\uE7C1', u'{} · {}'.format(tag, self._goals[agent]),
                                          '#FDE68A', 11)
                 self._goal_panel.Children.Add(line)
+            for state, text in plan_rows(self._plans.get(agent) or {}):
+                glyph, tint = {'done': ('\uE73E', '#4ADE80'), 'current': ('\uE768', '#FDE68A'),
+                               'todo': ('\uEA3A', '#94A3B8')}[state]
+                row = self._glyph_label(glyph, text, tint if state != 'done' else '#CBD5E1', 11)
+                row.Margin = Thickness(16, 1, 0, 0)
+                row.ToolTip = u'{} · {}'.format(tag, {'done': 'done', 'current': 'now',
+                                                      'todo': 'next'}[state])
+                self._goal_panel.Children.Add(row)
         self._toggles.Children.Clear()
         opts = options()
         for name, _k, _d in OPTIONS:
@@ -872,13 +882,16 @@ class _Overlay(object):
         self.hud.Top = abottom / scale - (self.hud.ActualHeight or 48) - 16
         self._timer.Start()
 
-    def working(self, agent, action, caption, tool_name, rect):
-        """A call has started: spin, say "Working", count the seconds."""
+    def working(self, agent, action, caption, tool_name, rect, task_text=''):
+        """A call has started: spin, say "Working", count the seconds. With a
+        plan, the cursor names the current task and the call goes underneath."""
         self._end_summary()
         if not self.win.IsVisible or self._origin == (0.0, 0.0):
             self._place(rect)
         cur = self._cursor(agent, action)
         key = '{}|{}'.format(agent, action)
+        if task_text:
+            caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
         self._working[key] = (time.time(), caption)
         cur['tool'].Text = u'Working · {}'.format(caption)
         cur['tool_name'].Text = tool_name
@@ -918,10 +931,14 @@ class _Overlay(object):
         if self.hud.IsVisible:
             self._refresh_hud()
 
-    def narrate(self, agent, goal):
-        """t3lab_narrate: the agent's goal banner on the HUD + a feed line."""
+    def narrate(self, agent, goal, plan=None):
+        """t3lab_narrate: the agent's goal and task list on the HUD + a feed line
+        when the goal changes."""
+        changed = goal != self._goals.get(agent)
         self._goals[agent] = goal
-        if goal:
+        if plan and plan.get('tasks'):
+            self._plans[agent] = plan
+        if goal and changed:
             self._feed.insert(0, {'agent': agent, 'action': 'read', 'caption': u'Goal: ' + goal,
                                   'tool': 't3lab_narrate', 'failed': False, 'kind': 'goal'})
             del self._feed[FEED_SIZE:]
@@ -939,11 +956,12 @@ class _Overlay(object):
 
     def show(self, agent, action, tool_name, failed, snap, followed=(),
              args=None, n_targets=0, changes=(), clashes=(), touched=0, goal='',
-             record=True):
+             record=True, task_text=''):
         self._end_summary()
         if record:
             self._history.append((agent, action, tool_name, failed, _light(snap), list(followed),
-                                  args, n_targets, list(changes), list(clashes), touched, goal))
+                                  args, n_targets, list(changes), list(clashes), touched, goal,
+                                  task_text))
             del self._history[:-REPLAY_SIZE]
         self._touched = touched or self._touched
         if goal and agent not in self._goals:
@@ -954,6 +972,10 @@ class _Overlay(object):
 
         label, _glyph, acolor = action_style(action)
         caption = describe_call(tool_name, args, n_targets, failed)
+        detail = tool_name
+        if task_text:           # the plan's task leads; what the call did goes underneath
+            detail = u'{} · {}'.format(caption, tool_name)
+            caption = (u'Failed: ' if failed else u'') + task_text
         key = '{}|{}'.format(agent, action)
         cur = self._cursor(agent, action)
         self._working.pop(key, None)
@@ -963,7 +985,7 @@ class _Overlay(object):
         cur['tool_pill'].Opacity = 1.0
         cur['tool_pill'].BorderThickness = _thickness(1)
         cur['tool'].Text = caption
-        cur['tool_name'].Text = tool_name
+        cur['tool_name'].Text = detail
         cur['tool_pill'].BorderBrush = self._brush('#DC2626' if failed else acolor)
 
         for vid, name, is_new in followed:
@@ -1024,7 +1046,7 @@ class _Overlay(object):
         cur['group'].Opacity = 1.0
 
         self._feed.insert(0, {'agent': agent, 'action': action, 'caption': caption,
-                              'tool': tool_name, 'failed': failed})
+                              'tool': detail, 'failed': failed})
         for elem_id, others in clashes:
             self._feed.insert(0, {
                 'agent': agent, 'action': action, 'tool': tool_name, 'failed': True,
@@ -1129,21 +1151,32 @@ class _Overlay(object):
             self._replay[1] = k + 1
             self.show(rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], args=rec[6],
                       n_targets=rec[7], changes=rec[8], clashes=rec[9], touched=rec[10],
-                      goal=rec[11], record=False)
+                      goal=rec[11], record=False, task_text=rec[12])
             self._views_text.Text = u'Replay {} / {}'.format(k + 1, len(records))
         except Exception:
             self._replay = None
             self._replay_timer.Stop()
 
-    def _enter_summary(self):
-        """Agents idle: clear the canvas, the HUD becomes a summary card."""
+    def _keep(self):
+        try:
+            return bool(options().get('keep'))
+        except Exception:
+            return False
+
+    def _enter_summary(self, keep=False):
+        """Agents idle: the HUD adds a summary card. Keep bar on: cursors only
+        dim and both windows stay, so the next call does not make them blink;
+        off: the canvas is cleared and hidden."""
         from System.Windows import Thickness
         self._summary = time.time()
+        self._resting = keep
         for cur in self._cursors.values():
             cur['group'].BeginAnimation(_opacity_property(), None)
-        self.canvas.Children.Clear()
-        self._cursors = {}
-        self.win.Hide()
+            cur['group'].Opacity = 0.45
+        if not keep:
+            self.canvas.Children.Clear()
+            self._cursors = {}
+            self.win.Hide()
         self._summary_panel.Children.Clear()
         title = self._text(u'Agents are idle', 12)
         self._summary_panel.Children.Add(title)
@@ -1162,6 +1195,7 @@ class _Overlay(object):
     def _end_summary(self):
         if self._summary is not None:
             self._summary = None
+            self._resting = False
             self._summary_panel.Children.Clear()
 
     def _select_touched(self):
@@ -1183,6 +1217,7 @@ class _Overlay(object):
         self._working = {}
         self._waiting = {}
         self._goals = {}
+        self._plans = {}
         self._replay = None
         self._replay_timer.Stop()
         self._end_summary()
@@ -1205,11 +1240,13 @@ class _Overlay(object):
                 if self._summary is not None:
                     self._summary = now
             elif self._summary is not None:
-                if now - self._summary >= SUMMARY_S:
+                if now - self._summary >= SUMMARY_S and not self._keep():
                     self.hide()
             elif now - self._last >= IDLE_HIDE_S:
-                if self._actions:
-                    self._enter_summary()
+                keep = self._keep()
+                if self._actions or keep:
+                    self._enter_summary(keep)
+                    self._refresh_hud()
                 else:
                     self.hide()
         except Exception:
@@ -1223,7 +1260,7 @@ class _Overlay(object):
                 if not front and window.IsVisible:
                     window.Visibility = _visibility('Hidden')
                 elif front and self._wanted and not window.IsVisible and (
-                        window is self.hud or self._summary is None):
+                        window is self.hud or self._summary is None or self._resting):
                     window.Visibility = _visibility('Visible')
         except Exception:
             pass

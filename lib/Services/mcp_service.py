@@ -545,17 +545,20 @@ AI_CLIENTS = [
      'label': 'Claude Desktop',
      'fmt': 'json',
      'setting': 'claude_desktop_config',
-     'candidates': _claude_candidates},
+     'candidates': _claude_candidates,
+     'agent': 'claude-desktop'},
     {'key': 'chatgpt',
      'label': 'ChatGPT (Codex)',
      'fmt': 'toml',
      'setting': 'codex_config',
-     'candidates': _codex_candidates},
+     'candidates': _codex_candidates,
+     'agent': 'codex'},
     {'key': 'antigravity',
      'label': 'Antigravity',
      'fmt': 'json',
      'setting': 'antigravity_config',
-     'candidates': _antigravity_candidates},
+     'candidates': _antigravity_candidates,
+     'agent': 'antigravity'},
 ]
 
 
@@ -616,7 +619,14 @@ def _backup_once(path):
         pass
 
 
-def _server_entry(python, bridge, port, name=MCP_SERVER_NAME):
+def _agent_args(agent):
+    """['--agent=<id>']: the bridge names the AI app with it (Agent Cursors,
+    audit) instead of the app's self-declared clientInfo, which Antigravity
+    sends as 'local-agent-mode-...' (owner, 2026-11-17: shown as "Claude")."""
+    return ['--agent={}'.format(agent)] if agent else []
+
+
+def _server_entry(python, bridge, port, name=MCP_SERVER_NAME, agent=None):
     """The JSON object describing our stdio server (Claude / Antigravity)."""
     if name in _BRIDGE_SERVERS:
         # -I = isolated: pyRevit's machine-wide PYTHONPATH cannot break it.
@@ -624,7 +634,7 @@ def _server_entry(python, bridge, port, name=MCP_SERVER_NAME):
     return {
         'type': 'stdio',
         'command': python,
-        'args': ['-E', bridge, str(port)],
+        'args': ['-E', bridge, str(port)] + _agent_args(agent),
         'env': {'PYTHONPATH': ''},
     }
 
@@ -654,10 +664,18 @@ def _write_text(path, text):
 def _json_is_configured(path, name=MCP_SERVER_NAME):
     config = _read_json_config(path)
     servers = config.get('mcpServers') if isinstance(config, dict) else None
-    return name in (servers or {})
+    entry = (servers or {}).get(name)
+    if entry is None:
+        return False
+    if name == MCP_SERVER_NAME:
+        # An entry from before --agent (2026-11-17) runs under the app's
+        # self-declared name: show Connect again so one click updates it.
+        args = entry.get('args') if isinstance(entry, dict) else None
+        return any('{}'.format(a).startswith('--agent=') for a in (args or []))
+    return True
 
 
-def _write_json_config(path, python, bridge, port, name=MCP_SERVER_NAME):
+def _write_json_config(path, python, bridge, port, name=MCP_SERVER_NAME, agent=None):
     import json as _json
     import codecs
 
@@ -678,7 +696,7 @@ def _write_json_config(path, python, bridge, port, name=MCP_SERVER_NAME):
         servers = {}
         config['mcpServers'] = servers
 
-    entry = _server_entry(python, bridge, port, name)
+    entry = _server_entry(python, bridge, port, name, agent)
     # Antigravity stamps its own entries with a protobuf type marker; keep it
     # if a previous entry had one so the client still recognises the record.
     previous = servers.get(name)
@@ -714,11 +732,12 @@ def _toml_quote(value):
     return value.replace('\\', '\\\\').replace('"', '\\"')
 
 
-def _codex_block(python, bridge, port, name=MCP_SERVER_NAME):
+def _codex_block(python, bridge, port, name=MCP_SERVER_NAME, agent=None):
     if name in _BRIDGE_SERVERS:
         args = 'args = ["-I", "{}"]\n'.format(_toml_quote(bridge))
     else:
-        args = 'args = ["{}", "{}"]\n'.format(_toml_quote(bridge), port)
+        args = 'args = [{}]\n'.format(', '.join('"{}"'.format(_toml_quote(a)) for a in
+                                               [bridge, str(port)] + _agent_args(agent)))
     return (
         '[mcp_servers.{}]\n'.format(name) +
         'type = "stdio"\n' +
@@ -774,13 +793,19 @@ def _read_toml_text(path):
 
 def _toml_is_configured(path, name=MCP_SERVER_NAME):
     section_re = _toml_section_re(name)
+    inside = found = False
     for line in _read_toml_text(path).splitlines():
         if section_re.match(line):
+            inside = found = True
+            continue
+        if inside and _TOML_HEADER_RE.match(line):
+            inside = False
+        if inside and name == MCP_SERVER_NAME and '--agent=' in line:
             return True
-    return False
+    return found and name != MCP_SERVER_NAME     # revit entry without --agent: Connect again
 
 
-def _write_toml_config(path, python, bridge, port, name=MCP_SERVER_NAME):
+def _write_toml_config(path, python, bridge, port, name=MCP_SERVER_NAME, agent=None):
     # A read error (non-UTF-8 byte, file locked) must not turn into '' and
     # overwrite the user's providers and servers: let configure_client
     # report it.
@@ -795,7 +820,7 @@ def _write_toml_config(path, python, bridge, port, name=MCP_SERVER_NAME):
         os.makedirs(cfg_dir)
 
     _backup_once(path)
-    _write_text(path, _toml_upsert(text, _codex_block(python, bridge, port, name), name))
+    _write_text(path, _toml_upsert(text, _codex_block(python, bridge, port, name, agent), name))
 
 
 # ─── MCPService ────────────────────────────────────────────────────────────────
@@ -1519,10 +1544,11 @@ class MCPService(object):
                         port = 48884
                 bridge = _get_bridge_path()
 
+            agent = None if name in _BRIDGE_SERVERS else spec.get('agent')
             if spec['fmt'] == 'toml':
-                _write_toml_config(path, python, bridge, port, name)
+                _write_toml_config(path, python, bridge, port, name, agent)
             else:
-                _write_json_config(path, python, bridge, port, name)
+                _write_json_config(path, python, bridge, port, name, agent)
             return True, path
         except Exception as ex:
             return False, str(ex)

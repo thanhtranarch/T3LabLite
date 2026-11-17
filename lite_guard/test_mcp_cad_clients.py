@@ -116,8 +116,13 @@ def test_json_keeps_revit_and_others():
         check('cad command', cad.get('command') == PY)
         check('status configured',
               M.MCPService.client_status('claude', server='autocad')['configured'])
-        check('revit status still configured',
-              M.MCPService.client_status('claude')['configured'])
+        check('an old revit entry (no --agent) asks for Connect again',
+              M.MCPService.client_status('claude')['configured'] is False)
+        servers['t3lab-revit'] = dict(revit, args=revit['args'] + ['--agent=claude-desktop'])
+        with open(env.paths['claude'], 'w') as f:
+            json.dump({'mcpServers': servers}, f)
+        check('revit entry with --agent is configured',
+              M.MCPService.client_status('claude')['configured'] is True)
         check('backup written', os.path.isfile(env.paths['claude'] + '.t3lab-backup'))
 
 
@@ -173,8 +178,14 @@ def test_snippets_and_revit_default():
         ok, msg = M.MCPService.configure_client('antigravity', port=48885)
         data = _json(env.paths['antigravity'])
         check('revit configure default server',
-              ok and data['mcpServers']['t3lab-revit']['args'] == ['-E', 'C:/T3LabAI/bridge.py', '48885'],
+              ok and data['mcpServers']['t3lab-revit']['args'] == [
+                  '-E', 'C:/T3LabAI/bridge.py', '48885', '--agent=antigravity'],
               str(data))
+        ok, msg = M.MCPService.configure_client('chatgpt', port=48885)
+        toml = open(env.paths['chatgpt'], encoding='utf-8').read()
+        check('Codex entry names its agent', ok and '"48885", "--agent=codex"]' in toml, toml)
+        check('Codex entry with --agent is configured',
+              M.MCPService.client_status('chatgpt')['configured'] is True)
         try:
             M.MCPService.config_snippet(server='nope')
             check('unknown server raises', False)

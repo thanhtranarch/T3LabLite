@@ -19,9 +19,13 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-11-17
+
+A new Agent Cursors bar with a minimal cursor and a Pause button, and Connect keeps the AutoCAD add-in up to date.
+
 ### Changed
-- **Agent Cursors — every option on by default:** Follow, Zoom, Select, Tile, Less motion, Glow and Keep bar start switched on. An option you already turned off stays off.
 - **Agent Cursors — new bar and a minimal cursor:** the cursor is a small pointer with one tag ("Claude · Moving 12 walls") instead of an arrow with two labels. The bar shows each AI app (its pointer is its avatar), a status (Working 8 s, Waiting for your OK, Paused, Idle), the goal with its progress, what runs now and the values it changed, and the last 3 steps; the 7 option chips moved into ⚙ Options. It follows Revit's light or dark theme, can be dragged anywhere (double-click puts it back) and folds to one line after 10 s without a call (the mouse opens it; Allow / Deny show on that line). Many targets get one frame round them all.
+- **Agent Cursors — every option on by default:** Follow, Zoom, Select, Tile, Less motion, Glow and Keep bar start switched on. An option you already turned off stays off.
 - **Agent Cursors — Pause:** ⏸ on the bar holds every model change until you click ▶; read-only tools keep running and the AI app is told it is paused.
 - **Agent Cursors — Glow turns itself off** when Revit cannot draw it, with a note on the bar, instead of failing on every call.
 - **Agent Cursors — options in the Settings dialog:** Settings › Agent Cursors now shows a checkbox for each option (Follow, Zoom, Select, Tile, Less motion, Glow, Keep bar) instead of a line of text. Tick what you want and click Turn On; when the cursors are on, the same dialog saves your changes or turns them off.

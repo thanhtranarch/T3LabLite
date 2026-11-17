@@ -2,16 +2,16 @@
 """Install a T3Lab add-in for another Autodesk app from its GitHub release, so
 MCP Control's Connect works without a manual setup (owner, 2026-11-17).
 
-Packages (repo thanhtranarch/t3lab_CADmcp, scripts/package.py there):
-T3LabCAD (AutoCAD and Civil 3D 2022-2027) and T3LabMax (3ds Max 2022-2027).
-Each release zip holds
+One package, built by CI in thanhtranarch/t3lab_CADmcp (scripts/package.py):
+T3LabCAD, AutoCAD and Civil 3D 2022-2027. Only add-ins CI builds and Connect
+installs in one click are listed (owner, 2026-11-17). The release zip holds
     <Package>.bundle/...  -> %APPDATA%\\Autodesk\\ApplicationPlugins\\<Package>.bundle
     <Package>/...         -> %APPDATA%\\<Package>  (bridge.py, tools_snapshot.json)
     manifest.json         {"name": "<Package>", "version": ...}
 A file the host app holds open (AutoCAD's loader DLL) is skipped and reported:
 closing the app and connecting again updates it.
 
-mcp_paths.json "<package>_addin_url" (e.g. "T3LabMax_addin_url") points at
+mcp_paths.json "<package>_addin_url" (e.g. "T3LabCAD_addin_url") points at
 another zip: an https URL or a local file (offline installs).
 
 Engine-agnostic (CPython 3 + IronPython 2.7). Test: lite_guard/test_addin_installer.py.
@@ -35,21 +35,11 @@ PACKAGES = {
         'old': ('T3LabCAD.Core.dll', 'T3LabCAD.Core.pdb',
                 'T3LabCAD.Loader.dll', 'T3LabCAD.Loader.pdb'),   # pre-1.1 layout
     },
-    'T3LabMax': {
-        'url': _RELEASE + 'T3LabMax.zip',
-        'bundle': 'T3LabMax.bundle',
-        'apps': '3ds Max 2022-2027',
-        'host': '3ds Max',
-        'old': (),
-    },
 }
 # Folders inside Program Files\Autodesk, per app: (prefix, subfolder that must exist or '').
 _PRODUCTS = {
     'autocad': (('AutoCAD 20', ''),),
     'civil3d': (('AutoCAD 20', 'C3D'), ('Civil 3D 20', '')),
-    'navisworks': (('Navisworks Manage 20', ''), ('Navisworks Simulate 20', ''),
-                   ('Navisworks Freedom 20', '')),
-    '3dsmax': (('3ds Max 20', ''),),
 }
 MIN_YEAR = 2022
 TIMEOUT_S = 60

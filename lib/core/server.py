@@ -3120,6 +3120,17 @@ class T3LabAIServer(object):
                       if mcp_policy.tool_visible(name, policy, read_only)]
         }
 
+    def _assistant_tools_list(self):
+        """Every registered tool, for the in-app Assistant. The MCP policy
+        (read-only, toolsets, code off) is for EXTERNAL clients only
+        (core/mcp_policy.py): ticking "Read-only" in MCP Control must not
+        strip place_wall & co. from the Assistant's own catalogue."""
+        read_only = self._read_only_tool_names()
+        return {
+            'tools': [mcp_policy.list_entry(tool, read_only)
+                      for _name, tool in sorted(self._tools.items())]
+        }
+
     def _external_policy_check(self, tool_name, arguments):
         """(decision, message, confirm) for one external tools/call — see
         core.mcp_policy.check_call. `confirm` is the dialog text when the

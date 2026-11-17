@@ -1,7 +1,7 @@
 # T3Lab Lite
 
 **T3Lab Lite** is a pyRevit extension running on **CPython 3** built for Revit users who want to work faster.
-It covers batch export, sheet & view management, datum & crop synchronization, CAD-to-BIM conversion, model auditing, rebar and assembly detailing (cast units, drawing cloning, BVBS export), IFC-SG compliance, family generation and management, a built-in AI assistant that runs Revit tools from plain Vietnamese or English, and MCP integration that lets Claude AI work with Revit directly.
+It covers batch export, sheet & view management, datum & crop synchronization, CAD-to-BIM conversion, model auditing, rebar and assembly detailing (cast units, drawing cloning, BVBS export), IFC-SG compliance, family generation and management, a built-in AI assistant that runs Revit tools from plain Vietnamese or English, MCP integration that lets Claude, ChatGPT (Codex) and other AI apps work with Revit — and with AutoCAD and other Autodesk apps through their T3Lab add-ins — and Agent Cursors, a live view of what each AI app is doing in the model.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's new in each release.
 
@@ -52,6 +52,8 @@ Tools that process many elements — Model Auditor, ManaSheets, ManaViews, Sheet
 #### T3Lab Assistant
 The AI assistant, in Revit. Ask about the model or tell it what to change, in Vietnamese or English — it calls real Revit tools, opens T3Lab tools for you, and by default presents a plan and waits for your confirmation before changing the model (deletes always ask). It opens from the **T3Lab Assistant** button on this panel as a window, docks as a native Revit pane beside Properties / Project Browser, and is also in the right-click menu (Revit 2025+).
 
+The first time it opens it asks what to call you (once), or keeps the name you set in an earlier install; change it in **LLMs Setting → General**. The name is saved on this computer only, in `%APPDATA%\T3LabAI\t3lablite_user.json`, separate from T3Lab AI's files in the same folder.
+
 - **Skills** — reusable instruction packs that activate on what you ask, 33 built in (ISO 19650 naming, LOD, worksets, QA checklist, BEP, COBie handover, clash coordination, sheet & annotation standards, construction wiki and drawing-completion rules, …). Type `/skill-name` to force one, or install more from a GitHub repo — Claude's `SKILL.md` format is read as-is.
 - **Knowledge (RAG)** — index folders of PDF / TXT / MD and get answers with citations. Keyword search works offline; semantic search is optional and runs on a local Ollama embedding model.
 - **Projects** — per-project chat history, custom instructions, default model, knowledge folders, remembered facts, and daily scheduled prompts.
@@ -62,8 +64,11 @@ The AI assistant, in Revit. Ask about the model or tell it what to change, in Vi
 - **Spell check** — proofread every Text Note in the model or just the active view.
 
 #### Settings (pulldown)
-- **MCP Control** — start and stop the local MCP server that lets Claude AI (and other MCP clients) interact directly with Revit, connect Claude Desktop / Codex / Antigravity in one click, pick the port (48884–48894) and set what AI apps may do (read-only mode, confirmations, code execution — see [MCP security](#mcp-security)).
-- **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, Gemini, DeepSeek, any OpenAI-compatible server — OpenRouter, Azure OpenAI, vLLM/LiteLLM, Groq, Mistral, xAI —, Ollama, LM Studio), model, API key or server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs.
+- **MCP Control** — connect AI apps to Revit and other Autodesk apps. Two tabs:
+  - **Connect** — pick the app at the top: **Revit**, or **AutoCAD**, **Civil 3D**, **Navisworks**, **3ds Max**, **Inventor**. For Revit, step 1 starts and stops the local MCP server; for another app, it shows whether that app's T3Lab add-in (its MCP bridge) is installed. Step 2 connects Claude Desktop / ChatGPT (Codex) / Antigravity to the picked app in one click; **Manual config** at the bottom gives the JSON, TOML or `claude mcp add` entry for any other AI app. The last app you picked is remembered. See [MCP for other Autodesk apps](#mcp-for-other-autodesk-apps).
+  - **Advanced** — auto-start, port (48884–48894), what AI apps may do (read-only mode, confirmations, code execution, toolset — see [MCP security](#mcp-security)), the file task watcher and teaching capture.
+- **Agent Cursors** — see what AI apps do in Revit while they work (off by default). See [Agent Cursors](#agent-cursors).
+- **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, Gemini, DeepSeek, any OpenAI-compatible server — OpenRouter, Azure OpenAI, vLLM/LiteLLM, Groq, Mistral, xAI —, Ollama, LM Studio), API key or server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", auto model, deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs. There is no model list to pick from: with **Auto model** (General) Claude picks Haiku, Sonnet or Opus for each request; other providers use their default model, and **Custom** uses the model name you type.
 - **Feedback** — send feedback or suggestions to the T3Lab team directly from Revit.
 - **ManaTabs** — hide or show Revit ribbon tabs to reduce clutter.
 - **Ribbon Names** — shorten or restore ribbon tab names with inline editing and saved mappings.
@@ -194,6 +199,81 @@ Manage sheets in one unified interface — browse with live search, sync sheet d
 Export sheets to PDF, DWG, NWD, and IFC formats in batch.
 Supports combined PDF, custom naming patterns, sheet ordering, and revision tracking.
 
+- **Export report** — after each export, `BatchOut_Report_<date_time>.xlsx` (or `.csv`) in the output folder lists every sheet / view and format with its status, the reason for a failure, the file path and size.
+- **Profiles** — save the current settings as a profile (to a shared folder for your team) and import a profile from any folder.
+- **Skip image reference files (DWG)** — Revit writes every image in a view or title block (logos) as a separate file next to the DWG. Turn this on to export the DWG without images and without those files. Off by default; saved in the profile.
+
+---
+
+### Agent Cursors
+
+**Support ▸ Settings ▸ Agent Cursors** turns on a live overlay of what each AI
+app does in Revit through MCP (off by default; the button lists the benefits
+and drawbacks before you switch).
+
+- **One cursor per AI app and action** — Read, Create, Modify, Delete, View,
+  Export, Code — in the app's colour, with a plain caption of what it does
+  ("Moving elements · 3 elements") and the MCP tool name under it.
+- **Move, click, next** — the cursor visits each element the call works on;
+  a box with the category and size ("Walls · 1200 × 300") appears as it
+  arrives. New elements grow in, edits pulse, deletes show a red cross, moves
+  leave a dashed ghost. A read or review scans the view instead.
+- **Goal and changes** — an AI app can show its goal over the model with the
+  MCP tool `t3lab_narrate` ("Renumber the doors on Level 2"). Changed values
+  show under the box: `Comments: "" → Checked`.
+- **While it works** — long calls say "Working 8 s"; a call waiting for your
+  OK pulses amber. Two AI apps editing the same element flash it red.
+  Targets outside the view get an edge arrow with a count.
+- **Follow** opens the views the AI works in, **Zoom** brings off-screen
+  targets into view; **Select**, **Tile**, **Less motion**, **Speed** (Calm /
+  Normal / Fast) and **Glow** (experimental: outlines the touched elements
+  inside 3D views) switch on the bar at the bottom of the view.
+- **When the AI goes idle** — a summary per AI app, **Select touched**
+  (selects every element the AI changed; no model change) and **Replay** of
+  the last 20 steps. The **X** on the bar turns the cursors off.
+
+Each tool call does a little extra work (bounding boxes of up to 12
+elements), Follow switches the active view, and the overlay shows up in
+screenshots and screen recordings.
+
+### MCP for other Autodesk apps
+
+MCP Control → **Connect** registers more than Revit: pick **AutoCAD**,
+**Civil 3D**, **Navisworks**, **3ds Max** or **Inventor** and connect your AI
+app to it. Each app is reached through its own T3Lab add-in, which puts an
+MCP bridge at `%APPDATA%\<folder>\bridge.py`; the AI app runs it with
+`python -I` and the bridge finds the app by itself (no port).
+
+| App | MCP server | Bridge |
+|---|---|---|
+| Revit | `t3lab-revit` | this extension (MCP Control starts the server) |
+| AutoCAD | `t3lab-autocad` | `%APPDATA%\T3LabCAD\bridge.py` — T3LabCAD add-in |
+| Civil 3D | `t3lab-civil3d` | `%APPDATA%\T3LabCivil3D\bridge.py` |
+| Navisworks | `t3lab-navisworks` | `%APPDATA%\T3LabNavisworks\bridge.py` |
+| 3ds Max | `t3lab-3dsmax` | `%APPDATA%\T3LabMax\bridge.py` |
+| Inventor | `t3lab-inventor` | `%APPDATA%\T3LabInventor\bridge.py` |
+
+Today only the AutoCAD add-in ships. For the other apps MCP Control shows
+"add-in not installed" with the expected path and keeps **Connect** off until
+the add-in puts its bridge there. A bridge somewhere else can be set with
+`"<app>_bridge": "<path>"` (e.g. `"navisworks_bridge"`) in
+`%APPDATA%\T3LabAI\mcp_paths.json`. MCP Control does not write to Claude
+Desktop's config while Claude Desktop is running (it would drop the entry
+when it quits) — quit it from the tray icon first.
+
+### Slow tool opens
+
+To see where the time goes when a tool opens, turn on the timing log
+(PowerShell):
+
+    New-Item "$env:APPDATA\T3LabAI\open_timing.on" -Force
+
+then restart Revit and open the slow tools. Each window adds one line to
+`%APPDATA%\T3LabAI\open_times.log` with the time of every step (bootstrap,
+imports, XAML, wiring, the tool's own data load, layout, first draw); the
+slowest step is marked `*`. Delete `open_timing.on` to stop. Send the log
+with a bug report.
+
 ---
 
 ### Network Traffic
@@ -212,13 +292,16 @@ choose **Allow** in the question Revit shows once (see
 | Skills install | `api.github.com` — zipball of the repo you paste | User installs or updates skills |
 | Knowledge (semantic search) | Ollama on `localhost`; the first enable downloads the embedding model (~270 MB) | User turns semantic search on |
 | MCP Server | `127.0.0.1:48884`–`48894` only (never reachable from the network), bearer token from `%APPDATA%\T3LabAI\mcp_token.txt` | Only while the MCP server is running |
+| Other Autodesk apps (MCP Control → Connect) | None — writes the AI app's local config file only; the add-in bridge talks to its app on this computer | User clicks Connect |
+| Agent Cursors | None — drawn locally over Revit | Only while turned on |
 | Usage tracking | `t3lab.space/api/revit/tracking` — a random install ID made on this computer, Revit version, a salted code of the model title (not the title), ribbon button or MCP tool name, result and redacted arguments; the server also sees the sender's IP address. This is still personal data (pseudonymous). Never sent: code, secrets, full paths, prompts and other free text, e-mails, phone numbers, user names. See [docs/PRIVACY.md](docs/PRIVACY.md) | Revit start, ribbon click, MCP tool call — **only after you choose Allow** (asked once on the first Revit start). Withdraw with `"tracking_enabled": false` in `%APPDATA%\T3LabAI\mcp_paths.json` |
 | ManaFami (Cloud) | User-configured Vercel URL in `~/.t3lab/family_loader_config.json` | User opens the cloud family catalogue |
 | Feedback | None — opens a `mailto:` link in the default email client | User sends feedback |
 | Cloud Links | `acc.autodesk.com` / `health.autodesk.com` / `status.bluebeam.com` / `pdf.t3lab.space` | Opens in the default browser on click |
 
-API keys, chat history, projects, attachments and the knowledge index stay on
-the machine under `%APPDATA%\T3LabAI`.
+API keys, chat history, projects, attachments, the knowledge index, your
+display name (`t3lablite_user.json`) and the timing log stay on the machine
+under `%APPDATA%\T3LabAI`.
 
 ### MCP security
 
@@ -234,6 +317,9 @@ Change them in **MCP Control → Advanced → Security**, or in
 | `mcp_code_execution` | `"ask"` | `send_code_to_revit`: `"off"` hides and refuses it, `"ask"` asks in Revit each time, `"allow"` runs it without asking |
 | `mcp_toolset` | `"full"` | Which tools AI apps see: `"full"` (all), `"standard"` (no teaching / training tools), `"documentation"` (read tools plus views, sheets, annotation, schedules, revisions and export — nothing that models or deletes). Fewer tools means fewer tokens on every request. A hidden tool is refused, also inside `run_batch` |
 | `auto_start_file_watcher` | `false` | The file task watcher (`~/T3Lab_AI_Data/task.json`) runs code with no token, so it only starts with Revit after you click **Start Watcher** once |
+
+`t3lab_narrate` (the Agent Cursors goal banner) changes nothing, so it stays
+available in read-only mode.
 
 The Revit question says what the call does, e.g. *Delete 3 elements (id 101,
 102, 103)?* For `send_code_to_revit` it shows the purpose the AI gives in the

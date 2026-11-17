@@ -4069,7 +4069,9 @@ class T3LabAIServer(object):
             return rejected
         if tool_name == agent_cursors.NARRATE_TOOL:
             # Overlay only: no Revit, never queued behind the ExternalEvent.
-            return agent_cursors.narrate(agent, (arguments or {}).get('message'))
+            args = arguments or {}
+            return agent_cursors.narrate(agent, args.get('message'), args.get('tasks'),
+                                         args.get('step'), bool(args.get('done')))
         if tool_name == mcp_wiki.TOOL_NAME:
             # Wiki pages are files, not Revit: answered on this thread, with or
             # without a document, never queued behind the ExternalEvent.

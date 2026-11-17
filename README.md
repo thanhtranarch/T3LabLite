@@ -218,9 +218,13 @@ and drawbacks before you switch).
   a box with the category and size ("Walls · 1200 × 300") appears as it
   arrives. New elements grow in, edits pulse, deletes show a red cross, moves
   leave a dashed ghost. A read or review scans the view instead.
-- **Goal and changes** — an AI app can show its goal over the model with the
-  MCP tool `t3lab_narrate` ("Renumber the doors on Level 2"). Changed values
-  show under the box: `Comments: "" → Checked`.
+- **Goal, tasks and changes** — an AI app shows its goal and its list of
+  tasks over the model with the MCP tool `t3lab_narrate` ("Renumber the
+  doors on Level 2": 1 Read the doors · 2 Number them · 3 Check). The bar
+  ticks the tasks off, and while a task runs the cursor names it ("Step 2/3 ·
+  Number them") instead of the tool. Code an AI runs is named by its
+  description or by the code itself ("Editing stairs"), not "Running code".
+  Changed values show under the box: `Comments: "" → Checked`.
 - **While it works** — long calls say "Working 8 s"; a call waiting for your
   OK pulses amber. Two AI apps editing the same element flash it red.
   Targets outside the view get an edge arrow with a count.
@@ -230,7 +234,9 @@ and drawbacks before you switch).
   inside 3D views) switch on the bar at the bottom of the view.
 - **When the AI goes idle** — a summary per AI app, **Select touched**
   (selects every element the AI changed; no model change) and **Replay** of
-  the last 20 steps. The **X** on the bar turns the cursors off.
+  the last 20 steps. **Keep bar** (on by default) keeps the bar and the
+  dimmed cursors on screen between calls, so they do not blink on and off
+  while you work with an AI app. The **X** on the bar turns the cursors off.
 
 Each tool call does a little extra work (bounding boxes of up to 12
 elements), Follow switches the active view, and the overlay shows up in

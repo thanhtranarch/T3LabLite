@@ -4888,8 +4888,10 @@ class ExportManagerWindow(T3WPFWindow):
         pages = []          # (item, path) in print order
         exported_count = 0
         misses = 0
+        old_print_to_file = None
         try:
             old_printer = pm.PrinterName
+            old_print_to_file = bool(pm.PrintToFile)
         except Exception:
             pass
         try:
@@ -4897,8 +4899,13 @@ class ExportManagerWindow(T3WPFWindow):
             group.Start()
             session.start(work_folder)
             pm.SelectNewPrintDriver(printer)
-            pm.PrintToFile = False
+            # Revit can class PDF24 as a virtual printer, and then refuses
+            # PrintToFile = False (owner, 2026-11-17): print to a file and
+            # turn PostScript into PDF with PDF24's Ghostscript.
+            virtual = self._pdf24_is_virtual(pm)
+            pm.PrintToFile = virtual
             pm.Apply()
+            gs = batchout_pdf24.find_ghostscript() if virtual else None
 
             for index, item in enumerate(items):
                 label = str(getattr(item, 'SheetNumber', 'Unknown'))
@@ -4927,10 +4934,13 @@ class ExportManagerWindow(T3WPFWindow):
                     prev_mtime = os.path.getmtime(expected_file) if os.path.exists(expected_file) else None
 
                     size, orientation = self._pdf24_paper_for(item)
+                    prn = batchout_pdf24.prn_path(work_folder, filename) if virtual else None
+                    if prn and os.path.exists(prn):
+                        os.remove(prn)
                     trans = Transaction(self.doc, "PDF24 page setup")
                     trans.Start()
                     try:
-                        note = self._pdf24_page_setup(pm, size, orientation)
+                        note = self._pdf24_page_setup(pm, size, orientation, prn)
                         trans.Commit()
                     except Exception:
                         trans.RollBack()
@@ -4947,8 +4957,9 @@ class ExportManagerWindow(T3WPFWindow):
                     found = batchout_pdf24.wait_for_pdf(
                         expected_file, prev_mtime, started_at, self.PDF24_PAGE_TIMEOUT,
                         taken=[p for p in taken if p != expected_file.lower()]
-                        + [page[1] for page in pages])
-                    if found is None:
+                        + [page[1] for page in pages], extra=[prn] if prn else ())
+                    if found is not None:
+                        found = self._pdf24_as_pdf(found, expected_file, gs)
                         misses += 1
                         self._note_failure(label, "PDF", "PDF24 saved no file within {:.0f} s"
                                            .format(self.PDF24_PAGE_TIMEOUT))
@@ -4980,6 +4991,9 @@ class ExportManagerWindow(T3WPFWindow):
             if old_printer:
                 try:
                     pm.SelectNewPrintDriver(old_printer)
+                    if old_print_to_file is not None and not self._pdf24_is_virtual(pm):
+                        pm.PrintToFile = old_print_to_file
+                    pm.Apply()
                 except Exception as ex:
                     logger.debug("Could not reselect printer '{}': {}".format(old_printer, ex))
             if group is not None:
@@ -4993,6 +5007,43 @@ class ExportManagerWindow(T3WPFWindow):
             shutil.rmtree(work_folder, ignore_errors=True)
         return exported_count
 
+    @staticmethod
+    def _pdf24_is_virtual(pm):
+        """True when Revit treats the selected printer as virtual
+        (PrintManager.IsVirtual != None): it must then print to a file."""
+        try:
+            return '{}'.format(pm.IsVirtual) != 'None'
+        except Exception:
+            return False
+
+    def _pdf24_as_pdf(self, path, expected_file, gs):
+        """The printed file as a real PDF at `path` or converted; raises when it
+        is neither PDF nor PostScript, or PostScript without Ghostscript."""
+        import subprocess
+        kind = batchout_pdf24.sniff(path)
+        if kind == 'pdf':
+            return path
+        if kind != 'ps':
+            raise RuntimeError("PDF24 printed a file that is neither PDF nor PostScript ({})"
+                               .format(os.path.basename(path)))
+        if not gs:
+            raise RuntimeError("Revit printed PostScript to a file and PDF24's Ghostscript "
+                               "(PDF24\\gs\\bin\\gswin64c.exe) was not found to turn it into PDF")
+        if os.path.exists(expected_file) and path.lower() != expected_file.lower():
+            os.remove(expected_file)
+        target = expected_file if path.lower() != expected_file.lower() else expected_file + '.tmp.pdf'
+        cmd = batchout_pdf24.ps_to_pdf_command(gs, path, target)
+        subprocess.call(cmd, timeout=300, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if batchout_pdf24.sniff(target) != 'pdf':
+            raise RuntimeError("Ghostscript could not turn PDF24's PostScript into PDF")
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        if target != expected_file:
+            os.rename(target, expected_file)
+        return expected_file
+
     def _pdf24_paper_for(self, item):
         """(paper size, orientation) for one item, same rules as the Revit engine."""
         is_auto = self.pdf_auto_detect_size.IsChecked
@@ -5001,9 +5052,10 @@ class ExportManagerWindow(T3WPFWindow):
             return self.get_sheet_paper_size_and_orientation(item.Sheet)
         return manual, ("Landscape" if self.pdf_landscape.IsChecked else "Portrait")
 
-    def _pdf24_page_setup(self, pm, size, orientation):
-        """InSession print parameters for one page (open transaction). Returns a
-        note when PDF24 has no such paper (the current paper is kept)."""
+    def _pdf24_page_setup(self, pm, size, orientation, print_file=None):
+        """InSession print parameters for one page (open transaction); print_file:
+        the print-to-file name for a virtual printer. Returns a note when PDF24
+        has no such paper (the current paper is kept)."""
         setup = pm.PrintSetup
         try:
             setup.CurrentPrintSetting = setup.InSession
@@ -5043,6 +5095,8 @@ class ExportManagerWindow(T3WPFWindow):
                 params.Zoom = 100
             except Exception as ex:
                 logger.debug("Print zoom not set: {}".format(ex))
+        if print_file:
+            pm.PrintToFileName = print_file
         pm.Apply()
         return note
 

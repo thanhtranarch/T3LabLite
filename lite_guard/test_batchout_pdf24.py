@@ -170,6 +170,57 @@ class WaitTests(unittest.TestCase):
         self.assertIsNone(self.wait(expected, taken=[other], timeout=1))
 
 
+class VirtualPrinterTests(unittest.TestCase):
+    """Revit can class PDF24 as a virtual printer and refuse PrintToFile = False
+    (owner, 2026-11-17): it prints to a file, PostScript goes through Ghostscript."""
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+
+    def write(self, name, data):
+        path = os.path.join(self.temp.name, name)
+        with open(path, 'wb') as f:
+            f.write(data)
+        return path
+
+    def test_sniff(self):
+        self.assertEqual(pdf24.sniff(self.write('a.pdf', b'%PDF-1.7\n...')), 'pdf')
+        self.assertEqual(pdf24.sniff(self.write('b.prn', b'%!PS-Adobe-3.0\n')), 'ps')
+        pjl = b'\x1b%-12345X@PJL JOB\r\n@PJL ENTER LANGUAGE=POSTSCRIPT\r\n%!PS-Adobe-3.0\n'
+        self.assertEqual(pdf24.sniff(self.write('c.prn', pjl)), 'ps')
+        self.assertEqual(pdf24.sniff(self.write('d.prn', b'\x00\x01binary')), 'other')
+        self.assertIsNone(pdf24.sniff(os.path.join(self.temp.name, 'missing')))
+
+    def test_ghostscript(self):
+        env = {'ProgramFiles': 'C:/PF'}
+        want = os.path.join('C:/PF', 'PDF24', 'gs', 'bin', pdf24.GS_EXE)
+        self.assertEqual(pdf24.find_ghostscript(env, exists=lambda p: p == want), want)
+        cmd = pdf24.ps_to_pdf_command('gs.exe', 'in.prn', 'out.pdf')
+        self.assertIn('-sDEVICE=pdfwrite', cmd)
+        self.assertIn('-sOutputFile=out.pdf', cmd)
+        self.assertEqual(cmd[-1], 'in.prn')
+        self.assertTrue(pdf24.prn_path('C:/out', 'A101').endswith('A101' + pdf24.PRN_SUFFIX))
+
+    def test_print_to_file_output_is_found(self):
+        prn = self.write('A101' + pdf24.PRN_SUFFIX, b'%!PS-Adobe-3.0\n')
+        expected = os.path.join(self.temp.name, 'A101.pdf')
+        now = [0.0]
+        got = pdf24.wait_for_pdf(expected, None, time.time(), 2, extra=[prn],
+                                 clock=lambda: now[0], sleep=lambda s: now.__setitem__(0, now[0] + s))
+        self.assertEqual(got, prn)
+
+    def test_dialog_prints_to_file_on_a_virtual_printer(self):
+        with open(os.path.join(LIB, 'GUI', 'BatchOutDialog.py'), encoding='utf-8') as f:
+            src = f.read()
+        body = src.split('def _export_pdf_with_pdf24', 1)[1].split('\n    def _pdf24_paper_for', 1)[0]
+        self.assertNotIn('pm.PrintToFile = False', body)
+        self.assertIn('pm.PrintToFile = virtual', body)
+        self.assertIn("'{}'.format(pm.IsVirtual) != 'None'", body)
+        self.assertIn('self._pdf24_as_pdf(found, expected_file, gs)', body)
+        self.assertIn('pm.PrintToFileName = print_file', src)
+
+
 class WiringTests(unittest.TestCase):
     def read(self, *parts):
         with open(os.path.join(LIB, *parts), encoding='utf-8') as f:

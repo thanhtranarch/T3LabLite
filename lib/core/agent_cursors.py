@@ -39,6 +39,9 @@ DWELL_MS = 220              # pause + click at each stop
 FEED_SIZE = 5               # last steps listed on the HUD
 REPLAY_SIZE = 20            # steps the HUD can replay
 SUMMARY_S = 20              # idle summary card stays this long
+COLLAPSE_S = 10             # idle this long: the bar folds to one line (mouse over opens it)
+FEED_SHOWN = 3              # feed rows on the bar (the rest wait for Replay)
+HUD_POS_KEY = 'agent_cursors_hud_pos'   # "dx,dy" DIP from the default spot, per user
 NARRATE_MAX = 90            # goal banner text
 PLAN_MAX = 8                # tasks in an agent's plan (t3lab_narrate tasks=[...])
 TASK_MAX = 60               # characters per task
@@ -210,6 +213,45 @@ def set_speed(name):
     _paths().set_setting(SPEED_KEY, name if name in dict(SPEEDS) else 'normal')
     _cache['mtime'] = None
     return speed()
+
+
+def hud_offset():
+    """(dx, dy) the user dragged the bar from its default spot, in DIP."""
+    return parse_offset(_settings().get(HUD_POS_KEY, ''))
+
+
+def set_hud_offset(dx, dy):
+    _paths().set_setting(HUD_POS_KEY, '' if (dx, dy) == (0, 0) else '{},{}'.format(int(dx), int(dy)))
+    _cache['mtime'] = None
+
+
+# Pause (HUD): the user holds model changes; read-only tools still run. Lives in
+# memory only, so a Revit restart never starts paused.
+_pause = {'on': False}
+
+
+def is_paused():
+    return bool(_pause['on'])
+
+
+def set_paused(on):
+    _pause['on'] = bool(on)
+    try:
+        if _state.get('overlay') is not None:
+            _state['overlay'].call('set_paused', bool(on))
+    except Exception:
+        pass
+    return bool(on)
+
+
+def paused_refusal(tool_name, is_write):
+    """The tool result for a write refused while paused, else None."""
+    if not (_pause['on'] and is_write) or tool_name == NARRATE_TOOL:
+        return None
+    return {'success': False, 'error_code': 'paused', 'nothing_ran': True,
+            'error': ('Paused by the user in Revit (Agent Cursors bar): model changes wait '
+                      'until they click Resume. Read-only tools still work; ask the user '
+                      'or try again later.')}
 
 
 def options_text():
@@ -707,6 +749,148 @@ def offscreen_markers(rect, points, margin=18.0):
     return out
 
 
+# ─── HUD helpers (core/agent_cursors_overlay.py) ─────────────────────────────
+
+# state -> (label, palette key of its colour)
+STATES = {
+    'working': ('Working', 'warn'),
+    'waiting': ('Waiting for your OK', 'warn'),
+    'paused': ('Paused', 'info'),
+    'idle': ('Idle', 'ok'),
+}
+
+# Bar colours per Revit theme. One orange accent (T3Lab / t3lab.space).
+HUD_PALETTES = {
+    'dark': {'bg': '#1E2430', 'card': '#273042', 'line': '#334155', 'chip': '#334155',
+             'chip_hot': '#475569', 'text': '#F8FAFC', 'text2': '#CBD5E1', 'muted': '#94A3B8',
+             'faint': '#64748B', 'accent': '#F27522', 'on_accent': '#FFFFFF', 'ok': '#4ADE80',
+             'bad': '#F87171', 'warn': '#FBBF24', 'info': '#93C5FD', 'track': '#475569'},
+    'light': {'bg': '#FFFFFF', 'card': '#F3F4F6', 'line': '#E5E7EB', 'chip': '#E5E7EB',
+              'chip_hot': '#D1D5DB', 'text': '#111827', 'text2': '#374151', 'muted': '#6B7280',
+              'faint': '#9CA3AF', 'accent': '#EA680C', 'on_accent': '#FFFFFF', 'ok': '#16A34A',
+              'bad': '#DC2626', 'warn': '#B45309', 'info': '#2563EB', 'track': '#D1D5DB'},
+}
+
+# Options drawer (⚙): group -> option names, in OPTIONS terms.
+OPTION_GROUPS = (
+    ('View', ('follow', 'zoom', 'tile')),
+    ('Selection', ('select',)),
+    ('Motion', ('reduce', 'glow')),
+    ('Bar', ('keep',)),
+)
+
+
+def hud_palette(theme):
+    return HUD_PALETTES['light' if theme == 'light' else 'dark']
+
+
+def hud_state(working, waiting, asks, paused):
+    """working | waiting | paused | idle — what the bar's status pill says."""
+    if asks or waiting:
+        return 'waiting'
+    if paused:
+        return 'paused'
+    return 'working' if working else 'idle'
+
+
+def status_text(state, seconds=None):
+    """'Working 8 s' / 'Paused' / ..."""
+    label = STATES[state][0]
+    if state == 'working' and seconds is not None and seconds >= 1:
+        return '{} {} s'.format(label, int(seconds))
+    return label
+
+
+def plan_progress(plan):
+    """(done, total) of a t3lab_narrate plan, or None without tasks."""
+    tasks, step = (plan or {}).get('tasks') or [], (plan or {}).get('step') or 0
+    if not tasks:
+        return None
+    return max(0, min(step - 1, len(tasks))), len(tasks)
+
+
+def ago_text(seconds):
+    """'now' · '9 s' · '3 min' · '2 h'."""
+    s = max(0, int(seconds))
+    if s < 2:
+        return 'now'
+    if s < 60:
+        return '{} s'.format(s)
+    if s < 3600:
+        return '{} min'.format(s // 60)
+    return '{} h'.format(s // 3600)
+
+
+def short_text(text, limit=44):
+    text = ' '.join('{}'.format(text or '').split())
+    return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
+def compact_line(caption, progress=None):
+    """One-line bar text: 'Moving 12 walls · 3/5'."""
+    text = short_text(caption, 36)
+    if progress:
+        text += ' · {}/{}'.format(min(progress[0] + 1, progress[1]), progress[1])
+    return text
+
+
+def count_items(counts):
+    """[(action, n)] in ACTIONS order, zeros left out."""
+    return [(key, counts[key]) for key, _l, _g, _c in ACTIONS if counts.get(key)]
+
+
+def footer_text(total, failed, views):
+    """'12 actions · 1 failed · 2 views'."""
+    parts = ['{} action{}'.format(total, '' if total == 1 else 's')]
+    if failed:
+        parts.append('{} failed'.format(failed))
+    if views:
+        parts.append('{} view{}'.format(views, '' if views == 1 else 's'))
+    return ' · '.join(parts)
+
+
+def should_collapse(user_folded, idle_s, hovering, asks):
+    """Fold the bar to one line: the user asked, or nothing happened for
+    COLLAPSE_S; never while the mouse is on it. A question opens it unless the
+    user folded it (the one-line bar carries Allow / Deny then)."""
+    if hovering:
+        return False
+    if user_folded:
+        return True
+    return not asks and idle_s >= COLLAPSE_S
+
+
+def parse_offset(text):
+    try:
+        dx, dy = ('{}'.format(text or '')).split(',')
+        return float(dx), float(dy)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+
+
+def hud_place(view, size, offset=(0.0, 0.0), margin=16.0):
+    """(left, top) DIP of the bar: centred at the bottom of `view` (DIP
+    left, top, right, bottom), moved by the user's offset, kept inside."""
+    left, top, right, bottom = view
+    w, h = size
+    x = left + (right - left - w) / 2.0 + offset[0]
+    y = bottom - h - margin + offset[1]
+    x = min(max(x, left + 4), max(right - w - 4, left + 4))
+    y = min(max(y, top + 4), max(bottom - h - 4, top + 4))
+    return x, y
+
+
+def union_box(boxes):
+    """The box round [(x0, y0, x1, y1)]."""
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def cluster_stops(n_boxes):
+    """More boxes than the cursor visits: draw one frame round them all."""
+    return n_boxes > MAX_STOPS
+
+
 def summary_lines(counts_by_agent, touched_count):
     """Idle card: one line per agent plus the elements changed."""
     lines = []
@@ -1182,6 +1366,9 @@ def notify(app, task):
         tool = getattr(task, 'tool_name', '')
         args = getattr(task, 'arguments', None)
         result = getattr(task, 'result', None)
+        if isinstance(result, dict) and result.get('error_code') == 'paused':
+            _overlay(_hwnd(app)).call('held', _agent_of(task), describe_call(tool, args))
+            return
         failed = bool(getattr(task, 'exception', None)) or (
             isinstance(result, dict) and bool(result.get('error')))
         action = classify_action(tool, args, result)
@@ -1213,11 +1400,18 @@ def notify(app, task):
         try:
             from core import agent_cursors_glow
             if opts['glow']:
-                agent_cursors_glow.update(app, sorted(_session['touched']))
+                if not agent_cursors_glow.update(app, sorted(_session['touched'])):
+                    # Revit refused the DirectContext3D server: switch Glow off
+                    # and say so, instead of failing on every call.
+                    set_option('glow', False)
+                    agent_cursors_glow.stop(app)
+                    _overlay(_hwnd(app)).call(
+                        'notice', 'Glow turned off: this Revit could not draw it.')
             else:
                 agent_cursors_glow.stop(app)        # no-op when never started
         except Exception:
             pass
+        _sync_theme()
         _overlay(_hwnd(app)).call(
             'show', agent, action, tool, failed, snap, followed, args=args,
             n_targets=len(ids), changes=changes, clashes=clashes,
@@ -1463,7 +1657,27 @@ def offer(app, agent):
 
 # ─── Overlay (core/agent_cursors_overlay.py) ──────────────────────────────────
 
-_state = {'overlay': None, 'offered': False}
+_state = {'overlay': None, 'offered': False, 'theme': None}
+
+
+def revit_theme():
+    """'dark' | 'light' as Revit shows it (UIThemeManager, Revit 2024+;
+    earlier Revit has only light). Main thread."""
+    try:
+        import Autodesk.Revit.UI as RUI
+        mgr = getattr(RUI, 'UIThemeManager', None)
+        if mgr is not None and 'dark' in '{}'.format(mgr.CurrentTheme).lower():
+            return 'dark'
+    except Exception:
+        pass
+    return 'light'
+
+
+def _sync_theme():
+    theme = revit_theme()
+    if theme != _state.get('theme') and _state.get('overlay') is not None:
+        _state['theme'] = theme
+        _state['overlay'].call('set_theme', theme)
 
 
 def _overlay(hwnd):
@@ -1472,6 +1686,9 @@ def _overlay(hwnd):
     ov = _state.get('overlay')
     if ov is None or not ov.alive:
         from core.agent_cursors_overlay import OverlayHost
-        ov = OverlayHost(hwnd, {'select_touched': select_touched, 'answer': answer})
+        ov = OverlayHost(hwnd, {'select_touched': select_touched, 'answer': answer,
+                                'pause': set_paused})
         _state['overlay'] = ov
+        _state['theme'] = None
+        _sync_theme()
     return ov

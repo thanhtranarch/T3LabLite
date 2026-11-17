@@ -400,6 +400,17 @@ try:
                     task.done.set()
                     continue
                 is_write = task.tool_name in self.server._WRITE_TOOLS
+                # Pause on the Agent Cursors bar holds model changes; reads run.
+                held = agent_cursors.paused_refusal(task.tool_name, is_write)
+                if held is not None:
+                    task.result = held
+                    task.exception = None
+                    task.done.set()
+                    try:
+                        agent_cursors.notify(app, task)
+                    except Exception:
+                        pass
+                    continue
                 if is_write:
                     self.server._write_in_progress = True
                 # Boxes a delete / move is about to change (agent cursors).

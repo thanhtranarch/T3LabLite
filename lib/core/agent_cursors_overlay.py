@@ -11,11 +11,12 @@ import sys
 import time
 
 from core.agent_cursors import (
-    ACTIONS, BOX_HOLD_S, DWELL_MS, FEED_SIZE, MAX_STOPS, MOVE_MS, IDLE_HIDE_S,
-    OPTIONS, OPTION_LABELS, REPLAY_SIZE, SUMMARY_S, action_style,
-    agent_style, classify_action, counts_text, describe_call, hop_ms, next_speed, plan_rows,
-    offscreen_markers, options, review_points, set_enabled, set_option, set_speed,
-    speed, speed_factor, summary_lines, tour_schedule)
+    BOX_HOLD_S, DWELL_MS, FEED_SHOWN, FEED_SIZE, IDLE_HIDE_S, MAX_STOPS, MOVE_MS, OPTION_GROUPS,
+    OPTION_LABELS, REPLAY_SIZE, SPEEDS, STATES, SUMMARY_S, action_style, agent_style,
+    ago_text, classify_action, cluster_stops, compact_line, count_items, describe_call,
+    footer_text, hop_ms, hud_offset, hud_palette, hud_place, hud_state, offscreen_markers,
+    options, plan_progress, review_points, set_enabled, set_hud_offset, set_option, set_speed,
+    short_text, should_collapse, speed, speed_factor, status_text, tour_schedule, union_box)
 
 
 class OverlayHost(object):
@@ -101,10 +102,14 @@ _WS_EX_TRANSPARENT = 0x20
 _WS_EX_TOOLWINDOW = 0x80
 _WS_EX_NOACTIVATE = 0x08000000
 _MAX_TRANSIENT = 400        # animation handlers kept alive (see _hook)
+BUSY_GAP_S = 4              # a gap this short between calls still reads "Working"
 # Glyph font with fallback: Windows 11 ships Segoe Fluent Icons (a superset);
 # a codepoint missing in the first font is taken from the next, never tofu
 # (owner, 2026-11-17: a broken icon on the bar).
 ICON_FONTS = 'Segoe Fluent Icons, Segoe MDL2 Assets'
+# The agent's pointer: a bare tip, no tail (owner, 2026-11-17: minimal cursor,
+# the caption stays). The bar draws it small as the agent's avatar.
+CURSOR_PATH = 'M1,1 L1,14 L5,10.2 L12,9.8 Z'
 
 
 def _set_exstyle(window, bits):
@@ -183,6 +188,17 @@ class _Overlay(object):
                    lambda s, e: _set_exstyle(self.win, _WS_EX_TRANSPARENT |
                                              _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE))
         self._hook(self.win, 'Closed', lambda s, e: setattr(self, 'alive', False))
+
+        self._pal = hud_palette('dark')     # set_theme() follows Revit
+        self._paused = False        # Pause on the bar (agent_cursors.set_paused)
+        self._folded = False        # the user folded the bar to one line
+        self._hover = False
+        self._drawer = False        # options drawer (⚙) open
+        self._note = ''             # replaces the footer text (replay progress)
+        self._failed = 0
+        self._last_changes = []     # 'Mark: A-101 → A-102' of the last step
+        self._view_dip = None       # active view (DIP) the bar sits in
+        self._status_label = None
 
         self.hud = Window()
         self.hud.WindowStyle = _NO_STYLE(WindowStyle)
@@ -339,245 +355,693 @@ class _Overlay(object):
             st.BeginAnimation(prop, self._anim(frames))
 
     # ── HUD ───────────────────────────────────────────────────────────────────
+    # One bar at the bottom of the view (owner, 2026-11-17 redesign):
+    #   header   cursor-mark avatars · title · status pill · ⏸ ⚙ — ✕ (drag to move)
+    #   drawer   options (⚙), grouped switches + speed
+    #   goal     goal + "Step k/n" + progress bar per agent with a plan
+    #   current  what runs now (or the last step) + before→after chips
+    #   feed     last FEED_SHOWN steps, ✓ / ✕, how long ago
+    #   agents   one row per agent with its counts (2+ agents, or idle)
+    #   footer   "12 actions · 1 failed · 2 views" · Select touched · Replay
+    # Folded (— or idle COLLAPSE_S): one line, mouse over opens it again.
+
+    def _c(self, key):
+        return self._pal[key]
 
     def _build_hud(self):
         from System.Windows import Thickness, CornerRadius
-        from System.Windows.Controls import Border, StackPanel, Orientation
-        from System.Windows.Input import Cursors
-
-        bar = Border()
-        bar.Background = self._brush('#1F2937', 235)
-        bar.CornerRadius = CornerRadius(8)
-        bar.Padding = Thickness(12, 8, 8, 8)
+        from System.Windows.Controls import Border, StackPanel
+        self._bar = Border()
+        self._bar.CornerRadius = CornerRadius(8)
+        self._bar.Padding = Thickness(12, 10, 12, 10)
         col = StackPanel()
-        bar.Child = col
-
+        self._bar.Child = col
         self._ask_panel = StackPanel()          # Allow / Deny cards (ask())
         col.Children.Add(self._ask_panel)
+        self._full = StackPanel()
+        col.Children.Add(self._full)
+        self._compact = StackPanel()
+        col.Children.Add(self._compact)
+        self.hud.Content = self._bar
+        self._hook(self.hud, 'MouseEnter', lambda s, e: self._set_hover(True))
+        self._hook(self.hud, 'MouseLeave', lambda s, e: self._set_hover(False))
+        self._apply_theme()
 
-        top = StackPanel()
-        top.Orientation = Orientation.Horizontal
-        col.Children.Add(top)
-        self._agents_panel = StackPanel()
-        top.Children.Add(self._agents_panel)
+    def _apply_theme(self):
+        self._bar.Background = self._brush(self._c('bg'), 246)
+        self._bar.BorderBrush = self._brush(self._c('line'))
+        self._bar.BorderThickness = _thickness(1)
 
-        self._goal_panel = StackPanel()
-        self._goal_panel.Margin = Thickness(16, 0, 0, 0)
-        top.Children.Add(self._goal_panel)
+    def set_theme(self, theme):
+        """Revit switched light / dark (agent_cursors._sync_theme)."""
+        self._pal = hud_palette(theme)
+        self._apply_theme()
+        if self.hud.IsVisible:
+            self._refresh_hud()
 
-        close = self._text('', 11, color='#CBD5E1', glyph=True)
-        close.Margin = Thickness(8, 2, 4, 0)
-        close.Cursor = Cursors.Hand
-        close.ToolTip = ('Turn agent cursors off. Settings > Agent Cursors '
-                         'turns them back on.')
-        self._hook(close, 'MouseLeftButtonUp', lambda s, e: set_enabled(False))
-        top.Children.Add(close)
+    def set_paused(self, on):
+        self._paused = bool(on)
+        if self.hud.IsVisible:
+            self._refresh_hud()
 
-        from System.Windows.Controls import WrapPanel
-        self._toggles = WrapPanel()
-        self._toggles.MaxWidth = 560
-        self._toggles.Margin = Thickness(0, 6, 0, 0)
-        col.Children.Add(self._toggles)
+    def _set_hover(self, on):
+        self._hover = on
+        if on:
+            self._last_hover = time.time()
+        if self.hud.IsVisible:
+            self._refresh_hud()
 
-        self._views_text = self._text('', 11, bold=False, color='#CBD5E1')
-        self._views_text.Margin = Thickness(0, 4, 0, 0)
-        col.Children.Add(self._views_text)
-        self._summary_panel = StackPanel()
-        self._summary_panel.Margin = Thickness(0, 6, 0, 0)
-        col.Children.Add(self._summary_panel)
-        self._feed_panel = StackPanel()
-        self._feed_panel.Margin = Thickness(0, 6, 0, 0)
-        col.Children.Add(self._feed_panel)
-        self.hud.Content = bar
+    # small parts
 
-    def _toggle(self, name, on):
-        from System.Windows import Thickness
-        from System.Windows.Input import Cursors
-        label, tip = OPTION_LABELS[name]
-        glyph = '' if on else ''        # CheckMark / Checkbox
-        chip = self._pill(self._glyph_label(glyph, label, '#FFFFFF' if on else '#94A3B8'),
-                          '#374151' if on else '#1F2937')
-        chip.Margin = Thickness(4, 0, 0, 0)
-        chip.Cursor = Cursors.Hand
-        chip.ToolTip = tip
+    def _mark(self, color, size=16):
+        """The agent's cursor, small: its avatar on the bar."""
+        from System.Windows.Controls import Canvas
+        from System.Windows.Media import Geometry, PenLineJoin, ScaleTransform
+        from System.Windows.Shapes import Path
+        holder = Canvas()
+        holder.Width = size * 0.8
+        holder.Height = size
+        arrow = Path()
+        arrow.Data = Geometry.Parse(CURSOR_PATH)
+        arrow.Fill = self._brush(color)
+        arrow.Stroke = self._brush('#FFFFFF')
+        arrow.StrokeThickness = 1.4
+        arrow.StrokeLineJoin = PenLineJoin.Round
+        arrow.RenderTransform = ScaleTransform(size / 15.0, size / 15.0)
+        holder.Children.Add(arrow)
+        return holder
 
-        def flip(s, e):
-            try:
-                set_option(name, not options()[name])
-                self._refresh_hud()
-            except Exception:
-                pass
-        self._hook(chip, 'MouseLeftButtonUp', flip, transient=True)
-        return chip
-
-    def _refresh_hud(self):
-        from System.Windows import Thickness, CornerRadius, HorizontalAlignment
+    def _icon_button(self, glyph, tip, action, active=False):
+        from System.Windows import Thickness, CornerRadius, HorizontalAlignment, VerticalAlignment
         from System.Windows.Controls import Border
-        self._agents_panel.Children.Clear()
-        for agent in sorted(self._counts):
-            tag, color = agent_style(agent)
-            dot = Border()
-            dot.Width = dot.Height = 18
-            dot.CornerRadius = CornerRadius(9)
-            dot.Background = self._brush(color)
-            dot.Margin = Thickness(0, 0, 8, 0)
-            letter = self._text(tag[:1].upper(), 9)
-            letter.HorizontalAlignment = HorizontalAlignment.Center
-            dot.Child = letter
-            parts = [dot, self._text(tag, 11.5)]
-            counts = self._counts[agent]
-            for key, label, glyph, acolor in ACTIONS:
-                if not counts.get(key):
-                    continue
-                chip = self._pill(self._glyph_label(glyph, '{}'.format(counts[key]), '#FFFFFF'),
-                                  acolor, radius=2)
-                chip.Margin = Thickness(6, 0, 0, 0)
-                chip.ToolTip = '{} · {} {}'.format(tag, label, counts[key])
-                parts.append(chip)
-            row = self._row(*parts)
-            row.Margin = Thickness(0, 1, 0, 1)
-            row.ToolTip = '{}: {}'.format(tag, counts_text(counts))
-            self._agents_panel.Children.Add(row)
-        self._goal_panel.Children.Clear()
-        for agent in sorted(set(self._goals) | set(self._plans)):
-            tag, color = agent_style(agent)
-            if self._goals.get(agent):
-                line = self._glyph_label('\uE7C1', u'{} · {}'.format(tag, self._goals[agent]),
-                                         '#FDE68A', 11)
-                self._goal_panel.Children.Add(line)
-            for state, text in plan_rows(self._plans.get(agent) or {}):
-                glyph, tint = {'done': ('\uE73E', '#4ADE80'), 'current': ('\uE768', '#FDE68A'),
-                               'todo': ('\uE739', '#94A3B8')}[state]
-                row = self._glyph_label(glyph, text, tint if state != 'done' else '#CBD5E1', 11)
-                row.Margin = Thickness(16, 1, 0, 0)
-                row.ToolTip = u'{} · {}'.format(tag, {'done': 'done', 'current': 'now',
-                                                      'todo': 'next'}[state])
-                self._goal_panel.Children.Add(row)
-        self._toggles.Children.Clear()
-        opts = options()
-        for name, _k, _d in OPTIONS:
-            self._toggles.Children.Add(self._toggle(name, opts[name]))
-        self._toggles.Children.Add(self._button(
-            '\uE916', 'Speed: {}'.format(speed().capitalize()),
-            'Calm, Normal or Fast motion', lambda: set_speed(next_speed(speed()))))
-        self._toggles.Children.Add(self._button(
-            '\uE768', 'Replay', 'Replay the last {} steps'.format(REPLAY_SIZE), self.replay))
-        self._feed_panel.Children.Clear()
-        for step in self._feed:
-            self._feed_panel.Children.Add(self._feed_row(step))
-        n = self._actions
-        names = [v[1] for v in self._views[-3:]]
-        more = len(self._views) - len(names)
-        views = ' · '.join(names) + (' · +{}'.format(more) if more > 0 else '')
-        self._views_text.Text = '{} action{}{}'.format(
-            n, '' if n == 1 else 's', ('  ·  Views: ' + views) if views else '')
-
-    def _button(self, glyph, label, tip, action, color='#E5E7EB'):
-        """A clickable chip on the HUD; refreshes the HUD after `action`."""
-        from System.Windows import Thickness
         from System.Windows.Input import Cursors
-        chip = self._pill(self._glyph_label(glyph, label, color), '#374151')
-        chip.Margin = Thickness(4, 0, 0, 0)
-        chip.Cursor = Cursors.Hand
-        chip.ToolTip = tip
+        icon = self._text(glyph, 11, color=self._c('text2'), glyph=True)
+        icon.HorizontalAlignment = HorizontalAlignment.Center
+        icon.VerticalAlignment = VerticalAlignment.Center
+        btn = Border()
+        btn.Width = btn.Height = 24
+        btn.CornerRadius = CornerRadius(4)
+        btn.Background = self._brush(self._c('chip') if active else self._c('bg'), 255 if active else 1)
+        btn.Child = icon
+        btn.Margin = Thickness(2, 0, 0, 0)
+        btn.Cursor = Cursors.Hand
+        btn.ToolTip = tip
+        self._hook(btn, 'MouseEnter', lambda s, e: setattr(btn, 'Background', self._brush(self._c('chip'))),
+                   transient=True)
+        self._hook(btn, 'MouseLeave', lambda s, e: setattr(btn, 'Background', self._brush(
+            self._c('chip') if active else self._c('bg'), 255 if active else 1)), transient=True)
 
         def click(s, e):
             try:
+                e.Handled = True
                 action()
                 self._refresh_hud()
             except Exception:
                 pass
-        self._hook(chip, 'MouseLeftButtonUp', click, transient=True)
-        return chip
+        self._hook(btn, 'MouseLeftButtonDown', _swallow, transient=True)
+        self._hook(btn, 'MouseLeftButtonUp', click, transient=True)
+        return btn
 
-    def _feed_row(self, step):
-        """[agent dot] [action glyph] caption · agent   ok / failed."""
+    def _button(self, glyph, label, tip, action, primary=False):
+        """A text button on the bar; refreshes the bar after `action`."""
         from System.Windows import Thickness, CornerRadius
         from System.Windows.Controls import Border
-        tag, color = agent_style(step['agent'])
-        label, glyph, acolor = action_style(step['action'])
-        if step.get('kind') == 'warn':
-            glyph, acolor = '\uE7BA', '#F87171'
-        elif step.get('kind') == 'goal':
-            glyph, acolor = '\uE7C1', '#FDE68A'
-        dot = Border()
-        dot.Width = dot.Height = 8
-        dot.CornerRadius = CornerRadius(4)
-        dot.Background = self._brush(color)
+        from System.Windows.Input import Cursors
+        fg = self._c('on_accent') if primary else self._c('text')
+        btn = Border()
+        btn.CornerRadius = CornerRadius(4)
+        btn.Padding = Thickness(8, 3, 10, 3)
+        btn.Background = self._brush(self._c('accent') if primary else self._c('chip'))
+        btn.Child = self._glyph_label(glyph, label, fg, 11.5)
+        btn.Margin = Thickness(6, 0, 0, 0)
+        btn.Cursor = Cursors.Hand
+        btn.ToolTip = tip
+
+        def click(s, e):
+            try:
+                e.Handled = True
+                action()
+                self._refresh_hud()
+            except Exception:
+                pass
+        self._hook(btn, 'MouseLeftButtonDown', _swallow, transient=True)
+        self._hook(btn, 'MouseLeftButtonUp', click, transient=True)
+        return btn
+
+    def _status_pill(self, state, seconds=None):
+        from System.Windows import Thickness, CornerRadius
+        from System.Windows.Controls import Border
+        from System.Windows.Shapes import Ellipse
+        color = self._c(STATES[state][1])
+        dot = Ellipse()
+        dot.Width = dot.Height = 7
+        dot.Fill = self._brush(color)
         dot.Margin = Thickness(0, 0, 6, 0)
-        icon = self._text(glyph, 10, color=acolor, glyph=True)
-        icon.Margin = Thickness(0, 0, 6, 0)
-        text = self._text(step['caption'], 11, bold=False, color='#F8FAFC')
-        who = self._text(u'  · ' + tag, 10.5, bold=False, color='#94A3B8')
-        state = self._text('' if step.get('kind') else ('\uE711' if step['failed'] else '\uE73E'), 10,
-                           color='#F87171' if step['failed'] else '#4ADE80', glyph=True)
-        state.Margin = Thickness(8, 0, 0, 0)
-        row = self._row(dot, icon, text, who, state)
-        row.Margin = Thickness(0, 1, 0, 1)
-        row.ToolTip = step['tool']
+        pill = Border()
+        pill.CornerRadius = CornerRadius(10)
+        pill.Padding = Thickness(7, 1, 9, 2)
+        pill.Background = self._brush(color, 40)
+        label = self._text(status_text(state, seconds), 11.5, bold=False, color=color)
+        self._status_label = label if state == 'working' else None
+        pill.Child = self._row(dot, label)
+        pill.Margin = Thickness(8, 0, 0, 0)
+        return pill
+
+    def _switch(self, on, flip):
+        from System.Windows import Thickness, CornerRadius, HorizontalAlignment
+        from System.Windows.Controls import Border
+        from System.Windows.Input import Cursors
+        from System.Windows.Shapes import Ellipse
+        knob = Ellipse()
+        knob.Width = knob.Height = 12
+        knob.Fill = self._brush('#FFFFFF')
+        knob.HorizontalAlignment = HorizontalAlignment.Right if on else HorizontalAlignment.Left
+        track = Border()
+        track.Width, track.Height = 28, 16
+        track.CornerRadius = CornerRadius(8)
+        track.Padding = Thickness(2)
+        track.Background = self._brush(self._c('accent') if on else self._c('track'))
+        track.Child = knob
+        track.Cursor = Cursors.Hand
+        self._hook(track, 'MouseLeftButtonUp', flip, transient=True)
+        return track
+
+    def _line_row(self, left, right=None, margin_top=0):
+        """Grid: `left` stretches, `right` hugs the right edge."""
+        from System.Windows import Thickness, GridLength, GridUnitType, VerticalAlignment
+        from System.Windows.Controls import Grid, ColumnDefinition
+        grid = Grid()
+        for width in (GridLength(1, GridUnitType.Star), GridLength.Auto):
+            cd = ColumnDefinition()
+            cd.Width = width
+            grid.ColumnDefinitions.Add(cd)
+        left.VerticalAlignment = VerticalAlignment.Center
+        grid.Children.Add(left)
+        if right is not None:
+            right.VerticalAlignment = VerticalAlignment.Center
+            Grid.SetColumn(right, 1)
+            grid.Children.Add(right)
+        grid.Margin = Thickness(0, margin_top, 0, 0)
+        return grid
+
+    def _counts_row(self, counts):
+        from System.Windows import Thickness
+        parts = []
+        for action, n in count_items(counts):
+            _label, glyph, _color = action_style(action)
+            item = self._glyph_label(glyph, '{}'.format(n), self._c('muted'), 11)
+            item.Margin = Thickness(8, 0, 0, 0)
+            item.ToolTip = u'{} {}'.format(action_style(action)[0], n)
+            parts.append(item)
+        return self._row(*parts)
+
+    # the bar
+
+    def _state(self):
+        # A run of calls stays "Working" in the gaps between them.
+        recent = [st['t'] for st in self._feed[:1] if not st.get('kind')]
+        busy = self._working or bool(recent and time.time() - recent[0] < BUSY_GAP_S)
+        return hud_state(busy, self._waiting, self._asks, self._paused)
+
+    def _refresh_hud(self):
+        from System.Windows import Visibility
+        state = self._state()
+        idle_s = time.time() - self._last if state == 'idle' else 0
+        folded = should_collapse(self._folded, idle_s, self._hover, self._asks)
+        self._full.Visibility = Visibility.Collapsed if folded else Visibility.Visible
+        self._compact.Visibility = Visibility.Visible if folded else Visibility.Collapsed
+        self._ask_panel.Visibility = (Visibility.Collapsed if folded else Visibility.Visible)
+        if folded:
+            self._fill_compact(state)
+        else:
+            self._fill_full(state)
+        self._place_hud()
+
+    def _seconds(self):
+        if not self._working:
+            return None
+        return time.time() - min(started for started, _c in self._working.values())
+
+    def _agents(self):
+        return sorted(set(self._counts) | set(self._goals) | set(self._plans) |
+                      set(k.split('|', 1)[0] for k in self._working))
+
+    def _fill_compact(self, state):
+        from System.Windows import Thickness
+        from System.Windows.Input import Cursors
+        from System.Windows.Shapes import Ellipse
+        self._compact.Children.Clear()
+        agents = self._agents()
+        parts = []
+        for agent in agents[:3]:
+            mark = self._mark(agent_style(agent)[1], 14)
+            mark.Margin = Thickness(0, 0, 4, 0)
+            parts.append(mark)
+        dot = Ellipse()
+        dot.Width = dot.Height = 7
+        dot.Fill = self._brush(self._c(STATES[state][1]))
+        dot.Margin = Thickness(4, 0, 8, 0)
+        parts.append(dot)
+        caption, progress = self._now_caption()
+        if self._asks:
+            item = self._asks[0]
+            caption = u'{} waits for your OK'.format(agent_style(item['agent'])[0])
+        text = self._text(compact_line(caption or status_text(state), progress), 12.5, bold=False,
+                          color=self._c('text'))
+        parts.append(text)
+        if self._asks:
+            item = self._asks[0]
+            parts.append(self._button(u'', 'Allow', 'Run it',
+                                      lambda rid=item['rid']: self._answer(rid, True), primary=True))
+            parts.append(self._button(u'', 'Deny', 'Do not run it',
+                                      lambda rid=item['rid']: self._answer(rid, False)))
+        expand = self._icon_button(u'', 'Open the bar', self._unfold)
+        expand.Margin = Thickness(8, 0, 0, 0)
+        parts.append(expand)
+        row = self._row(*parts)
+        row.Cursor = Cursors.SizeAll
+        self._hook(row, 'MouseLeftButtonDown', self._drag, transient=True)
+        self._compact.Children.Add(row)
+
+    def _unfold(self):
+        self._folded = False
+        self._last = time.time()
+
+    def _toggle_fold(self):
+        self._folded = not self._folded
+        if not self._folded:
+            self._last = time.time()
+
+    def _now_caption(self):
+        """(caption, plan progress) of what runs now, else of the last step."""
+        progress = None
+        for agent in self._agents():
+            progress = plan_progress(self._plans.get(agent))
+            if progress:
+                break
+        if self._working:
+            key = max(self._working, key=lambda k: self._working[k][0])
+            return self._working[key][1], progress
+        if self._replay is not None:
+            return self._note, progress
+        for step in self._feed:
+            if not step.get('kind'):
+                return step['caption'], progress
+        return '', progress
+
+    def _fill_full(self, state):
+        from System.Windows import Thickness
+        from System.Windows.Controls import StackPanel
+        full = self._full
+        full.Children.Clear()
+        full.Width = 420
+        agents = self._agents()
+
+        # header
+        left = []
+        for agent in agents[:4]:
+            mark = self._mark(agent_style(agent)[1], 16)
+            mark.Margin = Thickness(0, 0, 4, 0)
+            left.append(mark)
+        title = (agent_style(agents[0])[0] if len(agents) == 1 else
+                 '{} agents'.format(len(agents)) if agents else 'Agent Cursors')
+        name = self._text(title, 13, color=self._c('text'))
+        name.Margin = Thickness(4, 0, 0, 0)
+        left.append(name)
+        left.append(self._status_pill(state, self._seconds()))
+        buttons = self._row(
+            self._icon_button(u'' if self._paused else u'',
+                              'Resume: let the agents change the model again' if self._paused else
+                              'Pause: hold model changes (read-only tools still run)',
+                              self._toggle_pause, active=self._paused),
+            self._icon_button(u'', 'Options', self._toggle_drawer, active=self._drawer),
+            self._icon_button(u'', 'Fold to one line (mouse over opens it)',
+                              self._toggle_fold),
+            self._icon_button(u'', 'Turn agent cursors off (Settings > Agent Cursors '
+                              'turns them back on)', lambda: set_enabled(False)))
+        head = self._line_row(self._row(*left), buttons)
+        head.Background = self._brush(self._c('bg'), 1)     # hit-testable: drag to move
+        head.ToolTip = 'Drag to move the bar · double-click to put it back'
+        self._hook(head, 'MouseLeftButtonDown', self._drag, transient=True)
+        full.Children.Add(head)
+
+        if self._drawer:
+            full.Children.Add(self._options_drawer())
+
+        # goal + progress, per agent with a goal or a plan
+        for agent in agents:
+            goal = self._goals.get(agent, '')
+            progress = plan_progress(self._plans.get(agent))
+            if not goal and not progress:
+                continue
+            label = goal or 'Plan'
+            if len(agents) > 1:
+                label = u'{} · {}'.format(agent_style(agent)[0], label)
+            right = None
+            if progress:
+                right = self._text(u'Step {}/{}'.format(min(progress[0] + 1, progress[1]),
+                                                        progress[1]),
+                                   11.5, bold=False, color=self._c('text2'))
+            line = self._text(u'Goal · ' + short_text(label, 52), 11.5, bold=False,
+                              color=self._c('text2'))
+            full.Children.Add(self._line_row(line, right, 10))
+            if progress:
+                full.Children.Add(self._progress_bar(progress))
+
+        # what runs now / the last step
+        caption, _progress = self._now_caption()
+        if caption:
+            full.Children.Add(self._current_card(caption))
+
+        # feed
+        shown = [s for s in self._feed if s.get('kind') != 'goal'][:FEED_SHOWN]
+        if self._feed and caption and shown and not self._working and shown[0]['caption'] == caption:
+            shown = shown[1:FEED_SHOWN + 1]     # the card already shows the newest step
+        if shown:
+            feed = StackPanel()
+            feed.Margin = Thickness(0, 6, 0, 0)
+            for step in shown:
+                feed.Children.Add(self._feed_row(step, len(agents) > 1))
+            full.Children.Add(feed)
+
+        # agents with their counts (several agents, or a summary when idle)
+        if len(agents) > 1 or (state == 'idle' and self._counts):
+            for agent in agents:
+                tag, color = agent_style(agent)
+                mark = self._mark(color, 14)
+                mark.Margin = Thickness(0, 0, 8, 0)
+                row = self._line_row(self._row(mark, self._text(tag, 12.5, bold=False,
+                                                                color=self._c('text'))),
+                                     self._counts_row(self._counts.get(agent, {})), 6)
+                full.Children.Add(row)
+
+        # footer
+        from System.Windows.Controls import Border
+        rule = Border()
+        rule.Height = 1
+        rule.Background = self._brush(self._c('line'))
+        rule.Margin = Thickness(0, 10, 0, 8)
+        full.Children.Add(rule)
+        note = self._note if self._note else footer_text(self._actions, self._failed,
+                                                         len(self._views))
+        if self._views and not self._note:
+            names = [v[1] for v in self._views[-3:]]
+            note_tip = u'Views: ' + u' · '.join(names)
+        else:
+            note_tip = None
+        foot_text = self._text(note, 11.5, bold=False, color=self._c('muted'))
+        if note_tip:
+            foot_text.ToolTip = note_tip
+        actions = self._row(
+            self._button(u'', 'Select touched',
+                         'Select every element the agents changed (no model change)',
+                         self._select_touched),
+            self._button(u'', 'Replay', 'Replay the last {} steps'.format(REPLAY_SIZE),
+                         self.replay))
+        full.Children.Add(self._line_row(foot_text, actions))
+
+    def _progress_bar(self, progress):
+        from System.Windows import Thickness, CornerRadius, HorizontalAlignment
+        from System.Windows.Controls import Border
+        done, total = progress
+        track = Border()
+        track.Height = 4
+        track.CornerRadius = CornerRadius(2)
+        track.Background = self._brush(self._c('track'))
+        track.Margin = Thickness(0, 4, 0, 0)
+        fill = Border()
+        fill.Height = 4
+        fill.CornerRadius = CornerRadius(2)
+        fill.Background = self._brush(self._c('accent'))
+        fill.HorizontalAlignment = HorizontalAlignment.Left
+        fill.Width = max(4.0, 396.0 * done / float(total or 1))
+        track.Child = fill
+        return track
+
+    def _current_card(self, caption):
+        from System.Windows import Thickness, CornerRadius, TextWrapping
+        from System.Windows.Controls import Border, StackPanel
+        failed = (not self._working and bool(self._feed) and not self._feed[0].get('kind')
+                  and self._feed[0].get('failed'))
+        card = Border()
+        card.Background = self._brush(self._c('card'))
+        card.BorderBrush = self._brush(self._c('bad') if failed else self._c('accent'))
+        card.BorderThickness = Thickness(3, 0, 0, 0)
+        card.CornerRadius = CornerRadius(4)
+        card.Padding = Thickness(10, 6, 10, 7)
+        card.Margin = Thickness(0, 10, 0, 0)
+        body = StackPanel()
+        card.Child = body
+        text = self._text(caption, 12.5, color=self._c('text'))
+        text.TextWrapping = TextWrapping.Wrap
+        body.Children.Add(text)
+        if not self._working and self._last_changes:
+            from System.Windows.Controls import WrapPanel
+            from System.Windows.Media import FontFamily
+            chips = WrapPanel()
+            chips.Margin = Thickness(0, 4, 0, 0)
+            for change in self._last_changes[:3]:
+                chip = self._pill(self._text(short_text(change, 40), 11, bold=False,
+                                             color=self._c('text')), self._c('chip'), radius=2)
+                chip.Child.FontFamily = FontFamily('Consolas')
+                chip.Margin = Thickness(0, 0, 6, 2)
+                chips.Children.Add(chip)
+            body.Children.Add(chips)
+        return card
+
+    def _feed_row(self, step, with_agent):
+        """✓ / ✕ / ⚠ · [agent] caption · how long ago."""
+        from System.Windows import Thickness
+        if step.get('kind') in ('warn', 'note'):
+            glyph, tint = u'', self._c('warn')
+        elif step['failed']:
+            glyph, tint = u'', self._c('bad')
+        else:
+            glyph, tint = u'', self._c('ok')
+        icon = self._text(glyph, 10, color=tint, glyph=True)
+        icon.Margin = Thickness(0, 0, 8, 0)
+        parts = [icon]
+        if with_agent:
+            mark = self._mark(agent_style(step['agent'])[1], 12)
+            mark.Margin = Thickness(0, 0, 6, 0)
+            parts.append(mark)
+        parts.append(self._text(short_text(step['caption'], 50), 12, bold=False,
+                                color=self._c('text2')))
+        ago = self._text(ago_text(time.time() - step.get('t', time.time())), 11, bold=False,
+                         color=self._c('faint'))
+        row = self._line_row(self._row(*parts), ago, 3)
+        row.ToolTip = step.get('tool') or ''
         return row
+
+    def _options_drawer(self):
+        """⚙: the options as switches in groups, plus speed."""
+        from System.Windows import Thickness, CornerRadius
+        from System.Windows.Controls import Border, StackPanel
+        from System.Windows.Input import Cursors
+        box = Border()
+        box.Background = self._brush(self._c('card'))
+        box.CornerRadius = CornerRadius(4)
+        box.Padding = Thickness(10, 4, 10, 8)
+        box.Margin = Thickness(0, 10, 0, 0)
+        col = StackPanel()
+        box.Child = col
+        opts = options()
+        for group, names in OPTION_GROUPS:
+            head = self._text(group.upper(), 10.5, bold=False, color=self._c('faint'))
+            head.Margin = Thickness(0, 6, 0, 2)
+            col.Children.Add(head)
+            for name in names:
+                label, tip = OPTION_LABELS[name][:2]
+
+                def flip(s, e, name=name):
+                    try:
+                        set_option(name, not options()[name])
+                        self._refresh_hud()
+                    except Exception:
+                        pass
+                text = self._text(label, 12.5, bold=False, color=self._c('text'))
+                text.ToolTip = tip
+                col.Children.Add(self._line_row(text, self._switch(opts[name], flip), 3))
+            if group == 'Motion':
+                seg = []
+                for value, _factor in SPEEDS:
+                    on = value == speed()
+                    part = self._pill(self._text(value.capitalize(), 11, bold=False,
+                                                 color=self._c('on_accent') if on else
+                                                 self._c('muted')),
+                                      self._c('accent') if on else self._c('chip'), radius=3)
+                    part.Margin = Thickness(2, 0, 0, 0)
+                    part.Cursor = Cursors.Hand
+
+                    def pick(s, e, value=value):
+                        try:
+                            set_speed(value)
+                            self._refresh_hud()
+                        except Exception:
+                            pass
+                    self._hook(part, 'MouseLeftButtonUp', pick, transient=True)
+                    seg.append(part)
+                col.Children.Add(self._line_row(
+                    self._text('Speed', 12.5, bold=False, color=self._c('text')), self._row(*seg), 3))
+        return box
+
+    def _toggle_drawer(self):
+        self._drawer = not self._drawer
+
+    def _toggle_pause(self):
+        fn = (self.host.callbacks if self.host is not None else {}).get('pause')
+        if fn is not None:
+            fn(not self._paused)        # agent_cursors.set_paused -> set_paused() here
+        else:
+            self._paused = not self._paused
+
+    # position: bottom centre of the active view, moved by the user's drag
+
+    def _place_hud(self):
+        if self._view_dip is None or not self.hud.IsVisible:
+            return
+        self.hud.UpdateLayout()
+        size = (self.hud.ActualWidth or 420, self.hud.ActualHeight or 120)
+        try:
+            offset = hud_offset()
+        except Exception:
+            offset = (0.0, 0.0)
+        self.hud.Left, self.hud.Top = hud_place(self._view_dip, size, offset)
+
+    def _drag(self, sender, e):
+        try:
+            if e.ClickCount == 2:
+                set_hud_offset(0, 0)
+                self._place_hud()
+                return
+            self.hud.DragMove()
+            if self._view_dip is None:
+                return
+            size = (self.hud.ActualWidth or 420, self.hud.ActualHeight or 120)
+            home = hud_place(self._view_dip, size, (0.0, 0.0))
+            set_hud_offset(self.hud.Left - home[0], self.hud.Top - home[1])
+        except Exception:
+            pass
+
+    def held(self, agent, caption):
+        """A change refused while paused (agent_cursors.paused_refusal)."""
+        self._feed.insert(0, {'agent': agent, 'action': 'modify', 'tool': '', 'failed': True,
+                              'kind': 'warn', 't': time.time(),
+                              'caption': u'Held while paused: {}'.format(caption)})
+        del self._feed[FEED_SIZE:]
+        self._last = time.time()
+        if self.hud.IsVisible:
+            self._refresh_hud()
+
+    def notice(self, text):
+        self._feed.insert(0, {'agent': '', 'action': 'read', 'tool': '', 'failed': False,
+                              'kind': 'note', 't': time.time(), 'caption': text})
+        del self._feed[FEED_SIZE:]
+        if self.hud.IsVisible:
+            self._refresh_hud()
 
     # ── cursors ──────────────────────────────────────────────────────────────
 
     def _cursor(self, agent, action):
+        """Minimal cursor (owner, 2026-11-17): a bare pointer tip in the
+        agent's colour and one tag, "Claude · Moving 12 walls"."""
         key = '{}|{}'.format(agent, action)
         cur = self._cursors.get(key)
         if cur is not None:
             return cur
-        from System.Windows import Thickness
-        from System.Windows.Controls import Canvas, StackPanel
-        from System.Windows.Media import TranslateTransform, ScaleTransform, Geometry
-        from System.Windows.Shapes import Path
+        from System.Windows import Thickness, CornerRadius, Visibility
+        from System.Windows.Controls import Canvas, Border
+        from System.Windows.Media import TranslateTransform, ScaleTransform, Geometry, PenLineJoin
+        from System.Windows.Media.Effects import DropShadowEffect
+        from System.Windows.Shapes import Path, Ellipse
         tag, color = agent_style(agent)
-        label, glyph, acolor = action_style(action)
 
         group = Canvas()
         arrow = Path()
-        arrow.Data = Geometry.Parse('M0,0 L0,17 L4.6,12.8 L7.6,19.6 L10.4,18.4 L7.4,11.6 L13.4,11.6 Z')
+        arrow.Data = Geometry.Parse(CURSOR_PATH)
         arrow.Fill = self._brush(color)
         arrow.Stroke = self._brush('#FFFFFF')
-        arrow.StrokeThickness = 1.2
+        arrow.StrokeThickness = 1.4
+        arrow.StrokeLineJoin = PenLineJoin.Round
+        shadow = DropShadowEffect()
+        shadow.BlurRadius, shadow.ShadowDepth, shadow.Opacity = 2, 0.5, 0.3
+        arrow.Effect = shadow
         press = ScaleTransform()            # a "click" squeezes the arrow to its tip
         arrow.RenderTransform = press
         group.Children.Add(arrow)
-        spin = self._spinner(color)
-        group.Children.Add(spin)
 
-        tags = StackPanel()
-        Canvas.SetLeft(tags, 12)
-        Canvas.SetTop(tags, 18)
-        name = self._pill(self._row(self._text(tag), self._action_chip(glyph, label, acolor)),
-                          color)
-        tags.Children.Add(name)
-        tool = self._text('', 11, color='#111827')          # what it does
-        tool_name = self._text('', 9.5, bold=False, color='#6B7280')   # MCP tool
-        lines = StackPanel()
-        lines.Children.Add(tool)
-        lines.Children.Add(tool_name)
-        tool_pill = self._pill(lines, '#FFFFFF', alpha=238)
-        tool_pill.Margin = Thickness(0, 2, 0, 0)
-        tool_pill.BorderBrush = self._brush(acolor)
-        tool_pill.BorderThickness = Thickness(1)
-        tags.Children.Add(tool_pill)
-        group.Children.Add(tags)
+        spin = Ellipse()                    # turns inside the tag while the call runs
+        spin.Width = spin.Height = 8
+        spin.Stroke = self._brush('#FFFFFF')
+        spin.StrokeThickness = 1.4
+        from System.Windows.Media import DoubleCollection, RotateTransform
+        dash = DoubleCollection()
+        dash.Add(3)
+        dash.Add(2)
+        spin.StrokeDashArray = dash
+        rot = RotateTransform()
+        rot.CenterX = rot.CenterY = 4
+        spin.RenderTransform = rot
+        spin.Margin = Thickness(0, 0, 4, 0)
+        spin.Visibility = Visibility.Collapsed
+        name = self._text(tag, 11, color='#FFFFFF')
+        state = self._text('', 11, bold=False, color='#FFFFFF')     # " · what it does"
+        pill = Border()
+        pill.CornerRadius = CornerRadius(6)
+        pill.Padding = Thickness(7, 1, 7, 2)
+        pill.Background = self._brush(color)
+        pill.Child = self._row(spin, name, state)
+        Canvas.SetLeft(pill, 12)
+        Canvas.SetTop(pill, 12)
+        group.Children.Add(pill)
 
         tx = TranslateTransform()
         group.RenderTransform = tx
         self.canvas.Children.Add(group)
         # Cursors start at different spots so a swarm never stacks up.
         slot = len(self._cursors)
-        cur = {'group': group, 'tx': tx, 'tool': tool, 'tool_name': tool_name,
-               'tool_pill': tool_pill, 'press': press, 'color': acolor, 'spin': spin, 'x': 40.0 + 36 * slot, 'y': 40.0 + 24 * slot}
+        cur = {'group': group, 'tx': tx, 'press': press, 'spin': spin, 'pill': pill,
+               'name': name, 'state': state, 'color': color, 'caption': '',
+               'x': 40.0 + 36 * slot, 'y': 40.0 + 24 * slot}
         tx.X, tx.Y = cur['x'], cur['y']
         self._cursors[key] = cur
         return cur
 
-    def _action_chip(self, glyph, label, color):
-        from System.Windows import Thickness
-        chip = self._pill(self._glyph_label(glyph, label, '#FFFFFF', 9.5), color, radius=2)
-        chip.Padding = Thickness(4, 0, 4, 0)
-        chip.Margin = Thickness(6, 0, 0, 0)
-        return chip
+    def _cursor_state(self, cur, state, caption=None):
+        """idle | working (spinner) | waiting (amber, pulsing) | failed (red);
+        `caption` (what it does) follows the name, None keeps the current one."""
+        from System.Windows import Visibility
+        from System.Windows.Media import RotateTransform
+        pill, spin = cur['pill'], cur['spin']
+        pill.BeginAnimation(_opacity_property(), None)
+        pill.Opacity = 1.0
+        spin.RenderTransform.BeginAnimation(RotateTransform.AngleProperty, None)
+        spin.Visibility = Visibility.Collapsed
+        pill.Background = self._brush({'waiting': '#F59E0B', 'failed': '#DC2626'}.get(
+            state, cur['color']))
+        ink = '#1F2937' if state == 'waiting' else '#FFFFFF'
+        cur['name'].Foreground = cur['state'].Foreground = self._brush(ink)
+        if state == 'waiting':
+            caption = u'Waiting for your OK'
+        if caption is not None:
+            cur['caption'] = caption
+        text = cur.get('caption') or ''
+        cur['state'].Text = u' \u00b7 ' + short_text(text, 40) if text else ''
+        if state == 'working' and not self._reduce():
+            from System import TimeSpan
+            from System.Windows import Duration
+            from System.Windows.Media.Animation import DoubleAnimation, RepeatBehavior
+            anim = DoubleAnimation()
+            anim.From, anim.To = 0.0, 360.0
+            anim.Duration = Duration(TimeSpan.FromMilliseconds(900))
+            anim.RepeatBehavior = RepeatBehavior.Forever
+            spin.Visibility = Visibility.Visible
+            spin.RenderTransform.BeginAnimation(RotateTransform.AngleProperty, anim)
+        elif state == 'waiting' and not self._reduce():
+            from System.Windows.Media.Animation import RepeatBehavior
+            anim = self._anim(((1.0, 0), (0.5, 500), (1.0, 1000)))
+            anim.RepeatBehavior = RepeatBehavior.Forever
+            pill.BeginAnimation(_opacity_property(), anim)
 
     def _tour(self, cur, sched, shake=False):
         """Glide through sched [(x, y, arrive_ms, leave_ms)] on one keyframe
@@ -816,46 +1280,6 @@ class _Overlay(object):
 
     # ── states other than a finished call ─────────────────────────────────────
 
-    def _spinner(self, color):
-        """Ring that turns around the arrow while the call runs (hidden)."""
-        from System.Windows import Visibility
-        from System.Windows.Media import RotateTransform, DoubleCollection
-        from System.Windows.Shapes import Ellipse
-        from System.Windows.Controls import Canvas
-        ring = Ellipse()
-        ring.Width = ring.Height = 22
-        ring.Stroke = self._brush(color)
-        ring.StrokeThickness = 2
-        dash = DoubleCollection()
-        dash.Add(6)
-        dash.Add(4)
-        ring.StrokeDashArray = dash
-        Canvas.SetLeft(ring, -11)
-        Canvas.SetTop(ring, -11)
-        rot = RotateTransform()
-        rot.CenterX = rot.CenterY = 11
-        ring.RenderTransform = rot
-        ring.Visibility = Visibility.Collapsed
-        return ring
-
-    def _spin(self, cur, on):
-        from System.Windows import Visibility
-        from System.Windows.Media import RotateTransform
-        from System.Windows.Media.Animation import DoubleAnimation, RepeatBehavior
-        from System import TimeSpan
-        from System.Windows import Duration
-        ring = cur['spin']
-        if on and not self._reduce():
-            anim = DoubleAnimation()
-            anim.From, anim.To = 0.0, 360.0
-            anim.Duration = Duration(TimeSpan.FromMilliseconds(900))
-            anim.RepeatBehavior = RepeatBehavior.Forever
-            ring.Visibility = Visibility.Visible
-            ring.RenderTransform.BeginAnimation(RotateTransform.AngleProperty, anim)
-        else:
-            ring.RenderTransform.BeginAnimation(RotateTransform.AngleProperty, None)
-            ring.Visibility = Visibility.Collapsed
-
     def _place(self, rect):
         """Cover `rect` (screen px) with the canvas; shift cursors to match."""
         left, top, right, bottom = rect
@@ -880,14 +1304,10 @@ class _Overlay(object):
 
     def _show_hud(self, rect):
         scale = self._dpi()
-        self._refresh_hud()
+        self._view_dip = (rect[0] / scale, rect[1] / scale, rect[2] / scale, rect[3] / scale)
         if not self.hud.IsVisible:
             self.hud.Show()
-        self.hud.UpdateLayout()
-        aleft, _atop, aright, abottom = rect
-        hud_w = self.hud.ActualWidth or 320
-        self.hud.Left = aleft / scale + ((aright - aleft) / scale - hud_w) / 2.0
-        self.hud.Top = abottom / scale - (self.hud.ActualHeight or 48) - 16
+        self._refresh_hud()             # places it too (_place_hud)
         self._timer.Start()
 
     def working(self, agent, action, caption, tool_name, rect, task_text=''):
@@ -901,9 +1321,7 @@ class _Overlay(object):
         if task_text:
             caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
         self._working[key] = (time.time(), caption)
-        cur['tool'].Text = u'Working · {}'.format(caption)
-        cur['tool_name'].Text = tool_name
-        self._spin(cur, True)
+        self._cursor_state(cur, 'working', caption)
         cur['group'].BeginAnimation(_opacity_property(), None)
         cur['group'].Opacity = 1.0
         self._last = time.time()
@@ -921,20 +1339,12 @@ class _Overlay(object):
                     return          # nothing on screen yet: no view to draw in
                 cur = self._cursor(agent, action)
                 cur['group'].Opacity = 1.0
-            cur['tool'].Text = u'Waiting for your OK · {}'.format(caption)
-            cur['tool_pill'].BorderBrush = self._brush('#F59E0B')
-            cur['tool_pill'].BorderThickness = _thickness(2)
-            if not self._reduce():
-                from System.Windows.Media.Animation import RepeatBehavior
-                anim = self._anim(((1.0, 0), (0.45, 500), (1.0, 1000)))
-                anim.RepeatBehavior = RepeatBehavior.Forever
-                cur['tool_pill'].BeginAnimation(_opacity_property(), anim)
+            self._cursor_state(cur, 'waiting')
         else:
             self._waiting.pop(key, None)
             if cur is not None:
-                cur['tool_pill'].BeginAnimation(_opacity_property(), None)
-                cur['tool_pill'].Opacity = 1.0
-                cur['tool_pill'].BorderThickness = _thickness(1)
+                work = self._working.get(key)
+                self._cursor_state(cur, 'working' if work else 'idle', work[1] if work else None)
         self._last = time.time()
         if self.hud.IsVisible:
             self._refresh_hud()
@@ -948,7 +1358,8 @@ class _Overlay(object):
             self._plans[agent] = plan
         if goal and changed:
             self._feed.insert(0, {'agent': agent, 'action': 'read', 'caption': u'Goal: ' + goal,
-                                  'tool': 't3lab_narrate', 'failed': False, 'kind': 'goal'})
+                                  'tool': 't3lab_narrate', 'failed': False, 'kind': 'goal',
+                                  't': time.time()})
             del self._feed[FEED_SIZE:]
         self._last = time.time()
         if self.hud.IsVisible:
@@ -1001,35 +1412,35 @@ class _Overlay(object):
         for item in self._asks:
             tag, color = agent_style(item['agent'])
             card = Border()
-            card.Background = self._brush('#111827')
-            card.BorderBrush = self._brush('#F59E0B')
+            card.Background = self._brush(self._c('card'))
+            card.BorderBrush = self._brush(self._c('warn'))
             card.BorderThickness = Thickness(1)
             card.CornerRadius = CornerRadius(6)
             card.Padding = Thickness(10, 8, 10, 8)
             card.Margin = Thickness(0, 0, 0, 8)
-            card.MaxWidth = 560
+            card.Width = 420
             body = StackPanel()
             card.Child = body
-            head = self._glyph_label('\uE7BA', u'{} asks for your OK'.format(tag), '#FDE68A', 11)
+            head = self._glyph_label('\uE7BA', u'{} asks for your OK'.format(tag), self._c('warn'), 11)
             body.Children.Add(head)
-            title = self._text(item['main'] or item['caption'], 12, color='#FFFFFF')
+            title = self._text(item['main'] or item['caption'], 12, color=self._c('text'))
             title.TextWrapping = TextWrapping.Wrap
             title.Margin = Thickness(0, 4, 0, 0)
             body.Children.Add(title)
             if item['content']:
-                text = self._text(item['content'][:900], 11, bold=False, color='#E5E7EB')
+                text = self._text(item['content'][:900], 11, bold=False, color=self._c('text2'))
                 text.TextWrapping = TextWrapping.Wrap
                 text.Margin = Thickness(0, 4, 0, 0)
                 body.Children.Add(text)
             if item['expanded']:
-                code = self._text(item['expanded'][:6000], 10.5, bold=False, color='#D1D5DB')
+                code = self._text(item['expanded'][:6000], 10.5, bold=False, color=self._c('text2'))
                 code.FontFamily = FontFamily('Consolas')
                 scroll = ScrollViewer()
                 scroll.MaxHeight = 180
                 scroll.Content = code
                 scroll.Visibility = Visibility.Collapsed
                 scroll.Margin = Thickness(0, 4, 0, 0)
-                toggle = self._pill(self._glyph_label('\uE70D', 'Details', '#E5E7EB'), '#374151')
+                toggle = self._pill(self._glyph_label('\uE70D', 'Details', self._c('text2')), self._c('chip'))
                 toggle.Cursor = Cursors.Hand
                 toggle.ToolTip = 'Show what will run'
 
@@ -1044,11 +1455,11 @@ class _Overlay(object):
             always = None
             if item['always_text']:
                 always = CheckBox()
-                always.Content = self._text(item['always_text'], 11, bold=False, color='#E5E7EB')
+                always.Content = self._text(item['always_text'], 11, bold=False, color=self._c('text2'))
                 always.Margin = Thickness(0, 6, 0, 0)
                 body.Children.Add(always)
-            allow = self._pill(self._glyph_label('\uE73E', 'Allow', '#FFFFFF', 11), '#16A34A')
-            deny = self._pill(self._glyph_label('\uE711', 'Deny', '#FFFFFF', 11), '#4B5563')
+            allow = self._pill(self._glyph_label('\uE73E', 'Allow', self._c('on_accent'), 11), self._c('accent'))
+            deny = self._pill(self._glyph_label('\uE711', 'Deny', self._c('text'), 11), self._c('chip'))
             for chip, ok in ((allow, True), (deny, False)):
                 chip.Cursor = Cursors.Hand
                 chip.Padding = Thickness(10, 3, 10, 3)
@@ -1101,13 +1512,7 @@ class _Overlay(object):
         cur = self._cursor(agent, action)
         self._working.pop(key, None)
         self._waiting.pop(key, None)
-        self._spin(cur, False)
-        cur['tool_pill'].BeginAnimation(_opacity_property(), None)
-        cur['tool_pill'].Opacity = 1.0
-        cur['tool_pill'].BorderThickness = _thickness(1)
-        cur['tool'].Text = caption
-        cur['tool_name'].Text = detail
-        cur['tool_pill'].BorderBrush = self._brush('#DC2626' if failed else acolor)
+        self._cursor_state(cur, 'failed' if failed else 'idle', caption)
 
         for vid, name, is_new in followed:
             if vid not in [v[0] for v in self._views]:
@@ -1127,6 +1532,13 @@ class _Overlay(object):
                 b = self._local(item['box'])
                 stops.append((((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0), 'gone', b, item))
             ghosts.extend(geo['ghosts'])
+        boxes = [st for st in stops if st[1] == 'box']
+        if cluster_stops(len(boxes)):
+            # Many targets: one frame round them all and one stop, not a box each.
+            u = union_box([st[2] for st in boxes])
+            text = u'\u00d7{} · {}'.format(max(n_targets, len(boxes)), label)
+            stops = [((u[2] - 4, u[1] + 4), 'box', u, {'label': text, 'size': text})] + [
+                st for st in stops if st[1] != 'box']
         active_local = self._local(snap['active']['rect'])
         if stops:
             points = [st[0] for st in stops[:MAX_STOPS]]
@@ -1167,17 +1579,21 @@ class _Overlay(object):
         cur['group'].Opacity = 1.0
 
         self._feed.insert(0, {'agent': agent, 'action': action, 'caption': caption,
-                              'tool': detail, 'failed': failed})
+                              'tool': detail, 'failed': failed, 't': time.time()})
+        self._last_changes = [text for _i, text in changes]
         for elem_id, others in clashes:
             self._feed.insert(0, {
                 'agent': agent, 'action': action, 'tool': tool_name, 'failed': True,
-                'kind': 'warn', 'caption': u'{} and {} both edited element {}'.format(
+                'kind': 'warn', 't': time.time(),
+                'caption': u'{} and {} both edited element {}'.format(
                     agent_style(agent)[0], ', '.join(agent_style(o)[0] for o in others), elem_id)})
         del self._feed[FEED_SIZE:]
         if record:                  # a replay does not count twice
             counts = self._counts.setdefault(agent, {})
             counts[action] = counts.get(action, 0) + 1
             self._actions += 1
+            self._failed += 1 if failed else 0
+            self._note = ''
         self._last = time.time()
         self._show_hud(snap['active']['rect'])
 
@@ -1266,14 +1682,16 @@ class _Overlay(object):
             if k >= len(records):
                 self._replay = None
                 self._replay_timer.Stop()
-                self._views_text.Text = u'Replay done · {} steps'.format(len(records))
+                self._note = u'Replay done · {} steps'.format(len(records))
+                self._refresh_hud()
                 return
             rec = records[k]
             self._replay[1] = k + 1
             self.show(rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], args=rec[6],
                       n_targets=rec[7], changes=rec[8], clashes=rec[9], touched=rec[10],
                       goal=rec[11], record=False, task_text=rec[12])
-            self._views_text.Text = u'Replay {} / {}'.format(k + 1, len(records))
+            self._note = u'Replay {} / {}'.format(k + 1, len(records))
+            self._refresh_hud()
         except Exception:
             self._replay = None
             self._replay_timer.Stop()
@@ -1285,10 +1703,9 @@ class _Overlay(object):
             return False
 
     def _enter_summary(self, keep=False):
-        """Agents idle: the HUD adds a summary card. Keep bar on: cursors only
-        dim and both windows stay, so the next call does not make them blink;
-        off: the canvas is cleared and hidden."""
-        from System.Windows import Thickness
+        """Agents idle: the bar lists each agent's counts (_fill_full). Keep
+        bar on: cursors only dim and both windows stay, so the next call does
+        not make them blink; off: the canvas is cleared and hidden."""
         self._summary = time.time()
         self._resting = keep
         for cur in self._cursors.values():
@@ -1298,26 +1715,11 @@ class _Overlay(object):
             self.canvas.Children.Clear()
             self._cursors = {}
             self.win.Hide()
-        self._summary_panel.Children.Clear()
-        title = self._text(u'Agents are idle', 12)
-        self._summary_panel.Children.Add(title)
-        for line in summary_lines(self._counts, self._touched):
-            row = self._text(line, 11, bold=False, color='#E5E7EB')
-            row.Margin = Thickness(0, 2, 0, 0)
-            self._summary_panel.Children.Add(row)
-        buttons = self._row(
-            self._button('\uE8B3', 'Select touched',
-                         'Select every element the agents changed (no model change)',
-                         self._select_touched),
-            self._button('\uE768', 'Replay', 'Replay the last steps', self.replay))
-        buttons.Margin = Thickness(-4, 6, 0, 0)
-        self._summary_panel.Children.Add(buttons)
 
     def _end_summary(self):
         if self._summary is not None:
             self._summary = None
             self._resting = False
-            self._summary_panel.Children.Clear()
 
     def _select_touched(self):
         fn = (self.host.callbacks if self.host is not None else {}).get('select_touched')
@@ -1341,6 +1743,11 @@ class _Overlay(object):
         self._waiting = {}
         self._goals = {}
         self._plans = {}
+        self._failed = 0
+        self._last_changes = []
+        self._note = ''
+        self._drawer = False
+        self._folded = False
         self._replay = None
         self._replay_timer.Stop()
         self._end_summary()
@@ -1351,13 +1758,13 @@ class _Overlay(object):
     def _on_tick(self, sender, e):
         try:
             now = time.time()
-            for key, (started, caption) in list(self._working.items()):
-                cur = self._cursors.get(key)
-                if cur is not None and key not in self._waiting:
-                    cur['tool'].Text = u'Working {} s · {}'.format(int(now - started), caption)
+            if self._working and self._status_label is not None:
+                self._status_label.Text = status_text('working', self._seconds())
             if self._working or self._waiting or self._asks or self._replay is not None:
                 self._last = now
                 return
+            if self.hud.IsVisible and self._fold_due():
+                self._refresh_hud()             # idle long enough: fold to one line
             if self.hud.IsMouseOver:
                 self._last = now            # reading the HUD / toggling
                 if self._summary is not None:
@@ -1375,6 +1782,12 @@ class _Overlay(object):
         except Exception:
             pass
 
+    def _fold_due(self):
+        from System.Windows import Visibility
+        folded = self._compact.Visibility == Visibility.Visible
+        want = should_collapse(self._folded, time.time() - self._last, self._hover, self._asks)
+        return want != folded
+
     def _on_front_tick(self, sender, e):
         """Own thread only: show while Revit (this process) is in front."""
         try:
@@ -1391,6 +1804,10 @@ class _Overlay(object):
                     window.Visibility = _visibility('Visible')
         except Exception:
             pass
+
+def _swallow(sender, e):
+    e.Handled = True
+
 
 def _translate_x():
     from System.Windows.Media import TranslateTransform

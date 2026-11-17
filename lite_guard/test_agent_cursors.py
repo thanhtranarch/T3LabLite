@@ -28,6 +28,7 @@ os.environ['APPDATA'] = _TMP
 import core.agent_cursors as AC   # noqa: E402
 
 BUTTON = 'T3Lab.tab/Support.panel/Settings.pulldown/AgentCursors.pushbutton/script.py'
+SERVER = 'lib/core/server.py'
 FAILURES = []
 
 
@@ -437,6 +438,79 @@ def test_settings_dialog():
           'x:Name="pnl_options" Grid.Row="1"' in xaml and rows[:4] == ['0', '1', '2', '3'], rows)
 
 
+def test_hud_redesign():
+    print('[bar redesign: state, progress, fold, place, pause, minimal cursor]')
+    hs = AC.hud_state
+    check('state: question > pause > working > idle',
+          hs({}, {}, [1], True) == 'waiting' and hs({}, {'k': 1}, [], False) == 'waiting'
+          and hs({'k': 1}, {}, [], True) == 'paused' and hs({'k': 1}, {}, [], False) == 'working'
+          and hs({}, {}, [], False) == 'idle')
+    check('status text', AC.status_text('working', 8.6) == 'Working 8 s'
+          and AC.status_text('working', 0.2) == 'Working' and AC.status_text('paused') == 'Paused')
+    check('plan progress', AC.plan_progress({'tasks': list('abcde'), 'step': 4}) == (3, 5)
+          and AC.plan_progress({'tasks': list('ab'), 'step': 9}) == (2, 2)
+          and AC.plan_progress({}) is None and AC.plan_progress(None) is None)
+    check('ago text', [AC.ago_text(x) for x in (0, 9, 125, 7300)] == ['now', '9 s', '2 min', '2 h'])
+    check('one-line bar text', AC.compact_line('Moving 12 walls', (3, 5)) == u'Moving 12 walls \u00b7 4/5'
+          and AC.compact_line('x' * 80).endswith(u'\u2026') and len(AC.compact_line('x' * 80)) == 36)
+    check('footer', AC.footer_text(1, 0, 0) == '1 action'
+          and AC.footer_text(12, 1, 2) == u'12 actions \u00b7 1 failed \u00b7 2 views')
+    sc = AC.should_collapse
+    check('fold: hover opens, user fold wins, idle folds, a question opens',
+          not sc(True, 99, True, []) and sc(True, 0, False, [1])
+          and sc(False, AC.COLLAPSE_S, False, []) and not sc(False, 1, False, [])
+          and not sc(False, 99, False, [1]))
+    check('offset parse', AC.parse_offset('12,-30') == (12.0, -30.0) and AC.parse_offset('') == (0, 0)
+          and AC.parse_offset('bad') == (0, 0))
+    view = (0, 0, 1000, 800)
+    check('bar placed bottom centre', AC.hud_place(view, (420, 200)) == (290.0, 584.0))
+    check('bar kept inside the view', AC.hud_place(view, (420, 200), (5000, 5000)) == (576, 596)
+          and AC.hud_place(view, (420, 200), (-5000, -5000)) == (4, 4))
+    check('cluster', AC.union_box([(1, 5, 3, 9), (0, 6, 8, 7)]) == (0, 5, 8, 9)
+          and AC.cluster_stops(AC.MAX_STOPS + 1) and not AC.cluster_stops(AC.MAX_STOPS))
+    for theme in ('dark', 'light'):
+        pal = AC.hud_palette(theme)
+        check('palette ' + theme + ' complete',
+              set(pal) == set(AC.HUD_PALETTES['dark']) and all(pal[k] for k in AC.STATES.values()
+                                                              for k in [k[1]]))
+    grouped = [n for _g, names in AC.OPTION_GROUPS for n in names]
+    check('options drawer lists every option once',
+          sorted(grouped) == sorted(n for n, _k, _d in AC.OPTIONS) and len(grouped) == len(set(grouped)))
+    AC.set_paused(False)
+    check('not paused: nothing held', AC.paused_refusal('set_parameter', True) is None)
+    AC.set_paused(True)
+    try:
+        held = AC.paused_refusal('set_parameter', True)
+        check('paused: a write is held, nothing ran',
+              held and held['error_code'] == 'paused' and held['nothing_ran'] and 'Resume' in held['error'])
+        check('paused: reads and narrate still run',
+              AC.paused_refusal('list_views', False) is None
+              and AC.paused_refusal(AC.NARRATE_TOOL, True) is None)
+    finally:
+        AC.set_paused(False)
+    osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
+    check('minimal cursor: bare tip + one tag (name · what it does)',
+          'CURSOR_PATH' in osrc and "'tool_pill'" not in osrc and "cur['tool']" not in osrc
+          and 'def _cursor_state(self, cur, state, caption=None):' in osrc)
+    check('avatar on the bar is the cursor', 'def _mark(self, color, size=16):' in osrc
+          and 'Geometry.Parse(CURSOR_PATH)' in osrc.split('def _mark(', 1)[1].split('    def ', 1)[0])
+    check('options drawer replaces the chips', 'for group, names in OPTION_GROUPS' in osrc
+          and 'WrapPanel()\n        self._toggles' not in osrc)
+    check('header: pause, options, fold, close', all(t in osrc for t in (
+        "'Pause: hold model changes", "'Options'", "'Fold to one line", "'Turn agent cursors off")))
+    check('drag to move, remembered', 'self.hud.DragMove()' in osrc and 'set_hud_offset(' in osrc
+          and 'e.ClickCount == 2' in osrc)
+    check('buttons never start a drag', osrc.count("'MouseLeftButtonDown', _swallow") >= 2)
+    check('theme follows Revit', 'def set_theme(self, theme):' in osrc)
+    acsrc = open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
+    check('glow switches itself off when Revit refuses it', "set_option('glow', False)" in acsrc)
+    ssrc = open(os.path.join(REPO, *SERVER.split('/')), encoding='utf-8').read()
+    gate = ssrc.index('agent_cursors.paused_refusal(task.tool_name, is_write)')
+    check('server holds writes before they run',
+          gate < ssrc.index('self.server._write_in_progress = True', gate)
+          and gate < ssrc.index('self.server._execute_tool_in_context(', gate))
+
+
 if __name__ == '__main__':
     try:
         test_extract_ids()
@@ -453,6 +527,7 @@ if __name__ == '__main__':
         test_server_hook()
         test_agent_stamp()
         test_settings_dialog()
+        test_hud_redesign()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

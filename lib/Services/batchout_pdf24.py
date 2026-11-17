@@ -41,6 +41,8 @@ AUTO_SAVE_VALUES = (
 TOUCHED = tuple(v[0] for v in AUTO_SAVE_VALUES) + ('AutoSaveDir', 'AutoSaveFilename')
 
 DOCTOOL = 'pdf24-DocTool.exe'
+GS_EXE = 'gswin64c.exe'
+PRN_SUFFIX = '.t3lab.prn'       # Revit's print-to-file output for a "virtual" PDF24
 
 
 # ─── Pure helpers ──────────────────────────────────────────────────────────────
@@ -120,14 +122,60 @@ def join_command(doctool, files, out_dir, out_name):
              '-outputDir', out_dir, '-outputFile', name] + list(files))
 
 
+def sniff(path):
+    """'pdf' | 'ps' | 'other' for a printed file, None when unreadable. A PJL
+    header (UEL + @PJL lines) may come before %!PS."""
+    try:
+        with io.open(path, 'rb') as f:
+            head = f.read(4096)
+    except (IOError, OSError):
+        return None
+    if b'%PDF-' in head[:1024]:
+        return 'pdf'
+    if b'%!PS' in head:
+        return 'ps'
+    return 'other'
+
+
+def ghostscript_paths(env=None):
+    """Ghostscript PDF24 ships (PDF24\\gs\\bin), for PostScript -> PDF."""
+    env = os.environ if env is None else env
+    out = []
+    for var in ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)'):
+        base = env.get(var)
+        if base:
+            path = os.path.join(base, 'PDF24', 'gs', 'bin', GS_EXE)
+            if path not in out:
+                out.append(path)
+    return out
+
+
+def find_ghostscript(env=None, exists=os.path.isfile):
+    for path in ghostscript_paths(env):
+        if exists(path):
+            return path
+    return None
+
+
+def ps_to_pdf_command(gs, src, dst):
+    """argv: PostScript (Revit printed to file) -> PDF, print quality."""
+    return [gs, '-dBATCH', '-dNOPAUSE', '-dSAFER', '-q', '-sDEVICE=pdfwrite',
+            '-dPDFSETTINGS=/prepress', '-sOutputFile=' + dst, src]
+
+
+def prn_path(folder, name):
+    return os.path.join(folder, name + PRN_SUFFIX)
+
+
 def wait_for_pdf(expected, prev_mtime, started_at, timeout, taken=(),
-                 clock=None, sleep=None, poll=0.25):
+                 clock=None, sleep=None, poll=0.25, extra=()):
     """Path of the PDF PDF24 wrote for one job, or None after `timeout` s.
 
     PDF24 saves after SubmitPrint returns, so poll. Ready = nonempty, newer
     than prev_mtime, same size on two polls, openable for writing (PDF24 no
     longer holds it). A different new .pdf in the folder (PDF24 kept its own
-    filename pattern) counts too, unless already in `taken`.
+    filename pattern) counts too, unless already in `taken`; so do the
+    `extra` paths (Revit's print-to-file output). Check the result with sniff().
     """
     clock = clock or getattr(time, 'monotonic', time.time)
     sleep = sleep or time.sleep
@@ -136,7 +184,9 @@ def wait_for_pdf(expected, prev_mtime, started_at, timeout, taken=(),
     deadline = clock() + max(0.0, timeout)
     last = {}
     while True:
-        for path in _candidates(expected, folder, started_at, prev_mtime, taken):
+        found = _candidates(expected, folder, started_at, prev_mtime, taken)
+        found += [p for p in extra if p not in found and _fresh(p, started_at - 1.0)]
+        for path in found:
             size = _size(path)
             if size and last.get(path) == size and _unlocked(path):
                 return path

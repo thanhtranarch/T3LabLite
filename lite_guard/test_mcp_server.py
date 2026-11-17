@@ -663,7 +663,8 @@ class ToolCallTests(unittest.TestCase):
         self.s._handle_tool_call({'name': 'create_level', 'arguments': {},
                                   '_meta': {'t3lab/agent': 'codex-mcp-client'}})
         self._call('create_level')
-        self.assertEqual(self.agents, ['codex-mcp-client', 'claude-desktop'])
+        # no name on the call: "AI app", never a guessed app
+        self.assertEqual(self.agents, ['codex-mcp-client', 'mcp-client'])
 
     def test_confirm_can_be_turned_off(self):
         _set_settings(**{mp.CONFIRM_KEY: False})

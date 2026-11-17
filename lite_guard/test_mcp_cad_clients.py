@@ -26,7 +26,7 @@ def check(name, cond, detail=''):
     if cond:
         print('  ok   ' + name)
     else:
-        print('  FAIL ' + name + ('  -- ' + detail if detail else ''))
+        print('  FAIL ' + name + ('  -- ' + str(detail) if detail else ''))
         FAILURES.append(name)
 
 
@@ -207,10 +207,29 @@ def test_other_autodesk_apps():
           M.MCPService.cad_bridge_status()['server'] == 't3lab-autocad')
 
 
+def test_dialog_attrs_assigned():
+    """App switch crashed with "'MCPControlWindow' object has no attribute
+    '_configure_all_btn'": every self.<attr> the dialog reads must be set
+    somewhere (or come from the WPF base). Source scan: no WPF needed."""
+    import re
+    print('[MCP Control dialog: every self.<attr> read is assigned]')
+    with open(os.path.join(LIB, 'GUI', 'MCPControlDialog.py')) as f:
+        src = f.read()
+    reads = set(re.findall(r'self\.(_?\w+)', src))
+    assigned = set(re.findall(r'self\.(_?\w+)\s*(?:=[^=]|,)', src))
+    assigned |= set(re.findall(r'def (\w+)\(self', src))
+    assigned |= set(re.findall(r'^\s{4}(_?\w+)\s*=', src, re.M))
+    base = {'Close', 'FindName'}
+    missing = sorted(reads - assigned - base)
+    check('no unassigned attributes', not missing, missing)
+    check('Connect All button kept on self',
+          "self._configure_all_btn   = self.FindName('configure_all_btn')" in src)
+
+
 def main():
     for t in (test_needs_bridge, test_json_keeps_revit_and_others,
               test_desktop_running_guard, test_toml, test_snippets_and_revit_default,
-              test_other_autodesk_apps):
+              test_other_autodesk_apps, test_dialog_attrs_assigned):
         t()
     if FAILURES:
         print('\n{} FAILED: {}'.format(len(FAILURES), ', '.join(FAILURES)))

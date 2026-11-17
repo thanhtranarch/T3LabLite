@@ -255,9 +255,10 @@ class MCPControlWindow(T3WPFWindow):
                 btn.Click += handler
 
         self._configure_all_label = self.FindName('configure_all_label')
-        configure_all_btn         = self.FindName('configure_all_btn')
-        if configure_all_btn:
-            configure_all_btn.Click += self._on_configure_all
+        # Kept on self: _refresh_clients() enables/disables it per app.
+        self._configure_all_btn   = self.FindName('configure_all_btn')
+        if self._configure_all_btn:
+            self._configure_all_btn.Click += self._on_configure_all
 
         # Step 3 · active model (read-only status)
         self._doc_indicator = self.FindName('active_doc_indicator')

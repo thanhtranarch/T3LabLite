@@ -263,9 +263,7 @@ and drawbacks before you switch).
   the same switches.
 - **When the AI goes idle** — the counts per AI app, **Select touched**
   (selects every element the AI changed; no model change) and **Replay** of
-  the last 20 steps. **Keep bar** keeps the bar and the
-  dimmed cursors on screen between calls, so they do not blink on and off
-  while you work with an AI app. The **X** on the bar turns the cursors off.
+  the last 20 steps. **Keep bar** keeps the bar (folded) on screen between calls; the cursors, boxes and Glow leave when the AI app stops. The **X** on the bar turns the cursors off.
 
 Each tool call does a little extra work (bounding boxes of up to 12
 elements), Follow switches the active view, and the overlay shows up in

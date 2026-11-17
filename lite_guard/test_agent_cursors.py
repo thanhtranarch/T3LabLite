@@ -444,8 +444,33 @@ def test_setting():
     check('keep bar: never auto-hidden after the summary',
           'now - self._summary >= SUMMARY_S and not self._keep()' in tick)
     summary = src.split('    def _enter_summary(self, keep=False):', 1)[1].split('    def ', 1)[0]
-    check('keep bar: idle only dims the cursors, windows stay',
-          'if not keep:' in summary and summary.index('if not keep:') < summary.index('self.win.Hide()'))
+    check('idle: cursors and boxes always leave (Keep bar keeps only the bar)',
+          'if not keep:' not in summary and 'self.canvas.Children.Clear()' in summary
+          and 'self.win.Hide()' in summary)
+    check('idle: Glow taken off the model through the main thread',
+          ".get('idle')" in summary and "'idle': agents_idle" in open(
+              os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read())
+    front = src.split('    def _on_front_tick(self, sender, e):', 1)[1].split('    def ', 1)[0]
+    check('a resting bar never brings the cursor window back', 'self._resting' not in front)
+    AC._session['select_event'] = None
+    check('ui action without an event is a no-op', AC.agents_idle() is False)
+
+    class _Event(object):
+        raised = 0
+
+        def Raise(self):
+            _Event.raised += 1
+    AC._session['select_event'] = _Event()
+    try:
+        AC.agents_idle()
+        AC.select_touched()
+        check('ui actions queue in order for the main thread',
+              AC._session['ui_actions'] == ['idle', 'select'] and _Event.raised == 2)
+    finally:
+        AC._session['select_event'] = None
+        AC._session['ui_actions'] = []
+    check('Antigravity\'s client id reads Antigravity',
+          AC.agent_style('local-agent-mode-t3lab')[0] == 'Antigravity')
     check('speed normal by default', AC.speed() == 'normal' and AC.speed_factor() == 1.0)
     AC.set_speed('calm')
     check('speed saved', AC.speed() == 'calm' and AC.speed_factor() > 1.0)

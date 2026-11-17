@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+- **Agent Cursors — they stayed after the AI app stopped:** when the AI app goes quiet, its cursor, the boxes and the orange Glow outline now leave the model; **Keep bar** keeps only the bar (folded). They come back on its next step.
+- **Agent Cursors — Antigravity is named Antigravity** even when it was connected before 2.4.5 (its own id, `local-agent-mode-…`, is recognised).
+
 ## [2.4.5] - 2026-11-17
 
 Agent Cursors show the right AI app name: Antigravity is no longer shown as Claude.

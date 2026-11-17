@@ -19,6 +19,9 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+- **Agent Cursors — broken icon on the bar:** icons on the bar fall back from Segoe Fluent Icons to Segoe MDL2 Assets, so none shows as an empty box; the "next" mark of a task list uses an icon every Windows version has.
+
 ## [2.4.0] - 2026-11-17
 
 Agent Cursors (see what AI apps do and answer them on the bar), a data hub AI apps can read with Revit closed, PDF24 for BatchOut, MCP Control in one Connect tab, and the Assistant asks your name.

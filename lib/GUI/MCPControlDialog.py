@@ -5,15 +5,13 @@ MCP Control Dialog
 Thin WPF wrapper around MCPService. All backend logic lives in
 Services/mcp_service.py and can be reused by any other tool.
 
-Layout — four tabs, ordered by who needs them:
-  Setup         the three steps every user follows, in order: start the
-                server, connect an AI app, ask it about the active model.
-  Manual Config paste-it-yourself entry for apps not listed in Setup.
+Layout — tabs, ordered by who needs them:
+  Connect       pick the app (Revit, or another Autodesk app through its
+                T3Lab add-in, Services/mcp_service.py AUTODESK_APPS), then
+                the steps: start the server / install the add-in, connect an
+                AI app, ask it; manual config folded at the bottom.
   Advanced      auto-start, port, security (read-only, confirmations, code
                 execution), file task watcher, teaching capture.
-  Autodesk      the same AI apps, connected to another Autodesk app's
-                add-in bridge (AutoCAD: t3lab_CADmcp; list in
-                Services/mcp_service.py AUTODESK_APPS).
 The footer always states how ready the whole chain is. It has no button:
 Start/Stop Server sits in Step 1 and the title-bar X closes the window, so a
 footer "Start Server" / "Done" only repeated them.
@@ -327,49 +325,37 @@ class MCPControlWindow(T3WPFWindow):
         if mark_sandbox_btn:
             mark_sandbox_btn.Click += self._on_mark_sandbox
 
-        # Autodesk tab · same client rows, prefixed cad_ / configure_cad_,
-        # for the app picked in cad_app_cb (AutoCAD first).
-        self._cad_app  = 'autocad'
-        self._cad_apps = []
-        self._cad_app_cb = self.FindName('cad_app_cb')
-        if self._cad_app_cb is not None and HAS_SERVICE:
+        # Connect tab · one AI-app list for the app picked in app_cb: Revit
+        # (t3lab-revit, Step 1 = the server) or an Autodesk app (Step 1 = its
+        # add-in bridge). The pick is remembered (mcp_paths.json).
+        self._app = 'revit'
+        self._apps = [('revit', 'Revit', 't3lab-revit')]
+        self._addin_installed = True
+        self._app_cb             = self.FindName('app_cb')
+        self._revit_server_panel = self.FindName('revit_server_panel')
+        self._addin_panel        = self.FindName('addin_panel')
+        self._ask_panel          = self.FindName('ask_panel')
+        self._addin_dot          = self.FindName('addin_indicator')
+        self._addin_label        = self.FindName('addin_label')
+        self._addin_hint         = self.FindName('addin_hint')
+        if HAS_SERVICE:
             try:
-                self._cad_apps = MCPService.autodesk_apps()
-                for _key, app_label, server_name in self._cad_apps:
-                    self._cad_app_cb.Items.Add(u'{}  ·  {}'.format(app_label, server_name))
-                self._cad_app_cb.SelectedIndex = 0
+                self._apps += list(MCPService.autodesk_apps())
             except Exception as ex:
                 logger.debug('Autodesk app list: {}'.format(ex))
-            self._cad_app_cb.SelectionChanged += self._on_cad_app_changed
-        self._cad_bridge_dot   = self.FindName('cad_bridge_indicator')
-        self._cad_bridge_label = self.FindName('cad_bridge_label')
-        self._cad_bridge_hint  = self.FindName('cad_bridge_hint')
-        self._cad_installed    = False
-        self._cad_widgets      = {}
-        for key in CLIENT_KEYS:
-            btn = self.FindName('configure_cad_{}_btn'.format(key))
-            self._cad_widgets[key] = {
-                'indicator': self.FindName('cad_{}_cfg_indicator'.format(key)),
-                'label':     self.FindName('cad_{}_cfg_label'.format(key)),
-                'button':    btn,
-                'tooltip':   btn.ToolTip if btn else None,
-            }
-            if btn:
-                handler = self._make_cad_configure_handler(key)
-                self._client_handlers.append(handler)
-                btn.Click += handler
-        self._cad_configure_all_label = self.FindName('cad_configure_all_label')
-        self._cad_configure_all_btn   = self.FindName('cad_configure_all_btn')
-        if self._cad_configure_all_btn:
-            self._cad_configure_all_btn.Click += self._on_cad_configure_all
-        self.cad_config_box          = self.FindName('cad_config_box')
-        self._cad_copy_status        = self.FindName('cad_copy_status_label')
-        self._cad_snippet_format_cb  = self.FindName('cad_snippet_format_cb')
-        cad_copy_btn                 = self.FindName('cad_copy_btn')
-        if cad_copy_btn:
-            cad_copy_btn.Click += self._on_cad_copy
-        if self._cad_snippet_format_cb:
-            self._cad_snippet_format_cb.SelectionChanged += self._on_cad_snippet_format_changed
+        try:
+            from core import paths as _paths
+            saved = _paths.load_settings().get(self._APP_KEY)
+            if saved in [a[0] for a in self._apps]:
+                self._app = saved
+        except Exception:
+            pass
+        if self._app_cb is not None:
+            for _key, app_label, server_name in self._apps:
+                self._app_cb.Items.Add(u'{}  ·  {}'.format(app_label, server_name))
+            self._app_cb.SelectedIndex = [a[0] for a in self._apps].index(self._app)
+            self._app_cb.SelectionChanged += self._on_app_changed
+        self._apply_app_panels()
 
         # Footer
         self._footer_dot    = self.FindName('footer_dot')
@@ -398,12 +384,6 @@ class MCPControlWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug('Tab switch failed: {}'.format(ex))
             return
-        # The add-in may have been installed while the window was open.
-        if self._tab_control.SelectedIndex == 3:
-            try:
-                self._refresh_cad()
-            except Exception as ex:
-                logger.error('AutoCAD refresh failed: {}'.format(ex))
 
     # ── Small helpers ──────────────────────────────────────────────────────────
 
@@ -445,11 +425,11 @@ class MCPControlWindow(T3WPFWindow):
         for name, refresh in (('auto-start',  self._refresh_auto_start),
                               ('server',      self._refresh_server),
                               ('documents',   self._refresh_documents),
+                              ('add-in',      self._refresh_addin),
                               ('AI clients',  self._refresh_clients),
                               ('security',    self._refresh_security),
                               ('watcher',     self._refresh_watcher),
-                              ('teaching',    self._refresh_teaching),
-                              ('Autodesk',    self._refresh_cad)):
+                              ('teaching',    self._refresh_teaching)):
             try:
                 refresh()
             except Exception as ex:
@@ -539,14 +519,28 @@ class MCPControlWindow(T3WPFWindow):
                     widgets['button'].IsEnabled = False
             return
 
+        revit = self._app == 'revit'
+        _label, server_name = self._app_spec()
         for key, widgets in self._client_widgets.items():
             try:
-                status = MCPService.client_status(key)
+                revit_status = MCPService.client_status(key)
             except Exception as ex:
-                status = {'error': str(ex)}
-            self._client_states[key] = status
-            self._apply_client_row(widgets, status, 'T3Lab',
-                                   'Rewrite the T3Lab entry — use after changing the port')
+                revit_status = {'error': str(ex)}
+            self._client_states[key] = revit_status     # the footer is about Revit
+            if revit:
+                status = revit_status
+            else:
+                try:
+                    status = MCPService.client_status(key, server=self._app)
+                except Exception as ex:
+                    status = {'error': str(ex)}
+            self._apply_client_row(
+                widgets, status, 'T3Lab' if revit else server_name,
+                'Rewrite the T3Lab entry — use after changing the port' if revit
+                else 'Rewrite the {} entry'.format(server_name),
+                enabled=revit or self._addin_installed)
+        if self._configure_all_btn is not None:
+            self._configure_all_btn.IsEnabled = revit or self._addin_installed
 
     def _apply_client_row(self, widgets, status, entry, update_tip, enabled=True):
         """Dot, words and button of one AI app row from a client_status() dict."""
@@ -687,14 +681,17 @@ class MCPControlWindow(T3WPFWindow):
         if not HAS_SERVICE:
             return
         label = self._client_labels.get(key, key)
-        ok, msg = MCPService.configure_client(key, port=self._current_port())
+        app_label, server_name = self._app_spec()
+        ok, msg = MCPService.configure_client(key, port=self._current_port(),
+                                              server=self._app)
         if ok:
-            logger.info('{} configured: {}'.format(key, msg))
+            logger.info('{} configured for {}: {}'.format(key, app_label, msg))
         else:
-            logger.error('{} configure error: {}'.format(key, msg))
+            logger.error('{} {} configure error: {}'.format(key, app_label, msg))
         if self._configure_all_label:
             self._configure_all_label.Text = (
-                '{0} connected — restart {0} so it loads T3Lab.'.format(label) if ok
+                '{0} connected to {1} — restart {0} so it loads {2}.'.format(
+                    label, app_label, server_name) if ok
                 else '{} failed: {}'.format(label, msg))
         self._refresh_clients()
         self._refresh_footer()
@@ -702,7 +699,9 @@ class MCPControlWindow(T3WPFWindow):
     def _on_configure_all(self, sender, e):
         if not HAS_SERVICE:
             return
-        results = MCPService.configure_all_clients(port=self._current_port())
+        app_label, server_name = self._app_spec()
+        results = MCPService.configure_all_clients(port=self._current_port(),
+                                                   server=self._app)
         done   = [r['label'] for r in results if r['ok']]
         failed = [r for r in results if not r['ok']]
         for r in failed:
@@ -710,7 +709,8 @@ class MCPControlWindow(T3WPFWindow):
         if self._configure_all_label:
             if not failed:
                 self._configure_all_label.Text = (
-                    'Connected {} apps — restart them so they load T3Lab.'.format(len(done)))
+                    'Connected {} apps to {} — restart them so they load {}.'.format(
+                        len(done), app_label, server_name))
             else:
                 self._configure_all_label.Text = (
                     'Connected {} of {} — failed: {}'.format(
@@ -722,10 +722,11 @@ class MCPControlWindow(T3WPFWindow):
     # ── Manual config snippet ──────────────────────────────────────────────────
 
     def _snippet_fmt(self):
-        """'toml' when the Codex row is picked in the format combo, else 'json'."""
+        """'json' | 'toml' (Codex) | 'claude_code' from the format combo."""
         try:
             if self._snippet_format_cb is not None:
-                return 'toml' if self._snippet_format_cb.SelectedIndex == 1 else 'json'
+                return {1: 'toml', 2: 'claude_code'}.get(
+                    self._snippet_format_cb.SelectedIndex, 'json')
         except Exception:
             pass
         return 'json'
@@ -735,7 +736,7 @@ class MCPControlWindow(T3WPFWindow):
             return
         try:
             self.config_box.Text = MCPService.config_snippet(
-                port=self._current_port(), fmt=self._snippet_fmt())
+                port=self._current_port(), fmt=self._snippet_fmt(), server=self._app)
         except Exception as ex:
             logger.error('Snippet error: {}'.format(ex))
 
@@ -755,150 +756,83 @@ class MCPControlWindow(T3WPFWindow):
             from System.Windows import Clipboard
             text = self.config_box.Text if self.config_box else ''
             Clipboard.SetText(text)
-            msg = 'Copied — paste it into the app\'s MCP config file, then restart the app.'
+            msg = ('Copied — run it in a terminal.' if self._snippet_fmt() == 'claude_code'
+                   else 'Copied — paste it into the app\'s MCP config file, then restart the app.')
         except Exception as ex:
             logger.error('Clipboard error: {}'.format(ex))
             msg = 'Copy failed: {} — select the text and press Ctrl+C instead.'.format(ex)
         if self._copy_status:
             self._copy_status.Text = msg
 
-    # ── Autodesk apps ──────────────────────────────────────────────────────────
+    # ── App picker (Connect tab) ───────────────────────────────────────────────
 
-    def _cad_spec(self):
-        """(label, server name) of the Autodesk app picked in the tab."""
-        for key, app_label, server_name in self._cad_apps:
-            if key == self._cad_app:
+    _APP_KEY = 'mcp_control_app'
+
+    def _app_spec(self):
+        """(label, server name) of the app picked in the Connect tab."""
+        for key, app_label, server_name in self._apps:
+            if key == self._app:
                 return app_label, server_name
-        return 'AutoCAD', 't3lab-autocad'
+        return 'Revit', 't3lab-revit'
 
-    def _on_cad_app_changed(self, sender, e):
+    def _apply_app_panels(self):
+        """Revit: server step + ask step. Other apps: their add-in step."""
         try:
-            idx = self._cad_app_cb.SelectedIndex
-            if 0 <= idx < len(self._cad_apps):
-                self._cad_app = self._cad_apps[idx][0]
-                if self._cad_configure_all_label:
-                    self._cad_configure_all_label.Text = ''
-                self._refresh_cad()
+            from System.Windows import Visibility
+            revit = self._app == 'revit'
+            for panel, show in ((self._revit_server_panel, revit),
+                                (self._ask_panel, revit),
+                                (self._addin_panel, not revit)):
+                if panel is not None:
+                    panel.Visibility = Visibility.Visible if show else Visibility.Collapsed
         except Exception as ex:
-            logger.error('Autodesk app switch failed: {}'.format(ex))
+            logger.debug('App panels: {}'.format(ex))
 
-    def _refresh_cad(self):
-        """Add-in status, every AI app row for the picked app, and its snippet."""
-        if not HAS_SERVICE:
-            self._set_dot(self._cad_bridge_dot, 'T3.TextDisabled')
-            if self._cad_bridge_label:
-                self._cad_bridge_label.Text = 'Service unavailable'
-            for widgets in self._cad_widgets.values():
-                if widgets.get('button'):
-                    widgets['button'].IsEnabled = False
-            if self._cad_configure_all_btn:
-                self._cad_configure_all_btn.IsEnabled = False
+    def _on_app_changed(self, sender, e):
+        try:
+            idx = self._app_cb.SelectedIndex
+            if not (0 <= idx < len(self._apps)):
+                return
+            self._app = self._apps[idx][0]
+            try:
+                from core import paths as _paths
+                _paths.set_setting(self._APP_KEY, self._app)
+            except Exception:
+                pass
+            if self._configure_all_label:
+                self._configure_all_label.Text = ''
+            self._apply_app_panels()
+            self._refresh_addin()
+            self._refresh_clients()
+            self._refresh_snippet()
+            self._refresh_footer()
+        except Exception as ex:
+            logger.error('App switch failed: {}'.format(ex))
+
+    def _refresh_addin(self):
+        """Step 1 of an Autodesk app: is its add-in bridge on this machine?"""
+        if self._app == 'revit':
+            self._addin_installed = True
             return
-
-        app_label, server_name = self._cad_spec()
-        bridge = MCPService.app_bridge_status(self._cad_app)
-        self._cad_installed = bool(bridge.get('installed'))
-        if self._cad_installed:
-            self._set_dot(self._cad_bridge_dot, 'T3.Success.Accent')
+        if not HAS_SERVICE:
+            self._addin_installed = False
+            return
+        app_label, _server = self._app_spec()
+        bridge = MCPService.app_bridge_status(self._app)
+        self._addin_installed = bool(bridge.get('installed'))
+        if self._addin_installed:
+            self._set_dot(self._addin_dot, 'T3.Success.Accent')
             label = '{} add-in bridge installed'.format(app_label)
             hint = bridge.get('path') or ''
         else:
-            self._set_dot(self._cad_bridge_dot, 'T3.Warning.Accent')
+            self._set_dot(self._addin_dot, 'T3.Warning.Accent')
             label = '{} add-in not installed'.format(app_label)
-            hint = ('{} — then click Refresh. Expected: {}'.format(
-                (bridge.get('hint') or '').capitalize(), bridge.get('path') or ''))
-        if self._cad_bridge_label:
-            self._cad_bridge_label.Text = label
-        if self._cad_bridge_hint:
-            self._cad_bridge_hint.Text = hint
-
-        for key, widgets in self._cad_widgets.items():
-            try:
-                status = MCPService.client_status(key, server=self._cad_app)
-            except Exception as ex:
-                status = {'error': str(ex)}
-            self._apply_client_row(widgets, status, server_name,
-                                   'Rewrite the {} entry'.format(server_name),
-                                   enabled=self._cad_installed)
-        if self._cad_configure_all_btn:
-            self._cad_configure_all_btn.IsEnabled = self._cad_installed
-        self._refresh_cad_snippet()
-
-    def _make_cad_configure_handler(self, key):
-        def _handler(sender, e):
-            self._cad_configure_one(key)
-        return _handler
-
-    def _cad_configure_one(self, key):
-        if not HAS_SERVICE:
-            return
-        label = self._client_labels.get(key, key)
-        app_label, server_name = self._cad_spec()
-        ok, msg = MCPService.configure_client(key, server=self._cad_app)
-        if ok:
-            logger.info('{} configured for {}: {}'.format(key, app_label, msg))
-        else:
-            logger.error('{} {} configure error: {}'.format(key, app_label, msg))
-        if self._cad_configure_all_label:
-            self._cad_configure_all_label.Text = (
-                '{0} connected to {1} — restart {0} so it loads {2}.'.format(
-                    label, app_label, server_name)
-                if ok else '{} failed: {}'.format(label, msg))
-        self._refresh_cad()
-
-    def _on_cad_configure_all(self, sender, e):
-        if not HAS_SERVICE:
-            return
-        app_label, server_name = self._cad_spec()
-        results = MCPService.configure_all_clients(server=self._cad_app)
-        done   = [r['label'] for r in results if r['ok']]
-        failed = [r for r in results if not r['ok']]
-        for r in failed:
-            logger.error('{} {} configure error: {}'.format(r['label'], app_label, r['message']))
-        if self._cad_configure_all_label:
-            if not failed:
-                self._cad_configure_all_label.Text = (
-                    'Connected {} apps to {} — restart them so they load {}.'.format(
-                        len(done), app_label, server_name))
-            else:
-                self._cad_configure_all_label.Text = (
-                    'Connected {} of {} — failed: {}'.format(
-                        len(done), len(results),
-                        ', '.join('{} ({})'.format(r['label'], r['message']) for r in failed)))
-        self._refresh_cad()
-
-    def _cad_snippet_fmt(self):
-        try:
-            if self._cad_snippet_format_cb is not None:
-                return {1: 'toml', 2: 'claude_code'}.get(
-                    self._cad_snippet_format_cb.SelectedIndex, 'json')
-        except Exception:
-            pass
-        return 'json'
-
-    def _refresh_cad_snippet(self):
-        if not (HAS_SERVICE and self.cad_config_box):
-            return
-        try:
-            self.cad_config_box.Text = MCPService.config_snippet(
-                fmt=self._cad_snippet_fmt(), server=self._cad_app)
-        except Exception as ex:
-            logger.error('Autodesk snippet error: {}'.format(ex))
-
-    def _on_cad_snippet_format_changed(self, sender, e):
-        self._refresh_cad_snippet()
-
-    def _on_cad_copy(self, sender, e):
-        try:
-            from System.Windows import Clipboard
-            Clipboard.SetText(self.cad_config_box.Text if self.cad_config_box else '')
-            msg = ('Copied — run it in a terminal.' if self._cad_snippet_fmt() == 'claude_code'
-                   else 'Copied — paste it into the app\'s MCP config file, then restart the app.')
-        except Exception as ex:
-            logger.error('Clipboard error: {}'.format(ex))
-            msg = 'Copy failed: {} — select the text and press Ctrl+C instead.'.format(ex)
-        if self._cad_copy_status:
-            self._cad_copy_status.Text = msg
+            hint = '{} — then click Refresh. Expected: {}'.format(
+                (bridge.get('hint') or '').capitalize(), bridge.get('path') or '')
+        if self._addin_label:
+            self._addin_label.Text = label
+        if self._addin_hint:
+            self._addin_hint.Text = hint
 
     # ── File watcher ───────────────────────────────────────────────────────────
 

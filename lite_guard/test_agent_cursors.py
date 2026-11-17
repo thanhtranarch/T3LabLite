@@ -498,6 +498,11 @@ def test_hud_redesign():
           and 'WrapPanel()\n        self._toggles' not in osrc)
     check('header: pause, options, fold, close', all(t in osrc for t in (
         "'Pause: hold model changes", "'Options'", "'Fold to one line", "'Turn agent cursors off")))
+    cursor = osrc.split('    def _cursor(self, agent, action):', 1)[1].split('\n    def ', 1)[0]
+    check('no white outline on the cursor, its avatar, box corners or edge arrows',
+          'Stroke = self._brush(' not in cursor and "handle.Fill = self._brush(color)" in osrc
+          and "arrow.Stroke = self._brush('#FFFFFF')" not in osrc)
+    check('working: a pulsing dot, not a dashed ring', 'StrokeDashArray' not in cursor)
     check('drag to move, remembered', 'self.hud.DragMove()' in osrc and 'set_hud_offset(' in osrc
           and 'e.ClickCount == 2' in osrc)
     check('buttons never start a drag', osrc.count("'MouseLeftButtonDown', _swallow") >= 2)

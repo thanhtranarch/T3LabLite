@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-11-17
+
+Agent Cursors show the work on the model: one cursor per AI app, readable names, and the elements it builds highlighted as it goes.
+
 ### Changed
 - **Agent Cursors — one cursor per AI app:** an app no longer leaves a second, faded cursor behind for each kind of action; its one cursor moves on and the action only tints the left edge of its tag.
 - **Agent Cursors — readable names and tags:** Claude Desktop's agent mode shows as "Claude" instead of `local-agent-mode-t…`, other unknown apps get a clean name ("Acme Bot"). A tag flips to the left of or above its pointer near the edge of the view instead of being cut off, and two tags never cover each other.

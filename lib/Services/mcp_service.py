@@ -174,10 +174,14 @@ def _probe_health(port, timeout=0.35):
     try:
         import json as _json
         try:
-            from urllib.request import urlopen
+            from urllib.request import build_opener, ProxyHandler
         except ImportError:                       # IronPython 2
-            from urllib2 import urlopen
-        raw = urlopen('http://127.0.0.1:{}/health'.format(port), timeout=timeout).read()
+            from urllib2 import build_opener, ProxyHandler
+        # No proxy for 127.0.0.1: a system / HTTP_PROXY proxy without a
+        # localhost bypass made a running server look "Stopped" and let
+        # Start bind a second one.
+        opener = build_opener(ProxyHandler({}))
+        raw = opener.open('http://127.0.0.1:{}/health'.format(port), timeout=timeout).read()
         if isinstance(raw, bytes):
             raw = raw.decode('utf-8', 'replace')
         return _json.loads(raw)

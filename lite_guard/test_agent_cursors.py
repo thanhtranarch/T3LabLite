@@ -292,6 +292,127 @@ def test_agent_style():
             check('colour of ' + key, False, color)
 
 
+def test_agent_names():
+    print('[agent names: raw MCP client ids read as names]')
+    st = AC.agent_style
+    check('Claude Desktop local agent mode -> Claude',
+          st('local-agent-mode-t3lab')[0] == 'Claude' and st('local-agent-mode')[0] == 'Claude'
+          and AC.agent_key('Local-Agent-Mode-T3Lab_Lite') == 'claude-desktop')
+    check('suffixed known clients', st('claude-code-cli')[0] == 'Claude Code'
+          and st('gemini-cli')[0] == 'Gemini' and st('codex_vscode')[0] == 'GPT'
+          and st('cursor-agent')[0] == 'Cursor')
+    check('a prefix needs a separator', AC.agent_key('cursorless') == 'cursorless'
+          and AC.agent_key('claudette') == 'claudette')
+    pa = AC.pretty_agent
+    check('noise and version dropped, title case',
+          pa('acme-bot-mcp-client') == 'Acme Bot' and pa('my_bot-mcp') == 'My Bot'
+          and pa('revit.helper/1.2.0') == 'Revit Helper' and pa('console-qa') == 'Console QA',
+          [pa('acme-bot-mcp-client'), pa('my_bot-mcp'), pa('revit.helper/1.2.0'), pa('console-qa')])
+    check('capped at NAME_MAX', len(pa('a-very-long-agent-name-that-goes-on')) <= AC.NAME_MAX
+          and pa('a-very-long-agent-name-that-goes-on').endswith(u'\u2026'))
+    check('nothing left -> Agent', pa('') == 'Agent'
+          and pa(None) == 'Agent')
+    check('unknown agent shows prettified', st('acme-bot-mcp-client')[0] == 'Acme Bot'
+          and st('acme-bot-mcp-client')[1] in AC._SPARE)
+
+
+def test_visible_work():
+    print('[visible work: one cursor, tags, scan, created label, change capture]')
+    rect = (0, 0, 1000, 800)
+    # tags
+    check('tag right-below by default', AC.place_tags([(100, 100, 200, 20)], rect) == [(12.0, 12.0)])
+    dx, dy = AC.place_tags([(900, 100, 200, 20)], rect)[0]
+    check('tag flips left at the right edge', dx == -204.0 and 900 + dx >= 0 and dy == 12.0, (dx, dy))
+    dx, dy = AC.place_tags([(100, 790, 200, 20)], rect)[0]
+    check('tag flips above at the bottom edge', dy == -24.0 and dx == 12.0, (dx, dy))
+    dx, dy = AC.place_tags([(950, 790, 200, 20)], rect)[0]
+    check('corner: left and above', (dx, dy) == (-204.0, -24.0), (dx, dy))
+    items = [(300, 300, 220, 20), (310, 304, 220, 20), (305, 302, 220, 20)]
+    out = AC.place_tags(items, rect)
+    boxes = [(x + dx, y + dy, x + dx + w, y + dy + h) for (x, y, w, h), (dx, dy) in zip(items, out)]
+    check('tags of cursors side by side never overlap',
+          not any(AC._overlaps(a, b) for i, a in enumerate(boxes) for b in boxes[i + 1:]), boxes)
+    check('the first (active) cursor keeps the default spot', out[0] == (12.0, 12.0))
+    check('all inside the view', all(b[0] >= 0 and b[1] >= 0 and b[2] <= 1000 and b[3] <= 800
+                                     for b in boxes))
+    check('no view rect: default spot', AC.place_tags([(5000, 5000, 200, 20)]) == [(12.0, 12.0)])
+    # scan near the last place
+    pts = AC.scan_points((600, 400), rect, 7, 3)
+    check('scan stays near where the cursor worked',
+          len(pts) == 3 and all(abs(x - 600) <= AC.SCAN_RADIUS and abs(y - 400) <= AC.SCAN_RADIUS
+                                for x, y in pts), pts)
+    check('scan: same seed, same path; other seed, other path',
+          pts == AC.scan_points((600, 400), rect, 7, 3) and pts != AC.scan_points((600, 400), rect, 8, 3))
+    check('scan: one point = the anchor (Less motion)', AC.scan_points((600, 400), rect, 7, 1) == [(600, 400)])
+    check('scan: kept inside the view',
+          all(24 <= x <= 976 and 24 <= y <= 776 for x, y in AC.scan_points((2000, -50), rect, 3, 3)))
+    check('scan: no anchor -> middle of the view', AC.scan_points(None, rect, 1, 1) == [(500.0, 400.0)])
+    # labels
+    wl = AC.work_label
+    check('created label', wl(['Walls', 'Walls', 'Walls'], 'create') == u'Walls \u00d73 created', wl(['Walls'] * 3, 'create'))
+    check('two categories + the rest',
+          wl(['Doors', 'Walls', 'Walls', 'Floors', 'Roofs', ''], 'modify')
+          == u'Walls \u00d72 \u00b7 Doors \u00d71 \u00b7 +3 more changed',
+          wl(['Doors', 'Walls', 'Walls', 'Floors', 'Roofs', ''], 'modify'))
+    check('no elements -> no label', wl([], 'create') == '' and wl(None, 'create') == '')
+    # targets
+    mt = AC.merge_targets
+    check('named ids first, then added', mt([5, 6], [6, 7, 8], [99]) == [5, 6, 7, 8])
+    check('modified only when nothing else', mt([], [], [3, 4]) == [3, 4] and mt([1], [], [3]) == [1])
+    check('targets capped', len(mt([], list(range(100)))) == AC.MAX_TARGETS)
+    ids = AC.extract_ids({}, {'created_elements': [{'id': 11}, {'id': 12}], 'results': [{'id': 13}]})
+    check('ids inside created_elements / results lists', ids == [11, 12, 13], ids)
+    # change capture
+    class Args(object):
+        def GetAddedElementIds(self):
+            return [101, 102, 101]
+        def GetModifiedElementIds(self):
+            return list(range(1, 500))
+    AC._session['call'] = None
+    AC._on_changed(None, Args())
+    check('no call running: nothing captured', AC._session['call'] is None)
+    AC._session['call'] = call = {'added': [], 'modified': []}
+    try:
+        AC._on_changed(None, Args())
+        AC._on_changed(None, Args())
+    finally:
+        AC._session['call'] = None
+    check('added ids captured once each', call['added'] == [101, 102], call['added'])
+    check('modified ids capped', len(call['modified']) == AC.MAX_CAPTURE)
+    AC._on_changed(None, object())      # no call: quiet
+    acsrc = open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
+    check('DocumentChanged hooked once, old delegate detached on reload',
+          'application.DocumentChanged -= old' in acsrc
+          and 'application.DocumentChanged += delegate' in acsrc and '_WATCH_KEY' in acsrc)
+    before = acsrc.split('def before(app, task):', 1)[1].split('\ndef ', 1)[0]
+    check('before(): capture starts, named elements go to working()',
+          "_session['call'] = {'added': [], 'modified': []}" in before
+          and 'targets=[b[\'box\'] for b in boxes[:MAX_STOPS]]' in before)
+    notify = acsrc.split('def notify(app, task):', 1)[1].split('\ndef ', 1)[0]
+    check('notify(): capture ends, created label + fresh ids go to show()',
+          "call, _session['call'] = _session.get('call'), None" in notify
+          and 'created=label, fresh=fresh' in notify)
+    check('plan / section views are boxed (IsPerspective is View3D only)',
+          "getattr(view, 'IsPerspective', False)" in acsrc and 'view.IsPerspective' not in acsrc)
+    osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
+    check('one cursor per agent (no agent|action key)',
+          "'{}|{}'.format(agent, action)" not in osrc and 'self._cursors[agent] = cur' in osrc
+          and 'def _accent(self, cur, action):' in osrc)
+    check('tags laid out after every move',
+          osrc.count('self._layout_tags(agent)') >= 3 and 'place_tags(items, self._bounds())' in osrc)
+    show = osrc.split('    def show(self, agent,', 1)[1].split('\n    def ', 1)[0]
+    check('show(): scan near the cursor, label + build trail for fresh elements',
+          "scan_points((cur['x'], cur['y'])" in show and 'review_points' not in osrc
+          and 'self._draw_label(' in show and 'self._build_trail(' in show
+          and 'self._clear_focus(agent)' in show)
+    trail = show.split('self._draw_label(', 1)[1].split('self._tour(', 1)[0]
+    check('Less motion: no build trail', 'if not reduce and' in trail)
+    working = osrc.split('    def working(self, agent,', 1)[1].split('\n    def ', 1)[0]
+    check('working(): frames what the call names and goes there',
+          'self._draw_focus(agent, b, acolor)' in working and 'self._tour(cur,' in working)
+    check('caption capped on the tag', 'short_text(text, TAG_MAX)' in osrc and AC.TAG_MAX <= 40)
+
+
 def test_setting():
     print('[setting]')
     check('off by default', AC.is_enabled() is False)
@@ -498,7 +619,7 @@ def test_hud_redesign():
           and 'WrapPanel()\n        self._toggles' not in osrc)
     check('header: pause, options, fold, close', all(t in osrc for t in (
         "'Pause: hold model changes", "'Options'", "'Fold to one line", "'Turn agent cursors off")))
-    cursor = osrc.split('    def _cursor(self, agent, action):', 1)[1].split('\n    def ', 1)[0]
+    cursor = osrc.split('    def _cursor(self, agent, action=None):', 1)[1].split('\n    def ', 1)[0]
     check('no white outline on the cursor, its avatar, box corners or edge arrows',
           'Stroke = self._brush(' not in cursor and "handle.Fill = self._brush(color)" in osrc
           and "arrow.Stroke = self._brush('#FFFFFF')" not in osrc)
@@ -528,6 +649,8 @@ if __name__ == '__main__':
         test_views()
         test_projection()
         test_agent_style()
+        test_agent_names()
+        test_visible_work()
         test_setting()
         test_server_hook()
         test_agent_stamp()

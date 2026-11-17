@@ -29,6 +29,7 @@ Responsibilities:
   5. Register the right-click context-menu entry (Revit 2025+).
   6. Self-study idle loop (opt-in).
   7. Start the file-based task watcher (lib/core/file_watcher.py) if opted in.
+ 7b. Move pyRevit Routes off the T3Lab MCP ports (lib/routes_guard.py).
   8. Auto-start the MCP server (lib/Services/mcp_service.py). The bridge in
      %APPDATA%/T3LabAI is refreshed in 2c; MCP Control > Connect deploys it.
   9. Run the once-a-week update check against GitHub (lib/core/updater.py).
@@ -561,6 +562,17 @@ def main():
         from core.file_watcher import get_task_watcher
         # Opt-in only: it runs task files with no token (see file_watcher.py).
         get_task_watcher().start_if_enabled()
+    except Exception:
+        pass
+
+    # ─── 7b. Keep pyRevit Routes off the T3Lab MCP ports ───────────────────────
+    # Routes (default 48884) collided with the MCP server: WinError 10013 and
+    # "Routes servers failed activation" (lib/routes_guard.py, any pyRevit).
+    try:
+        _routes = _load_lib_module("routes_guard")
+        _note = _routes.apply() if _routes is not None else ""
+        if _note:
+            _log(_note)
     except Exception:
         pass
 

@@ -11,12 +11,13 @@ import sys
 import time
 
 from core.agent_cursors import (
-    BOX_HOLD_S, DWELL_MS, FEED_SHOWN, FEED_SIZE, IDLE_HIDE_S, MAX_STOPS, MOVE_MS, OPTION_GROUPS,
-    OPTION_LABELS, REPLAY_SIZE, SPEEDS, STATES, SUMMARY_S, action_style, agent_style,
-    ago_text, classify_action, cluster_stops, compact_line, count_items, describe_call,
-    footer_text, hop_ms, hud_offset, hud_palette, hud_place, hud_state, offscreen_markers,
-    options, plan_progress, review_points, set_enabled, set_hud_offset, set_option, set_speed,
-    short_text, should_collapse, speed, speed_factor, status_text, tour_schedule, union_box)
+    BOX_HOLD_S, DWELL_MS, FEED_SHOWN, FEED_SIZE, FRESH_HOLD_S, IDLE_HIDE_S, MAX_STOPS, MOVE_MS,
+    OPTION_GROUPS, OPTION_LABELS, REPLAY_SIZE, SPEEDS, STATES, SUMMARY_S, TAG_MAX, action_style,
+    agent_style, ago_text, classify_action, cluster_stops, compact_line, count_items,
+    describe_call, footer_text, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
+    offscreen_markers, options, place_tags, plan_progress, scan_points, set_enabled,
+    set_hud_offset, set_option, set_speed, short_text, should_collapse, speed, speed_factor,
+    status_text, tour_schedule, union_box)
 
 
 class OverlayHost(object):
@@ -152,14 +153,15 @@ class _Overlay(object):
         self._goals = {}            # agent -> goal banner text
         self._plans = {}            # agent -> {'tasks': [...], 'step': n} (t3lab_narrate)
         self._asks = []             # consent questions on the bar: dicts, oldest first
-        self._working = {}          # 'agent|action' -> (started, caption)
-        self._waiting = {}          # 'agent|action' -> caption
+        self._working = {}          # agent -> (started, caption)
+        self._waiting = {}          # agent -> caption
+        self._focus = {}            # agent -> frames round what its running call names
         self._history = []          # replayable show() records, oldest first
         self._replay = None         # [records, index] while replaying
         self._summary = None        # time the idle summary card appeared
         self._touched = 0
         self._marks = []            # off-screen arrows of the last call
-        self._cursors = {}          # 'agent|action' -> dict(group, tx, ...)
+        self._cursors = {}          # agent -> dict(group, tx, ...): one cursor per agent
         self._counts = {}           # agent -> {action: n}
         self._views = []            # [(view id, name)] the agents worked in
         self._feed = []             # last steps, newest first (HUD)
@@ -581,7 +583,7 @@ class _Overlay(object):
 
     def _agents(self):
         return sorted(set(self._counts) | set(self._goals) | set(self._plans) |
-                      set(k.split('|', 1)[0] for k in self._working))
+                      set(self._working))
 
     def _fill_compact(self, state):
         from System.Windows import Thickness
@@ -939,12 +941,15 @@ class _Overlay(object):
 
     # ── cursors ──────────────────────────────────────────────────────────────
 
-    def _cursor(self, agent, action):
+    def _cursor(self, agent, action=None):
         """Minimal cursor (owner, 2026-11-17): a bare pointer tip in the
-        agent's colour and one tag, "Claude · Moving 12 walls"."""
-        key = '{}|{}'.format(agent, action)
-        cur = self._cursors.get(key)
+        agent's colour and one tag, "Claude · Moving 12 walls". One per
+        agent: the action only tints the tag's left edge (two cursors of one
+        agent sat on top of each other, 2026-11-17)."""
+        cur = self._cursors.get(agent)
         if cur is not None:
+            if action:
+                self._accent(cur, action)
             return cur
         from System.Windows import Thickness, CornerRadius, Visibility
         from System.Windows.Controls import Canvas, Border
@@ -983,14 +988,62 @@ class _Overlay(object):
         tx = TranslateTransform()
         group.RenderTransform = tx
         self.canvas.Children.Add(group)
-        # Cursors start at different spots so a swarm never stacks up.
+        # A new cursor starts mid-view (a little apart per agent), not in a corner.
         slot = len(self._cursors)
+        x, y = 40.0 + 36 * slot, 40.0 + 24 * slot
+        bounds = self._bounds()
+        if bounds is not None:
+            x = (bounds[0] + bounds[2]) / 2.0 + 36 * slot
+            y = (bounds[1] + bounds[3]) / 2.0 + 24 * slot
         cur = {'group': group, 'tx': tx, 'press': press, 'spin': spin, 'pill': pill,
                'name': name, 'state': state, 'color': color, 'caption': '',
-               'x': 40.0 + 36 * slot, 'y': 40.0 + 24 * slot}
+               'x': x, 'y': y, 'action': None}
         tx.X, tx.Y = cur['x'], cur['y']
-        self._cursors[key] = cur
+        self._cursors[agent] = cur
+        if action:
+            self._accent(cur, action)
         return cur
+
+    def _accent(self, cur, action):
+        """The action shows as a coloured left edge on the agent's tag."""
+        from System.Windows import Thickness
+        if cur.get('action') == action:
+            return
+        cur['action'] = action
+        cur['pill'].BorderBrush = self._brush(action_style(action)[2])
+        cur['pill'].BorderThickness = Thickness(3, 0, 0, 0)
+
+    def _bounds(self):
+        """The canvas in its own DIP (l, t, r, b), or None before it is placed."""
+        try:
+            w, h = float(self.win.Width), float(self.win.Height)
+        except Exception:
+            return None
+        if not (w > 80 and h > 80):         # also False for NaN
+            return None
+        return (0.0, 0.0, w, h)
+
+    def _layout_tags(self, lead=None):
+        """Put every tag where it is readable: inside the view (flipped left
+        of / above its pointer near an edge) and never over another tag. The
+        `lead` agent (the one that just moved) picks first."""
+        from System.Windows import Size
+        from System.Windows.Controls import Canvas
+        keys = sorted(self._cursors, key=lambda k: (k != lead, k))
+        inf = float('inf')
+        items = []
+        for key in keys:
+            cur = self._cursors[key]
+            try:
+                cur['pill'].Measure(Size(inf, inf))
+                size = cur['pill'].DesiredSize
+                w, h = float(size.Width), float(size.Height)
+            except Exception:
+                w, h = 160.0, 20.0
+            items.append((cur['x'], cur['y'], w, h))
+        for key, (dx, dy) in zip(keys, place_tags(items, self._bounds())):
+            Canvas.SetLeft(self._cursors[key]['pill'], dx)
+            Canvas.SetTop(self._cursors[key]['pill'], dy)
 
     def _cursor_state(self, cur, state, caption=None):
         """idle | working (spinner) | waiting (amber, pulsing) | failed (red);
@@ -1010,7 +1063,7 @@ class _Overlay(object):
         if caption is not None:
             cur['caption'] = caption
         text = cur.get('caption') or ''
-        cur['state'].Text = u' \u00b7 ' + short_text(text, 40) if text else ''
+        cur['state'].Text = u' \u00b7 ' + short_text(text, TAG_MAX) if text else ''
         if state == 'working':
             spin.Visibility = Visibility.Visible
             if not self._reduce():
@@ -1124,9 +1177,68 @@ class _Overlay(object):
         Canvas.SetTop(frame, y0)
         return frame
 
-    def _draw_box(self, x0, y0, x1, y1, size, action, delay_ms):
-        """One target box; `size` is the badge text (category · size)."""
-        """One target box with the action's effect."""
+    def _draw_focus(self, agent, b, color):
+        """What a running call names: a soft frame that breathes until the
+        call ends (_clear_focus), so the work shows on the model meanwhile."""
+        frame = self._frame(b[0] - 2, b[1] - 2, b[2] + 2, b[3] + 2, color,
+                            thickness=1.5, fill_alpha=28)
+        self.canvas.Children.Insert(0, frame)
+        self._focus.setdefault(agent, []).append(frame)
+        if not self._reduce():
+            from System.Windows.Media.Animation import RepeatBehavior
+            anim = self._anim(((1.0, 0), (0.45, 700), (1.0, 1400)))
+            anim.RepeatBehavior = RepeatBehavior.Forever
+            frame.BeginAnimation(_opacity_property(), anim)
+
+    def _clear_focus(self, agent):
+        for frame in self._focus.pop(agent, ()):
+            try:
+                frame.BeginAnimation(_opacity_property(), None)
+                self.canvas.Children.Remove(frame)
+            except Exception:
+                pass
+
+    def _draw_label(self, b, text, action, delay_ms, hold_ms):
+        """'Walls ×3 created' above what the call made or changed."""
+        from System.Windows import Thickness
+        from System.Windows.Controls import Canvas
+        _label, glyph, color = action_style(action)
+        chip = self._pill(self._glyph_label(glyph, text, '#FFFFFF', 11), color)
+        chip.Padding = Thickness(8, 3, 8, 3)
+        chip.Opacity = 0
+        Canvas.SetLeft(chip, max(b[0], 4))
+        Canvas.SetTop(chip, b[1] - 26 if b[1] >= 30 else b[3] + 26)
+        self.canvas.Children.Add(chip)
+        self._pulse(chip, delay_ms, hold_ms, self._remover(chip))
+
+    def _build_trail(self, sched, color, hold_ms):
+        """Several new elements in a row: a dotted line joins them in the
+        order they were made, one segment per arrival."""
+        from System.Windows.Media import DoubleCollection
+        from System.Windows.Shapes import Line
+        end = sched[-1][2]
+        for k in range(1, len(sched)):
+            (x0, y0), (x1, y1), at = sched[k - 1][:2], sched[k][:2], sched[k][2]
+            if abs(x1 - x0) + abs(y1 - y0) < 12:
+                continue
+            line = Line()
+            line.X1, line.Y1, line.X2, line.Y2 = x0, y0, x1, y1
+            line.Stroke = self._brush(color, 200)
+            line.StrokeThickness = 2
+            dash = DoubleCollection()
+            dash.Add(1)
+            dash.Add(3)
+            line.StrokeDashArray = dash
+            line.Opacity = 0
+            self.canvas.Children.Insert(0, line)
+            line.BeginAnimation(_opacity_property(), self._anim(
+                ((0.0, at - 120), (1.0, at), (1.0, end + hold_ms), (0.0, end + hold_ms + 600)),
+                self._remover(line)))
+
+    def _draw_box(self, x0, y0, x1, y1, size, action, delay_ms, fresh=False):
+        """One target box with the action's effect; `size` is the badge text
+        (category · size). fresh = just created / changed: a soft highlight
+        that stays FRESH_HOLD_S."""
         from System.Windows import Thickness
         from System.Windows.Controls import Canvas
         from System.Windows.Shapes import Rectangle, Shape
@@ -1134,7 +1246,8 @@ class _Overlay(object):
         label, glyph, color = action_style(action)
         group = Canvas()
         group.Opacity = 0
-        frame = self._frame(x0, y0, x1, y1, color, dashed=(action == 'code'))
+        frame = self._frame(x0, y0, x1, y1, color, dashed=(action == 'code' and not fresh),
+                            thickness=1.5 if fresh else 1.0, fill_alpha=52 if fresh else 18)
         group.Children.Add(frame)
         for hx, hy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
             handle = Rectangle()
@@ -1149,8 +1262,8 @@ class _Overlay(object):
         Canvas.SetTop(badge, y1 + 4)
         group.Children.Add(badge)
         self.canvas.Children.Insert(0, group)    # under the cursors
-        hold = int(BOX_HOLD_S * 1000 * speed_factor())
-        fx = None if self._reduce() else action
+        hold = int((FRESH_HOLD_S if fresh else BOX_HOLD_S) * 1000 * speed_factor())
+        fx = None if self._reduce() else ('create' if fresh and action == 'code' else action)
         start = delay_ms + 180
 
         if fx == 'create':
@@ -1289,41 +1402,56 @@ class _Overlay(object):
         self._refresh_hud()             # places it too (_place_hud)
         self._timer.Start()
 
-    def working(self, agent, action, caption, tool_name, rect, task_text=''):
+    def working(self, agent, action, caption, tool_name, rect, task_text='',
+                targets=(), canvas=None):
         """A call has started: spin, say "Working", count the seconds. With a
-        plan, the cursor names the current task and the call goes underneath."""
+        plan, the cursor names the current task and the call goes underneath.
+        targets = screen boxes of the elements the call names: framed until
+        it ends, the cursor goes to the first. None: the cursor stays where
+        it last worked."""
         self._end_summary()
-        if not self.win.IsVisible or self._origin == (0.0, 0.0):
-            self._place(rect)
+        if canvas or not self.win.IsVisible or self._origin == (0.0, 0.0):
+            self._place(canvas or rect)
         cur = self._cursor(agent, action)
-        key = '{}|{}'.format(agent, action)
         if task_text:
             caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
-        self._working[key] = (time.time(), caption)
+        self._working[agent] = (time.time(), caption)
         self._cursor_state(cur, 'working', caption)
         cur['group'].BeginAnimation(_opacity_property(), None)
         cur['group'].Opacity = 1.0
+        self._clear_focus(agent)
+        if targets:
+            acolor = action_style(action)[2]
+            boxes = [self._local(b) for b in targets]
+            for b in boxes:
+                self._draw_focus(agent, b, acolor)
+            point = ((boxes[0][0] + boxes[0][2]) / 2.0, (boxes[0][1] + boxes[0][3]) / 2.0)
+            reduce = self._reduce()
+            if not reduce:
+                self._trail(cur['x'], cur['y'], point[0], point[1], acolor)
+            self._tour(cur, tour_schedule([point], 1 if reduce else int(hop_ms(1) * speed_factor()), 0))
+        self._layout_tags(agent)
         self._last = time.time()
         self._show_hud(rect)
 
     def waiting(self, agent, tool_name, caption, on):
         """The call waits for the user's OK: an amber, pulsing pill."""
-        action = classify_action(tool_name)
-        key = '{}|{}'.format(agent, action)
-        cur = self._cursors.get(key)
+        cur = self._cursors.get(agent)
         if on:
-            self._waiting[key] = caption
+            self._waiting[agent] = caption
             if cur is None:
                 if not self.win.IsVisible:
                     return          # nothing on screen yet: no view to draw in
-                cur = self._cursor(agent, action)
+                cur = self._cursor(agent, classify_action(tool_name))
                 cur['group'].Opacity = 1.0
             self._cursor_state(cur, 'waiting')
         else:
-            self._waiting.pop(key, None)
+            self._waiting.pop(agent, None)
             if cur is not None:
-                work = self._working.get(key)
+                work = self._working.get(agent)
                 self._cursor_state(cur, 'working' if work else 'idle', work[1] if work else None)
+        if cur is not None:
+            self._layout_tags(agent)
         self._last = time.time()
         if self.hud.IsVisible:
             self._refresh_hud()
@@ -1467,12 +1595,14 @@ class _Overlay(object):
 
     def show(self, agent, action, tool_name, failed, snap, followed=(),
              args=None, n_targets=0, changes=(), clashes=(), touched=0, goal='',
-             record=True, task_text=''):
+             record=True, task_text='', created='', fresh=()):
+        """created = 'Walls ×3 created' (agent_cursors.work_label), fresh =
+        the ids it is about: those boxes stay highlighted longer."""
         self._end_summary()
         if record:
             self._history.append((agent, action, tool_name, failed, _light(snap), list(followed),
                                   args, n_targets, list(changes), list(clashes), touched, goal,
-                                  task_text))
+                                  task_text, created, list(fresh)))
             del self._history[:-REPLAY_SIZE]
         self._touched = touched or self._touched
         if goal and agent not in self._goals:
@@ -1487,10 +1617,10 @@ class _Overlay(object):
         if task_text:           # the plan's task leads; what the call did goes underneath
             detail = u'{} · {}'.format(caption, tool_name)
             caption = (u'Failed: ' if failed else u'') + task_text
-        key = '{}|{}'.format(agent, action)
         cur = self._cursor(agent, action)
-        self._working.pop(key, None)
-        self._waiting.pop(key, None)
+        self._working.pop(agent, None)
+        self._waiting.pop(agent, None)
+        self._clear_focus(agent)
         self._cursor_state(cur, 'failed' if failed else 'idle', caption)
 
         for vid, name, is_new in followed:
@@ -1505,28 +1635,32 @@ class _Overlay(object):
         stops, ghosts = [], []
         for geo in snap['views']:
             for item in geo['boxes']:
-                b = self._local(item['box'])
-                stops.append(((b[2] - 4, b[1] + 4), 'box', b, item))
+                b = self._local(item['box'])     # the tip lands on the element
+                stops.append((((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0), 'box', b, item))
             for item in geo['gone']:
                 b = self._local(item['box'])
                 stops.append((((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0), 'gone', b, item))
             ghosts.extend(geo['ghosts'])
         boxes = [st for st in stops if st[1] == 'box']
+        fresh_ids = set(fresh)
+        fresh_boxes = [st[2] for st in boxes if st[3].get('id') in fresh_ids]
         if cluster_stops(len(boxes)):
             # Many targets: one frame round them all and one stop, not a box each.
             u = union_box([st[2] for st in boxes])
             text = u'\u00d7{} · {}'.format(max(n_targets, len(boxes)), label)
-            stops = [((u[2] - 4, u[1] + 4), 'box', u, {'label': text, 'size': text})] + [
+            stops = [(((u[0] + u[2]) / 2.0, (u[1] + u[3]) / 2.0), 'box', u,
+                      {'label': text, 'size': text, 'fresh': bool(fresh_boxes)})] + [
                 st for st in stops if st[1] != 'box']
         active_local = self._local(snap['active']['rect'])
         if stops:
             points = [st[0] for st in stops[:MAX_STOPS]]
         else:
-            # Nothing to point at (a read, a list, a review): scan the active
-            # view, a few clicks along a path of its own per agent and action.
-            slot = sorted(self._cursors).index(key)
+            # Nothing to point at (a read, a list, a review): a small scan
+            # next to where this cursor last worked, not across the view.
+            slot = sorted(self._cursors).index(agent)
             n = 1 if failed or reduce else (3 if action in ('read', 'view', 'export', 'code') else 2)
-            points = review_points(active_local, self._actions * 31 + slot * 7 + 1, n)
+            points = scan_points((cur['x'], cur['y']), active_local,
+                                 self._actions * 31 + slot * 7 + 1, n)
         hop = 1 if reduce else int(hop_ms(len(points)) * f)
         sched = tour_schedule(points, hop, 0 if reduce else int(DWELL_MS * f))
         change_by_id = dict(changes)
@@ -1535,7 +1669,8 @@ class _Overlay(object):
             arrive = sched[min(k, len(sched) - 1)][2]
             if kind == 'box':
                 self._draw_box(b[0], b[1], b[2], b[3], item.get('label') or item['size'],
-                               action, arrive)
+                               action, arrive,
+                               fresh=item.get('fresh') or item.get('id') in fresh_ids)
                 if item.get('id') in change_by_id:
                     self._draw_chip(b[0], b[3] + 24, change_by_id[item['id']], acolor, arrive)
                 if item.get('id') in clash_ids:
@@ -1546,9 +1681,16 @@ class _Overlay(object):
             self._draw_ghost(self._local(old['box']), self._local(new['box']),
                              acolor, sched[0][2])
         self._draw_offscreen(active_local, snap.get('offscreen') or (), acolor)
+        if created and fresh_boxes and not failed:
+            # What the call made or changed, named once above it; it stays.
+            hold = int(FRESH_HOLD_S * 1000 * f)
+            self._draw_label(union_box(fresh_boxes), created, action, sched[-1][2], hold)
+            if not reduce and len(fresh_boxes) > 1 and len(stops) == len(boxes) > 1:
+                self._build_trail(sched, acolor, hold)
         if not reduce:
             self._trail(cur['x'], cur['y'], points[0][0], points[0][1], acolor)
         self._tour(cur, sched, shake=failed and not reduce)
+        self._layout_tags(agent)
         if not reduce:
             ring = '#DC2626' if failed else acolor
             for x, y, arrive, _leave in sched:
@@ -1645,6 +1787,7 @@ class _Overlay(object):
             cur['group'].BeginAnimation(_opacity_property(), None)
         self.canvas.Children.Clear()
         self._cursors = {}
+        self._focus = {}
         self._replay = [list(self._history), 0]
         self._replay_timer.Interval = TimeSpan.FromMilliseconds(int(1500 * speed_factor()))
         self._replay_timer.Start()
@@ -1666,7 +1809,8 @@ class _Overlay(object):
             self._replay[1] = k + 1
             self.show(rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], args=rec[6],
                       n_targets=rec[7], changes=rec[8], clashes=rec[9], touched=rec[10],
-                      goal=rec[11], record=False, task_text=rec[12])
+                      goal=rec[11], record=False, task_text=rec[12], created=rec[13],
+                      fresh=rec[14])
             self._note = u'Replay {} / {}'.format(k + 1, len(records))
             self._refresh_hud()
         except Exception:
@@ -1691,6 +1835,7 @@ class _Overlay(object):
         if not keep:
             self.canvas.Children.Clear()
             self._cursors = {}
+            self._focus = {}
             self.win.Hide()
 
     def _end_summary(self):
@@ -1711,6 +1856,7 @@ class _Overlay(object):
             cur['group'].BeginAnimation(_opacity_property(), None)
         self.canvas.Children.Clear()
         self._cursors = {}
+        self._focus = {}
         self._counts = {}
         self._views = []
         self._feed = []

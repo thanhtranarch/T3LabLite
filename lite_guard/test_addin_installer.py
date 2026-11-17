@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MCP Control's Connect installs the T3Lab add-in for AutoCAD / Civil 3D from its
+"""MCP Control's Connect installs the T3Lab add-in for AutoCAD / Civil 3D / 3ds Max from its
 release zip (lib/Services/addin_installer.py, MCPService.install_addin). Plain CPython 3."""
 import io
 import json
@@ -16,6 +16,16 @@ _TMP = tempfile.mkdtemp(prefix='t3lab_addin_test_')
 os.environ['APPDATA'] = _TMP
 
 from Services import addin_installer as AI   # noqa: E402
+
+
+def make_max_zip(path):
+    with zipfile.ZipFile(path, 'w') as z:
+        z.writestr('manifest.json', json.dumps({'name': 'T3LabMax', 'version': '1.1.0'}))
+        z.writestr('T3LabMax.bundle/PackageContents.xml', '<ApplicationPackage/>')
+        z.writestr('T3LabMax.bundle/Contents/scripts/t3lab_max_mcp.py', '# server')
+        z.writestr('T3LabMax.bundle/Contents/scripts/t3lab_max_mcp_start.ms', '-- start')
+        z.writestr('T3LabMax/bridge.py', '# bridge')
+    return path
 
 
 def make_zip(path, name='T3LabCAD', extra=None, manifest=True, bridge=True):
@@ -50,6 +60,15 @@ class InstallTests(unittest.TestCase):
         again = AI.install('T3LabCAD', source=src)
         self.assertEqual(again['written'], [])          # unchanged files are left alone
 
+    def test_installs_3dsmax(self):
+        res = AI.install('T3LabMax', source=make_max_zip(os.path.join(self.dir, 'T3LabMax.zip')))
+        bundle = os.path.join(os.environ['APPDATA'], 'Autodesk', 'ApplicationPlugins', 'T3LabMax.bundle')
+        self.assertTrue(os.path.isfile(os.path.join(bundle, 'Contents', 'scripts', 't3lab_max_mcp_start.ms')))
+        self.assertTrue(os.path.isfile(os.path.join(os.environ['APPDATA'], 'T3LabMax', 'bridge.py')))
+        self.assertIn('Restart 3ds Max', AI.summary(res))
+        with self.assertRaises(AI.InstallError):            # a CAD zip is not the Max package
+            AI.install('T3LabMax', source=make_zip(os.path.join(self.dir, 'c.zip')))
+
     def test_old_layout_removed(self):
         old = os.path.join(os.environ['APPDATA'], 'Autodesk', 'ApplicationPlugins', 'T3LabCAD.bundle',
                            'Contents', 'T3LabCAD.Loader.dll')
@@ -81,14 +100,14 @@ class InstallTests(unittest.TestCase):
     def test_installed_years(self):
         root = tempfile.mkdtemp(prefix='t3lab_pf_')
         for name in ('AutoCAD 2021', 'AutoCAD 2024', 'AutoCAD 2027', 'Navisworks Manage 2025',
-                     '3ds Max 2026', 'Inventor 2022'):
+                     '3ds Max 2026'):
             os.makedirs(os.path.join(root, name))
         os.makedirs(os.path.join(root, 'AutoCAD 2024', 'C3D'))
         self.assertEqual(AI.installed_years('autocad', [root]), [2024, 2027])
         self.assertEqual(AI.installed_years('civil3d', [root]), [2024])
         self.assertEqual(AI.installed_years('navisworks', [root]), [2025])
         self.assertEqual(AI.installed_years('3dsmax', [root]), [2026])
-        self.assertEqual(AI.installed_years('inventor', [root]), [2022])
+        self.assertEqual(AI.installed_years('inventor', [root]), [])       # dropped
 
 
 class ServiceTests(unittest.TestCase):
@@ -117,10 +136,16 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(st['installed'] and st['installable'])
 
     def test_apps_without_an_addin_say_so(self):
-        ok, msg = self.M.MCPService.install_addin('inventor')
+        ok, msg = self.M.MCPService.install_addin('navisworks')
         self.assertFalse(ok)
-        self.assertIn('no T3Lab add-in for Inventor yet', msg)
-        self.assertFalse(self.M.MCPService.app_bridge_status('3dsmax')['installable'])
+        self.assertIn('no T3Lab add-in for Navisworks yet', msg)
+        self.assertFalse(self.M.MCPService.app_bridge_status('navisworks')['installable'])
+        self.assertTrue(self.M.MCPService.app_bridge_status('3dsmax')['installable'])
+
+    def test_inventor_is_gone(self):
+        keys = [a[0] for a in self.M.MCPService.autodesk_apps()]
+        self.assertNotIn('inventor', keys)
+        self.assertNotIn('inventor', self.M.SERVERS)
 
 
 if __name__ == '__main__':

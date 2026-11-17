@@ -20,7 +20,11 @@ Releasing a new version:
 ## [Unreleased]
 
 ### Added
-- **MCP Control — Connect installs the AutoCAD add-in:** pick AutoCAD or Civil 3D and click Connect: MCP Control downloads the T3Lab add-in (T3LabCAD) from GitHub and installs it for every AutoCAD and Civil 3D from 2022 to 2027, then connects your AI app. Restart AutoCAD once after the first install. Step 1 also lists the versions found on this PC. Civil 3D uses the AutoCAD add-in (`t3lab-autocad`); Navisworks, 3ds Max and Inventor say plainly that their add-in does not exist yet.
+- **MCP Control — Connect installs the AutoCAD add-in:** pick AutoCAD or Civil 3D and click Connect: MCP Control downloads the T3Lab add-in (T3LabCAD) from GitHub and installs it for every AutoCAD and Civil 3D from 2022 to 2027, then connects your AI app. Restart AutoCAD once after the first install. Step 1 also lists the versions found on this PC. Civil 3D uses the AutoCAD add-in (`t3lab-autocad`).
+- **MCP Control — 3ds Max add-in:** pick 3ds Max and click Connect: MCP Control installs the T3Lab add-in (T3LabMax) for 3ds Max 2022 to 2027, then connects your AI app, which can list, create, move, colour and give materials to objects, take a viewport picture and run MAXScript. Restart 3ds Max once after the first install.
+
+### Removed
+- **MCP Control — Inventor** is no longer in the app list. Navisworks still says plainly that its add-in does not exist yet.
 
 ### Fixed
 - **BatchOut — PDF24 printer:** export failed with "The PrintToFile property cannot be set to false while the printer is Virtual". When Revit treats PDF24 as a virtual printer, BatchOut now prints to a file and turns it into a PDF with the Ghostscript that comes with PDF24; your printer's Print to file setting is put back afterwards.

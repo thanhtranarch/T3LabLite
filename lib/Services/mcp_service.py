@@ -410,8 +410,9 @@ MCP_SERVER_NAME = 't3lab-revit'
 # Other Autodesk apps: each add-in ships its own stdio bridge, deployed to
 # %APPDATA%/<folder>/bridge.py (AutoCAD: t3lab_CADmcp scripts/install.ps1).
 # A bridge takes no port (it finds its app itself) and runs with `python -I`.
-# mcp_paths.json '<key>_bridge' overrides the path. Only AutoCAD ships today;
-# the rest wait for their add-in (owner, 2026-11-17). Order = the tab's list.
+# mcp_paths.json '<key>_bridge' overrides the path. AutoCAD / Civil 3D and
+# 3ds Max ship today; Navisworks waits for its add-in; Inventor was dropped
+# (owner, 2026-11-17). Order = the tab's list.
 AUTODESK_APPS = (
     # key,         label,        server name,        %APPDATA% folder,   add-in hint
     # A folder named in Services.addin_installer.PACKAGES is installed by Connect.
@@ -424,9 +425,7 @@ AUTODESK_APPS = (
     ('navisworks', 'Navisworks', 't3lab-navisworks', 'T3LabNavisworks',
      'install the T3Lab Navisworks add-in first'),
     ('3dsmax',     '3ds Max',    't3lab-3dsmax',     'T3LabMax',
-     'install the T3Lab 3ds Max add-in first'),
-    ('inventor',   'Inventor',   't3lab-inventor',   'T3LabInventor',
-     'install the T3Lab Inventor add-in first'),
+     'Connect installs it (3ds Max 2022-2027)'),
 )
 CAD_SERVER_NAME = 't3lab-autocad'
 SERVERS = dict([('revit', MCP_SERVER_NAME)] + [(a[0], a[2]) for a in AUTODESK_APPS])
@@ -1393,8 +1392,8 @@ class MCPService(object):
         except Exception as ex:
             return False, 'Add-in installer unavailable: {}'.format(ex)
         if spec[3] not in addin_installer.PACKAGES:
-            return False, ('There is no T3Lab add-in for {} yet — AutoCAD and Civil 3D '
-                           'are supported today.'.format(spec[1]))
+            return False, ('There is no T3Lab add-in for {} yet — AutoCAD, Civil 3D and '
+                           '3ds Max are supported today.'.format(spec[1]))
         try:
             source = _get_paths_module().load_settings().get(spec[3] + '_addin_url')
         except Exception:

@@ -184,7 +184,8 @@ def test_other_autodesk_apps():
     apps = M.MCPService.autodesk_apps()
     keys = [a[0] for a in apps]
     check('AutoCAD first, then the other apps',
-          keys[0] == 'autocad' and {'civil3d', 'navisworks', '3dsmax', 'inventor'} <= set(keys), keys)
+          keys[0] == 'autocad' and {'civil3d', 'navisworks', '3dsmax'} <= set(keys)
+          and 'inventor' not in keys, keys)
     names = [a[2] for a in apps]
     others = [a[2] for a in apps if a[0] != 'civil3d']
     check('server names unique and t3lab-* (Civil 3D shares AutoCAD\'s add-in)',
@@ -210,8 +211,8 @@ def test_other_autodesk_apps():
               entry.get('args') == ['-I', path.replace('\\', '/')], entry)
         check('status configured', M.MCPService.client_status(
             'antigravity', server='navisworks').get('configured'))
-        snip = M.MCPService.config_snippet(fmt='claude_code', server='inventor')
-        check('snippet per app', 't3lab-inventor' in snip and '-I' in snip, snip)
+        snip = M.MCPService.config_snippet(fmt='claude_code', server='3dsmax')
+        check('snippet per app', 't3lab-3dsmax' in snip and '-I' in snip, snip)
     check('cad_bridge_status kept for older callers',
           M.MCPService.cad_bridge_status()['server'] == 't3lab-autocad')
 

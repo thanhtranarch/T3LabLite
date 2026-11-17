@@ -69,3 +69,5 @@ jobs:
         run: python3 lite_guard/test_data_hub.py
       - name: Test the MCP bridge refresh at Revit start
         run: python3 lite_guard/test_bridge_deploy.py
+      - name: Test the MCP bridge over stdio (UTF-8, no proxy, junk lines)
+        run: python3 lite_guard/test_bridge_stdio.py

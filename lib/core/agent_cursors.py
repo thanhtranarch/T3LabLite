@@ -43,14 +43,15 @@ NARRATE_MAX = 90            # goal banner text
 PLAN_MAX = 8                # tasks in an agent's plan (t3lab_narrate tasks=[...])
 TASK_MAX = 60               # characters per task
 
-# name -> (mcp_paths.json key, default). The HUD toggles them live.
+# name -> (mcp_paths.json key, default). The HUD toggles them live. All on by
+# default (owner, 2026-11-17); a saved choice wins.
 OPTIONS = (
     ('follow', 'agent_cursors_follow_views', True),
     ('zoom', 'agent_cursors_zoom', True),
-    ('select', 'agent_cursors_select', False),
-    ('tile', 'agent_cursors_tile_views', False),
-    ('reduce', 'agent_cursors_reduce_motion', False),
-    ('glow', 'agent_cursors_glow', False),
+    ('select', 'agent_cursors_select', True),
+    ('tile', 'agent_cursors_tile_views', True),
+    ('reduce', 'agent_cursors_reduce_motion', True),
+    ('glow', 'agent_cursors_glow', True),
     ('keep', 'agent_cursors_keep_bar', True),
 )
 # Motion speed (mcp_paths.json agent_cursors_speed): name -> time factor.
@@ -117,9 +118,9 @@ PROS = (
 CONS = (
     "Each tool call does a little extra work (bounding boxes of up to {} elements, twice for a delete or move).".format(MAX_TARGETS),
     "Follow switches the active view, so a later tool that works on 'the active view' works on the view the agent opened.",
-    "Zoom and Select change your camera and selection while an agent works (Select is off by default).",
+    "Zoom and Select change your camera and selection while an agent works (both on by default).",
     "Boxes are a snapshot: pan or zoom while an agent works and they sit off until its next call; Replay uses the old positions.",
-    "Glow (off by default) is experimental: it draws inside Revit's 3D views and is not tested on every Revit version.",
+    "Glow (on by default) is experimental: it draws inside Revit's 3D views and is not tested on every Revit version.",
     "The overlay shows up in screenshots and recordings.",
 )
 

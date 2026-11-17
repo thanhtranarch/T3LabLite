@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Agent cursors "Glow" (experimental, off by default): outline the elements
+"""Agent cursors "Glow" (experimental, on by default): outline the elements
 the agents touched inside Revit's own 3D views, drawn by Revit through a
 DirectContext3D server. The overlay only floats above the view; this sits in
 the model and follows orbit / zoom.

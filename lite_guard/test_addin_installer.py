@@ -115,6 +115,28 @@ class ServiceTests(unittest.TestCase):
         st = M.MCPService.app_bridge_status('autocad')
         self.assertTrue(st['installed'] and st['installable'])
 
+    def test_connect_updates_an_installed_addin(self):
+        M = self.M
+        src = os.path.join(tempfile.mkdtemp(), 'T3LabCAD.zip')
+        make_zip(src)
+        paths = M._get_paths_module()
+        real_load = paths.load_settings
+        paths.load_settings = lambda *a, **k: dict(real_load(*a, **k), T3LabCAD_addin_url=src)
+        self.addCleanup(setattr, paths, 'load_settings', real_load)
+        M._addin_refreshed.clear()
+        AI.install('T3LabCAD', source=src)                    # 1.1.0 already installed
+        make_zip(src, extra={'T3LabCAD/tools_snapshot.json': '{}'})   # a newer release
+        note = M.MCPService.update_addin('autocad')
+        self.assertIn('Installed the T3Lab add-in', note)
+        os.remove(src)                                        # offline now
+        self.assertEqual(M.MCPService.update_addin('civil3d'), '')     # throttled
+        M._addin_refreshed.clear()
+        self.assertEqual(M.MCPService.update_addin('autocad'), '')     # failure is not fatal
+        M._addin_refreshed.clear()
+        make_zip(src)
+        AI.install('T3LabCAD', source=src)
+        self.assertEqual(M.MCPService.update_addin('autocad'), '')     # unchanged -> no note
+
     def test_only_one_click_apps_are_listed(self):
         keys = [a[0] for a in self.M.MCPService.autodesk_apps()]
         self.assertEqual(keys, ['autocad', 'civil3d'])

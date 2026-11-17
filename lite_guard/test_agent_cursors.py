@@ -310,9 +310,9 @@ def test_setting():
                     if l[:1] != '#')
         used = set(c.upper() for c in _re.findall(r'\\u(E[0-9A-Fa-f]{3})', osrc))
         check('every bar glyph is in Segoe MDL2', used <= known, sorted(used - known))
-    check('options default: follow + zoom + keep bar on, select / tile / less motion / glow off',
-          opts == {'follow': True, 'zoom': True, 'select': False, 'tile': False,
-                   'reduce': False, 'glow': False, 'keep': True}, opts)
+    check('options default: every bar option on (owner, 2026-11-17)',
+          opts == {'follow': True, 'zoom': True, 'select': True, 'tile': True,
+                   'reduce': True, 'glow': True, 'keep': True}, opts)
     src = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
     tick = src.split('    def _on_tick(self, sender, e):', 1)[1].split('    def ', 1)[0]
     check('keep bar: never auto-hidden after the summary',

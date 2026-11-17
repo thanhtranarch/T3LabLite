@@ -238,10 +238,11 @@ and drawbacks before you switch).
 - **Follow** opens the views the AI works in, **Zoom** brings off-screen
   targets into view; **Select**, **Tile**, **Less motion**, **Speed** (Calm /
   Normal / Fast) and **Glow** (experimental: outlines the touched elements
-  inside 3D views) switch on the bar at the bottom of the view.
+  inside 3D views) switch on the bar at the bottom of the view. Every
+  option is on until you turn it off.
 - **When the AI goes idle** — a summary per AI app, **Select touched**
   (selects every element the AI changed; no model change) and **Replay** of
-  the last 20 steps. **Keep bar** (on by default) keeps the bar and the
+  the last 20 steps. **Keep bar** keeps the bar and the
   dimmed cursors on screen between calls, so they do not blink on and off
   while you work with an AI app. The **X** on the bar turns the cursors off.
 

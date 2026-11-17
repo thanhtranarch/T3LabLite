@@ -54,6 +54,8 @@ class Env(object):
         ).replace('\\', '/')
         M._claude_desktop_running = lambda: self.desktop_running
         M._get_bridge_path = lambda: 'C:/T3LabAI/bridge.py'
+        self.real_update = M.MCPService.update_addin       # no download in these tests
+        M.MCPService.update_addin = staticmethod(lambda app='autocad': '')
         return self
 
     def install_bridge(self):
@@ -64,6 +66,7 @@ class Env(object):
     def __exit__(self, *exc):
         for n, v in self.saved.items():
             setattr(M, n, v)
+        M.MCPService.update_addin = self.real_update
         shutil.rmtree(self.dir, ignore_errors=True)
 
 

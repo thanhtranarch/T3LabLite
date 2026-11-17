@@ -40,6 +40,9 @@ python dev/test_audit_ribbon.py
 python dev/test_mcp_host_engine.py
 python dev/test_assistant_pane.py
 python lite_guard/test_ribbon_memory.py
+python lite_guard/test_batchout_refs.py
+python lite_guard/test_mcp_cad_clients.py
+python lite_guard/test_agent_cursors.py
 python dev/test_icons_t3space.py
 ```
 

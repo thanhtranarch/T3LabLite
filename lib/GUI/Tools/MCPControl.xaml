@@ -3,8 +3,8 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="MCP Control"
-        Width="460" Height="620"
-        MinWidth="440" MinHeight="520"
+        Width="540" Height="620"
+        MinWidth="520" MinHeight="520"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" AllowsTransparency="True"
         ResizeMode="CanResize"
@@ -1747,7 +1747,7 @@
                                RenderOptions.BitmapScalingMode="HighQuality"/>
                         <StackPanel Orientation="Vertical" VerticalAlignment="Center">
                             <TextBlock Text="MCP Control" Style="{StaticResource T3.Title}"/>
-                            <TextBlock Text="Connect AI apps such as Claude or ChatGPT to Revit" Style="{StaticResource T3.Subtitle}"/>
+                            <TextBlock Text="Connect AI apps such as Claude or ChatGPT to Revit and AutoCAD" Style="{StaticResource T3.Subtitle}"/>
                         </StackPanel>
                     </StackPanel>
 
@@ -1791,6 +1791,10 @@
                                      Style="{StaticResource T3.Chip}"
                                      Checked="tab_chip_checked" Tag="2"
                                      ToolTip="Port, auto-start, file task watcher and teaching capture"/>
+                        <RadioButton x:Name="chip_tab_autocad" Content="AutoCAD" GroupName="mcp_tabs"
+                                     Style="{StaticResource T3.Chip}"
+                                     Checked="tab_chip_checked" Tag="3"
+                                     ToolTip="Connect AI apps to AutoCAD through the T3LabCAD add-in"/>
                     </StackPanel>
                     <Button Grid.Column="1" x:Name="refresh_btn" Content="Refresh"
                             Style="{StaticResource T3.Button.Ghost}"
@@ -2139,6 +2143,163 @@
                             <TextBlock Text="While recording, AI edits may only change this model."
                                        Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,4,0,0"/>
 
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- ════════ TAB 3: AUTOCAD ════════
+                     Registers the AutoCAD add-in's own bridge (t3lab-autocad,
+                     installed by t3lab_CADmcp/scripts/install.ps1) in the same AI apps. -->
+                <TabItem>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Padding="16,16,12,16">
+                        <StackPanel>
+
+                            <!-- Add-in -->
+                            <TextBlock Text="AUTOCAD ADD-IN" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="cad_bridge_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                        VerticalAlignment="Top" Margin="0,4,8,0"
+                                        Background="{StaticResource T3.Border}"/>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock x:Name="cad_bridge_label" Text="Checking the AutoCAD add-in..."
+                                               Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="cad_bridge_hint"
+                                               Text="AI apps reach AutoCAD through the T3LabCAD add-in's bridge."
+                                               Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
+
+                            <!-- AI apps -->
+                            <TextBlock Text="CONNECT YOUR AI APP TO AUTOCAD" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                            <Border Style="{StaticResource T3.Panel}" Padding="0">
+                                <StackPanel>
+                                    <!-- Claude Desktop -->
+                                    <Grid Margin="12,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="cad_claude_cfg_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                                VerticalAlignment="Top" Margin="0,4,8,0"
+                                                Background="{StaticResource T3.Border}"/>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                                            <TextBlock Text="Claude Desktop" Style="{StaticResource T3.BodyStrong}"/>
+                                            <TextBlock x:Name="cad_claude_cfg_label" Text="Checking..."
+                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                                            <TextBlock Text="Quit Claude Desktop from the tray icon before connecting."
+                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="2" x:Name="configure_cad_claude_btn" Content="Connect"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                Height="28" Padding="12,0" VerticalAlignment="Center"
+                                                ToolTip="Add t3lab-autocad to claude_desktop_config.json"/>
+                                    </Grid>
+
+                                    <Separator Style="{StaticResource T3.Rule}"/>
+
+                                    <!-- ChatGPT (Codex) -->
+                                    <Grid Margin="12,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="cad_chatgpt_cfg_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                                VerticalAlignment="Top" Margin="0,4,8,0"
+                                                Background="{StaticResource T3.Border}"/>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                                            <TextBlock Text="ChatGPT (Codex)" Style="{StaticResource T3.BodyStrong}"/>
+                                            <TextBlock x:Name="cad_chatgpt_cfg_label" Text="Checking..."
+                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="2" x:Name="configure_cad_chatgpt_btn" Content="Connect"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                Height="28" Padding="12,0" VerticalAlignment="Center"
+                                                ToolTip="Add [mcp_servers.t3lab-autocad] to the Codex config.toml"/>
+                                    </Grid>
+
+                                    <Separator Style="{StaticResource T3.Rule}"/>
+
+                                    <!-- Antigravity -->
+                                    <Grid Margin="12,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="cad_antigravity_cfg_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                                VerticalAlignment="Top" Margin="0,4,8,0"
+                                                Background="{StaticResource T3.Border}"/>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                                            <TextBlock Text="Antigravity" Style="{StaticResource T3.BodyStrong}"/>
+                                            <TextBlock x:Name="cad_antigravity_cfg_label" Text="Checking..."
+                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="2" x:Name="configure_cad_antigravity_btn" Content="Connect"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                Height="28" Padding="12,0" VerticalAlignment="Center"
+                                                ToolTip="Add t3lab-autocad to Antigravity's mcp_config.json"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Connect every app at once -->
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="cad_configure_all_label" Grid.Column="0"
+                                           Text="Restart the AI app after connecting."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
+                                           Margin="0,0,12,0"/>
+                                <Button Grid.Column="1" x:Name="cad_configure_all_btn" Content="Connect All"
+                                        Style="{StaticResource T3.Button.Secondary}"
+                                        Height="28" Padding="12,0"
+                                        ToolTip="Add t3lab-autocad to every app listed above"/>
+                            </Grid>
+
+                            <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
+
+                            <!-- Manual entry -->
+                            <TextBlock Text="MANUAL CONFIG" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                            <ComboBox x:Name="cad_snippet_format_cb" Style="{StaticResource T3.ComboBox}"
+                                      Margin="0,0,0,8"
+                                      ToolTip="Choose the syntax your AI app expects">
+                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}" IsSelected="True"
+                                              Content="JSON — Claude, Cursor, Windsurf, Antigravity"/>
+                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
+                                              Content="TOML — ChatGPT (Codex)"/>
+                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
+                                              Content="Command — Claude Code"/>
+                            </ComboBox>
+                            <TextBox x:Name="cad_config_box" IsReadOnly="True"
+                                     Style="{StaticResource T3.TextBox.Mono}"
+                                     Height="160" Padding="8" VerticalContentAlignment="Top"
+                                     AcceptsReturn="True" TextWrapping="NoWrap"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="cad_copy_status_label" Grid.Column="0"
+                                           Text="The bridge finds AutoCAD by itself — no port needed."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
+                                           Margin="0,0,12,0"/>
+                                <Button Grid.Column="1" x:Name="cad_copy_btn" Content="Copy to Clipboard"
+                                        Style="{StaticResource T3.Button.Secondary}"
+                                        Height="28" Padding="12,0"/>
+                            </Grid>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

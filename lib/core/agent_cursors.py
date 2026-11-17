@@ -87,10 +87,11 @@ AGENTS = {
     'claude-code':     ('Claude Code', '#B4532A'),
     'codex':           ('GPT', '#10A37F'),
     'chatgpt':         ('GPT', '#10A37F'),
-    'antigravity':     ('Gemini', '#4285F4'),
+    'antigravity':     ('Antigravity', '#4285F4'),
     'cursor':          ('Cursor', '#7C3AED'),
     'cli':             ('CLI', '#64748B'),
     't3lab-assistant': ('T3Lab Assistant', '#EA680C'),
+    'mcp-client':      ('AI app', '#64748B'),      # no name sent at all
 }
 # MCP clientInfo names -> AGENTS key.
 _ALIASES = {
@@ -99,10 +100,11 @@ _ALIASES = {
     'gemini-cli-mcp-client': 'antigravity', 'gemini': 'antigravity',
     'cursor-vscode': 'cursor',
 }
-# Client names that carry a suffix (Claude Desktop's local agent mode sends
-# "local-agent-mode-<project>"): first matching prefix wins.
+# Client names that carry a suffix: first matching prefix wins. Never map a
+# name we have not seen from that app (2026-11-17: 'local-agent-mode-...' was
+# taken for Claude and is Antigravity's); MCP Control writes --agent instead.
 _ALIAS_PREFIXES = (
-    ('local-agent-mode', 'claude-desktop'), ('claude-code', 'claude-code'),
+    ('claude-code', 'claude-code'),
     ('claude', 'claude-desktop'), ('codex', 'codex'), ('chatgpt', 'chatgpt'),
     ('openai', 'chatgpt'), ('gemini', 'antigravity'), ('antigravity', 'antigravity'),
     ('cursor', 'cursor'),
@@ -1380,7 +1382,9 @@ def _agent_of(task):
     if agent:
         return agent
     source = getattr(task, 'source', None) or getattr(audit, 'source', '')
-    return 't3lab-assistant' if source == 'assistant' else 'claude-desktop'
+    # No name at all: say "AI app", never guess one (2026-11-17: Antigravity
+    # was shown as Claude).
+    return 't3lab-assistant' if source == 'assistant' else 'mcp-client'
 
 
 def _internal(task):

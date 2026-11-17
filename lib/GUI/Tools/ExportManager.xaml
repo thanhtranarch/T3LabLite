@@ -2209,6 +2209,16 @@
                                             <CheckBox x:Name="pdf_hide_unreferenced_tags" Content="Hide unreferenced view tags" Margin="0,4,0,16"/>
 
                                             <TextBlock Text="Output Settings" FontWeight="SemiBold" FontSize="12.5" Foreground="{StaticResource T3.Ink}" Margin="0,0,0,12"/>
+                                            <TextBlock Text="PDF Engine" FontSize="11" Foreground="{StaticResource T3.TextSecondary}" Margin="0,0,0,4"/>
+                                            <ComboBox x:Name="pdf_engine" Height="32" SelectedIndex="0"
+                                                      Style="{StaticResource T3.ComboBox}" Margin="0,0,0,4" HorizontalAlignment="Stretch"
+                                                      SelectionChanged="pdf_engine_changed"
+                                                      ToolTip="Revit (built-in) uses Revit's PDF export. PDF24 printer prints each sheet to the PDF24 Creator printer and saves it in the output folder.">
+                                                <ComboBoxItem Content="Revit (built-in)"/>
+                                                <ComboBoxItem Content="PDF24 printer"/>
+                                            </ComboBox>
+                                            <TextBlock x:Name="pdf24_status" FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
+                                                       TextWrapping="Wrap" Margin="0,0,0,8" Visibility="Collapsed"/>
                                             <CheckBox x:Name="pdf_view_links_blue" Content="View links in blue" Margin="0,4"/>
                                             <CheckBox x:Name="combine_pdf" Content="Combine all sheets into single PDF"
                                                       FontWeight="SemiBold" Margin="0,4"/>

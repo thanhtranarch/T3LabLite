@@ -19,6 +19,11 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Added
+- **Agent Cursors (Settings → Agent Cursors):** see what AI apps do in Revit. One coloured cursor per app and action (Read, Create, Modify, Delete, View, Export, Code) moves to the elements it works on, with an effect per action: new elements grow in, edits pulse, deletes show a red cross, moves leave a ghost. **Follow** opens the views the AI works in, **Zoom** brings off-screen elements into view, **Select** and **Tile** are optional. Off by default; the bar at the bottom of the view switches the options.
+- **MCP Control — AutoCAD tab:** connect Claude Desktop, ChatGPT (Codex) or Antigravity to AutoCAD through the T3LabCAD add-in (`t3lab-autocad`), or copy a JSON / TOML / `claude mcp add` entry.
+- **BatchOut — Skip image reference files (DWG):** export DWG without the logo/image files Revit writes next to it. Off by default; saved in the profile.
+
 ## [2.3.0] - 2026-11-04
 
 BatchOut export report and shareable profiles, usage statistics that ask first, and an MCP option to run AI code without the Yes/No dialog.

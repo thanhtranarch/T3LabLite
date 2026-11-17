@@ -2279,6 +2279,8 @@
                                             <CheckBox x:Name="cad_export_links_as_external" Content="Export links as external references" IsChecked="False" Margin="0,4"/>
                                             <CheckBox x:Name="cad_match_revit_display" Content="Match Revit display (colors, line weights)" IsChecked="True" Margin="0,4"
                                                       ToolTip="Every line, fill and text keeps the color Revit shows in the view, including V/G overrides and filters. Turn off to use the DWG export setup exactly as saved."/>
+                                            <CheckBox x:Name="cad_skip_image_references" Content="Skip image reference files" IsChecked="False" Margin="0,4"
+                                                      ToolTip="Revit writes every image in a view or title block (logos) as a separate file next to the DWG. Turn on to export the DWG without images and without those files."/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>

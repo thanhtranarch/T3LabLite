@@ -6,7 +6,8 @@ Single source of truth for all MCP-related operations:
   • MCP HTTP server (start / stop / status)
   • File-based task watcher (start / stop / status)
   • MCP client config snippet generation (JSON + Codex TOML)
-  • Auto-configure Claude Desktop / ChatGPT (Codex) / Antigravity
+  • Auto-configure Claude Desktop / ChatGPT (Codex) / Antigravity, for
+    t3lab-revit and for the AutoCAD add-in's t3lab-autocad bridge
   • Data directory management
 
 Import this from any dialog or tool that needs MCP control:
@@ -402,6 +403,64 @@ def _host_outcome(code, result):
 
 MCP_SERVER_NAME = 't3lab-revit'
 
+# The AutoCAD add-in (sibling repo t3lab_CADmcp) ships its own stdio bridge,
+# deployed by its scripts/install.ps1 to %APPDATA%/T3LabCAD/bridge.py. It takes
+# no port (it scans 48900-48908 itself) and runs with `python -I`.
+CAD_SERVER_NAME = 't3lab-autocad'
+SERVERS = {'revit': MCP_SERVER_NAME, 'autocad': CAD_SERVER_NAME}
+
+
+def _server_name(server):
+    try:
+        return SERVERS[server]
+    except KeyError:
+        raise KeyError('Unknown MCP server: {}'.format(server))
+
+
+def _cad_bridge_path():
+    """%APPDATA%/T3LabCAD/bridge.py, or mcp_paths.json 'autocad_bridge' if set."""
+    try:
+        override = _get_paths_module().load_settings().get('autocad_bridge')
+    except Exception:
+        override = None
+    path = override or os.path.join(_appdata(), 'T3LabCAD', 'bridge.py')
+    return path.replace('\\', '/')
+
+
+def _claude_desktop_running():
+    """
+    True while the Claude Desktop app runs: it rewrites its config when it
+    quits, so an entry written meanwhile is lost (t3lab_CADmcp 4b04809).
+    Claude Code also ships a claude.exe, so match by install folder.
+    """
+    def _is_desktop(path):
+        p = (path or '').replace('/', '\\').lower()
+        return '\\anthropicclaude\\' in p or '\\windowsapps\\' in p
+
+    try:
+        from System.Diagnostics import Process
+        for proc in Process.GetProcessesByName('claude'):
+            try:
+                if _is_desktop(proc.MainModule.FileName):
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        pass
+    if os.name != 'nt':
+        return False
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ['powershell', '-NoProfile', '-Command',
+             '(Get-Process claude -ErrorAction SilentlyContinue).Path'],
+            stderr=subprocess.STDOUT, creationflags=0x08000000)
+        return any(_is_desktop(line.decode('utf-8', 'ignore').strip())
+                   for line in out.splitlines())
+    except Exception:
+        return False
+
 
 def _home():
     return os.path.expanduser('~')
@@ -517,8 +576,11 @@ def _backup_once(path):
         pass
 
 
-def _server_entry(python, bridge, port):
+def _server_entry(python, bridge, port, name=MCP_SERVER_NAME):
     """The JSON object describing our stdio server (Claude / Antigravity)."""
+    if name == CAD_SERVER_NAME:
+        # -I = isolated: pyRevit's machine-wide PYTHONPATH cannot break it.
+        return {'type': 'stdio', 'command': python, 'args': ['-I', bridge]}
     return {
         'type': 'stdio',
         'command': python,
@@ -541,13 +603,13 @@ def _read_json_config(path):
     return _json.loads(raw)
 
 
-def _json_is_configured(path):
+def _json_is_configured(path, name=MCP_SERVER_NAME):
     config = _read_json_config(path)
     servers = config.get('mcpServers') if isinstance(config, dict) else None
-    return MCP_SERVER_NAME in (servers or {})
+    return name in (servers or {})
 
 
-def _write_json_config(path, python, bridge, port):
+def _write_json_config(path, python, bridge, port, name=MCP_SERVER_NAME):
     import json as _json
     import codecs
 
@@ -563,13 +625,13 @@ def _write_json_config(path, python, bridge, port):
         servers = {}
         config['mcpServers'] = servers
 
-    entry = _server_entry(python, bridge, port)
+    entry = _server_entry(python, bridge, port, name)
     # Antigravity stamps its own entries with a protobuf type marker; keep it
     # if a previous entry had one so the client still recognises the record.
-    previous = servers.get(MCP_SERVER_NAME)
+    previous = servers.get(name)
     if isinstance(previous, dict) and '$typeName' in previous:
         entry['$typeName'] = previous['$typeName']
-    servers[MCP_SERVER_NAME] = entry
+    servers[name] = entry
 
     cfg_dir = os.path.dirname(path)
     if cfg_dir and not os.path.isdir(cfg_dir):
@@ -600,27 +662,31 @@ def _toml_quote(value):
     return value.replace('\\', '\\\\').replace('"', '\\"')
 
 
-def _codex_block(python, bridge, port):
+def _codex_block(python, bridge, port, name=MCP_SERVER_NAME):
+    if name == CAD_SERVER_NAME:
+        args = 'args = ["-I", "{}"]\n'.format(_toml_quote(bridge))
+    else:
+        args = 'args = ["{}", "{}"]\n'.format(_toml_quote(bridge), port)
     return (
-        '[mcp_servers.{}]\n'.format(MCP_SERVER_NAME) +
+        '[mcp_servers.{}]\n'.format(name) +
         'type = "stdio"\n' +
         'command = "{}"\n'.format(_toml_quote(python)) +
-        'args = ["{}", "{}"]\n'.format(_toml_quote(bridge), port) +
+        args +
         # Revit can be slow to answer the first probe on a cold start; Codex
         # kills a server that has not handshaken within 10s by default.
         'startup_timeout_sec = 60\n'
     )
 
 
-def _toml_upsert(text, block):
+def _toml_upsert(text, block, name=MCP_SERVER_NAME):
     """
-    Replace the `[mcp_servers.t3lab-revit]` table (and its sub-tables) in
+    Replace the `[mcp_servers.<name>]` table (and its sub-tables) in
     `text` with `block`, or append it when absent.
 
     Everything outside our own table is preserved line-for-line — the file
     holds the user's model providers, other MCP servers and plugins.
     """
-    section_re = _toml_section_re(MCP_SERVER_NAME)
+    section_re = _toml_section_re(name)
     lines = text.splitlines()
     out = []
     i, n = 0, len(lines)
@@ -654,15 +720,15 @@ def _read_toml_text(path):
         return f.read()
 
 
-def _toml_is_configured(path):
-    section_re = _toml_section_re(MCP_SERVER_NAME)
+def _toml_is_configured(path, name=MCP_SERVER_NAME):
+    section_re = _toml_section_re(name)
     for line in _read_toml_text(path).splitlines():
         if section_re.match(line):
             return True
     return False
 
 
-def _write_toml_config(path, python, bridge, port):
+def _write_toml_config(path, python, bridge, port, name=MCP_SERVER_NAME):
     import codecs
     try:
         text = _read_toml_text(path)
@@ -675,7 +741,7 @@ def _write_toml_config(path, python, bridge, port):
 
     _backup_once(path)
     with codecs.open(path, 'w', encoding='utf-8') as f:
-        f.write(_toml_upsert(text, _codex_block(python, bridge, port)))
+        f.write(_toml_upsert(text, _codex_block(python, bridge, port, name), name))
 
 
 # ─── MCPService ────────────────────────────────────────────────────────────────
@@ -1144,19 +1210,38 @@ class MCPService(object):
             return None, str(ex)
 
     @staticmethod
-    def config_snippet(port=None, fmt='json'):
+    def config_snippet(port=None, fmt='json', server='revit'):
         """
         Return a ready-to-paste MCP server entry for this machine.
 
         Args:
             port (int|None): Port number to embed. Reads from running server if None.
+                Ignored for server='autocad' (its bridge finds AutoCAD itself).
             fmt (str): 'json' for the "mcpServers" block used by Claude Desktop,
                 Antigravity, Cursor, Windsurf and Claude Code; 'toml' for the
-                `[mcp_servers.t3lab-revit]` table used by ChatGPT's Codex.
+                `[mcp_servers.<name>]` table used by ChatGPT's Codex;
+                'claude_code' for a `claude mcp add` command line.
+            server (str): 'revit' (t3lab-revit) or 'autocad' (t3lab-autocad).
 
         Returns:
             str: Formatted snippet.
         """
+        name = _server_name(server)
+        fmt = str(fmt).lower()
+        if name == CAD_SERVER_NAME:
+            python = _find_python_executable()
+            bridge = _cad_bridge_path()
+            if fmt == 'toml':
+                return _codex_block(python, bridge, 0, name).rstrip('\n')
+            if fmt == 'claude_code':
+                return 'claude mcp add --scope user {} -- "{}" -I "{}"'.format(
+                    name, python, bridge)
+            import json as _json
+            return _json.dumps(
+                {'mcpServers': {name: _server_entry(python.replace('\\', '/'),
+                                                    bridge, 0, name)}},
+                indent=2)
+
         if port is None:
             try:
                 server = _get_server()
@@ -1166,7 +1251,10 @@ class MCPService(object):
 
         bridge = _get_bridge_path()
 
-        if str(fmt).lower() == 'toml':
+        if fmt == 'claude_code':
+            return 'claude mcp add --scope user {} -- "{}" -E "{}" {}'.format(
+                name, _find_python_executable(), bridge, port)
+        if fmt == 'toml':
             # Codex reads real TOML — Windows backslashes must stay escaped.
             return _codex_block(_find_python_executable(), bridge, port).rstrip('\n')
 
@@ -1221,15 +1309,27 @@ class MCPService(object):
 
 
     @staticmethod
-    def client_status(key):
+    def cad_bridge_status():
         """
-        Check one client's configuration status.
+        Is the AutoCAD add-in's bridge deployed on this machine?
+
+        Returns:
+            dict: installed (bool), path (str)
+        """
+        path = _cad_bridge_path()
+        return {'installed': os.path.isfile(path), 'path': path}
+
+    @staticmethod
+    def client_status(key, server='revit'):
+        """
+        Check one client's configuration status for `server` ('revit'|'autocad').
 
         Returns:
             dict: key, label, fmt, path, file_exists, configured, error
         """
         label, fmt = key, 'json'
         try:
+            name  = _server_name(server)
             spec  = _client_spec(key)
             label = spec['label']
             fmt   = spec['fmt']
@@ -1243,8 +1343,8 @@ class MCPService(object):
             base.update({'file_exists': False, 'configured': False, 'error': None})
             return base
         try:
-            configured = (_toml_is_configured(path) if fmt == 'toml'
-                          else _json_is_configured(path))
+            configured = (_toml_is_configured(path, name) if fmt == 'toml'
+                          else _json_is_configured(path, name))
             base.update({'file_exists': True, 'configured': configured, 'error': None})
         except Exception as ex:
             base.update({'file_exists': True, 'configured': False,
@@ -1253,43 +1353,56 @@ class MCPService(object):
 
 
     @staticmethod
-    def configure_client(key, port=None):
+    def configure_client(key, port=None, server='revit'):
         """
-        Write the t3lab-revit entry into one client's config file.
+        Write the `server` entry (t3lab-revit / t3lab-autocad) into one
+        client's config file.
 
         Creates the file and its directory if absent, merges with existing
         entries, and keeps a one-time `<path>.t3lab-backup` of the original.
+        AutoCAD: refuses when its bridge is not deployed, and refuses Claude
+        Desktop while it runs (it would drop the entry on quit).
 
         Returns:
             (success: bool, message: str) — config path on success, error text
             on failure.
         """
         try:
+            name = _server_name(server)
             spec = _client_spec(key)
         except Exception as ex:
             return False, str(ex)
 
         try:
-            if port is None:
-                try:
-                    port = _get_server().port
-                except Exception:
-                    port = 48884
-
-            bridge = _get_bridge_path()
             python = _find_python_executable()
             path   = _resolve_client_path(spec)
+            if name == CAD_SERVER_NAME:
+                port = 0
+                bridge = _cad_bridge_path()
+                if not os.path.isfile(bridge):
+                    return False, ('AutoCAD add-in not installed ({} is missing) — '
+                                   'run scripts/install.ps1 from t3lab_CADmcp first'.format(bridge))
+                if key == 'claude' and _claude_desktop_running():
+                    return False, ('Claude Desktop is running and would drop the entry '
+                                   'when it quits — quit it from the tray icon, then Connect again')
+            else:
+                if port is None:
+                    try:
+                        port = _get_server().port
+                    except Exception:
+                        port = 48884
+                bridge = _get_bridge_path()
 
             if spec['fmt'] == 'toml':
-                _write_toml_config(path, python, bridge, port)
+                _write_toml_config(path, python, bridge, port, name)
             else:
-                _write_json_config(path, python, bridge, port)
+                _write_json_config(path, python, bridge, port, name)
             return True, path
         except Exception as ex:
             return False, str(ex)
 
     @staticmethod
-    def configure_all_clients(port=None):
+    def configure_all_clients(port=None, server='revit'):
         """
         Configure every registered client in one go.
 
@@ -1298,7 +1411,7 @@ class MCPService(object):
         """
         results = []
         for spec in AI_CLIENTS:
-            ok, msg = MCPService.configure_client(spec['key'], port=port)
+            ok, msg = MCPService.configure_client(spec['key'], port=port, server=server)
             results.append({'key': spec['key'], 'label': spec['label'],
                             'ok': ok, 'message': msg})
         return results

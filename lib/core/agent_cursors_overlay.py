@@ -101,6 +101,10 @@ _WS_EX_TRANSPARENT = 0x20
 _WS_EX_TOOLWINDOW = 0x80
 _WS_EX_NOACTIVATE = 0x08000000
 _MAX_TRANSIENT = 400        # animation handlers kept alive (see _hook)
+# Glyph font with fallback: Windows 11 ships Segoe Fluent Icons (a superset);
+# a codepoint missing in the first font is taken from the next, never tofu
+# (owner, 2026-11-17: a broken icon on the bar).
+ICON_FONTS = 'Segoe Fluent Icons, Segoe MDL2 Assets'
 
 
 def _set_exstyle(window, bits):
@@ -264,7 +268,7 @@ class _Overlay(object):
         from System.Windows.Media import FontFamily
         tb = TextBlock()
         tb.Text = text
-        tb.FontFamily = FontFamily('Segoe MDL2 Assets' if glyph else 'Segoe UI')
+        tb.FontFamily = FontFamily(ICON_FONTS if glyph else 'Segoe UI')
         tb.FontSize = size
         tb.FontWeight = FontWeights.SemiBold if bold and not glyph else FontWeights.Normal
         tb.Foreground = _Overlay._brush(color)
@@ -443,7 +447,7 @@ class _Overlay(object):
                 self._goal_panel.Children.Add(line)
             for state, text in plan_rows(self._plans.get(agent) or {}):
                 glyph, tint = {'done': ('\uE73E', '#4ADE80'), 'current': ('\uE768', '#FDE68A'),
-                               'todo': ('\uEA3A', '#94A3B8')}[state]
+                               'todo': ('\uE739', '#94A3B8')}[state]
                 row = self._glyph_label(glyph, text, tint if state != 'done' else '#CBD5E1', 11)
                 row.Margin = Thickness(16, 1, 0, 0)
                 row.ToolTip = u'{} · {}'.format(tag, {'done': 'done', 'current': 'now',

@@ -298,6 +298,18 @@ def test_setting():
     AC.set_enabled(False)
     check('off again', AC.is_enabled() is False)
     opts = AC.options()
+    osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
+    check('icon font falls back (no tofu on the bar)',
+          "ICON_FONTS = 'Segoe Fluent Icons, Segoe MDL2 Assets'" in osrc
+          and "FontFamily(ICON_FONTS if glyph else 'Segoe UI')" in osrc
+          and "FontFamily('Segoe MDL2 Assets'" not in osrc)
+    import re as _re
+    tsv = os.path.join(REPO, 'dev', 'icons', 'mdl2_codepoints.tsv')    # t3lab_dev only
+    if os.path.exists(tsv):
+        known = set(l.split('\t', 1)[0].strip().upper() for l in open(tsv, encoding='utf-8')
+                    if l[:1] != '#')
+        used = set(c.upper() for c in _re.findall(r'\\u(E[0-9A-Fa-f]{3})', osrc))
+        check('every bar glyph is in Segoe MDL2', used <= known, sorted(used - known))
     check('options default: follow + zoom + keep bar on, select / tile / less motion / glow off',
           opts == {'follow': True, 'zoom': True, 'select': False, 'tile': False,
                    'reduce': False, 'glow': False, 'keep': True}, opts)

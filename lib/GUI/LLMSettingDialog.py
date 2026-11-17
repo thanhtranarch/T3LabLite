@@ -195,7 +195,7 @@ class LLMSettingWindow(T3WPFWindow):
         # calls _apply_provider_chrome, which used to overwrite whatever the
         # user was typing — paste a key, wait ~5s, watch it turn back into the
         # old masked value. Focus alone is not enough (the user can click the
-        # MODEL combo mid-edit), so the edit flag is the real guard.
+        # elsewhere mid-edit), so the edit flag is the real guard.
         # An int counter, not a bool, so nested programmatic writes nest.
         self._suppress_text_dirty = 0
         self._key_dirty  = False
@@ -350,7 +350,7 @@ class LLMSettingWindow(T3WPFWindow):
             tag = item.Tag
             if not tag:
                 return
-            self._populate_model_combo(tag)
+            self._show_provider_hint(tag)
             self._apply_host_panel(tag)
             self._apply_custom_panel(tag)
             self._switch_provider(tag)
@@ -383,7 +383,7 @@ class LLMSettingWindow(T3WPFWindow):
         The old code simply returned when self._probing was set, which the
         startup probe holds for several seconds — so switching provider right
         after opening the window silently never loaded the new provider's
-        models and the MODEL combo stayed disabled with a valid saved key.
+        models and showed "not connected" with a valid saved key.
         _probe_pending holds at most one name (last wins), so the chain always
         terminates.
         """
@@ -420,20 +420,6 @@ class LLMSettingWindow(T3WPFWindow):
         if not self._start_worker(_bg):
             self._probing = False
 
-    def model_changed(self, sender, e):
-        try:
-            from Intelligence.llm_router import LLMRouter
-            item = self.model_combo.SelectedItem
-            if item is None:
-                return
-            router = LLMRouter()
-            if router.set_model(router.get_active_name(), item.ToString()):
-                self.model_saved_hint.Foreground = self._t("T3.Success.Text")
-                self.model_saved_hint.Text = u"Model saved"
-                self._flash_saved_hint()
-        except Exception as ex:
-            self._fail_action(u"Models · saving the model", ex)
-
     def _flash_saved_hint(self):
         try:
             from System.Windows.Threading import DispatcherTimer
@@ -452,52 +438,21 @@ class LLMSettingWindow(T3WPFWindow):
         except Exception:
             pass
 
-    def _populate_model_combo(self, active):
-        """Fill MODEL combo for `active`. Empty+disabled until a live model list exists."""
+    def _show_provider_hint(self, active):
+        """Status next to the provider until it has a live model list. The model
+        itself is no longer picked here (2026-11-17: auto per request,
+        Intelligence/model_tier.py; Custom keeps its typed model name)."""
         try:
-            try:
-                self.model_combo.SelectionChanged -= self.model_changed
-            except Exception:
-                pass
-
-            self.model_combo.Items.Clear()
-            models  = list(self._models_cache.get(active, []))
-            enabled = bool(models)
-            hint    = u""
-
-            if enabled:
-                saved = None
-                try:
-                    from config.settings import T3LabAISettings
-                    saved = T3LabAISettings().get_provider_model(active)
-                except Exception:
-                    pass
-                for m in models:
-                    self.model_combo.Items.Add(m)
-                if saved and saved in models:
-                    self.model_combo.SelectedItem = saved
-                else:
-                    self.model_combo.SelectedIndex = 0
+            if self._models_cache.get(active):
+                hint = u""
+            elif active in self._KEY_PROVIDERS:
+                hint = self._key_hint(active)
             else:
-                if active == "custom":
-                    hint = (u"Enter the server Base URL first"
-                            if not self._custom_endpoint().get("base_url")
-                            else u"Not connected — press Save URL to test")
-                elif active in self._KEY_PROVIDERS:
-                    hint = self._key_hint(active)
-                else:
-                    hint = u"Start the server & press Test Connection"
-
-            self.model_combo.IsEnabled = enabled
+                hint = u"Start the server & press Test Connection"
             self.model_saved_hint.Text = hint
             self.model_saved_hint.Foreground = self._t("T3.TextMuted")
         except Exception as ex:
-            logger.debug("_populate_model_combo error: {}".format(ex))
-        finally:
-            try:
-                self.model_combo.SelectionChanged += self.model_changed
-            except Exception:
-                pass
+            logger.debug("_show_provider_hint error: {}".format(ex))
 
     def _key_source(self, provider):
         try:
@@ -540,7 +495,7 @@ class LLMSettingWindow(T3WPFWindow):
 
     def save_key_clicked(self, sender, e):
         """Validate the key against the live model list → save it only if it
-        works → enable MODEL combo. A rejected key never reaches settings.json."""
+        works → show it connected. A rejected key never reaches settings.json."""
         try:
             from Intelligence.llm_router import LLMRouter
 
@@ -577,7 +532,6 @@ class LLMSettingWindow(T3WPFWindow):
                     provider.invalidate_models_cache()
                 self._models_cache.pop(name, None)
 
-            self.model_combo.IsEnabled = False
             self.save_key_btn.IsEnabled = False
 
             def _validate():
@@ -605,7 +559,7 @@ class LLMSettingWindow(T3WPFWindow):
                         ok = msg is None
                     if ok:
                         self._models_cache[name] = models
-                        self._populate_model_combo(name)
+                        self._show_provider_hint(name)
                         self.model_saved_hint.Foreground = self._t("T3.Success.Text")
                         self.model_saved_hint.Text = (
                             u"Key saved — connected ({} models)" if new_key
@@ -614,7 +568,7 @@ class LLMSettingWindow(T3WPFWindow):
                     else:
                         if not new_key:
                             self._models_cache.pop(name, None)
-                        self._populate_model_combo(name)
+                        self._show_provider_hint(name)
                         short, full = msg or self._key_rejected_text(
                             provider, new_key)
                         self.model_saved_hint.Foreground = self._t("T3.Danger.Text")
@@ -790,7 +744,7 @@ class LLMSettingWindow(T3WPFWindow):
 
             router = LLMRouter()
             # A typed model name is the user's choice; clearing the field
-            # hands the choice back to the MODEL combo / live list.
+            # hands the choice back to the provider's default.
             if model:
                 router.set_model("custom", model)
             elif previous_model:
@@ -800,7 +754,6 @@ class LLMSettingWindow(T3WPFWindow):
                 provider.reload_credentials()
             self._models_cache.pop("custom", None)
 
-            self.model_combo.IsEnabled = False
             self.save_custom_btn.IsEnabled = False
             self.model_saved_hint.Foreground = self._t("T3.TextMuted")
             self.model_saved_hint.Text = u"Checking connection…"
@@ -824,7 +777,7 @@ class LLMSettingWindow(T3WPFWindow):
                     else:
                         self._models_cache.pop("custom", None)
                     if router.get_active_name() == "custom":
-                        self._populate_model_combo("custom")
+                        self._show_provider_hint("custom")
                         if ok:
                             self.model_saved_hint.Foreground = self._t("T3.Success.Text")
                             self.model_saved_hint.Text = (
@@ -998,7 +951,7 @@ class LLMSettingWindow(T3WPFWindow):
             router = LLMRouter()
             active = router.get_active_name()
             self._apply_provider_chrome(active)
-            self._populate_model_combo(active)
+            self._show_provider_hint(active)
         except Exception as ex:
             logger.debug("_update_instant error: {}".format(ex))
 
@@ -1011,7 +964,7 @@ class LLMSettingWindow(T3WPFWindow):
             active = router.get_active_name()
 
             self._apply_provider_chrome(active)
-            self._populate_model_combo(active)
+            self._show_provider_hint(active)
 
             for name in self._STATUS_PROVIDERS:
                 info = status.get(name, {})
@@ -1384,7 +1337,7 @@ class LLMSettingWindow(T3WPFWindow):
         """Fill display name + action-mode + reasoning toggles from settings."""
         try:
             from config.user_profile import UserProfile
-            self.username_box.Text = UserProfile().get_name() or u""
+            self.username_box.Text = UserProfile().get_name(fallback=False) or u""
         except Exception:
             pass
         try:

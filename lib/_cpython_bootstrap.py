@@ -375,9 +375,19 @@ def reload_changed_modules(names=HOT_RELOAD_MODULES):
     return reloaded
 
 
+def _timing(event):
+    """open_timing.<event>(); never raises (the log is opt-in, off by default)."""
+    try:
+        import open_timing
+        getattr(open_timing, event)()
+    except Exception:
+        pass
+
+
 def init_cpython_paths():
     """Ensure pyRevit CPython standard library and C extensions are in sys.path and DLL path."""
     sys.dont_write_bytecode = True
+    _timing('run_started')      # opt-in open timing log (lib/open_timing.py)
     engine_dirs = []
     candidates = []
     running = sys.version_info[:2]
@@ -483,6 +493,7 @@ def init_cpython_paths():
         track_ribbon_click()
     except Exception:
         pass
+    _timing('bootstrap_done')
 
 
 class _NullStream(object):

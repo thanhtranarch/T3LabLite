@@ -654,7 +654,9 @@ class ToolCallTests(unittest.TestCase):
         self.assertNotIn('create_level', names)
         self.assertNotIn('send_code_to_revit', names)
         self.assertIn('list_levels', names)
-        self.assertTrue(names <= set(READ_ONLY))
+        # t3lab_narrate only sets the Agent Cursors goal banner: changes nothing.
+        self.assertIn('t3lab_narrate', names)
+        self.assertTrue(names <= set(READ_ONLY) | {'t3lab_narrate'})
 
         _clear_policy()
         _set_settings(**{mp.CODE_KEY: 'off'})

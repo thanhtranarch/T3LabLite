@@ -55,11 +55,13 @@ def main():
     else:
         show_info(
             'Agent cursors are on.', title='Agent Cursors',
-            details='They appear on the next MCP tool call, one cursor per agent and '
-                    'action (Read, Create, Modify, Delete, View, Export, Code), and fade '
-                    'out after a few idle seconds. Follow opens the views the agent '
-                    'works in. The bar at the bottom of the view switches Follow, Zoom, '
-                    'Select and Tile; its X turns the cursors off again.\n\n'
+            details='They appear on the next MCP tool call: one cursor per agent and '
+                    'action, a plain caption of what it does and its goal, the elements '
+                    'it visits and the values it changes. Long calls say "Working"; a '
+                    'call waiting for your OK pulses amber. When the agents go idle the '
+                    'bar shows a summary with Select touched and Replay. The bar switches '
+                    'Follow, Zoom, Select, Tile, Less motion, Glow (experimental) and '
+                    'Speed; its X turns the cursors off again.\n\n'
                     'Options: {}'.format(agent_cursors.options_text()))
 
 

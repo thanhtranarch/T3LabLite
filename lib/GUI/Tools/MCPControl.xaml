@@ -3,8 +3,8 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="MCP Control"
-        Width="540" Height="620"
-        MinWidth="520" MinHeight="520"
+        Width="480" Height="640"
+        MinWidth="460" MinHeight="520"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" AllowsTransparency="True"
         ResizeMode="CanResize"
@@ -1747,7 +1747,7 @@
                                RenderOptions.BitmapScalingMode="HighQuality"/>
                         <StackPanel Orientation="Vertical" VerticalAlignment="Center">
                             <TextBlock Text="MCP Control" Style="{StaticResource T3.Title}"/>
-                            <TextBlock Text="Connect AI apps such as Claude or ChatGPT to Revit and AutoCAD" Style="{StaticResource T3.Subtitle}"/>
+                            <TextBlock Text="Connect AI apps such as Claude or ChatGPT to Revit and Autodesk apps" Style="{StaticResource T3.Subtitle}"/>
                         </StackPanel>
                     </StackPanel>
 
@@ -1779,22 +1779,14 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                        <RadioButton x:Name="chip_tab_setup" Content="Setup" GroupName="mcp_tabs"
+                        <RadioButton x:Name="chip_tab_setup" Content="Connect" GroupName="mcp_tabs"
                                      Style="{StaticResource T3.Chip}" IsChecked="True"
                                      Checked="tab_chip_checked" Tag="0"
                                      ToolTip="Start the server and connect your AI app"/>
-                        <RadioButton x:Name="chip_tab_manual" Content="Manual Config" GroupName="mcp_tabs"
-                                     Style="{StaticResource T3.Chip}"
-                                     Checked="tab_chip_checked" Tag="1"
-                                     ToolTip="Config entry to paste into an AI app that is not listed in Setup"/>
                         <RadioButton x:Name="chip_tab_advanced" Content="Advanced" GroupName="mcp_tabs"
                                      Style="{StaticResource T3.Chip}"
-                                     Checked="tab_chip_checked" Tag="2"
+                                     Checked="tab_chip_checked" Tag="1"
                                      ToolTip="Port, auto-start, file task watcher and teaching capture"/>
-                        <RadioButton x:Name="chip_tab_autocad" Content="AutoCAD" GroupName="mcp_tabs"
-                                     Style="{StaticResource T3.Chip}"
-                                     Checked="tab_chip_checked" Tag="3"
-                                     ToolTip="Connect AI apps to AutoCAD through the T3LabCAD add-in"/>
                     </StackPanel>
                     <Button Grid.Column="1" x:Name="refresh_btn" Content="Refresh"
                             Style="{StaticResource T3.Button.Ghost}"
@@ -1810,37 +1802,66 @@
                     <Style TargetType="TabItem" BasedOn="{StaticResource T3.TabItem.Hidden}"/>
                 </TabControl.ItemContainerStyle>
 
-                <!-- ════════ TAB 0: SETUP ════════ -->
+                <!-- ════════ TAB 0: CONNECT (Revit or another Autodesk app) ════════ -->
                 <TabItem>
                     <ScrollViewer VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Padding="16,16,12,16">
                         <StackPanel>
 
-                            <!-- STEP 1 · Server -->
-                            <TextBlock Text="STEP 1 · START THE SERVER" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <Border x:Name="status_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
-                                        VerticalAlignment="Top" Margin="0,4,8,0"
-                                        Background="{StaticResource T3.Border}"/>
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
-                                    <TextBlock x:Name="status_label" Text="Checking server status..."
-                                               Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
-                                    <TextBlock x:Name="server_hint_label"
-                                               Text="Starts by itself when a model opens in Revit."
-                                               Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
-                                </StackPanel>
-                                <Button Grid.Column="2" x:Name="toggle_btn" Content="Start Server"
-                                        Style="{StaticResource T3.Button.Secondary}" IsEnabled="False"
-                                        Height="28" Padding="12,0" VerticalAlignment="Center"/>
-                            </Grid>
+                            <TextBlock Text="APP" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                            <ComboBox x:Name="app_cb" Style="{StaticResource T3.ComboBox}" Margin="0,0,0,16"
+                                      ToolTip="Revit, or another Autodesk app reached through its T3Lab add-in"/>
 
-                            <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
+                            <!-- Another Autodesk app: its add-in bridge -->
+                            <StackPanel x:Name="addin_panel" Visibility="Collapsed">
+                                <TextBlock Text="STEP 1 · INSTALL THE ADD-IN" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border x:Name="addin_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                            VerticalAlignment="Top" Margin="0,4,8,0"
+                                            Background="{StaticResource T3.Border}"/>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock x:Name="addin_label" Text="Checking the add-in..."
+                                                   Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="addin_hint"
+                                                   Text="AI apps reach the app through its T3Lab add-in's bridge."
+                                                   Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
+                            </StackPanel>
+
+                            <!-- Revit: the T3Lab MCP server -->
+                            <StackPanel x:Name="revit_server_panel">
+                                <!-- STEP 1 · Server -->
+                                <TextBlock Text="STEP 1 · START THE SERVER" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border x:Name="status_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                            VerticalAlignment="Top" Margin="0,4,8,0"
+                                            Background="{StaticResource T3.Border}"/>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                                        <TextBlock x:Name="status_label" Text="Checking server status..."
+                                                   Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="server_hint_label"
+                                                   Text="Starts by itself when a model opens in Revit."
+                                                   Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="2" x:Name="toggle_btn" Content="Start Server"
+                                            Style="{StaticResource T3.Button.Secondary}" IsEnabled="False"
+                                            Height="28" Padding="12,0" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
+                            </StackPanel>
 
                             <!-- STEP 2 · AI apps -->
                             <TextBlock Text="STEP 2 · CONNECT YOUR AI APP" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
@@ -1934,72 +1955,75 @@
                                         ToolTip="Add T3Lab to every app listed above"/>
                             </Grid>
 
+                            <StackPanel x:Name="ask_panel">
+                                <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
+
+                                <!-- STEP 3 · Try it -->
+                                <TextBlock Text="STEP 3 · ASK YOUR AI APP" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                                <Grid ToolTip="AI tools always work on the active model">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border x:Name="active_doc_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                            VerticalAlignment="Top" Margin="0,4,8,0"
+                                            Background="{StaticResource T3.Border}"/>
+                                    <TextBlock x:Name="active_doc_label" Grid.Column="1" Text="Checking active model..."
+                                               Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
+                                </Grid>
+                                <TextBlock Text="Open the AI app and try: &quot;How many walls are in this model?&quot; Tools always run on the active model."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="16,4,0,0"/>
+                            </StackPanel>
+
                             <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
 
-                            <!-- STEP 3 · Try it -->
-                            <TextBlock Text="STEP 3 · ASK YOUR AI APP" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                            <Grid ToolTip="AI tools always work on the active model">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <Border x:Name="active_doc_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
-                                        VerticalAlignment="Top" Margin="0,4,8,0"
-                                        Background="{StaticResource T3.Border}"/>
-                                <TextBlock x:Name="active_doc_label" Grid.Column="1" Text="Checking active model..."
-                                           Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
-                            </Grid>
-                            <TextBlock Text="Open the AI app and try: &quot;How many walls are in this model?&quot; Tools always run on the active model."
-                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="16,4,0,0"/>
+                            <!-- Manual entry, for any other AI app -->
+                            <Expander x:Name="manual_expander" Header="Manual config" Style="{StaticResource T3.Expander}">
+                                <StackPanel Margin="0,8,0,0">
+                                        <TextBlock Text="For an AI app that is not listed above: paste this entry into the app's MCP config file, then restart the app."
+                                                   Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                                        <TextBlock Text="FORMAT" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="snippet_format_cb" Style="{StaticResource T3.ComboBox}"
+                                                  Margin="0,0,0,12"
+                                                  ToolTip="Choose the syntax your AI app expects">
+                                            <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}" IsSelected="True"
+                                                          Content="JSON — Claude, Cursor, Windsurf, Antigravity"/>
+                                            <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
+                                                          Content="TOML — ChatGPT (Codex)"/>
+                                            <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
+                                                          Content="Command — Claude Code"/>
+                                        </ComboBox>
+
+                                        <TextBlock Text="CONFIG ENTRY" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="config_box" IsReadOnly="True"
+                                                 Style="{StaticResource T3.TextBox.Mono}"
+                                                 Height="160" Padding="8" VerticalContentAlignment="Top"
+                                                 AcceptsReturn="True" TextWrapping="NoWrap"
+                                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+
+                                        <Grid Margin="0,8,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="copy_status_label" Grid.Column="0"
+                                                       Text="The port in the entry follows the Port setting in Advanced."
+                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
+                                                       Margin="0,0,12,0"/>
+                                            <Button Grid.Column="1" x:Name="copy_btn" Content="Copy to Clipboard"
+                                                    Style="{StaticResource T3.Button.Secondary}"
+                                                    Height="28" Padding="12,0"/>
+                                        </Grid>
+                        
+                                </StackPanel>
+                            </Expander>
 
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
 
-                <!-- ════════ TAB 1: MANUAL CONFIG ════════ -->
-                <TabItem>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  Padding="16,16,12,16">
-                        <StackPanel>
-                            <TextBlock Text="For an AI app that is not listed in Setup: paste this entry into the app's MCP config file, then restart the app."
-                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,16"/>
-
-                            <TextBlock Text="FORMAT" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                            <ComboBox x:Name="snippet_format_cb" Style="{StaticResource T3.ComboBox}"
-                                      Margin="0,0,0,12"
-                                      ToolTip="Choose the syntax your AI app expects">
-                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}" IsSelected="True"
-                                              Content="JSON — Claude, Cursor, Windsurf, Antigravity"/>
-                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
-                                              Content="TOML — ChatGPT (Codex)"/>
-                            </ComboBox>
-
-                            <TextBlock Text="CONFIG ENTRY" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                            <TextBox x:Name="config_box" IsReadOnly="True"
-                                     Style="{StaticResource T3.TextBox.Mono}"
-                                     Height="240" Padding="8" VerticalContentAlignment="Top"
-                                     AcceptsReturn="True" TextWrapping="NoWrap"
-                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
-
-                            <Grid Margin="0,8,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="copy_status_label" Grid.Column="0"
-                                           Text="The port in the entry follows the Port setting in Advanced."
-                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
-                                           Margin="0,0,12,0"/>
-                                <Button Grid.Column="1" x:Name="copy_btn" Content="Copy to Clipboard"
-                                        Style="{StaticResource T3.Button.Secondary}"
-                                        Height="28" Padding="12,0"/>
-                            </Grid>
-                        </StackPanel>
-                    </ScrollViewer>
-                </TabItem>
-
-                <!-- ════════ TAB 2: ADVANCED ════════ -->
+                <!-- ════════ TAB 1: ADVANCED ════════ -->
                 <TabItem>
                     <ScrollViewer VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
@@ -2147,162 +2171,6 @@
                     </ScrollViewer>
                 </TabItem>
 
-                <!-- ════════ TAB 3: AUTOCAD ════════
-                     Registers the AutoCAD add-in's own bridge (t3lab-autocad,
-                     installed by t3lab_CADmcp/scripts/install.ps1) in the same AI apps. -->
-                <TabItem>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  Padding="16,16,12,16">
-                        <StackPanel>
-
-                            <!-- Add-in -->
-                            <TextBlock Text="AUTOCAD ADD-IN" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <Border x:Name="cad_bridge_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
-                                        VerticalAlignment="Top" Margin="0,4,8,0"
-                                        Background="{StaticResource T3.Border}"/>
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                    <TextBlock x:Name="cad_bridge_label" Text="Checking the AutoCAD add-in..."
-                                               Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
-                                    <TextBlock x:Name="cad_bridge_hint"
-                                               Text="AI apps reach AutoCAD through the T3LabCAD add-in's bridge."
-                                               Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
-                                </StackPanel>
-                            </Grid>
-
-                            <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
-
-                            <!-- AI apps -->
-                            <TextBlock Text="CONNECT YOUR AI APP TO AUTOCAD" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
-                            <Border Style="{StaticResource T3.Panel}" Padding="0">
-                                <StackPanel>
-                                    <!-- Claude Desktop -->
-                                    <Grid Margin="12,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Border x:Name="cad_claude_cfg_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
-                                                VerticalAlignment="Top" Margin="0,4,8,0"
-                                                Background="{StaticResource T3.Border}"/>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
-                                            <TextBlock Text="Claude Desktop" Style="{StaticResource T3.BodyStrong}"/>
-                                            <TextBlock x:Name="cad_claude_cfg_label" Text="Checking..."
-                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
-                                            <TextBlock Text="Quit Claude Desktop from the tray icon before connecting."
-                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
-                                        </StackPanel>
-                                        <Button Grid.Column="2" x:Name="configure_cad_claude_btn" Content="Connect"
-                                                Style="{StaticResource T3.Button.Secondary}"
-                                                Height="28" Padding="12,0" VerticalAlignment="Center"
-                                                ToolTip="Add t3lab-autocad to claude_desktop_config.json"/>
-                                    </Grid>
-
-                                    <Separator Style="{StaticResource T3.Rule}"/>
-
-                                    <!-- ChatGPT (Codex) -->
-                                    <Grid Margin="12,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Border x:Name="cad_chatgpt_cfg_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
-                                                VerticalAlignment="Top" Margin="0,4,8,0"
-                                                Background="{StaticResource T3.Border}"/>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
-                                            <TextBlock Text="ChatGPT (Codex)" Style="{StaticResource T3.BodyStrong}"/>
-                                            <TextBlock x:Name="cad_chatgpt_cfg_label" Text="Checking..."
-                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
-                                        </StackPanel>
-                                        <Button Grid.Column="2" x:Name="configure_cad_chatgpt_btn" Content="Connect"
-                                                Style="{StaticResource T3.Button.Secondary}"
-                                                Height="28" Padding="12,0" VerticalAlignment="Center"
-                                                ToolTip="Add [mcp_servers.t3lab-autocad] to the Codex config.toml"/>
-                                    </Grid>
-
-                                    <Separator Style="{StaticResource T3.Rule}"/>
-
-                                    <!-- Antigravity -->
-                                    <Grid Margin="12,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Border x:Name="cad_antigravity_cfg_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
-                                                VerticalAlignment="Top" Margin="0,4,8,0"
-                                                Background="{StaticResource T3.Border}"/>
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
-                                            <TextBlock Text="Antigravity" Style="{StaticResource T3.BodyStrong}"/>
-                                            <TextBlock x:Name="cad_antigravity_cfg_label" Text="Checking..."
-                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
-                                        </StackPanel>
-                                        <Button Grid.Column="2" x:Name="configure_cad_antigravity_btn" Content="Connect"
-                                                Style="{StaticResource T3.Button.Secondary}"
-                                                Height="28" Padding="12,0" VerticalAlignment="Center"
-                                                ToolTip="Add t3lab-autocad to Antigravity's mcp_config.json"/>
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- Connect every app at once -->
-                            <Grid Margin="0,8,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="cad_configure_all_label" Grid.Column="0"
-                                           Text="Restart the AI app after connecting."
-                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
-                                           Margin="0,0,12,0"/>
-                                <Button Grid.Column="1" x:Name="cad_configure_all_btn" Content="Connect All"
-                                        Style="{StaticResource T3.Button.Secondary}"
-                                        Height="28" Padding="12,0"
-                                        ToolTip="Add t3lab-autocad to every app listed above"/>
-                            </Grid>
-
-                            <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
-
-                            <!-- Manual entry -->
-                            <TextBlock Text="MANUAL CONFIG" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
-                            <ComboBox x:Name="cad_snippet_format_cb" Style="{StaticResource T3.ComboBox}"
-                                      Margin="0,0,0,8"
-                                      ToolTip="Choose the syntax your AI app expects">
-                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}" IsSelected="True"
-                                              Content="JSON — Claude, Cursor, Windsurf, Antigravity"/>
-                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
-                                              Content="TOML — ChatGPT (Codex)"/>
-                                <ComboBoxItem Style="{StaticResource T3.ComboBoxItem}"
-                                              Content="Command — Claude Code"/>
-                            </ComboBox>
-                            <TextBox x:Name="cad_config_box" IsReadOnly="True"
-                                     Style="{StaticResource T3.TextBox.Mono}"
-                                     Height="160" Padding="8" VerticalContentAlignment="Top"
-                                     AcceptsReturn="True" TextWrapping="NoWrap"
-                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
-                            <Grid Margin="0,8,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock x:Name="cad_copy_status_label" Grid.Column="0"
-                                           Text="The bridge finds AutoCAD by itself — no port needed."
-                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
-                                           Margin="0,0,12,0"/>
-                                <Button Grid.Column="1" x:Name="cad_copy_btn" Content="Copy to Clipboard"
-                                        Style="{StaticResource T3.Button.Secondary}"
-                                        Height="28" Padding="12,0"/>
-                            </Grid>
-                        </StackPanel>
-                    </ScrollViewer>
-                </TabItem>
             </TabControl>
 
             <!-- ══════════════════ ROW 3: FOOTER BAR ══════════════════

@@ -107,6 +107,102 @@ def test_actions():
           AC.counts_text({'create': 3, 'read': 1}))
 
 
+def test_captions_and_tour():
+    print('[describe_call / badge_text / tour]')
+    cases = (
+        (('list_open_documents', None, 0, False), 'Listing open documents'),
+        (('revit_get_element_info', {'element_id': 1}, 1, False), 'Reading element info · 1 element'),
+        (('move_elements', {}, 3, False), 'Moving elements · 3 elements'),
+        (('operate_element', {'operation': 'hide'}, 5, False), 'Hiding elements · 5 elements'),
+        (('send_code_to_revit', {}, 0, False), 'Running code in Revit'),
+        (('delete_element', {}, 2, True), 'Failed: Deleting element · 2 elements'),
+        (('famigen_create_family', None, 0, False), 'Creating family'),
+        (('frobnicate_walls', None, 0, False), 'Frobnicating walls'),
+    )
+    for args, want in cases:
+        got = AC.describe_call(*args)
+        check('caption ' + args[0], got == want, got)
+    long = AC.describe_call('get_' + '_'.join(['parameter'] * 12))
+    check('long caption cut with an ellipsis', len(long) <= 46 and long.endswith('…'), long)
+    check('empty tool -> Working', AC.describe_call('') == 'Working')
+    check('badge with category', AC.badge_text('Walls', '1200 × 300') == 'Walls · 1200 × 300')
+    check('badge without category', AC.badge_text('', '10 × 10') == '10 × 10')
+    sched = AC.tour_schedule([(0, 0), (10, 5), (20, 20)], 300, 200)
+    check('tour: arrive / leave in order',
+          [s_[2:] for s_ in sched] == [(300, 500), (800, 1000), (1300, 1500)], sched)
+    check('one stop glides MOVE_MS', AC.hop_ms(1) == AC.MOVE_MS)
+    check('many stops glide faster, never under 260 ms',
+          AC.hop_ms(4) < AC.hop_ms(1) and AC.hop_ms(50) == 260)
+    rect = (100.0, 50.0, 900.0, 650.0)
+    pts = AC.review_points(rect, 7, 3)
+    check('review path: n points', len(pts) == 3)
+    check('review path inside the view',
+          all(rect[0] < x < rect[2] and rect[1] < y < rect[3] for x, y in pts), pts)
+    check('review path stable per seed', pts == AC.review_points(rect, 7, 3))
+    check('another seed, another path', pts != AC.review_points(rect, 8, 3))
+
+
+def test_activity_helpers():
+    print('[goal / changes / conflicts / off-screen / summary]')
+    check('goal one line', AC.clean_goal('  Renumber\n  doors  ') == 'Renumber doors')
+    long = AC.clean_goal('x' * 200)
+    check('goal capped', len(long) == AC.NARRATE_MAX and long.endswith('…'))
+    check('change text', AC.change_text('Comments', '', 'Checked') == 'Comments: "" → Checked',
+          AC.change_text('Comments', '', 'Checked'))
+    check('change text shortens long values',
+          len(AC.change_text('Mark', 'a' * 50, 'b')) < 60)
+    touched = {}
+    check('first edit: no clash', AC.track_touches(touched, 'claude', [1, 2], 'modify') == [])
+    check('same agent again: no clash', AC.track_touches(touched, 'claude', [1], 'modify') == [])
+    check('reads never clash', AC.track_touches(touched, 'codex', [1], 'read') == [])
+    clash = AC.track_touches(touched, 'codex', [1, 3], 'delete')
+    check('another agent edits 1: clash with claude', clash == [(1, ['claude'])], clash)
+    rect = (0.0, 0.0, 400.0, 300.0)
+    x, y, ang = AC.edge_point(rect, (1000.0, 150.0))
+    check('edge point on the right edge', abs(x - 382.0) < 1e-6 and abs(y - 150.0) < 1e-6
+          and abs(ang) < 1e-6, (x, y, ang))
+    marks = AC.offscreen_markers(rect, [(1000, 150), (900, 160), (-50, 150), (200, 100)])
+    check('one marker per side, inside points ignored',
+          sorted(m[3] for m in marks) == [1, 2], marks)
+    check('markers sit inside the view', all(0 <= m[0] <= 400 and 0 <= m[1] <= 300 for m in marks))
+    lines = AC.summary_lines({'claude-desktop': {'read': 2, 'create': 1}}, 3)
+    check('summary lines', lines == ['Claude: Read 2 · Create 1', '3 elements changed'], lines)
+
+
+def test_perspective():
+    print('[perspective projection]')
+    cam = {'eye': (0, 0, 0), 'forward': (0, 1, 0), 'up': (0, 0, 1), 'right': (1, 0, 0),
+           'c0': (-10, 10, -5), 'c1': (10, 10, 5)}
+    rect = (0.0, 0.0, 200.0, 100.0)
+    x, y = AC.project_perspective((0, 10, 0), cam, rect)
+    check('centre of view -> centre of screen', (x, y) == (100.0, 50.0), (x, y))
+    x, y = AC.project_perspective((10, 20, 0), cam, rect)
+    check('twice as far, half the offset', abs(x - 150.0) < 1e-9, x)
+    check('behind the eye -> None', AC.project_perspective((0, -5, 0), cam, rect) is None)
+    corners = [(a, b, c) for a in (-1, 1) for b in (9, 11) for c in (-1, 1)]
+    box = AC.perspective_box(corners, cam, rect)
+    check('box around the centre', box is not None and box[0] < 100 < box[2], box)
+    check('box behind the eye -> None',
+          AC.perspective_box([(0, -1, 0)] * 8, cam, rect) is None)
+
+
+def test_narrate_and_glow():
+    print('[narrate / glow helpers]')
+    check('narrate schema', AC.NARRATE_SCHEMA['name'] == AC.NARRATE_TOOL == 't3lab_narrate'
+          and AC.NARRATE_SCHEMA['inputSchema']['required'] == ['message'])
+    res = AC.narrate('claude-ai', '  Renumber doors on Level 2 ')
+    check('narrate stores the goal', res['success'] and res['goal'] == 'Renumber doors on Level 2'
+          and AC._session['goals'].get('claude-desktop') == res['goal'], res)
+    AC.waiting('claude-ai', 'delete_element', {'element_ids': [1]}, True)   # no overlay: quiet
+    check('waiting never raises without an overlay', True)
+    import core.agent_cursors_glow as G
+    check('glow: 8 corners', len(G.corners((0, 0, 0), (1, 2, 3))) == 8)
+    idx = G.line_indices(2)
+    check('glow: 12 edges per box, second box offset by 8',
+          len(idx) == 24 and idx[12] == (8, 9) and max(max(p) for p in idx) == 15, idx[:3])
+    check('select_touched quiet without Revit', AC.select_touched() is False)
+
+
 def test_views():
     print('[visible_views / union_rect / moved]')
     a, b = (0, 0, 500, 400), (500, 0, 1000, 400)
@@ -166,8 +262,15 @@ def test_setting():
     AC.set_enabled(False)
     check('off again', AC.is_enabled() is False)
     opts = AC.options()
-    check('options default: follow + zoom on, select + tile off',
-          opts == {'follow': True, 'zoom': True, 'select': False, 'tile': False}, opts)
+    check('options default: follow + zoom on, select / tile / less motion / glow off',
+          opts == {'follow': True, 'zoom': True, 'select': False, 'tile': False,
+                   'reduce': False, 'glow': False}, opts)
+    check('speed normal by default', AC.speed() == 'normal' and AC.speed_factor() == 1.0)
+    AC.set_speed('calm')
+    check('speed saved', AC.speed() == 'calm' and AC.speed_factor() > 1.0)
+    check('speed cycles', AC.next_speed('calm') == 'normal' and AC.next_speed('fast') == 'calm')
+    AC.set_speed('nonsense')
+    check('unknown speed -> normal', AC.speed() == 'normal')
     AC.set_option('tile', True)
     check('option saved', AC.options()['tile'] is True)
     AC.set_option('tile', False)
@@ -211,8 +314,25 @@ def test_server_hook():
     check('notify is called', hook > 0)
     check('after task.done.set()', 0 < done < hook, (done, hook))
     check('before() is called ahead of the tool', 0 < pre < run, (pre, run))
+    if 'def _external_policy_check(' not in src:        # dev server
+        check('t3lab_narrate answered before the ExternalEvent queue',
+              0 < src.find("if tool_name == 't3lab_narrate':") < src.find('task = _ToolTask(tool_name, arguments, expect_document'))
+        check('waiting() around the approval request',
+              src.find('agent_cursors.waiting(agent, tool_name, arguments, True)')
+              < src.find('ok, how, wait_ms = broker.request(')
+              < src.find('agent_cursors.waiting(agent, tool_name, arguments, False)'))
+    check('narrate tool registered', 'NARRATE_SCHEMA' in src)
+    if 'def _external_policy_check(' in src:            # Lite server
+        check('t3lab_narrate answered before the ExternalEvent queue',
+              0 < src.find('if tool_name == agent_cursors.NARRATE_TOOL:') < src.find('task = _ToolTask(tool_name, arguments'))
+        check('waiting() around the confirm dialog',
+              src.find('agent_cursors.waiting(task.agent, task.tool_name, task.arguments, True)')
+              < src.find('refusal = _ask_user_to_confirm(task)')
+              < src.find('agent_cursors.waiting(task.agent, task.tool_name, task.arguments, False)'))
     # IronPython 2.7 parses the module too: no f-strings / py3-only syntax.
-    ac_src = open(AC.__file__, encoding='utf-8').read()
+    ac_src = ''.join(open(os.path.join(LIB, 'core', f), encoding='utf-8').read()
+                     for f in ('agent_cursors.py', 'agent_cursors_overlay.py',
+                               'agent_cursors_glow.py'))
     check('no f-strings (IronPython)', not re.search(r'(?<![\w])[fF][rR]?[\'"]', ac_src))
     check('no nonlocal (IronPython)', 'nonlocal' not in ac_src)
 
@@ -247,6 +367,10 @@ if __name__ == '__main__':
         test_extract_ids()
         test_view_ids()
         test_actions()
+        test_captions_and_tour()
+        test_activity_helpers()
+        test_perspective()
+        test_narrate_and_glow()
         test_views()
         test_projection()
         test_agent_style()

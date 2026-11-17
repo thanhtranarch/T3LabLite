@@ -198,6 +198,8 @@ class _ToolTask(object):
         # the UI thread, right before the tool runs.
         self.confirm = confirm
         self.awaiting_user = False
+        self.answered = False       # Allow on the Agent Cursors bar: run when re-queued
+        self.ask_rid = ''           # the bar's request id while it asks
         self._caller_gone = False
 
     def claim(self, who):
@@ -282,6 +284,52 @@ def _ask_user_to_confirm(task):
     return None
 
 
+def _ask_on_bar(handler, app, task):
+    """Put the consent question on the Agent Cursors bar instead of the modal
+    dialog (UI thread). The task leaves the queue; Allow re-queues it with
+    answered=True and raises the ExternalEvent again, Deny finishes it.
+    False when the bar cannot ask (cursors off ...): use the dialog."""
+    main, content, expanded = task.confirm
+    try:
+        from core import mcp_policy
+        always_text = mcp_policy.dont_ask_text(task.tool_name)
+    except Exception:
+        mcp_policy, always_text = None, None
+
+    def on_answer(approved, always):            # overlay thread
+        if mcp_policy is not None:
+            try:
+                mcp_policy.remember_answer(task.tool_name, approved, always)
+            except Exception:
+                pass
+        still_waiting = task.proceed_after_confirm()
+        if approved and still_waiting:
+            task.answered = True
+            handler.tasks.put(task)
+            try:
+                handler.server._external_event.Raise()
+            except Exception:
+                pass
+            return
+        task.result = ({'error': ('The user declined {} in Revit, so it was not run. '
+                                  'Do not retry it unless the user asks.'.format(task.tool_name)),
+                        'declined_by_user': True, 'tool': task.tool_name} if not approved else
+                       {'error': 'Confirmed too late: the request had already timed out, '
+                                 'so it was not run.', 'tool': task.tool_name})
+        task.exception = None
+        task.done.set()
+
+    with task._claim_lock:
+        task.awaiting_user = True
+    task.ask_rid = agent_cursors.ask(app, task.agent, task.tool_name, task.arguments, main,
+                                     content, expanded or '', always_text or '', on_answer)
+    if task.ask_rid:
+        return True
+    with task._claim_lock:
+        task.awaiting_user = False
+    return False
+
+
 try:
     import clr
     clr.AddReference('RevitAPIUI')
@@ -314,9 +362,17 @@ try:
                     task = self.tasks.get_nowait()
                 except _queue_mod.Empty:
                     break
-                if not task.claim('ui'):
+                if task.answered:
+                    if task.claimed_by != 'ui':
+                        continue  # given up while the bar was asking
+                elif not task.claim('ui'):
                     continue  # read fallback or timeout already consumed it
-                if getattr(task, 'confirm', None):
+                if task.agent and not task.answered:
+                    agent_cursors.offer(app, task.agent)   # once per session, cursors off
+                if getattr(task, 'confirm', None) and not task.answered:
+                    if _ask_on_bar(self, app, task):
+                        continue  # Allow on the bar re-queues it
+
                     agent_cursors.waiting(task.agent, task.tool_name, task.arguments, True)
                     try:
                         refusal = _ask_user_to_confirm(task)
@@ -4125,8 +4181,10 @@ class T3LabAIServer(object):
                 # stopped — say so, or the caller retries a write that is
                 # about to land.
                 if task.give_up():
+                    if task.ask_rid:
+                        agent_cursors.cancel_ask(task.ask_rid)
                     if task.awaiting_user:
-                        return {'error': ('No answer to the confirmation dialog in Revit '
+                        return {'error': ('No answer to the confirmation in Revit '
                                           'within 120 s, so {} was NOT run.'.format(tool_name)),
                                 'tool': tool_name}
                     return {'error': ('Revit was busy for 120 s (a dialog or command '

@@ -142,6 +142,7 @@ class _Overlay(object):
         self._owner = owner_hwnd
         self._goals = {}            # agent -> goal banner text
         self._plans = {}            # agent -> {'tasks': [...], 'step': n} (t3lab_narrate)
+        self._asks = []             # consent questions on the bar: dicts, oldest first
         self._working = {}          # 'agent|action' -> (started, caption)
         self._waiting = {}          # 'agent|action' -> caption
         self._history = []          # replayable show() records, oldest first
@@ -346,6 +347,9 @@ class _Overlay(object):
         bar.Padding = Thickness(12, 8, 8, 8)
         col = StackPanel()
         bar.Child = col
+
+        self._ask_panel = StackPanel()          # Allow / Deny cards (ask())
+        col.Children.Add(self._ask_panel)
 
         top = StackPanel()
         top.Orientation = Orientation.Horizontal
@@ -946,6 +950,119 @@ class _Overlay(object):
         if self.hud.IsVisible:
             self._refresh_hud()
 
+    # ── consent on the bar (agent_cursors.ask) ───────────────────────────────
+
+    def ask(self, rid, agent, tool_name, caption, main, content, expanded, always_text, rect):
+        """A call waits for the user's OK: a card with Allow / Deny on the bar
+        and the cursor pulsing, instead of a modal Revit dialog."""
+        self._end_summary()
+        self._place(rect)
+        self._asks.append({'rid': rid, 'agent': agent, 'tool': tool_name, 'caption': caption,
+                           'main': main, 'content': content, 'expanded': expanded,
+                           'always_text': always_text})
+        self.waiting(agent, tool_name, caption, True)
+        self._render_asks()
+        self._show_hud(rect)
+        try:
+            self.hud.Topmost = True         # seen even while the AI app is in front
+        except Exception:
+            pass
+
+    def _answer(self, rid, approved, always=False):
+        item = next((a for a in self._asks if a['rid'] == rid), None)
+        if item is None:
+            return
+        self._asks.remove(item)
+        self.waiting(item['agent'], item['tool'], item['caption'], False)
+        self._render_asks()
+        fn = (self.host.callbacks if self.host is not None else {}).get('answer')
+        if fn is not None:
+            fn(rid, approved, always)
+        self._last = time.time()
+
+    def cancel_ask(self, rid):
+        item = next((a for a in self._asks if a['rid'] == rid), None)
+        if item is not None:
+            self._asks.remove(item)
+            self.waiting(item['agent'], item['tool'], item['caption'], False)
+            self._render_asks()
+
+    def _render_asks(self):
+        from System.Windows import (Thickness, CornerRadius, TextWrapping, Visibility,
+                                    HorizontalAlignment)
+        from System.Windows.Controls import Border, StackPanel, CheckBox, ScrollViewer
+        from System.Windows.Input import Cursors
+        from System.Windows.Media import FontFamily
+        self._ask_panel.Children.Clear()
+        for item in self._asks:
+            tag, color = agent_style(item['agent'])
+            card = Border()
+            card.Background = self._brush('#111827')
+            card.BorderBrush = self._brush('#F59E0B')
+            card.BorderThickness = Thickness(1)
+            card.CornerRadius = CornerRadius(6)
+            card.Padding = Thickness(10, 8, 10, 8)
+            card.Margin = Thickness(0, 0, 0, 8)
+            card.MaxWidth = 560
+            body = StackPanel()
+            card.Child = body
+            head = self._glyph_label('\uE7BA', u'{} asks for your OK'.format(tag), '#FDE68A', 11)
+            body.Children.Add(head)
+            title = self._text(item['main'] or item['caption'], 12, color='#FFFFFF')
+            title.TextWrapping = TextWrapping.Wrap
+            title.Margin = Thickness(0, 4, 0, 0)
+            body.Children.Add(title)
+            if item['content']:
+                text = self._text(item['content'][:900], 11, bold=False, color='#E5E7EB')
+                text.TextWrapping = TextWrapping.Wrap
+                text.Margin = Thickness(0, 4, 0, 0)
+                body.Children.Add(text)
+            if item['expanded']:
+                code = self._text(item['expanded'][:6000], 10.5, bold=False, color='#D1D5DB')
+                code.FontFamily = FontFamily('Consolas')
+                scroll = ScrollViewer()
+                scroll.MaxHeight = 180
+                scroll.Content = code
+                scroll.Visibility = Visibility.Collapsed
+                scroll.Margin = Thickness(0, 4, 0, 0)
+                toggle = self._pill(self._glyph_label('\uE70D', 'Details', '#E5E7EB'), '#374151')
+                toggle.Cursor = Cursors.Hand
+                toggle.ToolTip = 'Show what will run'
+
+                def flip(s, e, scroll=scroll):
+                    scroll.Visibility = (Visibility.Collapsed if scroll.Visibility ==
+                                         Visibility.Visible else Visibility.Visible)
+                self._hook(toggle, 'MouseLeftButtonUp', flip, transient=True)
+                toggle.Margin = Thickness(0, 6, 0, 0)
+                toggle.HorizontalAlignment = HorizontalAlignment.Left
+                body.Children.Add(toggle)
+                body.Children.Add(scroll)
+            always = None
+            if item['always_text']:
+                always = CheckBox()
+                always.Content = self._text(item['always_text'], 11, bold=False, color='#E5E7EB')
+                always.Margin = Thickness(0, 6, 0, 0)
+                body.Children.Add(always)
+            allow = self._pill(self._glyph_label('\uE73E', 'Allow', '#FFFFFF', 11), '#16A34A')
+            deny = self._pill(self._glyph_label('\uE711', 'Deny', '#FFFFFF', 11), '#4B5563')
+            for chip, ok in ((allow, True), (deny, False)):
+                chip.Cursor = Cursors.Hand
+                chip.Padding = Thickness(10, 3, 10, 3)
+                chip.Margin = Thickness(0, 0, 8, 0)
+
+                def click(s, e, rid=item['rid'], ok=ok, always=always):
+                    self._answer(rid, ok, bool(always is not None and always.IsChecked))
+                self._hook(chip, 'MouseLeftButtonUp', click, transient=True)
+            buttons = self._row(allow, deny)
+            buttons.Margin = Thickness(0, 8, 0, 0)
+            body.Children.Add(buttons)
+            self._ask_panel.Children.Add(card)
+        if not self._asks:
+            try:
+                self.hud.Topmost = False
+            except Exception:
+                pass
+
     def _reduce(self):
         try:
             return bool(options().get('reduce'))
@@ -1204,6 +1321,8 @@ class _Overlay(object):
             fn()
 
     def hide(self):
+        for item in list(self._asks):          # closing the bar answers No
+            self._answer(item['rid'], False)
         self._timer.Stop()
         for cur in self._cursors.values():
             cur['group'].BeginAnimation(_opacity_property(), None)
@@ -1232,7 +1351,7 @@ class _Overlay(object):
                 cur = self._cursors.get(key)
                 if cur is not None and key not in self._waiting:
                     cur['tool'].Text = u'Working {} s · {}'.format(int(now - started), caption)
-            if self._working or self._waiting or self._replay is not None:
+            if self._working or self._waiting or self._asks or self._replay is not None:
                 self._last = now
                 return
             if self.hud.IsMouseOver:
@@ -1257,6 +1376,10 @@ class _Overlay(object):
         try:
             front = _process_in_front()
             for window in (self.win, self.hud):
+                if window is self.hud and self._asks:
+                    if not window.IsVisible:
+                        window.Visibility = _visibility('Visible')
+                    continue                # a question waits: stay in sight
                 if not front and window.IsVisible:
                     window.Visibility = _visibility('Hidden')
                 elif front and self._wanted and not window.IsVisible and (

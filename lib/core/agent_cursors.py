@@ -2,9 +2,11 @@
 """Agent cursors: a live overlay of which AI agent does what, where.
 
 Each MCP tool call moves one cursor per (agent, action) — Claude · Create,
-Claude · Modify, GPT · Read … — onto the elements it read, edited, created or
-deleted, in every visible view (tiled views included), with an effect per
-action. Follow mode opens the views the agent works in; zoom brings off-screen
+Claude · Modify, GPT · Read … — to each element it read, edited, created or
+deleted in turn (move, click, next), in every visible view, with a plain
+caption ("Moving elements · 3 elements"), a badge per element ("Walls ·
+1200 × 300") and an effect per action; a call with no element scans the view.
+The HUD lists the last steps. Follow mode opens the views the agent works in; zoom brings off-screen
 targets into view. Idea after swarm-cursors (github.com/DhvanilPatel/
 swarm-cursors); drawn here in code-built WPF, no code from it.
 
@@ -28,7 +30,10 @@ MAX_TARGETS = 12            # bounding boxes per call: keeps a bulk edit cheap
 MAX_FOLLOW_VIEWS = 4        # views follow mode may open per call
 IDLE_HIDE_S = 12            # overlay fades out after this long without a call
 BOX_HOLD_S = 3.5            # element boxes stay this long, then fade
-MOVE_MS = 650               # cursor glide
+MOVE_MS = 650               # cursor glide (one stop; shorter per stop on a tour)
+MAX_STOPS = 6               # targets the cursor visits one by one per call
+DWELL_MS = 220              # pause + click at each stop
+FEED_SIZE = 5               # last steps listed on the HUD
 
 # name -> (mcp_paths.json key, default). The HUD toggles them live.
 OPTIONS = (
@@ -84,6 +89,8 @@ _ACTION = dict((a[0], a) for a in ACTIONS)
 
 PROS = (
     "See at a glance which AI app is working, what it does and on which elements.",
+    "Plain-English captions (\"Moving elements · 3 elements\") and a feed of the last steps on the bar.",
+    "The cursor moves to each target and clicks it; a read or review scans the view instead of standing still.",
     "One cursor per action (Read, Create, Modify, Delete, View, Export, Code), each with its own effect.",
     "Follow mode opens the views the agent works in; boxes show in every tiled view.",
     "Spot a wrong target early and stop the agent before it goes further.",
@@ -403,6 +410,101 @@ def moved(old, new, tolerance=3.0):
     return any(abs(a - b) > tolerance for a, b in zip(old, new))
 
 
+# First word of a tool / operation -> what the caption says the agent is doing.
+_GERUNDS = {
+    'get': 'Reading', 'read': 'Reading', 'list': 'Listing', 'find': 'Finding',
+    'query': 'Querying', 'search': 'Searching', 'check': 'Checking',
+    'analyze': 'Analyzing', 'analyse': 'Analyzing', 'count': 'Counting',
+    'describe': 'Describing', 'audit': 'Auditing', 'detect': 'Detecting',
+    'inspect': 'Inspecting', 'propose': 'Proposing', 'preview': 'Previewing',
+    'create': 'Creating', 'place': 'Placing', 'add': 'Adding', 'new': 'Creating',
+    'duplicate': 'Duplicating', 'copy': 'Copying', 'draw': 'Drawing',
+    'generate': 'Generating', 'load': 'Loading', 'tag': 'Tagging', 'make': 'Making',
+    'insert': 'Inserting', 'build': 'Building', 'set': 'Setting', 'update': 'Updating',
+    'modify': 'Modifying', 'move': 'Moving', 'rotate': 'Rotating', 'rename': 'Renaming',
+    'change': 'Changing', 'apply': 'Applying', 'edit': 'Editing', 'align': 'Aligning',
+    'join': 'Joining', 'split': 'Splitting', 'mirror': 'Mirroring', 'pin': 'Pinning',
+    'unpin': 'Unpinning', 'group': 'Grouping', 'ungroup': 'Ungrouping',
+    'store': 'Storing', 'delete': 'Deleting', 'remove': 'Removing', 'purge': 'Purging',
+    'clear': 'Clearing', 'export': 'Exporting', 'print': 'Printing', 'save': 'Saving',
+    'sync': 'Syncing', 'open': 'Opening', 'close': 'Closing', 'activate': 'Activating',
+    'zoom': 'Zooming to', 'show': 'Showing', 'select': 'Selecting', 'isolate': 'Isolating',
+    'hide': 'Hiding', 'unhide': 'Unhiding', 'switch': 'Switching', 'color': 'Coloring',
+    'colour': 'Colouring', 'override': 'Overriding', 'reset': 'Resetting',
+    'execute': 'Running', 'run': 'Running', 'say': 'Saying', 'manage': 'Managing',
+    'operate': 'Changing', 'bulk': 'Bulk', 'halftone': 'Halftoning',
+}
+_CAPTION_MAX = 46
+
+
+def describe_call(tool_name, arguments=None, n_targets=0, failed=False):
+    """'Listing open documents', 'Moving elements · 3 elements', 'Failed: …'."""
+    name = '{}'.format(tool_name or '').strip().lower()
+    if name == 'send_code_to_revit':
+        text = 'Running code in Revit'
+    else:
+        op = arguments.get('operation') if isinstance(arguments, dict) else None
+        words = []
+        if isinstance(op, (str, type(''))) and op.strip():
+            words = op.strip().lower().replace('-', '_').split('_') + ['elements']
+        else:
+            for prefix in _PREFIXES:
+                if name.startswith(prefix):
+                    name = name[len(prefix):]
+            words = [w for w in name.split('_') if w]
+        if not words:
+            return 'Working'
+        head = words[0]
+        verb = _GERUNDS.get(head)
+        if verb is None:
+            verb = (head[:-1] if head.endswith('e') and not head.endswith('ee') else head)
+            verb = verb.capitalize() + 'ing'
+        rest = ' '.join(w for w in words[1:] if w not in ('revit',))
+        text = (verb + ' ' + rest).strip()
+    if n_targets:
+        text = '{} · {} element{}'.format(text, n_targets, '' if n_targets == 1 else 's')
+    if failed:
+        text = 'Failed: ' + text
+    return text if len(text) <= _CAPTION_MAX else text[:_CAPTION_MAX - 1] + '…'
+
+
+def badge_text(category, size):
+    """'Walls · 1200 × 300' under a box; the size alone without a category."""
+    category = (category or '').strip()
+    return '{} · {}'.format(category, size) if category else size
+
+
+def hop_ms(stops):
+    """Glide time per stop: shorter when the cursor has more stops to visit."""
+    return max(260, MOVE_MS - 70 * max(0, stops - 1))
+
+
+def tour_schedule(points, hop, dwell):
+    """[(x, y, arrive_ms, leave_ms)]: glide `hop` ms to each point, stay `dwell`."""
+    out, t = [], 0
+    for x, y in points:
+        arrive = t + hop
+        out.append((x, y, arrive, arrive + dwell))
+        t = arrive + dwell
+    return out
+
+
+def review_points(rect, seed, n=3):
+    """`n` spread-out points in the middle of rect (l, t, r, b) for a call with
+    no element to point at; the same seed gives the same path."""
+    left, top, right, bottom = rect
+    w, h = right - left, bottom - top
+    state = (seed * 7919 + 17) % 2147483647 or 1
+    pts = []
+    for i in range(n):
+        state = (state * 48271) % 2147483647
+        fx = 0.22 + 0.56 * ((i + (state % 1000) / 1000.0) / float(n))
+        state = (state * 48271) % 2147483647
+        fy = 0.25 + 0.5 * ((state % 1000) / 1000.0)
+        pts.append((left + w * fx, top + h * fy))
+    return pts
+
+
 def counts_text(counts):
     """{'create': 3, 'read': 1} -> 'Read 1 · Create 3' (ACTIONS order)."""
     parts = []
@@ -495,7 +597,12 @@ def _boxes(doc, geo, ids):
             ext = (hi.X - lo.X, hi.Y - lo.Y, hi.Z - lo.Z)
             w = abs(sum(ext[k] * abs(right[k]) for k in range(3)))
             h = abs(sum(ext[k] * abs(up[k]) for k in range(3)))
-            out.append({'id': i, 'box': box, 'size': size_label(w, h)})
+            try:
+                cat = elem.Category.Name if elem.Category is not None else ''
+            except Exception:
+                cat = ''
+            out.append({'id': i, 'box': box, 'size': size_label(w, h),
+                        'label': badge_text(cat, size_label(w, h))})
         except Exception:
             continue
     return out
@@ -755,7 +862,8 @@ def notify(app, task):
             hwnd = app.MainWindowHandle
         except Exception:
             pass
-        _overlay(hwnd).show(_agent_of(task), action, tool, failed, snap, followed)
+        _overlay(hwnd).show(_agent_of(task), action, tool, failed, snap, followed,
+                            args=args, n_targets=len(ids))
     except Exception:
         pass
 
@@ -834,6 +942,7 @@ class _Overlay(object):
         self._cursors = {}          # 'agent|action' -> dict(group, tx, ...)
         self._counts = {}           # agent -> {action: n}
         self._views = []            # [(view id, name)] the agents worked in
+        self._feed = []             # last steps, newest first (HUD)
         self._actions = 0
         self._last = 0.0
         self._scale = None
@@ -1037,6 +1146,9 @@ class _Overlay(object):
         self._views_text = self._text('', 11, bold=False, color='#CBD5E1')
         self._views_text.Margin = Thickness(0, 4, 0, 0)
         col.Children.Add(self._views_text)
+        self._feed_panel = StackPanel()
+        self._feed_panel.Margin = Thickness(0, 6, 0, 0)
+        col.Children.Add(self._feed_panel)
         self.hud.Content = bar
 
     def _toggle(self, name, on):
@@ -1091,12 +1203,38 @@ class _Overlay(object):
         opts = options()
         for name, _k, _d in OPTIONS:
             self._toggles.Children.Add(self._toggle(name, opts[name]))
+        self._feed_panel.Children.Clear()
+        for step in self._feed:
+            self._feed_panel.Children.Add(self._feed_row(step))
         n = self._actions
         names = [v[1] for v in self._views[-3:]]
         more = len(self._views) - len(names)
         views = ' · '.join(names) + (' · +{}'.format(more) if more > 0 else '')
         self._views_text.Text = '{} action{}{}'.format(
             n, '' if n == 1 else 's', ('  ·  Views: ' + views) if views else '')
+
+    def _feed_row(self, step):
+        """[agent dot] [action glyph] caption · agent   ok / failed."""
+        from System.Windows import Thickness, CornerRadius
+        from System.Windows.Controls import Border
+        tag, color = agent_style(step['agent'])
+        label, glyph, acolor = action_style(step['action'])
+        dot = Border()
+        dot.Width = dot.Height = 8
+        dot.CornerRadius = CornerRadius(4)
+        dot.Background = self._brush(color)
+        dot.Margin = Thickness(0, 0, 6, 0)
+        icon = self._text(glyph, 10, color=acolor, glyph=True)
+        icon.Margin = Thickness(0, 0, 6, 0)
+        text = self._text(step['caption'], 11, bold=False, color='#F8FAFC')
+        who = self._text(u'  · ' + tag, 10.5, bold=False, color='#94A3B8')
+        state = self._text('\uE711' if step['failed'] else '\uE73E', 10,
+                           color='#F87171' if step['failed'] else '#4ADE80', glyph=True)
+        state.Margin = Thickness(8, 0, 0, 0)
+        row = self._row(dot, icon, text, who, state)
+        row.Margin = Thickness(0, 1, 0, 1)
+        row.ToolTip = step['tool']
+        return row
 
     # ── cursors ──────────────────────────────────────────────────────────────
 
@@ -1107,7 +1245,7 @@ class _Overlay(object):
             return cur
         from System.Windows import Thickness
         from System.Windows.Controls import Canvas, StackPanel
-        from System.Windows.Media import TranslateTransform, Geometry
+        from System.Windows.Media import TranslateTransform, ScaleTransform, Geometry
         from System.Windows.Shapes import Path
         tag, color = agent_style(agent)
         label, glyph, acolor = action_style(action)
@@ -1118,6 +1256,8 @@ class _Overlay(object):
         arrow.Fill = self._brush(color)
         arrow.Stroke = self._brush('#FFFFFF')
         arrow.StrokeThickness = 1.2
+        press = ScaleTransform()            # a "click" squeezes the arrow to its tip
+        arrow.RenderTransform = press
         group.Children.Add(arrow)
 
         tags = StackPanel()
@@ -1126,8 +1266,12 @@ class _Overlay(object):
         name = self._pill(self._row(self._text(tag), self._action_chip(glyph, label, acolor)),
                           color)
         tags.Children.Add(name)
-        tool = self._text('', 10, bold=False, color='#1F2937')
-        tool_pill = self._pill(tool, '#FFFFFF', alpha=230)
+        tool = self._text('', 11, color='#111827')          # what it does
+        tool_name = self._text('', 9.5, bold=False, color='#6B7280')   # MCP tool
+        lines = StackPanel()
+        lines.Children.Add(tool)
+        lines.Children.Add(tool_name)
+        tool_pill = self._pill(lines, '#FFFFFF', alpha=238)
         tool_pill.Margin = Thickness(0, 2, 0, 0)
         tool_pill.BorderBrush = self._brush(acolor)
         tool_pill.BorderThickness = Thickness(1)
@@ -1139,8 +1283,8 @@ class _Overlay(object):
         self.canvas.Children.Add(group)
         # Cursors start at different spots so a swarm never stacks up.
         slot = len(self._cursors)
-        cur = {'group': group, 'tx': tx, 'tool': tool, 'tool_pill': tool_pill,
-               'color': acolor, 'x': 40.0 + 36 * slot, 'y': 40.0 + 24 * slot}
+        cur = {'group': group, 'tx': tx, 'tool': tool, 'tool_name': tool_name,
+               'tool_pill': tool_pill, 'press': press, 'color': acolor, 'x': 40.0 + 36 * slot, 'y': 40.0 + 24 * slot}
         tx.X, tx.Y = cur['x'], cur['y']
         self._cursors[key] = cur
         return cur
@@ -1152,29 +1296,45 @@ class _Overlay(object):
         chip.Margin = Thickness(6, 0, 0, 0)
         return chip
 
-    def _glide(self, cur, x, y):
+    def _tour(self, cur, sched, shake=False):
+        """Glide through sched [(x, y, arrive_ms, leave_ms)] on one keyframe
+        path per axis (a second BeginAnimation would cancel the first); a
+        failed call ends with a shake."""
         from System import TimeSpan
-        from System.Windows import Duration
         from System.Windows.Media import TranslateTransform
-        from System.Windows.Media.Animation import DoubleAnimation, CubicEase, EasingMode
+        from System.Windows.Media.Animation import (
+            DoubleAnimationUsingKeyFrames, EasingDoubleKeyFrame, LinearDoubleKeyFrame,
+            KeyTime, CubicEase, EasingMode)
         ease = CubicEase()
         ease.EasingMode = EasingMode.EaseInOut
-        for prop, start, end in ((TranslateTransform.XProperty, cur['x'], x),
-                                 (TranslateTransform.YProperty, cur['y'], y)):
-            anim = DoubleAnimation()
-            anim.From = start
-            anim.To = end
-            anim.Duration = Duration(TimeSpan.FromMilliseconds(MOVE_MS))
-            anim.EasingFunction = ease
-            cur['tx'].BeginAnimation(prop, anim)
-        cur['x'], cur['y'] = x, y
 
-    def _shake(self, cur):
-        from System.Windows.Media import TranslateTransform
-        x = cur['x']
-        cur['tx'].BeginAnimation(TranslateTransform.XProperty, self._anim(
-            ((x, MOVE_MS), (x - 6, MOVE_MS + 60), (x + 6, MOVE_MS + 120),
-             (x - 4, MOVE_MS + 180), (x, MOVE_MS + 240))))
+        def at(ms):
+            return KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(ms))
+        try:
+            start = (float(cur['tx'].X), float(cur['tx'].Y))   # where it is mid-tour
+        except Exception:
+            start = (cur['x'], cur['y'])
+        for axis, prop in ((0, TranslateTransform.XProperty), (1, TranslateTransform.YProperty)):
+            anim = DoubleAnimationUsingKeyFrames()
+            anim.KeyFrames.Add(LinearDoubleKeyFrame(start[axis], at(0)))
+            for stop in sched:
+                anim.KeyFrames.Add(EasingDoubleKeyFrame(stop[axis], at(stop[2]), ease))
+                anim.KeyFrames.Add(LinearDoubleKeyFrame(stop[axis], at(stop[3])))
+            if shake and axis == 0:
+                end, t = sched[-1][0], sched[-1][3]
+                for dx, dt in ((-6, 60), (6, 120), (-4, 180), (0, 240)):
+                    anim.KeyFrames.Add(LinearDoubleKeyFrame(end + dx, at(t + dt)))
+            cur['tx'].BeginAnimation(prop, anim)
+        cur['x'], cur['y'] = sched[-1][0], sched[-1][1]
+
+    def _press(self, cur, times):
+        """Squeeze the arrow at each arrival: the agent clicks."""
+        from System.Windows.Media import ScaleTransform
+        frames = [(1.0, 0)]
+        for t in times:
+            frames += [(1.0, max(t - 1, frames[-1][1] + 1)), (0.78, t + 70), (1.0, t + 170)]
+        for prop in (ScaleTransform.ScaleXProperty, ScaleTransform.ScaleYProperty):
+            cur['press'].BeginAnimation(prop, self._anim(frames))
 
     # ── effects ──────────────────────────────────────────────────────────────
 
@@ -1237,6 +1397,7 @@ class _Overlay(object):
         return frame
 
     def _draw_box(self, x0, y0, x1, y1, size, action, delay_ms):
+        """One target box; `size` is the badge text (category · size)."""
         """One target box with the action's effect."""
         from System.Windows import Thickness
         from System.Windows.Controls import Canvas
@@ -1258,7 +1419,7 @@ class _Overlay(object):
             group.Children.Add(handle)
         badge = self._pill(self._glyph_label(glyph, size, '#FFFFFF'), color, radius=2)
         badge.Padding = Thickness(4, 1, 4, 1)
-        Canvas.SetLeft(badge, (x0 + x1) / 2.0 - 34)
+        Canvas.SetLeft(badge, max(x0, (x0 + x1) / 2.0 - 60))
         Canvas.SetTop(badge, y1 + 4)
         group.Children.Add(badge)
         self.canvas.Children.Insert(0, group)    # under the cursors
@@ -1369,7 +1530,8 @@ class _Overlay(object):
 
     # ── public ────────────────────────────────────────────────────────────────
 
-    def show(self, agent, action, tool_name, failed, snap, followed=()):
+    def show(self, agent, action, tool_name, failed, snap, followed=(),
+             args=None, n_targets=0):
         left, top, right, bottom = snap['rect']
         if not self.win.IsVisible:
             self.win.Width = self.win.Height = 1
@@ -1391,8 +1553,10 @@ class _Overlay(object):
         self.win.Height = (bottom - top) / scale
 
         label, _glyph, acolor = action_style(action)
+        caption = describe_call(tool_name, args, n_targets, failed)
         cur = self._cursor(agent, action)
-        cur['tool'].Text = '{} · failed'.format(tool_name) if failed else tool_name
+        cur['tool'].Text = caption
+        cur['tool_name'].Text = tool_name
         cur['tool_pill'].BorderBrush = self._brush('#DC2626' if failed else acolor)
 
         for vid, name, is_new in followed:
@@ -1403,38 +1567,48 @@ class _Overlay(object):
             self._flash_view(snap['active'], '{} · {}'.format(
                 'Opened' if first[2] else 'Switched to', first[1]), action_style('view')[2])
 
-        target, n = None, 0
+        # Stops: every box / deleted box, visited in order (move, click, next).
+        stops, ghosts = [], []
         for geo in snap['views']:
             for item in geo['boxes']:
-                x0, y0, x1, y1 = self._local(item['box'])
-                self._draw_box(x0, y0, x1, y1, item['size'], action, MOVE_MS + 60 * n)
-                n += 1
-                if target is None:
-                    target = (x1 - 4, y0 + 4)       # tags hang right of the box
+                b = self._local(item['box'])
+                stops.append(((b[2] - 4, b[1] + 4), 'box', b, item))
             for item in geo['gone']:
-                x0, y0, x1, y1 = self._local(item['box'])
-                self._draw_gone(x0, y0, x1, y1, MOVE_MS + 60 * n)
-                n += 1
-                if target is None:
-                    target = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
-            for old, _new in geo['ghosts']:
-                self._draw_ghost(self._local(old['box']), self._local(_new['box']),
-                                 acolor, MOVE_MS)
-        if target is None:
-            # No element to point at: drift in the active view, one slot per
-            # (agent, action) wide enough for its tags, so cursors never overlap.
-            ax0, ay0, ax1, ay1 = self._local(snap['active']['rect'])
+                b = self._local(item['box'])
+                stops.append((((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0), 'gone', b, item))
+            ghosts.extend(geo['ghosts'])
+        if stops:
+            points = [st[0] for st in stops[:MAX_STOPS]]
+        else:
+            # Nothing to point at (a read, a list, a review): scan the active
+            # view, a few clicks along a path of its own per agent and action.
             slot = sorted(self._cursors).index('{}|{}'.format(agent, action))
-            target = (ax0 + (ax1 - ax0) * 0.25 + 210 * (slot % 3) + (self._actions % 3) * 10,
-                      ay0 + (ay1 - ay0) * 0.25 + 64 * (slot // 3) + (self._actions % 2) * 8)
-        self._trail(cur['x'], cur['y'], target[0], target[1], acolor)
-        self._glide(cur, target[0], target[1])
-        self._ripple(target[0], target[1], '#DC2626' if failed else acolor, MOVE_MS)
-        if failed:
-            self._shake(cur)
+            n = 1 if failed else (3 if action in ('read', 'view', 'export', 'code') else 2)
+            points = review_points(self._local(snap['active']['rect']),
+                                   self._actions * 31 + slot * 7 + 1, n)
+        sched = tour_schedule(points, hop_ms(len(points)), DWELL_MS)
+        for k, (_pt, kind, b, item) in enumerate(stops):
+            arrive = sched[min(k, len(sched) - 1)][2]
+            if kind == 'box':
+                self._draw_box(b[0], b[1], b[2], b[3], item.get('label') or item['size'],
+                               action, arrive)
+            else:
+                self._draw_gone(b[0], b[1], b[2], b[3], arrive)
+        for old, new in ghosts:
+            self._draw_ghost(self._local(old['box']), self._local(new['box']),
+                             acolor, sched[0][2])
+        self._trail(cur['x'], cur['y'], points[0][0], points[0][1], acolor)
+        self._tour(cur, sched, shake=failed)
+        ring = '#DC2626' if failed else acolor
+        for x, y, arrive, _leave in sched:
+            self._ripple(x, y, ring, arrive)
+        self._press(cur, [st[2] for st in sched])
         cur['group'].BeginAnimation(_opacity_property(), None)
         cur['group'].Opacity = 1.0
 
+        self._feed.insert(0, {'agent': agent, 'action': action, 'caption': caption,
+                              'tool': tool_name, 'failed': failed})
+        del self._feed[FEED_SIZE:]
         counts = self._counts.setdefault(agent, {})
         counts[action] = counts.get(action, 0) + 1
         self._actions += 1
@@ -1457,6 +1631,7 @@ class _Overlay(object):
         self._cursors = {}
         self._counts = {}
         self._views = []
+        self._feed = []
         self._actions = 0
         self._transient = []
         self.win.Hide()

@@ -211,13 +211,15 @@ Supports combined PDF, custom naming patterns, sheet ordering, and revision trac
 app does in Revit through MCP (off by default; the button lists the benefits
 and drawbacks before you switch).
 
-- **One cursor per AI app and action** — Read, Create, Modify, Delete, View,
-  Export, Code — in the app's colour, with a plain caption of what it does
-  ("Moving elements · 3 elements") and the MCP tool name under it.
+- **One cursor per AI app and action** — a small pointer in the app's colour
+  with one tag: the app and what it does ("Claude · Moving 12 walls"). The
+  tag spins while the call runs, turns amber while it waits for your OK and
+  red when it fails.
 - **Move, click, next** — the cursor visits each element the call works on;
   a box with the category and size ("Walls · 1200 × 300") appears as it
   arrives. New elements grow in, edits pulse, deletes show a red cross, moves
-  leave a dashed ghost. A read or review scans the view instead.
+  leave a dashed ghost. A read or review scans the view instead. More
+  targets than the cursor visits get one frame round them all ("×48 · Modify").
 - **Goal, tasks and changes** — an AI app shows its goal and its list of
   tasks over the model with the MCP tool `t3lab_narrate` ("Renumber the
   doors on Level 2": 1 Read the doors · 2 Number them · 3 Check). The bar
@@ -235,13 +237,25 @@ and drawbacks before you switch).
 - **While it works** — long calls say "Working 8 s"; a call waiting for your
   OK pulses amber. Two AI apps editing the same element flash it red.
   Targets outside the view get an edge arrow with a count.
-- **Follow** opens the views the AI works in, **Zoom** brings off-screen
-  targets into view; **Select**, **Tile**, **Less motion**, **Speed** (Calm /
-  Normal / Fast) and **Glow** (experimental: outlines the touched elements
-  inside 3D views) switch on the bar at the bottom of the view.
-- **When the AI goes idle** — a summary per AI app, **Select touched**
+- **The bar** at the bottom of the view: each AI app (its pointer is its
+  avatar), a status (Working 8 s · Waiting for your OK · Paused · Idle), the
+  goal with "Step 2/5" and a progress bar, what runs now with the values it
+  changed, the last 3 steps (✓ / ✕, how long ago), and Select touched /
+  Replay. It follows Revit's light or dark theme. Drag it anywhere
+  (double-click puts it back); **—** folds it to one line, and it folds by
+  itself after 10 s without a call (the mouse opens it; a question for your
+  OK shows Allow / Deny on that line).
+- **⏸ Pause** holds every model change (the AI app is told it is paused and
+  to try later); read-only tools still run. **▶** resumes.
+- **⚙ Options**: **Follow** opens the views the AI works in, **Zoom** brings
+  off-screen targets into view; **Select**, **Tile**, **Less motion**,
+  **Speed** (Calm / Normal / Fast) and **Glow** (experimental: outlines the
+  touched elements inside 3D views; it turns itself off if Revit cannot draw
+  it). Every option is on until you turn it off; Settings › Agent Cursors has
+  the same switches.
+- **When the AI goes idle** — the counts per AI app, **Select touched**
   (selects every element the AI changed; no model change) and **Replay** of
-  the last 20 steps. **Keep bar** (on by default) keeps the bar and the
+  the last 20 steps. **Keep bar** keeps the bar and the
   dimmed cursors on screen between calls, so they do not blink on and off
   while you work with an AI app. The **X** on the bar turns the cursors off.
 

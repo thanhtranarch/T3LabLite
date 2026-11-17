@@ -3201,7 +3201,9 @@ class T3LabAIServer(object):
         tool_name = params.get('name', '')
         arguments = params.get('arguments', {})
         meta = params.get('_meta')
-        agent = (meta.get('t3lab/agent') if isinstance(meta, dict) else None) or 'claude-desktop'
+        # No name on the call: "AI app" on the cursors, never a guessed app
+        # (2026-11-17: this default showed Antigravity as Claude).
+        agent = (meta.get('t3lab/agent') if isinstance(meta, dict) else None) or 'mcp-client'
 
         # A tool the machine's toolset hides is refused before anything else,
         # the teaching tools below included (MCP Control > Security).

@@ -709,13 +709,123 @@ def _capabilities():
 AGENT_META = 't3lab/agent'
 
 
+# Who is calling, most to least reliable (owner, 2026-11-17: Antigravity was
+# shown as Claude, twice, on guessed client names):
+#   1. --agent / T3LAB_AGENT        written by MCP Control > Connect
+#   2. a clientInfo name we know    the app's documented MCP name
+#   3. the app that launched us     the nearest ancestor process (HOST_APPS)
+#   4. any other clientInfo name    shown as it is
+# Nothing at all: no stamp, and Revit shows "AI app".
+KNOWN_CLIENTS = ('claude-ai', 'claude-code', 'codex-mcp-client', 'cursor-vscode')
+# (text in an ancestor's executable path, agent id): first match wins.
+HOST_APPS = (('antigravity', 'antigravity'), ('cursor', 'cursor'), ('codex', 'codex'),
+             ('chatgpt', 'codex'), ('claude-code', 'claude-code'), ('claude', 'claude-desktop'))
+
+
+def host_agent(images, home=''):
+    """Agent id of the app behind `images` (executable paths of our ancestor
+    processes, nearest first), or ''. The user's home folder is cut off first
+    so a Windows user named "claude" names nobody."""
+    home = (home or '').replace('/', '\\').lower().rstrip('\\')
+    for image in images:
+        low = '{}'.format(image or '').replace('/', '\\').lower()
+        if home and low.startswith(home + '\\'):
+            low = low[len(home):]
+        for needle, agent in HOST_APPS:
+            if needle in low:
+                return agent
+    return ''
+
+
+def _ancestor_images(limit=8):
+    """Executable paths of this process's ancestors, nearest first (Windows;
+    [] elsewhere or on any error)."""
+    if os.name != 'nt':
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _Entry(ctypes.Structure):
+            _fields_ = [('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD),
+                        ('th32ProcessID', wintypes.DWORD),
+                        ('th32DefaultHeapID', ctypes.c_size_t),
+                        ('th32ModuleID', wintypes.DWORD), ('cntThreads', wintypes.DWORD),
+                        ('th32ParentProcessID', wintypes.DWORD),
+                        ('pcPriClassBase', ctypes.c_long), ('dwFlags', wintypes.DWORD),
+                        ('szExeFile', ctypes.c_wchar * 260)]
+
+        k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Entry)]
+        k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Entry)]
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)          # TH32CS_SNAPPROCESS
+        if not snap or snap == wintypes.HANDLE(-1).value:
+            return []
+        table = {}
+        entry = _Entry()
+        entry.dwSize = ctypes.sizeof(_Entry)
+        more = k32.Process32FirstW(snap, ctypes.byref(entry))
+        while more:
+            table[entry.th32ProcessID] = (entry.th32ParentProcessID, entry.szExeFile)
+            more = k32.Process32NextW(snap, ctypes.byref(entry))
+        k32.CloseHandle(snap)
+
+        out, seen, pid = [], set([os.getpid()]), os.getpid()
+        for _ in range(limit):
+            pid = table.get(pid, (0, ''))[0]
+            if not pid or pid in seen or pid not in table:
+                break
+            seen.add(pid)
+            image = table[pid][1]
+            handle = k32.OpenProcess(0x1000, False, pid)     # QUERY_LIMITED_INFORMATION
+            if handle:
+                size = wintypes.DWORD(1024)
+                buf = ctypes.create_unicode_buffer(size.value)
+                if k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                    image = buf.value
+                k32.CloseHandle(handle)
+            out.append(image)
+        return out
+    except Exception:
+        return []
+
+
 def _remember_client(request, current):
     if current.get('agent_explicit'):
         return              # --agent from MCP Control's Connect wins
     info = (request.get('params') or {}).get('clientInfo')
-    name = info.get('name') if isinstance(info, dict) else None
-    if name:
-        current['client'] = '{}'.format(name).strip()[:40]
+    name = '{}'.format(info.get('name') or '').strip()[:40] if isinstance(info, dict) else ''
+    if name.lower() in KNOWN_CLIENTS:
+        current['client'] = name
+    elif current.get('host'):
+        current['client'] = current['host']
+    elif name:
+        current['client'] = name
+    _log_client(current, name)
+
+
+def _log_client(current, name=''):
+    """One line saying who we think is calling and why, for support:
+    %APPDATA%\\T3LabAI\\bridge_client.txt and stderr. Never raises."""
+    try:
+        line = 'agent={} | clientInfo={} | launched by: {}'.format(
+            current.get('client') or '(none)', name or '(none)',
+            ' <- '.join(current.get('ancestors') or []) or '(unknown)')
+        sys.stderr.write('[t3lab-revit] ' + line + '\n')
+        folder = os.path.join(os.environ.get('APPDATA') or os.path.expanduser('~'), 'T3LabAI')
+        if os.path.isdir(folder):
+            with open(os.path.join(folder, 'bridge_client.txt'), 'w', encoding='utf-8') as f:
+                f.write(line + '\n')
+    except Exception:
+        pass
 
 
 def _stamp_agent(request, current):
@@ -1182,6 +1292,13 @@ def main():
     if agent.strip():
         current['client'] = agent.strip()[:40]
         current['agent_explicit'] = True
+    else:
+        # No --agent (an entry written before 2.4.5, or by hand): the app
+        # that launched this process says who it is.
+        current['ancestors'] = _ancestor_images()
+        current['host'] = host_agent(current['ancestors'], os.path.expanduser('~'))
+        if current['host']:
+            current['client'] = current['host']
     token = _read_token()
 
     # Clients send UTF-8. Launched with -I / -E, Windows Python decodes a

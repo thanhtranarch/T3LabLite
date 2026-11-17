@@ -282,7 +282,7 @@ def test_agent_style():
     print('[agent_style]')
     check('claude desktop', AC.agent_style('claude-desktop')[0] == 'Claude')
     check('codex shows as GPT', AC.agent_style('codex')[0] == 'GPT')
-    check('missing agent -> Claude', AC.agent_style(None) == AC.AGENTS['claude-desktop'])
+    check('missing agent -> "AI app", never a guessed app', AC.agent_style(None) == AC.AGENTS['mcp-client'])
     check('MCP client name claude-ai -> Claude', AC.agent_style('claude-ai')[0] == 'Claude')
     check('MCP client name codex-mcp-client -> GPT', AC.agent_style('codex-mcp-client')[0] == 'GPT')
     a, b = AC.agent_style('my-bot'), AC.agent_style('my-bot')
@@ -469,8 +469,10 @@ def test_setting():
     finally:
         AC._session['select_event'] = None
         AC._session['ui_actions'] = []
-    check('Antigravity\'s client id reads Antigravity',
-          AC.agent_style('local-agent-mode-t3lab')[0] == 'Antigravity')
+    check('an unverified client id is mapped to no app at all',
+          AC.agent_style('local-agent-mode-t3lab')[0] not in ('Claude', 'Antigravity'))
+    check('no name at all reads "AI app", not Claude',
+          AC.agent_style('')[0] == 'AI app' and AC.agent_style(None)[0] == 'AI app')
     check('speed normal by default', AC.speed() == 'normal' and AC.speed_factor() == 1.0)
     AC.set_speed('calm')
     check('speed saved', AC.speed() == 'calm' and AC.speed_factor() > 1.0)
@@ -568,6 +570,36 @@ def test_agent_stamp():
     bsrc = open(os.path.join(LIB, 'core', 'bridge.py'), encoding='utf-8').read()
     check('bridge forwards the stamped call',
           '_forward(_stamp_agent(request, current), current, token)' in bsrc)
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location('t3_bridge', os.path.join(LIB, 'core', 'bridge.py'))
+    BR = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(BR)
+    home = 'C:\\Users\\claude'
+    check('bridge: the launching app names the caller',
+          BR.host_agent(['C:\\Python312\\python.exe',
+                         home + '\\AppData\\Local\\Programs\\Antigravity\\Antigravity.exe'],
+                        home) == 'antigravity'
+          and BR.host_agent([home + '\\AppData\\Local\\AnthropicClaude\\app-1\\claude.exe'],
+                            home) == 'claude-desktop'
+          and BR.host_agent(['Codex.exe']) == 'codex' and BR.host_agent(['Cursor.exe']) == 'cursor')
+    check('bridge: nearest ancestor wins, the user name names nobody',
+          BR.host_agent(['Cursor.exe', 'Antigravity.exe']) == 'cursor'
+          and BR.host_agent([home + '\\AppData\\Local\\Programs\\Python\\python.exe',
+                             'C:\\Windows\\explorer.exe'], home) == '')
+    BR._log_client = lambda current, name='': None      # no file / stderr in tests
+
+    def named(info, **current):
+        BR._remember_client({'params': {'clientInfo': {'name': info}}}, current)
+        return current.get('client')
+    check('bridge: --agent > known clientInfo > launching app > other clientInfo',
+          named('claude-ai', client='antigravity', agent_explicit=True) == 'antigravity'
+          and named('claude-code', host='antigravity', client='antigravity') == 'claude-code'
+          and named('local-agent-mode-x', host='antigravity', client='antigravity') == 'antigravity'
+          and named('some-app') == 'some-app' and named('') is None)
+    check('bridge: ancestors off Windows are simply unknown',
+          os.name == 'nt' or BR._ancestor_images() == [])
+    check('server: a call with no name is "AI app", never claude-desktop',
+          "or 'mcp-client'" in src and "or 'claude-desktop'" not in src)
     check('--agent from Connect wins over the self-declared clientInfo',
           "arg.startswith('--agent=')" in bsrc and "current['agent_explicit'] = True" in bsrc
           and "if current.get('agent_explicit'):" in bsrc)

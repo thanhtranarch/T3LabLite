@@ -1824,19 +1824,20 @@ class _Overlay(object):
             return False
 
     def _enter_summary(self, keep=False):
-        """Agents idle: the bar lists each agent's counts (_fill_full). Keep
-        bar on: cursors only dim and both windows stay, so the next call does
-        not make them blink; off: the canvas is cleared and hidden."""
+        """Agents idle: cursors, boxes and Glow leave (owner, 2026-11-17: they
+        stayed after the agent stopped); the bar lists each agent's counts
+        and Keep bar keeps only the bar (folded)."""
         self._summary = time.time()
         self._resting = keep
         for cur in self._cursors.values():
             cur['group'].BeginAnimation(_opacity_property(), None)
-            cur['group'].Opacity = 0.45
-        if not keep:
-            self.canvas.Children.Clear()
-            self._cursors = {}
-            self._focus = {}
-            self.win.Hide()
+        self.canvas.Children.Clear()
+        self._cursors = {}
+        self._focus = {}
+        self.win.Hide()
+        fn = (self.host.callbacks if self.host is not None else {}).get('idle')
+        if fn is not None:
+            fn()                        # Glow off the model (main thread)
 
     def _end_summary(self):
         if self._summary is not None:
@@ -1923,7 +1924,7 @@ class _Overlay(object):
                 if not front and window.IsVisible:
                     window.Visibility = _visibility('Hidden')
                 elif front and self._wanted and not window.IsVisible and (
-                        window is self.hud or self._summary is None or self._resting):
+                        window is self.hud or self._summary is None):
                     window.Visibility = _visibility('Visible')
         except Exception:
             pass

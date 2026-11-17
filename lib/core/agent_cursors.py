@@ -76,7 +76,7 @@ OPTION_LABELS = {
     'reduce': ('Less motion', 'No glides, ripples or scans: boxes and captions only'),
     'glow': ('Glow', 'Experimental: outline touched elements inside the Revit view '
                      '(DirectContext3D). Turn off if Revit misbehaves.'),
-    'keep': ('Keep bar', 'Keep the bar and cursors on screen between calls instead of '
+    'keep': ('Keep bar', 'Keep the bar (folded) on screen between calls instead of '
                          'fading out (the x on the bar turns Agent Cursors off)'),
 }
 
@@ -104,6 +104,7 @@ _ALIASES = {
 # name we have not seen from that app (2026-11-17: 'local-agent-mode-...' was
 # taken for Claude and is Antigravity's); MCP Control writes --agent instead.
 _ALIAS_PREFIXES = (
+    ('local-agent-mode', 'antigravity'),    # seen from Antigravity (owner, 2026-11-17)
     ('claude-code', 'claude-code'),
     ('claude', 'claude-desktop'), ('codex', 'codex'), ('chatgpt', 'chatgpt'),
     ('openai', 'chatgpt'), ('gemini', 'antigravity'), ('antigravity', 'antigravity'),
@@ -1746,10 +1747,16 @@ def _ensure_select_event():
                 __namespace__ = 'T3Lab.AgentCursorsSelect'
 
                 def Execute(self, uiapp):
-                    try:
-                        _select(uiapp.ActiveUIDocument, touched_ids())
-                    except Exception:
-                        pass
+                    actions, _session['ui_actions'] = _session.get('ui_actions') or [], []
+                    for action in actions or ['select']:
+                        try:
+                            if action == 'idle':        # agents went quiet: Glow off
+                                from core import agent_cursors_glow
+                                agent_cursors_glow.stop(uiapp)
+                            else:
+                                _select(uiapp.ActiveUIDocument, touched_ids())
+                        except Exception:
+                            pass
 
                 def GetName(self):
                     return 'T3Lab Agent Cursors - select touched'
@@ -1760,16 +1767,28 @@ def _ensure_select_event():
     return _session['select_event']
 
 
-def select_touched():
-    """HUD button: select every element the agents changed. Any thread."""
+def _raise_ui(action):
+    """Run `action` ('select' | 'idle') on Revit's main thread. Any thread."""
     event = _session.get('select_event')
     if event is not None:
         try:
+            _session.setdefault('ui_actions', []).append(action)
             event.Raise()
             return True
         except Exception:
             pass
     return False
+
+
+def select_touched():
+    """HUD button: select every element the agents changed. Any thread."""
+    return _raise_ui('select')
+
+
+def agents_idle():
+    """Overlay: the agents went quiet. Glow is taken off the model (it came
+    back on the next call); owner, 2026-11-17: it stayed after the agent stopped."""
+    return _raise_ui('idle')
 
 
 def hide():
@@ -1917,6 +1936,7 @@ def _overlay(hwnd):
     if ov is None or not ov.alive:
         from core.agent_cursors_overlay import OverlayHost
         ov = OverlayHost(hwnd, {'select_touched': select_touched, 'answer': answer,
+                                'idle': agents_idle,
                                 'pause': set_paused})
         _state['overlay'] = ov
         _state['theme'] = None

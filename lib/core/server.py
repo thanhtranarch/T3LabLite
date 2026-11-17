@@ -24,6 +24,7 @@ from core import jsonsafe
 from core import mcp_policy
 from core import mcp_prompts
 from core import mcp_wiki
+from core import agent_cursors
 
 try:
     import queue as _queue_mod            # CPython 3
@@ -316,7 +317,11 @@ try:
                 if not task.claim('ui'):
                     continue  # read fallback or timeout already consumed it
                 if getattr(task, 'confirm', None):
-                    refusal = _ask_user_to_confirm(task)
+                    agent_cursors.waiting(task.agent, task.tool_name, task.arguments, True)
+                    try:
+                        refusal = _ask_user_to_confirm(task)
+                    finally:
+                        agent_cursors.waiting(task.agent, task.tool_name, task.arguments, False)
                     if refusal is not None:
                         task.result = refusal
                         task.exception = None
@@ -925,6 +930,8 @@ class T3LabAIServer(object):
             # Files only, answered without Revit — see core/mcp_wiki.py. The
             # Assistant gets the same pages injected by SkillsEngine instead.
             mcp_wiki.TOOL_NAME: mcp_wiki.TOOL_SCHEMA,
+            # Goal banner over the model (Agent Cursors); answered off Revit.
+            agent_cursors.NARRATE_TOOL: dict(agent_cursors.NARRATE_SCHEMA),
             # ── Project memory (external MCP clients) ───────────────────────
             # T3Lab facts + the project's Claude Code memory, answered without
             # Revit — see Intelligence/memory_hub.py. The Assistant uses its
@@ -3009,11 +3016,12 @@ class T3LabAIServer(object):
         """Tools that change neither the model nor any file — the single
         classification the Assistant uses too (Intelligence.tool_schema).
         Empty when it cannot be imported: read-only mode then fails closed."""
+        narrate = frozenset([agent_cursors.NARRATE_TOOL])     # changes nothing
         try:
             from Intelligence.tool_schema import READ_ONLY_TOOL_NAMES
-            return READ_ONLY_TOOL_NAMES
+            return frozenset(READ_ONLY_TOOL_NAMES) | narrate
         except Exception:
-            return frozenset()
+            return narrate
 
     def _handle_tools_list(self):
         """Handle tools/list request: the tools this machine's MCP policy lets
@@ -4043,6 +4051,9 @@ class T3LabAIServer(object):
         rejected = self._reject_unknown_arguments(tool_name, arguments)
         if rejected is not None:
             return rejected
+        if tool_name == agent_cursors.NARRATE_TOOL:
+            # Overlay only: no Revit, never queued behind the ExternalEvent.
+            return agent_cursors.narrate(agent, (arguments or {}).get('message'))
         if tool_name == mcp_wiki.TOOL_NAME:
             # Wiki pages are files, not Revit: answered on this thread, with or
             # without a document, never queued behind the ExternalEvent.

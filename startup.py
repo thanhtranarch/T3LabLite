@@ -29,8 +29,8 @@ Responsibilities:
   5. Register the right-click context-menu entry (Revit 2025+).
   6. Self-study idle loop (opt-in).
   7. Start the file-based task watcher (lib/core/file_watcher.py) if opted in.
-  8. Deploy the MCP bridge to %APPDATA%/T3LabAI/bridge.py and auto-start the
-     MCP server (lib/Services/mcp_service.py).
+  8. Auto-start the MCP server (lib/Services/mcp_service.py). The bridge in
+     %APPDATA%/T3LabAI is refreshed in 2c; MCP Control > Connect deploys it.
   9. Run the once-a-week update check against GitHub (lib/core/updater.py).
  10. Record session start telemetry (lib/tracking/), after asking for consent.
 
@@ -564,10 +564,12 @@ def main():
     except Exception:
         pass
 
-    # ─── 8. Deploy MCP bridge + auto-start MCP server ──────────────────────────
+    # ─── 8. Auto-start MCP server ──────────────────────────────────────────────
+    # The bridge was refreshed in 2c. No deploy_bridge() here: it always
+    # overwrites and takes ownership, which would undo 2c's guard and let
+    # T3Lab / T3Lab Lite overwrite each other's bridge at every Revit start.
     try:
         from Services.mcp_service import MCPService
-        MCPService.deploy_bridge()
 
         from core import paths as _mcp_paths
         _auto = _mcp_paths.load_settings().get('auto_start_mcp')

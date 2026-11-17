@@ -64,6 +64,12 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
+# The in-Revit server is always 127.0.0.1. Plain urlopen() honours HTTP_PROXY
+# and, on Windows, the Internet Settings proxy, whose <local> bypass does not
+# cover dotted hosts such as 127.0.0.1: every call would then go to the proxy
+# and Revit would look "not reachable". Never use a proxy for it.
+_LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 BRIDGE_VERSION = '2.7.0'
 
 PORT_MIN, PORT_MAX = 48884, 48894
@@ -298,7 +304,7 @@ def _post_once(port, request, token, timeout):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/mcp", data=data, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with _LOCAL.open(req, timeout=timeout) as response:
             return json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as e:
         # A modern-protocol error (unsupported version, header mismatch)
@@ -338,7 +344,7 @@ def _port_alive(port, timeout=PROBE_TIMEOUT):
     """True if a T3Lab server answers /health on this port."""
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{port}/health")
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _LOCAL.open(req, timeout=timeout) as r:
             return r.status == 200
     except urllib.error.HTTPError as e:
         # Transitional: servers built between the dead-code sweep af2a9ab
@@ -802,7 +808,9 @@ def _handle_tools_list(request, current, token):
         if isinstance(tools, list) and tools:
             _save_cached_tools(tools)
         else:
-            tools = []
+            # Revit answered with an error or no tools (e.g. mid-reload): the
+            # client keeps this list until it restarts, so fall back to cache.
+            tools = _load_cached_tools()
     except Exception:
         tools = _load_cached_tools()
     return {'jsonrpc': '2.0', 'id': request.get('id'),
@@ -1165,6 +1173,15 @@ def main():
     current = {'port': port}
     token = _read_token()
 
+    # Clients send UTF-8. Launched with -I / -E, Windows Python decodes a
+    # piped stdin with the ANSI code page: Vietnamese text is garbled, and a
+    # byte undefined there (e.g. in "Đường") raises UnicodeDecodeError and
+    # kills the bridge. stdout stays ASCII (json.dumps ensure_ascii).
+    try:
+        sys.stdin.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
     while True:
         line = sys.stdin.readline()
         if not line:
@@ -1177,7 +1194,7 @@ def main():
         # Notifications (no 'id') are handled locally — the in-Revit server
         # keeps no MCP session state, so forwarding them only adds a failed
         # connect per notification whenever Revit is closed.
-        if 'id' not in request:
+        if not isinstance(request, dict) or 'id' not in request:
             continue
 
         try:

@@ -378,24 +378,25 @@ def save_policy(read_only=None, confirm_destructive=None, code_execution=None,
                 toolset=None):
     """Persist the given fields; the others keep their stored values."""
     from core import paths
-    data = paths.load_settings() or {}
-    if toolset is not None:
-        name = u'{}'.format(toolset).strip().lower()
-        if name not in TOOLSETS:
-            raise ValueError('toolset must be one of {}'.format(', '.join(TOOLSETS)))
-        data[TOOLSET_KEY] = name
-    if read_only is not None:
-        data[READ_ONLY_KEY] = bool(read_only)
-    if confirm_destructive is not None:
-        data[CONFIRM_KEY] = bool(confirm_destructive)
-    if code_execution is not None:
-        mode = u'{}'.format(code_execution).strip().lower()
-        if mode not in CODE_MODES:
-            raise ValueError('code_execution must be one of {}'.format(
-                ', '.join(CODE_MODES)))
-        data[CODE_KEY] = mode
-    paths.save_settings(data)
-    return policy_from_settings(data)
+    with paths._LOCK:    # no other writer between our read and write
+        data = paths.load_settings() or {}
+        if toolset is not None:
+            name = u'{}'.format(toolset).strip().lower()
+            if name not in TOOLSETS:
+                raise ValueError('toolset must be one of {}'.format(', '.join(TOOLSETS)))
+            data[TOOLSET_KEY] = name
+        if read_only is not None:
+            data[READ_ONLY_KEY] = bool(read_only)
+        if confirm_destructive is not None:
+            data[CONFIRM_KEY] = bool(confirm_destructive)
+        if code_execution is not None:
+            mode = u'{}'.format(code_execution).strip().lower()
+            if mode not in CODE_MODES:
+                raise ValueError('code_execution must be one of {}'.format(
+                    ', '.join(CODE_MODES)))
+            data[CODE_KEY] = mode
+        paths.save_settings(data)
+        return policy_from_settings(data)
 
 
 # Tick box under the Yes/No dialog for code (TaskDialog.VerificationText):

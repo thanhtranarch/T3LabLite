@@ -367,28 +367,43 @@ try:
                         continue  # given up while the bar was asking
                 elif not task.claim('ui'):
                     continue  # read fallback or timeout already consumed it
-                if task.agent and not task.answered:
-                    agent_cursors.offer(app, task.agent)   # once per session, cursors off
-                if getattr(task, 'confirm', None) and not task.answered:
-                    if _ask_on_bar(self, app, task):
-                        continue  # Allow on the bar re-queues it
+                # The task is claimed: from here on every path must set
+                # task.done, or the caller waits 120 s holding
+                # _MCP_REQUEST_LOCK and every other tools/call queues behind.
+                # (agent_cursors is the module-level import: a local
+                # `from core import agent_cursors` anywhere in this method
+                # makes the name local and these calls raise
+                # UnboundLocalError.)
+                try:
+                    if task.agent and not task.answered:
+                        try:
+                            agent_cursors.offer(app, task.agent)   # once per session, cursors off
+                        except Exception:
+                            pass
+                    if getattr(task, 'confirm', None) and not task.answered:
+                        if _ask_on_bar(self, app, task):
+                            continue  # Allow on the bar re-queues it
 
-                    agent_cursors.waiting(task.agent, task.tool_name, task.arguments, True)
-                    try:
-                        refusal = _ask_user_to_confirm(task)
-                    finally:
-                        agent_cursors.waiting(task.agent, task.tool_name, task.arguments, False)
-                    if refusal is not None:
-                        task.result = refusal
-                        task.exception = None
-                        task.done.set()
-                        continue
+                        agent_cursors.waiting(task.agent, task.tool_name, task.arguments, True)
+                        try:
+                            refusal = _ask_user_to_confirm(task)
+                        finally:
+                            agent_cursors.waiting(task.agent, task.tool_name, task.arguments, False)
+                        if refusal is not None:
+                            task.result = refusal
+                            task.exception = None
+                            task.done.set()
+                            continue
+                except Exception as e:
+                    task.exception = e
+                    task.result = None
+                    task.done.set()
+                    continue
                 is_write = task.tool_name in self.server._WRITE_TOOLS
                 if is_write:
                     self.server._write_in_progress = True
                 # Boxes a delete / move is about to change (agent cursors).
                 try:
-                    from core import agent_cursors
                     agent_cursors.before(app, task)
                 except Exception:
                     pass
@@ -414,7 +429,6 @@ try:
                 # After the caller has its result; off unless the user turned
                 # it on (Settings > Agent Cursors).
                 try:
-                    from core import agent_cursors
                     agent_cursors.notify(app, task)
                 except Exception:
                     pass
@@ -3106,6 +3120,17 @@ class T3LabAIServer(object):
                       if mcp_policy.tool_visible(name, policy, read_only)]
         }
 
+    def _assistant_tools_list(self):
+        """Every registered tool, for the in-app Assistant. The MCP policy
+        (read-only, toolsets, code off) is for EXTERNAL clients only
+        (core/mcp_policy.py): ticking "Read-only" in MCP Control must not
+        strip place_wall & co. from the Assistant's own catalogue."""
+        read_only = self._read_only_tool_names()
+        return {
+            'tools': [mcp_policy.list_entry(tool, read_only)
+                      for _name, tool in sorted(self._tools.items())]
+        }
+
     def _external_policy_check(self, tool_name, arguments):
         """(decision, message, confirm) for one external tools/call — see
         core.mcp_policy.check_call. `confirm` is the dialog text when the
@@ -3170,10 +3195,18 @@ class T3LabAIServer(object):
         # A tool the machine's toolset hides is refused before anything else,
         # the teaching tools below included (MCP Control > Security).
         policy = mcp_policy.load_policy()
+        read_only_names = self._read_only_tool_names()
         if not mcp_policy.toolset_allows(tool_name, policy.get('toolset'),
-                                         self._read_only_tool_names()):
+                                         read_only_names):
             return self._tool_call_result({
                 'error': mcp_policy.toolset_message(tool_name, policy.get('toolset')),
+                'blocked_by_policy': True, 'tool': tool_name})
+        # Read-only mode too: the teaching tools below change settings, start a
+        # fine-tune or rewrite exemplar files, and tools/list already hides
+        # them in read-only mode -- a direct call must not run them either.
+        if policy.get('read_only') and tool_name not in read_only_names:
+            return self._tool_call_result({
+                'error': mcp_policy._read_only_message(tool_name),
                 'blocked_by_policy': True, 'tool': tool_name})
 
         # Teaching session boundary tools are handled locally (no Revit) so the
@@ -5288,7 +5321,6 @@ class T3LabAIServer(object):
             # only, runs on the Revit main thread (routed like any read tool).
             from Autodesk.Revit.DB import (BuiltInCategory as _B,
                                            BuiltInParameter as _BP, StorageType)
-            from Snippets._compat import elem_name
             import re as _re
             items, counts = [], {}
             view_only = bool(arguments.get('view_only'))
@@ -5619,14 +5651,24 @@ class T3LabAIServer(object):
             t = Transaction(doc, "T3Lab AI Override Color")
             t.Start()
             overridden_count = 0
-            for eid_val in element_ids:
+            try:
+                for eid_val in element_ids:
+                    try:
+                        eid = make_eid(eid_val)
+                        view.SetElementOverrides(eid, override_settings)
+                        overridden_count += 1
+                    except Exception:
+                        pass
+                t.Commit()
+            except Exception:
+                # Never leave the transaction open for Revit to discard at the
+                # end of the external event (same pattern as every other tool).
                 try:
-                    eid = make_eid(eid_val)
-                    view.SetElementOverrides(eid, override_settings)
-                    overridden_count += 1
+                    if t.HasStarted() and not t.HasEnded():
+                        t.RollBack()
                 except Exception:
                     pass
-            t.Commit()
+                raise
             
             result = {
                 'success': True,
@@ -5710,12 +5752,12 @@ class T3LabAIServer(object):
             target_wall_type = None
             if wall_type_name_arg:
                 for wt in wall_types:
-                    if wt.Name == wall_type_name_arg:
+                    if elem_name(wt) == wall_type_name_arg:
                         target_wall_type = wt
                         break
                 if target_wall_type is None:
                     for wt in wall_types:
-                        if wall_type_name_arg.lower() in wt.Name.lower():
+                        if wall_type_name_arg.lower() in elem_name(wt).lower():
                             target_wall_type = wt
                             break
                 if target_wall_type is None:
@@ -5842,17 +5884,17 @@ class T3LabAIServer(object):
             for elem in collector:
                 try:
                     cat_name = elem.Category.Name if elem.Category else 'Unknown'
-                    elem_name = elem.Name if hasattr(elem, 'Name') else ''
+                    el_name = elem_name(elem) or ''
                     type_name = ''
                     try:
                         type_elem = doc.GetElement(elem.GetTypeId())
                         if type_elem is not None:
-                            type_name = type_elem.Name if hasattr(type_elem, 'Name') else ''
+                            type_name = elem_name(type_elem) or ''
                     except Exception:
                         pass
                     elements_out.append({
                         'id': eid_value(elem.Id),
-                        'name': elem_name,
+                        'name': el_name,
                         'category': cat_name,
                         'type_name': type_name
                     })
@@ -5954,7 +5996,7 @@ class T3LabAIServer(object):
                     types_out.append({
                         'id': eid_value(sym.Id),
                         'family': family_name,
-                        'type': sym.Name,
+                        'type': elem_name(sym),
                         'category': cat_name,
                         'active': sym.IsActive,
                     })
@@ -6267,8 +6309,8 @@ class T3LabAIServer(object):
             partial = None
             for s in FilteredElementCollector(doc).OfClass(FamilySymbol):
                 try:
-                    full = '{}:{}'.format(s.Family.Name, s.Name) if s.Family else s.Name
-                    if s.Name == ftype_name or full == ftype_name:
+                    full = '{}:{}'.format(s.Family.Name, elem_name(s)) if s.Family else elem_name(s)
+                    if elem_name(s) == ftype_name or full == ftype_name:
                         sym = s
                         break
                     if partial is None and ftype_name.lower() in full.lower():
@@ -6342,7 +6384,7 @@ class T3LabAIServer(object):
                     inst = doc.Create.NewFamilyInstance(point, sym, target_level, struct_type)
                 t.Commit()
                 result = {'success': True, 'element_id': eid_value(inst.Id),
-                          'type': '{}:{}'.format(sym.Family.Name, sym.Name) if sym.Family else sym.Name,
+                          'type': '{}:{}'.format(sym.Family.Name, elem_name(sym)) if sym.Family else elem_name(sym),
                           'level': target_level.Name}
                 if host_elem is not None:
                     result['host_id'] = eid_value(host_elem.Id)
@@ -6369,8 +6411,8 @@ class T3LabAIServer(object):
             partial = None
             for s in FilteredElementCollector(doc).OfClass(FamilySymbol):
                 try:
-                    full = '{}:{}'.format(s.Family.Name, s.Name) if s.Family else s.Name
-                    if s.Name == ftype_name or full == ftype_name:
+                    full = '{}:{}'.format(s.Family.Name, elem_name(s)) if s.Family else elem_name(s)
+                    if elem_name(s) == ftype_name or full == ftype_name:
                         sym = s
                         break
                     if partial is None and ftype_name.lower() in full.lower():
@@ -6420,7 +6462,7 @@ class T3LabAIServer(object):
                 inst = doc.Create.NewFamilyInstance(curve, sym, target_level, struct_type)
                 t.Commit()
                 return {'success': True, 'element_id': eid_value(inst.Id),
-                        'type': '{}:{}'.format(sym.Family.Name, sym.Name) if sym.Family else sym.Name,
+                        'type': '{}:{}'.format(sym.Family.Name, elem_name(sym)) if sym.Family else elem_name(sym),
                         'level': target_level.Name}
             except Exception as e:
                 t.RollBack()
@@ -6479,10 +6521,10 @@ class T3LabAIServer(object):
                 picked = types[0] if types else None
                 if type_name:
                     for candidate in types:
-                        if candidate.Name == type_name:
+                        if elem_name(candidate) == type_name:
                             return candidate
                     for candidate in types:
-                        if type_name.lower() in candidate.Name.lower():
+                        if type_name.lower() in elem_name(candidate).lower():
                             return candidate
                 return picked
 
@@ -6505,7 +6547,7 @@ class T3LabAIServer(object):
                     profile = NetList[CurveLoop]()
                     profile.Add(loop)
                     new_elem = Ceiling.Create(doc, profile, ct.Id, target_level.Id)
-                    type_used = ct.Name
+                    type_used = elem_name(ct)
 
                 elif elem_type == 'roof':
                     from Autodesk.Revit.DB import RoofType, ModelCurveArray, BuiltInCategory as _BIC
@@ -6521,7 +6563,7 @@ class T3LabAIServer(object):
                         ca.Append(seg)
                     ma = ModelCurveArray()
                     new_elem = doc.Create.NewFootPrintRoof(ca, target_level, rt, ma)
-                    type_used = rt.Name
+                    type_used = elem_name(rt)
 
                 else:  # floor (default)
                     floor_types = list(FilteredElementCollector(doc).OfClass(FloorType).ToElements())
@@ -6541,7 +6583,7 @@ class T3LabAIServer(object):
                         for seg in segments:
                             ca.Append(seg)
                         new_elem = doc.Create.NewFloor(ca, ft, target_level, False)
-                    type_used = ft.Name
+                    type_used = elem_name(ft)
 
                 t.Commit()
                 return {'success': True, 'element_id': eid_value(new_elem.Id),
@@ -6698,18 +6740,18 @@ class T3LabAIServer(object):
             sym = None
             if beam_type:
                 for s in framing_syms:
-                    if s.Name == beam_type or (s.Family and s.Family.Name == beam_type):
+                    if elem_name(s) == beam_type or (s.Family and s.Family.Name == beam_type):
                         sym = s
                         break
                 if sym is None:
                     for s in framing_syms:
-                        full = '{}:{}'.format(s.Family.Name, s.Name) if s.Family else s.Name
+                        full = '{}:{}'.format(s.Family.Name, elem_name(s)) if s.Family else elem_name(s)
                         if beam_type.lower() in full.lower():
                             sym = s
                             break
                 if sym is None:
                     return {'error': 'Structural framing type "{}" not found. Available: {}'.format(
-                        beam_type, ', '.join(sorted(set(s.Name for s in framing_syms))[:20]) or '(none)')}
+                        beam_type, ', '.join(sorted(set(elem_name(s) for s in framing_syms))[:20]) or '(none)')}
             elif framing_syms:
                 sym = framing_syms[0]
             if sym is None:
@@ -7115,7 +7157,6 @@ class T3LabAIServer(object):
                                            ElementTransformUtils, Group,
                                            ElementType)
             from System.Collections.Generic import List
-            from Snippets._compat import elem_name
             op      = (arguments.get('operation') or '').lower()
             ids     = arguments.get('element_ids', [])
             cat_arg = arguments.get('category')
@@ -7548,7 +7589,6 @@ class T3LabAIServer(object):
             from Autodesk.Revit.DB import (Transaction, RevitLinkType,
                                            RevitLinkInstance, CADLinkType,
                                            ImportInstance)
-            from Snippets._compat import elem_name
             op = (arguments.get('operation') or '').lower()
             if op not in ('list', 'reload', 'unload', 'delete', 'pin', 'unpin'):
                 return {'error': 'Unknown operation: {}'.format(op),
@@ -8044,7 +8084,6 @@ class T3LabAIServer(object):
             # Same probe the badgeometry preflight check runs — one source of
             # truth for the geometry that kills the PDF/DWG exporter.
             from Snippets._geometry_probe import probe_element
-            from Snippets._compat import elem_name
 
             deep = bool(arguments.get('deep_probe'))
             try:
@@ -8196,7 +8235,6 @@ class T3LabAIServer(object):
                                            FilledRegion, FilledRegionType,
                                            ElementTypeGroup, View)
             from System.Collections.Generic import List as NetList
-            from Snippets._compat import elem_name
             op = (arguments.get('operation') or '').lower()
             if op not in ('filled_region', 'detail_line'):
                 return {'error': 'Unknown operation: {}'.format(op),
@@ -9054,7 +9092,7 @@ class T3LabAIServer(object):
                 if tb_types:
                     if tb_name:
                         for tb in tb_types:
-                            if tb.Name == tb_name or (hasattr(tb, 'FamilyName') and tb.FamilyName == tb_name):
+                            if elem_name(tb) == tb_name or (hasattr(tb, 'FamilyName') and tb.FamilyName == tb_name):
                                 tb_id = tb.Id
                                 break
                     if tb_id == ElementId.InvalidElementId:
@@ -9166,12 +9204,12 @@ class T3LabAIServer(object):
                 tn_type = None
                 if type_name:
                     for tt in tn_types:
-                        if tt.Name == type_name:
+                        if elem_name(tt) == type_name:
                             tn_type = tt
                             break
                     if tn_type is None:
                         for tt in tn_types:
-                            if type_name.lower() in tt.Name.lower():
+                            if type_name.lower() in elem_name(tt).lower():
                                 tn_type = tt
                                 break
                 if tn_type is None and font_size:
@@ -10749,8 +10787,8 @@ class T3LabAIServer(object):
                 tbs = list(FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_TitleBlocks).OfClass(FamilySymbol))
                 if tb_name:
                     for s in tbs:
-                        full = '{}:{}'.format(s.Family.Name, s.Name) if s.Family else s.Name
-                        if s.Name == tb_name or full == tb_name or tb_name.lower() in full.lower():
+                        full = '{}:{}'.format(s.Family.Name, elem_name(s)) if s.Family else elem_name(s)
+                        if elem_name(s) == tb_name or full == tb_name or tb_name.lower() in full.lower():
                             tb = s; break
                 if tb is None and tbs:
                     tb = tbs[0]
@@ -11087,7 +11125,7 @@ class T3LabAIServer(object):
 
                 report = {
                     'unused_family_types': len(unused_syms),
-                    'unused_family_type_names': [s.Name for s in unused_syms[:30]],
+                    'unused_family_type_names': [elem_name(s) for s in unused_syms[:30]],
                     'unused_view_templates': len(unused_tpl),
                     'unused_view_template_names': [v.Name for v in unused_tpl[:30]],
                 }

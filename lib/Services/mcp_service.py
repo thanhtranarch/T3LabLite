@@ -174,10 +174,14 @@ def _probe_health(port, timeout=0.35):
     try:
         import json as _json
         try:
-            from urllib.request import urlopen
+            from urllib.request import build_opener, ProxyHandler
         except ImportError:                       # IronPython 2
-            from urllib2 import urlopen
-        raw = urlopen('http://127.0.0.1:{}/health'.format(port), timeout=timeout).read()
+            from urllib2 import build_opener, ProxyHandler
+        # No proxy for 127.0.0.1: a system / HTTP_PROXY proxy without a
+        # localhost bypass made a running server look "Stopped" and let
+        # Start bind a second one.
+        opener = build_opener(ProxyHandler({}))
+        raw = opener.open('http://127.0.0.1:{}/health'.format(port), timeout=timeout).read()
         if isinstance(raw, bytes):
             raw = raw.decode('utf-8', 'replace')
         return _json.loads(raw)
@@ -522,9 +526,10 @@ def _antigravity_candidates():
     alternative layouts; whichever exists first wins.
     """
     return [
+        # The live file first: when none exists yet, Connect creates this one.
+        os.path.join(_home(), '.gemini', 'antigravity-ide', 'mcp_config.json'),
         os.path.join(_home(), '.gemini', 'config', 'mcp_config.json'),
         os.path.join(_home(), '.gemini', 'antigravity', 'mcp_config.json'),
-        os.path.join(_home(), '.gemini', 'antigravity-ide', 'mcp_config.json'),
         os.path.join(_home(), '.antigravity', 'mcp_config.json'),
         os.path.join(_appdata(), 'Antigravity', 'User', 'globalStorage', 'mcp_config.json'),
     ]
@@ -562,21 +567,30 @@ def _resolve_client_path(spec):
     """
     Config path for one client.
 
-    mcp_paths.json wins if the user set it; otherwise the first candidate that
-    already exists on disk is chosen, falling back to the primary candidate so
-    Configure can create it. The result is persisted, so it becomes editable.
+    mcp_paths.json wins if it names a file that exists (or nothing better
+    exists); otherwise the first candidate that already exists on disk is
+    chosen and persisted, so it becomes editable. When no candidate exists
+    yet, the primary one is returned but NOT persisted: opening MCP Control
+    before the AI app is installed (or before CODEX_HOME is set) must not pin
+    a path the app will never read.
     """
-    def _default():
-        candidates = spec['candidates']()
-        for c in candidates:
-            if os.path.isfile(c):
-                return c
-        return candidates[0]
-
+    candidates = spec['candidates']()
+    found = next((c for c in candidates if os.path.isfile(c)), None)
     try:
-        return _get_paths_module().get_setting(spec['setting'], _default)
+        paths = _get_paths_module()
+        stored = paths.load_settings().get(spec['setting'])
     except Exception:
-        return _default()
+        paths, stored = None, None
+    if stored and (os.path.isfile(stored) or not found):
+        return stored
+    if found:
+        if paths is not None:
+            try:
+                paths.set_setting(spec['setting'], found)
+            except Exception:
+                pass
+        return found
+    return candidates[0]
 
 
 def _backup_once(path):
@@ -619,11 +633,19 @@ def _read_json_config(path):
     import codecs
     if not os.path.isfile(path):
         return {}
-    with codecs.open(path, 'r', encoding='utf-8') as f:
+    # utf-8-sig: Notepad / PowerShell 5.1 save UTF-8 with a BOM, which
+    # json.loads rejects ("Unexpected UTF-8 BOM").
+    with codecs.open(path, 'r', encoding='utf-8-sig') as f:
         raw = f.read().strip()
     if not raw:
         return {}
     return _json.loads(raw)
+
+
+def _write_text(path, text):
+    """Write a client config through a temp file: never half-written."""
+    data = text.encode('utf-8') if not isinstance(text, bytes) else text
+    _get_paths_module().atomic_write(path, data)
 
 
 def _json_is_configured(path, name=MCP_SERVER_NAME):
@@ -636,12 +658,17 @@ def _write_json_config(path, python, bridge, port, name=MCP_SERVER_NAME):
     import json as _json
     import codecs
 
+    # A file we cannot parse (comments, trailing comma, hand-edit typo) holds
+    # the user's other MCP servers and settings: never replace it with only
+    # our entry -- the one-time backup may be from long ago.
     try:
         config = _read_json_config(path)
-    except Exception:
-        config = {}          # unparseable -> start clean (backup keeps original)
+    except Exception as ex:
+        raise ValueError('{} is not valid JSON ({}). Fix it by hand (or add the '
+                         'entry from Manual Config), then Connect again.'.format(path, ex))
     if not isinstance(config, dict):
-        config = {}
+        raise ValueError('{} does not hold a JSON object. Fix it by hand, then '
+                         'Connect again.'.format(path))
 
     servers = config.get('mcpServers')
     if not isinstance(servers, dict):
@@ -661,8 +688,7 @@ def _write_json_config(path, python, bridge, port, name=MCP_SERVER_NAME):
         os.makedirs(cfg_dir)
 
     _backup_once(path)
-    with codecs.open(path, 'w', encoding='utf-8') as f:
-        f.write(_json.dumps(config, indent=2, ensure_ascii=False))
+    _write_text(path, _json.dumps(config, indent=2, ensure_ascii=False))
 
 
 # ── TOML client (Codex / ChatGPT) ─────────────────────────────────────────────
@@ -739,7 +765,7 @@ def _read_toml_text(path):
     import codecs
     if not os.path.isfile(path):
         return ''
-    with codecs.open(path, 'r', encoding='utf-8') as f:
+    with codecs.open(path, 'r', encoding='utf-8-sig') as f:
         return f.read()
 
 
@@ -752,19 +778,21 @@ def _toml_is_configured(path, name=MCP_SERVER_NAME):
 
 
 def _write_toml_config(path, python, bridge, port, name=MCP_SERVER_NAME):
-    import codecs
+    # A read error (non-UTF-8 byte, file locked) must not turn into '' and
+    # overwrite the user's providers and servers: let configure_client
+    # report it.
     try:
         text = _read_toml_text(path)
-    except Exception:
-        text = ''
+    except Exception as ex:
+        raise ValueError('Could not read {} ({}). Save it as UTF-8, then '
+                         'Connect again.'.format(path, ex))
 
     cfg_dir = os.path.dirname(path)
     if cfg_dir and not os.path.isdir(cfg_dir):
         os.makedirs(cfg_dir)
 
     _backup_once(path)
-    with codecs.open(path, 'w', encoding='utf-8') as f:
-        f.write(_toml_upsert(text, _codex_block(python, bridge, port, name), name))
+    _write_text(path, _toml_upsert(text, _codex_block(python, bridge, port, name), name))
 
 
 # ─── MCPService ────────────────────────────────────────────────────────────────
@@ -1206,9 +1234,9 @@ class MCPService(object):
         The Claude Desktop config points at the deployed copy, never inside
         the extension folder — anyone can download the extension anywhere on
         their machine, and updating/moving/re-cloning it never breaks the MCP
-        connection. Content-compared before writing, so it is safe (and
-        cheap) to call on every Revit startup; extension updates propagate
-        to the deployed copy automatically.
+        connection. Content-compared before writing. Called from Connect
+        only: it always takes ownership, so startup.py refreshes through
+        bridge_deploy.refresh() instead (T3Lab and Lite share the folder).
 
         hub_store.py (t3lab_hub) goes with it, and this extension becomes the
         bridge's owner, so startup.py keeps it current (lib/bridge_deploy.py).

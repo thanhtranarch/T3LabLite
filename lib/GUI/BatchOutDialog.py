@@ -75,7 +75,7 @@ if lib_dir not in sys.path:
 
 from Snippets._compat import eid_value, make_eid
 from core.paths import user_data_path
-from Services import batchout_report, batchout_profiles, batchout_refs
+from Services import batchout_report, batchout_profiles, batchout_refs, batchout_pdf24
 from Services.batchout_report import DEFAULT_COLUMNS as REPORT_DEFAULT_COLUMNS
 
 try:
@@ -659,6 +659,8 @@ class ExportProfile(object):
         self.PDFHideUnreferencedTags = False
         self.PDFViewLinksBlue = False
         self.CombinePDF = False
+        # "Revit" (doc.Export) or "PDF24" (PDF24 Creator printer, Services/batchout_pdf24.py)
+        self.PDFEngine = "Revit"
 
         # DWG settings
         self.DWGVersion = "AutoCAD 2013"
@@ -706,6 +708,7 @@ class ExportProfile(object):
             'PDFHideUnreferencedTags': self.PDFHideUnreferencedTags,
             'PDFViewLinksBlue': self.PDFViewLinksBlue,
             'CombinePDF': self.CombinePDF,
+            'PDFEngine': self.PDFEngine,
             'DWGVersion': self.DWGVersion,
             'CADExportSetup': self.CADExportSetup,
             'CADExportViewsOnSheets': self.CADExportViewsOnSheets,
@@ -1175,6 +1178,7 @@ class ExportManagerWindow(T3WPFWindow):
         profile.PDFHideUnreferencedTags = self.pdf_hide_unreferenced_tags.IsChecked if self.pdf_hide_unreferenced_tags.IsChecked is not None else False
         profile.PDFViewLinksBlue = self.pdf_view_links_blue.IsChecked if self.pdf_view_links_blue.IsChecked is not None else False
         profile.CombinePDF = self.combine_pdf.IsChecked if self.combine_pdf.IsChecked is not None else False
+        profile.PDFEngine = self._pdf_engine()
 
         # DWG settings
         if self.dwg_version.SelectedItem:
@@ -1247,6 +1251,7 @@ class ExportManagerWindow(T3WPFWindow):
             self.pdf_hide_unreferenced_tags.IsChecked = profile.PDFHideUnreferencedTags
             self.pdf_view_links_blue.IsChecked = profile.PDFViewLinksBlue
             self.combine_pdf.IsChecked = profile.CombinePDF
+            self.pdf_engine.SelectedIndex = 1 if profile.PDFEngine == "PDF24" else 0
 
             # DWG settings
             for i in range(self.dwg_version.Items.Count):
@@ -3297,6 +3302,36 @@ class ExportManagerWindow(T3WPFWindow):
         # Update export preview if on Create tab
         self.update_export_preview_if_needed()
 
+    def _pdf_engine(self):
+        """"PDF24" when the PDF24 printer engine is picked, else "Revit"."""
+        try:
+            return "PDF24" if self.pdf_engine.SelectedIndex == 1 else "Revit"
+        except Exception:
+            return "Revit"
+
+    def pdf_engine_changed(self, sender, e):
+        """Say whether PDF24 can be used before the user starts an export."""
+        try:
+            if self._pdf_engine() != "PDF24":
+                self.pdf24_status.Visibility = Visibility.Collapsed
+                return
+            printer = batchout_pdf24.find_printer()
+            if not printer:
+                text = ("PDF24 printer not found. Install PDF24 Creator ({}) or pick "
+                        "Revit (built-in).".format(batchout_pdf24.INSTALL_URL))
+            else:
+                blocked = batchout_pdf24.AutoSave().blocked_reason()
+                if blocked:
+                    text = "PDF24 cannot be used: {}.".format(blocked)
+                else:
+                    text = "Prints to '{}'. Your PDF24 settings are restored after the export.".format(printer)
+                    if self.combine_pdf.IsChecked and not batchout_pdf24.find_doctool():
+                        text += " pdf24-DocTool.exe not found: Combine keeps one PDF per sheet."
+            self.pdf24_status.Text = text
+            self.pdf24_status.Visibility = Visibility.Visible
+        except Exception as ex:
+            logger.debug("PDF24 status check failed: {}".format(ex))
+
     def pdf_auto_detect_changed(self, sender, e):
         """Handle PDF auto-detect checkbox change."""
         try:
@@ -4415,6 +4450,9 @@ class ExportManagerWindow(T3WPFWindow):
             # Sync cached values with live values from Revit
             self._sync_item_labels(items, "PDF")
 
+            if self._pdf_engine() == "PDF24":
+                return self._export_pdf_with_pdf24(items, output_folder)
+
             # Check if combine PDF is enabled
             combine_pdf = self.combine_pdf.IsChecked
 
@@ -4805,6 +4843,251 @@ class ExportManagerWindow(T3WPFWindow):
         except Exception as ex:
             logger.error("PDF export failed: {}".format(ex))
             return 0
+
+    PDF24_PAGE_TIMEOUT = 120.0      # s per sheet; PDF24 may start its tray app on the first
+    PDF24_MAX_MISSES = 2            # sheets in a row with no file -> stop, PDF24 is not saving
+
+    def _export_pdf_with_pdf24(self, items, output_folder):
+        """PDF through the PDF24 Creator printer (PrintManager + PDF24 auto-save).
+
+        One print job per item; PDF24 saves it under the reserved name. Combine
+        joins the pages with pdf24-DocTool. Print settings are changed InSession
+        inside a TransactionGroup that is rolled back, and the user's printer and
+        PDF24 settings are put back. NOT verified in Revit + PDF24 yet.
+        """
+        import shutil
+        import tempfile
+
+        printer = batchout_pdf24.find_printer()
+        session = batchout_pdf24.AutoSave()
+        problem = None
+        if not printer:
+            problem = ("PDF24 printer not found — install PDF24 Creator ({}) or set "
+                       "PDF Engine to Revit (built-in)".format(batchout_pdf24.INSTALL_URL))
+        else:
+            blocked = session.blocked_reason()
+            if blocked:
+                problem = "PDF24 cannot be used: {} — set PDF Engine to Revit (built-in)".format(blocked)
+        if problem:
+            logger.error(problem)
+            for item in items:
+                self._note_failure(getattr(item, 'SheetNumber', 'Unknown'), "PDF", problem)
+            return 0
+
+        combine = bool(self.combine_pdf.IsChecked)
+        doctool = batchout_pdf24.find_doctool() if combine else None
+        if combine and not doctool:
+            logger.warning("pdf24-DocTool.exe not found: Combine is off for this run, "
+                           "one PDF per sheet is written instead.")
+            combine = False
+        work_folder = tempfile.mkdtemp(prefix="t3lab_pdf24_") if combine else output_folder
+
+        pm = self.doc.PrintManager
+        old_printer = None
+        group = None
+        pages = []          # (item, path) in print order
+        exported_count = 0
+        misses = 0
+        try:
+            old_printer = pm.PrinterName
+        except Exception:
+            pass
+        try:
+            group = DB.TransactionGroup(self.doc, "BatchOut PDF24 print setup")
+            group.Start()
+            session.start(work_folder)
+            pm.SelectNewPrintDriver(printer)
+            pm.PrintToFile = False
+            pm.Apply()
+
+            for index, item in enumerate(items):
+                label = str(getattr(item, 'SheetNumber', 'Unknown'))
+                if misses >= self.PDF24_MAX_MISSES:
+                    self._note_failure(label, "PDF", "skipped: PDF24 saved nothing for the "
+                                       "previous {} sheets".format(misses))
+                    continue
+                try:
+                    element, element_name = self._element_of(item)
+                    if element is None:
+                        self._note_failure(label, "PDF", "row is neither a sheet nor a view")
+                        continue
+                    self.update_export_item_progress(item.SheetNumber, "PDF", 50, "Printing to PDF24...")
+                    self._update_progress(
+                        int(self._overall_counter * 100.0 / max(1, self._overall_total)),
+                        "Printing {} to PDF24...".format(element_name))
+
+                    if combine:
+                        filename = "{:04d}".format(index + 1)
+                    else:
+                        filename = item.CustomFilename or self.get_export_filename(item)
+                        if filename.lower().endswith('.pdf'):
+                            filename = filename[:-4]
+                        filename = self._reserve_filename(work_folder, filename, ".pdf")
+                    expected_file = os.path.join(work_folder, filename + ".pdf")
+                    prev_mtime = os.path.getmtime(expected_file) if os.path.exists(expected_file) else None
+
+                    size, orientation = self._pdf24_paper_for(item)
+                    trans = Transaction(self.doc, "PDF24 page setup")
+                    trans.Start()
+                    try:
+                        note = self._pdf24_page_setup(pm, size, orientation)
+                        trans.Commit()
+                    except Exception:
+                        trans.RollBack()
+                        raise
+                    if note:
+                        logger.warning("{}: {}".format(element_name, note))
+
+                    session.set_filename(filename)
+                    started_at = time.time()
+                    if not pm.SubmitPrint(element):
+                        raise RuntimeError("Revit did not send the print job to PDF24")
+
+                    taken = getattr(self, '_used_filenames', set())
+                    found = batchout_pdf24.wait_for_pdf(
+                        expected_file, prev_mtime, started_at, self.PDF24_PAGE_TIMEOUT,
+                        taken=[p for p in taken if p != expected_file.lower()]
+                        + [page[1] for page in pages])
+                    if found is None:
+                        misses += 1
+                        self._note_failure(label, "PDF", "PDF24 saved no file within {:.0f} s"
+                                           .format(self.PDF24_PAGE_TIMEOUT))
+                        continue
+                    misses = 0
+                    if found.lower() != expected_file.lower():
+                        logger.warning("PDF24 saved '{}' as '{}'; renamed.".format(
+                            os.path.basename(expected_file), os.path.basename(found)))
+                        if os.path.exists(expected_file):
+                            os.remove(expected_file)
+                        os.rename(found, expected_file)
+                    pages.append((item, expected_file))
+                    if not combine:
+                        exported_count += 1
+                        self._overall_counter += 1
+                        self._last_output_file = expected_file
+                        self.update_export_item_progress(item.SheetNumber, "PDF", 100)
+                except Exception as ex:
+                    logger.error("Error printing {} to PDF24: {}".format(label, ex))
+                    self._note_failure(label, "PDF", ex)
+        except Exception as ex:
+            logger.error("PDF24 export failed: {}".format(ex))
+            for item in items:
+                if not any(item is p[0] for p in pages):
+                    self._note_failure(getattr(item, 'SheetNumber', 'Unknown'), "PDF",
+                                       "PDF24 export failed: {}".format(ex))
+        finally:
+            session.restore()
+            if old_printer:
+                try:
+                    pm.SelectNewPrintDriver(old_printer)
+                except Exception as ex:
+                    logger.debug("Could not reselect printer '{}': {}".format(old_printer, ex))
+            if group is not None:
+                try:
+                    group.RollBack()
+                except Exception as ex:
+                    logger.error("PDF24 print setup rollback failed: {}".format(ex))
+
+        if combine:
+            exported_count = self._pdf24_join(doctool, pages, items, output_folder)
+            shutil.rmtree(work_folder, ignore_errors=True)
+        return exported_count
+
+    def _pdf24_paper_for(self, item):
+        """(paper size, orientation) for one item, same rules as the Revit engine."""
+        is_auto = self.pdf_auto_detect_size.IsChecked
+        manual = self.pdf_paper_size.SelectedItem.Content if self.pdf_paper_size.SelectedItem else "Use Sheet Size"
+        if (is_auto or manual == "Use Sheet Size") and hasattr(item, 'Sheet'):
+            return self.get_sheet_paper_size_and_orientation(item.Sheet)
+        return manual, ("Landscape" if self.pdf_landscape.IsChecked else "Portrait")
+
+    def _pdf24_page_setup(self, pm, size, orientation):
+        """InSession print parameters for one page (open transaction). Returns a
+        note when PDF24 has no such paper (the current paper is kept)."""
+        setup = pm.PrintSetup
+        try:
+            setup.CurrentPrintSetting = setup.InSession
+        except Exception as ex:
+            logger.debug("InSession print setting: {}".format(ex))
+        params = setup.CurrentPrintSetting.PrintParameters
+        note = None
+        if size and size != "Use Sheet Size":
+            papers = list(pm.PaperSizes)
+            match = batchout_pdf24.match_paper(size, [p.Name for p in papers])
+            paper = next((p for p in papers if p.Name == match), None)
+            if paper is not None:
+                params.PaperSize = paper
+            else:
+                note = "PDF24 has no '{}' paper; the current paper size was used".format(size)
+        settings = (
+            ('PageOrientation', DB.PageOrientationType.Landscape if orientation == "Landscape"
+             else DB.PageOrientationType.Portrait),
+            ('PaperPlacement', DB.PaperPlacementType.Center),
+            ('ZoomType', DB.ZoomType.FitToPage if self.pdf_fit_to_page.IsChecked else DB.ZoomType.Zoom),
+            ('ColorDepth', DB.ColorDepthType.Color),
+            ('RasterQuality', DB.RasterQualityType.High),
+            ('HiddenLineViews', DB.HiddenLineViewsType.VectorProcessing),
+            ('HideReforWorkPlanes', bool(self.pdf_hide_ref_planes.IsChecked)),
+            ('HideScopeBoxes', bool(self.pdf_hide_scope_boxes.IsChecked)),
+            ('HideCropBoundaries', bool(self.pdf_hide_crop_boundaries.IsChecked)),
+            ('HideUnreferencedViewTags', bool(self.pdf_hide_unreferenced_tags.IsChecked)),
+            ('ViewLinksinBlue', bool(self.pdf_view_links_blue.IsChecked)),
+        )
+        for name, value in settings:
+            try:
+                setattr(params, name, value)
+            except Exception as ex:
+                logger.debug("Print parameter {} not set: {}".format(name, ex))
+        if not self.pdf_fit_to_page.IsChecked:
+            try:
+                params.Zoom = 100
+            except Exception as ex:
+                logger.debug("Print zoom not set: {}".format(ex))
+        pm.Apply()
+        return note
+
+    def _pdf24_join(self, doctool, pages, items, output_folder):
+        """Join the printed pages into one PDF; 1 on success. On failure the pages
+        are kept in the output folder, one file per sheet."""
+        import shutil
+        import subprocess
+        if not pages:
+            return 0
+        first = self._element_of(pages[0][0])[1]
+        last = self._element_of(pages[-1][0])[1]
+        name = self._reserve_filename(output_folder, "{}-{}_Combined".format(first, last), ".pdf")
+        target = os.path.join(output_folder, name + ".pdf")
+        before = self._native_output_stamp(target)
+        cmd = batchout_pdf24.join_command(doctool, [p[1] for p in pages], output_folder, name)
+        self._update_progress(
+            int(self._overall_counter * 100.0 / max(1, self._overall_total)),
+            "Joining {} pages with PDF24...".format(len(pages)))
+        try:
+            subprocess.call(cmd, timeout=300, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except Exception as ex:
+            logger.error("pdf24-DocTool join failed: {}".format(ex))
+        if self._confirm_native_output(target, before):
+            self._overall_counter += len(pages)
+            for item, _ in pages:
+                self.update_export_item_progress(item.SheetNumber, "PDF", 100)
+            return 1
+        logger.warning("PDF24 could not join the pages; one PDF per sheet was kept instead.")
+        kept = 0
+        for item, path in pages:
+            base = item.CustomFilename or self.get_export_filename(item)
+            if base.lower().endswith('.pdf'):
+                base = base[:-4]
+            dest = os.path.join(output_folder, self._reserve_filename(output_folder, base, ".pdf") + ".pdf")
+            try:
+                if os.path.exists(dest):
+                    os.remove(dest)
+                shutil.move(path, dest)     # temp folder may be on another drive
+                kept += 1
+                self._overall_counter += 1
+                self.update_export_item_progress(item.SheetNumber, "PDF", 100)
+            except Exception as ex:
+                self._note_failure(item.SheetNumber, "PDF", "could not keep the printed page: {}".format(ex))
+        return kept
 
     def export_to_dwf(self, items, output_folder):
         """Export items (sheets or views) to DWF format using Revit's native DWF export with version-aware API usage.

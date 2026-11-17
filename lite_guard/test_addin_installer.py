@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""MCP Control's Connect installs the T3Lab add-in for AutoCAD / Civil 3D / 3ds Max from its
+"""MCP Control's Connect installs the T3Lab add-in for AutoCAD / Civil 3D from its
 release zip (lib/Services/addin_installer.py, MCPService.install_addin). Plain CPython 3."""
 import io
 import json
@@ -16,16 +16,6 @@ _TMP = tempfile.mkdtemp(prefix='t3lab_addin_test_')
 os.environ['APPDATA'] = _TMP
 
 from Services import addin_installer as AI   # noqa: E402
-
-
-def make_max_zip(path):
-    with zipfile.ZipFile(path, 'w') as z:
-        z.writestr('manifest.json', json.dumps({'name': 'T3LabMax', 'version': '1.1.0'}))
-        z.writestr('T3LabMax.bundle/PackageContents.xml', '<ApplicationPackage/>')
-        z.writestr('T3LabMax.bundle/Contents/scripts/t3lab_max_mcp.py', '# server')
-        z.writestr('T3LabMax.bundle/Contents/scripts/t3lab_max_mcp_start.ms', '-- start')
-        z.writestr('T3LabMax/bridge.py', '# bridge')
-    return path
 
 
 def make_zip(path, name='T3LabCAD', extra=None, manifest=True, bridge=True):
@@ -59,15 +49,6 @@ class InstallTests(unittest.TestCase):
         self.assertIn('1.1.0', AI.summary(res))
         again = AI.install('T3LabCAD', source=src)
         self.assertEqual(again['written'], [])          # unchanged files are left alone
-
-    def test_installs_3dsmax(self):
-        res = AI.install('T3LabMax', source=make_max_zip(os.path.join(self.dir, 'T3LabMax.zip')))
-        bundle = os.path.join(os.environ['APPDATA'], 'Autodesk', 'ApplicationPlugins', 'T3LabMax.bundle')
-        self.assertTrue(os.path.isfile(os.path.join(bundle, 'Contents', 'scripts', 't3lab_max_mcp_start.ms')))
-        self.assertTrue(os.path.isfile(os.path.join(os.environ['APPDATA'], 'T3LabMax', 'bridge.py')))
-        self.assertIn('Restart 3ds Max', AI.summary(res))
-        with self.assertRaises(AI.InstallError):            # a CAD zip is not the Max package
-            AI.install('T3LabMax', source=make_zip(os.path.join(self.dir, 'c.zip')))
 
     def test_old_layout_removed(self):
         old = os.path.join(os.environ['APPDATA'], 'Autodesk', 'ApplicationPlugins', 'T3LabCAD.bundle',
@@ -105,9 +86,8 @@ class InstallTests(unittest.TestCase):
         os.makedirs(os.path.join(root, 'AutoCAD 2024', 'C3D'))
         self.assertEqual(AI.installed_years('autocad', [root]), [2024, 2027])
         self.assertEqual(AI.installed_years('civil3d', [root]), [2024])
-        self.assertEqual(AI.installed_years('navisworks', [root]), [2025])
-        self.assertEqual(AI.installed_years('3dsmax', [root]), [2026])
-        self.assertEqual(AI.installed_years('inventor', [root]), [])       # dropped
+        for dropped in ('navisworks', '3dsmax', 'inventor'):
+            self.assertEqual(AI.installed_years(dropped, [root]), [])
 
 
 class ServiceTests(unittest.TestCase):
@@ -135,17 +115,12 @@ class ServiceTests(unittest.TestCase):
         st = M.MCPService.app_bridge_status('autocad')
         self.assertTrue(st['installed'] and st['installable'])
 
-    def test_apps_without_an_addin_say_so(self):
-        ok, msg = self.M.MCPService.install_addin('navisworks')
-        self.assertFalse(ok)
-        self.assertIn('no T3Lab add-in for Navisworks yet', msg)
-        self.assertFalse(self.M.MCPService.app_bridge_status('navisworks')['installable'])
-        self.assertTrue(self.M.MCPService.app_bridge_status('3dsmax')['installable'])
-
-    def test_inventor_is_gone(self):
+    def test_only_one_click_apps_are_listed(self):
         keys = [a[0] for a in self.M.MCPService.autodesk_apps()]
-        self.assertNotIn('inventor', keys)
-        self.assertNotIn('inventor', self.M.SERVERS)
+        self.assertEqual(keys, ['autocad', 'civil3d'])
+        self.assertEqual(sorted(AI.PACKAGES), ['T3LabCAD'])
+        for app in keys:
+            self.assertTrue(self.M.MCPService.app_bridge_status(app)['installable'], app)
 
 
 if __name__ == '__main__':

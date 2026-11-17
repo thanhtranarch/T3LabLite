@@ -73,3 +73,5 @@ jobs:
         run: python3 lite_guard/test_bridge_stdio.py
       - name: Test MCP code for module imports shadowed inside functions
         run: python3 lite_guard/test_mcp_shadowing.py
+      - name: Test MCP Control never destroys a config file it cannot read
+        run: python3 lite_guard/test_mcp_config_safety.py

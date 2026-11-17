@@ -2273,6 +2273,22 @@ class T3LabAIServer(object):
                 'description': 'Get model health summary: warning count, element count, linked files, unused families',
                 'inputSchema': {'type': 'object', 'properties': {}, 'required': []}
             },
+            # ── Data hub (core/hub_snapshot.py, docs/data-hub.md) ─────────────
+            'hub_publish': {
+                'name': 'hub_publish',
+                'description': 'Write a data-hub snapshot of the document (elements, types, parameters, warnings) for t3lab_hub. The model is not changed.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'categories': {'type': 'array', 'items': {'type': 'string'},
+                                       'description': 'Only these categories (default: model categories, sheets, levels, grids)'},
+                        'parameters': {'type': 'array', 'items': {'type': 'string'},
+                                       'description': 'Only these parameters (default: all)'},
+                        'max_seconds': {'type': 'integer', 'description': 'Give up after this long (default 90, max 110)'}
+                    },
+                    'required': []
+                }
+            },
             # ── Collaboration / worksets ──────────────────────────────────────
             'list_worksets': {
                 'name': 'list_worksets',
@@ -9163,6 +9179,14 @@ class T3LabAIServer(object):
                     except Exception:
                         pass
                 return {'warnings': result, 'total': len(list(warnings)), 'returned': len(result)}
+            except Exception as e:
+                return {'error': str(e)}
+
+        # ── hub_publish ──────────────────────────────────────────────────────
+        elif tool_name == 'hub_publish':
+            try:
+                from core import hub_snapshot
+                return hub_snapshot.publish(doc, arguments)
             except Exception as e:
                 return {'error': str(e)}
 

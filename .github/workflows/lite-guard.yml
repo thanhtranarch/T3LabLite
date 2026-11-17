@@ -63,3 +63,7 @@ jobs:
         run: python3 lite_guard/test_open_timing.py
       - name: Test the Assistant user name (own file, asked once, no built-in name)
         run: python3 lite_guard/test_lite_user.py
+      - name: Test the data hub (snapshot, store, t3lab_hub)
+        run: python3 lite_guard/test_data_hub.py
+      - name: Test the MCP bridge refresh at Revit start
+        run: python3 lite_guard/test_bridge_deploy.py

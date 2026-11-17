@@ -805,6 +805,53 @@ def _toml_is_configured(path, name=MCP_SERVER_NAME):
     return found and name != MCP_SERVER_NAME     # revit entry without --agent: Connect again
 
 
+_TOML_ARGS_RE = re.compile(r'^(\s*args\s*=\s*\[.*?)\s*\](\s*(?:#.*)?)$')
+
+
+def _json_add_agent(path, agent):
+    """Append --agent=<id> to our own t3lab-revit entry when it has none.
+    True when the file was changed. Raises on a file that cannot be parsed."""
+    import json as _json
+    config = _read_json_config(path)
+    servers = config.get('mcpServers') if isinstance(config, dict) else None
+    entry = (servers or {}).get(MCP_SERVER_NAME)
+    args = entry.get('args') if isinstance(entry, dict) else None
+    if not isinstance(args, list):
+        return False
+    texts = ['{}'.format(a) for a in args]
+    if any(a.startswith('--agent=') for a in texts) or not any(
+            a.replace('\\', '/').endswith('/bridge.py') for a in texts):
+        return False                # already named, or not the entry we wrote
+    entry['args'] = args + _agent_args(agent)
+    _backup_once(path)
+    _write_text(path, _json.dumps(config, indent=2, ensure_ascii=False))
+    return True
+
+
+def _toml_add_agent(path, agent):
+    """Same for Codex: add "--agent=<id>" to the args of [mcp_servers.t3lab-revit]."""
+    section_re = _toml_section_re(MCP_SERVER_NAME)
+    lines = _read_toml_text(path).split('\n')
+    inside = False
+    for i, line in enumerate(lines):
+        if section_re.match(line):
+            inside = True
+            continue
+        if inside and _TOML_HEADER_RE.match(line):
+            break
+        m = _TOML_ARGS_RE.match(line.rstrip('\r')) if inside else None
+        if m is None:
+            continue
+        if '--agent=' in line or 'bridge.py' not in line:
+            return False
+        end = '\r' if line.endswith('\r') else ''
+        lines[i] = '{}, "{}"]{}{}'.format(m.group(1), _agent_args(agent)[0], m.group(2), end)
+        _backup_once(path)
+        _write_text(path, '\n'.join(lines))
+        return True
+    return False
+
+
 def _write_toml_config(path, python, bridge, port, name=MCP_SERVER_NAME, agent=None):
     # A read error (non-UTF-8 byte, file locked) must not turn into '' and
     # overwrite the user's providers and servers: let configure_client
@@ -1552,6 +1599,35 @@ class MCPService(object):
             return True, path
         except Exception as ex:
             return False, str(ex)
+
+    @staticmethod
+    def upgrade_client_entries():
+        """
+        Revit start: name the AI app in t3lab-revit entries written before
+        Connect added --agent (2.4.5). The config file a client reads says
+        which app it is, so nothing is guessed (2026-11-17: Antigravity sends
+        no name and showed as "AI app"). Only our own entry is touched, with
+        the one-time backup; Claude Desktop is skipped while it runs (it
+        rewrites its config when it quits). Never raises.
+
+        Returns:
+            list[str]: labels of the apps whose entry was updated.
+        """
+        done = []
+        for spec in AI_CLIENTS:
+            try:
+                agent = spec.get('agent')
+                path = _resolve_client_path(spec)
+                if not agent or not os.path.isfile(path):
+                    continue
+                if spec['key'] == 'claude' and _claude_desktop_running():
+                    continue
+                add = _toml_add_agent if spec['fmt'] == 'toml' else _json_add_agent
+                if add(path, agent):
+                    done.append(spec['label'])
+            except Exception:
+                continue
+        return done
 
     @staticmethod
     def configure_all_clients(port=None, server='revit'):

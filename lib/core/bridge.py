@@ -723,6 +723,8 @@ AGENT_META = 't3lab/agent'
 #   4. any other clientInfo name    shown as it is
 # Nothing at all: no stamp, and Revit shows "AI app".
 KNOWN_CLIENTS = ('claude-ai', 'claude-code', 'codex-mcp-client', 'cursor-vscode')
+# Seen from Claude Desktop's agent mode on the owner's machine (2026-11-17).
+KNOWN_CLIENT_PREFIXES = ('local-agent-mode',)
 # (text in an ancestor's executable path, agent id): first match wins.
 HOST_APPS = (('antigravity', 'antigravity'), ('cursor', 'cursor'), ('codex', 'codex'),
              ('chatgpt', 'codex'), ('claude-code', 'claude-code'), ('claude', 'claude-desktop'))
@@ -809,7 +811,7 @@ def _remember_client(request, current):
         return              # --agent from MCP Control's Connect wins
     info = (request.get('params') or {}).get('clientInfo')
     name = '{}'.format(info.get('name') or '').strip()[:40] if isinstance(info, dict) else ''
-    if name.lower() in KNOWN_CLIENTS:
+    if name.lower() in KNOWN_CLIENTS or name.lower().startswith(KNOWN_CLIENT_PREFIXES):
         current['client'] = name
     elif current.get('host'):
         current['client'] = current['host']

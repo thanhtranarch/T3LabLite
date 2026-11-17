@@ -222,6 +222,52 @@ def test_other_autodesk_apps():
           M.MCPService.cad_bridge_status()['server'] == 't3lab-autocad')
 
 
+def test_startup_names_old_entries():
+    print('[startup: entries written before --agent get their app name]')
+    with Env() as env:
+        old = {'type': 'stdio', 'command': PY, 'args': ['-E', 'C:/T3LabAI/bridge.py', '48884'],
+               'env': {'PYTHONPATH': ''}}
+        for key in ('claude', 'antigravity'):
+            os.makedirs(os.path.dirname(env.paths[key]))
+            with open(env.paths[key], 'w') as f:
+                json.dump({'mcpServers': {'t3lab-revit': dict(old), 'other': {'command': 'npx'}},
+                           'theme': 'dark'}, f)
+        os.makedirs(os.path.dirname(env.paths['chatgpt']))
+        with open(env.paths['chatgpt'], 'w') as f:
+            f.write('model = "gpt"\n\n[mcp_servers.t3lab-revit]\ntype = "stdio"\n'
+                    'command = "C:\\\\Py\\\\python.exe"\n'
+                    'args = ["C:/T3LabAI/bridge.py", "48884"]\nstartup_timeout_sec = 60\n\n'
+                    '[mcp_servers.other]\nargs = ["x"]\n')
+        env.desktop_running = True
+        done = M.MCPService.upgrade_client_entries()
+        check('Claude Desktop skipped while it runs', done == ['ChatGPT (Codex)', 'Antigravity'], done)
+        ag = _json(env.paths['antigravity'])
+        check('Antigravity entry names Antigravity',
+              ag['mcpServers']['t3lab-revit']['args'][-1] == '--agent=antigravity'
+              and ag['mcpServers']['t3lab-revit']['args'][:3] == old['args'], ag)
+        check('other servers and settings kept',
+              ag['mcpServers']['other'] == {'command': 'npx'} and ag['theme'] == 'dark')
+        toml = open(env.paths['chatgpt'], encoding='utf-8').read()
+        check('Codex args name codex, other table untouched',
+              'args = ["C:/T3LabAI/bridge.py", "48884", "--agent=codex"]' in toml
+              and '[mcp_servers.other]\nargs = ["x"]' in toml and 'model = "gpt"' in toml, toml)
+        check('backup kept', os.path.isfile(env.paths['antigravity'] + '.t3lab-backup'))
+        env.desktop_running = False
+        check('Claude named once it is closed', M.MCPService.upgrade_client_entries() == ['Claude Desktop']
+              and _json(env.paths['claude'])['mcpServers']['t3lab-revit']['args'][-1]
+              == '--agent=claude-desktop')
+        check('second run changes nothing', M.MCPService.upgrade_client_entries() == [])
+        check('now reads connected', M.MCPService.client_status('antigravity')['configured'] is True)
+        with open(env.paths['antigravity'], 'w') as f:
+            f.write('{ not json')
+        check('a broken file is left alone, no error', M.MCPService.upgrade_client_entries() == []
+              and open(env.paths['antigravity']).read() == '{ not json')
+        with open(env.paths['antigravity'], 'w') as f:
+            json.dump({'mcpServers': {'t3lab-revit': {'command': 'node', 'args': ['server.js']}}}, f)
+        check('an entry that is not our bridge is left alone',
+              M.MCPService.upgrade_client_entries() == [])
+
+
 def test_dialog_attrs_assigned():
     """App switch crashed with "'MCPControlWindow' object has no attribute
     '_configure_all_btn'": every self.<attr> the dialog reads must be set
@@ -244,7 +290,8 @@ def test_dialog_attrs_assigned():
 def main():
     for t in (test_needs_bridge, test_json_keeps_revit_and_others,
               test_desktop_running_guard, test_toml, test_snippets_and_revit_default,
-              test_other_autodesk_apps, test_dialog_attrs_assigned):
+              test_other_autodesk_apps, test_startup_names_old_entries,
+              test_dialog_attrs_assigned):
         t()
     if FAILURES:
         print('\n{} FAILED: {}'.format(len(FAILURES), ', '.join(FAILURES)))

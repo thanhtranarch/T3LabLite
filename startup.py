@@ -30,6 +30,7 @@ Responsibilities:
   6. Self-study idle loop (opt-in).
   7. Start the file-based task watcher (lib/core/file_watcher.py) if opted in.
  7b. Move pyRevit Routes off the T3Lab MCP ports (lib/routes_guard.py).
+ 7c. Add --agent to MCP client entries written before 2.4.5.
   8. Auto-start the MCP server (lib/Services/mcp_service.py). The bridge in
      %APPDATA%/T3LabAI is refreshed in 2c; MCP Control > Connect deploys it.
   9. Run the once-a-week update check against GitHub (lib/core/updater.py).
@@ -573,6 +574,17 @@ def main():
         _note = _routes.apply() if _routes is not None else ""
         if _note:
             _log(_note)
+    except Exception:
+        pass
+
+    # ─── 7c. Name the AI app in entries Connect wrote before --agent ───────────
+    # (Services.mcp_service.upgrade_client_entries: Antigravity sends no name.)
+    try:
+        from Services.mcp_service import MCPService as _McpNames
+        _named = _McpNames.upgrade_client_entries()
+        if _named:
+            _log("MCP entries now name their AI app (--agent): %s. Restart the app(s) "
+                 "to see the name on the Agent Cursors." % ", ".join(_named))
     except Exception:
         pass
 

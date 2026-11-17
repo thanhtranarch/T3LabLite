@@ -100,11 +100,14 @@ _ALIASES = {
     'gemini-cli-mcp-client': 'antigravity', 'gemini': 'antigravity',
     'cursor-vscode': 'cursor',
 }
-# Client names that carry a suffix: first matching prefix wins. Never map a
-# name on a guess (2026-11-17: 'local-agent-mode-...' was mapped to Claude,
-# then to Antigravity, both unverified). The bridge names the app from
-# --agent or from the process that launched it (bridge.host_agent).
+# Client names that carry a suffix: first matching prefix wins. Map a name
+# only when it was seen coming from that app (2026-11-17: Antigravity was
+# guessed twice). The bridge names the app from --agent, which MCP Control
+# writes, or from the process that launched it (bridge.host_agent).
 _ALIAS_PREFIXES = (
+    # Claude Desktop's agent mode: the owner ran Claude and Revit showed this
+    # id (2026-11-17, 2.5.1 screenshot). Verified, not a guess.
+    ('local-agent-mode', 'claude-desktop'),
     ('claude-code', 'claude-code'),
     ('claude', 'claude-desktop'), ('codex', 'codex'), ('chatgpt', 'chatgpt'),
     ('openai', 'chatgpt'), ('gemini', 'antigravity'), ('antigravity', 'antigravity'),

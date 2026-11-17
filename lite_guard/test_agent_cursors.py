@@ -295,9 +295,11 @@ def test_agent_style():
 def test_agent_names():
     print('[agent names: raw MCP client ids read as names]')
     st = AC.agent_style
-    check('an unseen client id is never guessed as Claude (2026-11-17: Antigravity)',
-          st('local-agent-mode-t3lab')[0] != 'Claude'
-          and AC.agent_key('Local-Agent-Mode-T3Lab_Lite') != 'claude-desktop')
+    check('Claude Desktop agent mode reads Claude (seen on the owner\'s machine)',
+          st('local-agent-mode-t3lab')[0] == 'Claude'
+          and AC.agent_key('Local-Agent-Mode-T3Lab_Lite') == 'claude-desktop')
+    check('an id nobody has seen is shown as it is, never as a known app',
+          st('some-new-agent-x')[0] not in ('Claude', 'Antigravity', 'GPT'))
     check('Connect names the apps', st('antigravity')[0] == 'Antigravity'
           and st('codex')[0] == 'GPT' and st('claude-desktop')[0] == 'Claude')
     check('no name at all reads "AI app"', st('mcp-client')[0] == 'AI app')
@@ -469,8 +471,8 @@ def test_setting():
     finally:
         AC._session['select_event'] = None
         AC._session['ui_actions'] = []
-    check('an unverified client id is mapped to no app at all',
-          AC.agent_style('local-agent-mode-t3lab')[0] not in ('Claude', 'Antigravity'))
+    check('Claude agent mode is never taken for Antigravity',
+          AC.agent_style('local-agent-mode-t3lab')[0] == 'Claude')
     check('no name at all reads "AI app", not Claude',
           AC.agent_style('')[0] == 'AI app' and AC.agent_style(None)[0] == 'AI app')
     check('speed normal by default', AC.speed() == 'normal' and AC.speed_factor() == 1.0)
@@ -603,7 +605,8 @@ def test_agent_stamp():
     check('bridge: --agent > known clientInfo > launching app > other clientInfo',
           named('claude-ai', client='antigravity', agent_explicit=True) == 'antigravity'
           and named('claude-code', host='antigravity', client='antigravity') == 'claude-code'
-          and named('local-agent-mode-x', host='antigravity', client='antigravity') == 'antigravity'
+          and named('local-agent-mode-x', host='antigravity', client='antigravity') == 'local-agent-mode-x'
+          and named('unknown-thing', host='antigravity', client='antigravity') == 'antigravity'
           and named('some-app') == 'some-app' and named('') is None)
     check('bridge: ancestors off Windows are simply unknown',
           os.name == 'nt' or BR._ancestor_images() == [])

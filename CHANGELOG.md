@@ -19,6 +19,9 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+- **Agent Cursors — Claude shown as "Local Agent Mod…", Antigravity as "AI app":** Claude Desktop's agent mode is now recognised as Claude. Antigravity sends no name of its own, so at Revit start T3Lab adds the app's name to the connection it wrote earlier in each AI app's settings (Antigravity, ChatGPT / Codex, Claude Desktop); nothing else in those files changes and a backup is kept. Restart the AI app once afterwards.
+
 ## [2.5.1] - 2026-11-17
 
 Agent Cursors no longer show an extra "Claude" cursor next to the AI app you use.

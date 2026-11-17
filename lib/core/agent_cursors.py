@@ -6,7 +6,11 @@ Claude · Modify, GPT · Read … — to each element it read, edited, created o
 deleted in turn (move, click, next), in every visible view, with a plain
 caption ("Moving elements · 3 elements"), a badge per element ("Walls ·
 1200 × 300") and an effect per action; a call with no element scans the view.
-The HUD lists the last steps. Follow mode opens the views the agent works in; zoom brings off-screen
+The HUD lists the last steps and each agent's plan (t3lab_narrate tasks / step):
+while a step runs the cursor names that task, the call goes underneath; a
+send_code_to_revit call is named by its `purpose` or its code (summarize_code).
+Keep bar (on by default) keeps the HUD and dimmed cursors between calls.
+Follow mode opens the views the agent works in; zoom brings off-screen
 targets into view. Idea after swarm-cursors (github.com/DhvanilPatel/
 swarm-cursors); drawn here in code-built WPF, no code from it.
 
@@ -36,6 +40,8 @@ FEED_SIZE = 5               # last steps listed on the HUD
 REPLAY_SIZE = 20            # steps the HUD can replay
 SUMMARY_S = 20              # idle summary card stays this long
 NARRATE_MAX = 90            # goal banner text
+PLAN_MAX = 8                # tasks in an agent's plan (t3lab_narrate tasks=[...])
+TASK_MAX = 60               # characters per task
 
 # name -> (mcp_paths.json key, default). The HUD toggles them live.
 OPTIONS = (
@@ -45,6 +51,7 @@ OPTIONS = (
     ('tile', 'agent_cursors_tile_views', False),
     ('reduce', 'agent_cursors_reduce_motion', False),
     ('glow', 'agent_cursors_glow', False),
+    ('keep', 'agent_cursors_keep_bar', True),
 )
 # Motion speed (mcp_paths.json agent_cursors_speed): name -> time factor.
 SPEED_KEY = 'agent_cursors_speed'
@@ -57,6 +64,8 @@ OPTION_LABELS = {
     'reduce': ('Less motion', 'No glides, ripples or scans: boxes and captions only'),
     'glow': ('Glow', 'Experimental: outline touched elements inside the Revit view '
                      '(DirectContext3D). Turn off if Revit misbehaves.'),
+    'keep': ('Keep bar', 'Keep the bar and cursors on screen between calls instead of '
+                         'fading out (the x on the bar turns Agent Cursors off)'),
 }
 
 # agent id (bridge `t3lab/agent`) -> (tag, colour). Unknown agents get a
@@ -162,11 +171,12 @@ def set_enabled(on):
         hide()
         _session['touched'].clear()     # the next session starts clean
         _session['goals'].clear()
+        _session['plans'].clear()
     return bool(on)
 
 
 def options():
-    """{'follow': bool, 'zoom': bool, 'select': bool, 'tile': bool}."""
+    """{name: bool} for every OPTIONS entry."""
     data = _settings()
     return dict((name, bool(data.get(key, default))) for name, key, default in OPTIONS)
 
@@ -470,11 +480,60 @@ _GERUNDS = {
 _CAPTION_MAX = 46
 
 
+_CODE_COMMENT = re.compile(r'^\s*#\s*(.+?)\s*$')
+_CODE_DOC = re.compile(r'^\s*[uUrR]?("""|\'\'\')\s*(.+?)\s*("""|\'\'\')?\s*$')
+_CODE_TRANSACTION = re.compile(r'Transaction(?:Group)?\s*\(\s*\w+\s*,\s*[uUrR]?([\'"])(.+?)\1')
+_CODE_CATEGORY = re.compile(r'\bOST_([A-Za-z]+)')
+_CODE_CLASS = re.compile(r'OfClass\s*\(\s*(?:\w+\.)*([A-Z][A-Za-z]+)\s*\)')
+_CODE_EDIT = re.compile(r'\.Start\s*\(|\bSet\s*\(|\.Delete\s*\(|\.Create\w*\s*\(|\.NewFamilyInstance\s*\(')
+_CAMEL = re.compile(r'(?<=[a-z])(?=[A-Z])')
+
+
+def _humanize(name):
+    """'StairsRailing' -> 'stairs railing'."""
+    return _CAMEL.sub(' ', name).lower()
+
+
+def summarize_code(code):
+    """What a send_code_to_revit snippet does, in a few words: its first
+    comment or docstring line, else its Transaction name, else the categories
+    or classes it collects ('Editing stairs, railings'), else ''."""
+    code = '{}'.format(code or '')
+    for line in code.splitlines()[:6]:
+        if not line.strip():
+            continue
+        found = _CODE_COMMENT.match(line) or _CODE_DOC.match(line)
+        if found:
+            text = found.group(found.lastindex if found.re is _CODE_COMMENT else 2).strip(' .:-')
+            if len(text) >= 4 and not text.startswith('!') and 'coding' not in text:
+                return text[0].upper() + text[1:]
+        if not line.lstrip().startswith(('#', 'import', 'from', '"""', "'''")):
+            break
+    found = _CODE_TRANSACTION.search(code)
+    if found and found.group(2).strip():
+        return found.group(2).strip()
+    names = []
+    found = [_humanize(c) for c in _CODE_CATEGORY.findall(code)]
+    found += [_humanize(c) + ('' if c.endswith('s') else 's') for c in _CODE_CLASS.findall(code)]
+    for name in found:
+        if name not in names and name not in ('elements', 'element types'):
+            names.append(name)
+    if names:
+        verb = 'Editing' if _CODE_EDIT.search(code) else 'Reading'
+        return '{} {}'.format(verb, ', '.join(names[:3]))
+    return ''
+
+
 def describe_call(tool_name, arguments=None, n_targets=0, failed=False):
-    """'Listing open documents', 'Moving elements · 3 elements', 'Failed: …'."""
+    """'Listing open documents', 'Moving elements · 3 elements', 'Failed: …'.
+    send_code_to_revit: its `purpose` (Lite: `description`), else what the
+    code itself says."""
     name = '{}'.format(tool_name or '').strip().lower()
     if name == 'send_code_to_revit':
-        text = 'Running code in Revit'
+        args = arguments if isinstance(arguments, dict) else {}
+        purpose = ' '.join('{}'.format(args.get('purpose') or args.get('description')
+                                       or '').split())
+        text = purpose or summarize_code(args.get('code')) or 'Running code in Revit'
     else:
         op = arguments.get('operation') if isinstance(arguments, dict) else None
         words = []
@@ -551,6 +610,33 @@ def clean_goal(text):
     """One line, at most NARRATE_MAX characters, or ''."""
     text = ' '.join('{}'.format(text or '').split())
     return text if len(text) <= NARRATE_MAX else text[:NARRATE_MAX - 1] + '…'
+
+
+def clean_tasks(tasks):
+    """A plan: up to PLAN_MAX one-line tasks of at most TASK_MAX characters."""
+    if not isinstance(tasks, (list, tuple)):
+        return []
+    out = []
+    for task in tasks:
+        text = ' '.join('{}'.format(task or '').split())
+        if text:
+            out.append(text if len(text) <= TASK_MAX else text[:TASK_MAX - 1] + '…')
+    return out[:PLAN_MAX]
+
+
+def plan_rows(plan):
+    """[(state, text)] with state done | current | todo, for the HUD."""
+    tasks, step = plan.get('tasks') or [], plan.get('step') or 0
+    return [('done' if i + 1 < step else 'current' if i + 1 == step else 'todo', t)
+            for i, t in enumerate(tasks)]
+
+
+def current_task(plan):
+    """'Step 2/4 · Number the risers' while a step of the plan is running, else ''."""
+    tasks, step = plan.get('tasks') or [], plan.get('step') or 0
+    if not tasks or not 1 <= step <= len(tasks):
+        return ''
+    return 'Step {}/{} · {}'.format(step, len(tasks), tasks[step - 1])
 
 
 def _short(value, limit=24):
@@ -991,7 +1077,11 @@ _PARAM_TOOLS = {
     'rename_element': ((), 'new_name'),
 }
 # Per Revit session: who edited what, the agents' goals, the select event.
-_session = {'touched': {}, 'goals': {}, 'select_event': None, 'select_cls': None}
+_session = {'touched': {}, 'goals': {}, 'plans': {}, 'select_event': None, 'select_cls': None}
+
+
+def _plan_of(agent):
+    return _session['plans'].get(agent_key(agent) or 'claude-desktop') or {}
 
 
 def _param_value(elem, name):
@@ -1051,9 +1141,10 @@ def before(app, task):
         try:
             doc, geos, active = _open_views(app)
             if active is not None:
+                agent = _agent_of(task)
                 _overlay(_hwnd(app)).call(
-                    'working', _agent_of(task), action,
-                    describe_call(tool, args, len(ids)), tool, geos[active]['rect'])
+                    'working', agent, action, describe_call(tool, args, len(ids)), tool,
+                    geos[active]['rect'], task_text=current_task(_plan_of(agent)))
         except Exception:
             pass
         name, ok = _param_name(tool, args)
@@ -1130,7 +1221,8 @@ def notify(app, task):
             'show', agent, action, tool, failed, snap, followed, args=args,
             n_targets=len(ids), changes=changes, clashes=clashes,
             touched=len(_session['touched']),
-            goal=_session['goals'].get(agent_key(agent) or 'claude-desktop', ''))
+            goal=_session['goals'].get(agent_key(agent) or 'claude-desktop', ''),
+            task_text=current_task(_plan_of(agent)))
     except Exception:
         pass
 
@@ -1140,35 +1232,63 @@ def notify(app, task):
 NARRATE_TOOL = 't3lab_narrate'
 NARRATE_SCHEMA = {
     'name': NARRATE_TOOL,
-    'description': ('Say in one short line what you are about to do in Revit, e.g. '
-                    '"Renumber the doors on Level 2". Shown to the user as a goal banner '
-                    'over the model while Agent Cursors are on; changes nothing. Call it '
-                    'before a multi-step task and when the goal changes.'),
+    'description': ('Show the user what you are doing in Revit: a goal and the list of tasks, '
+                    'over the model while Agent Cursors are on; changes nothing. Before a '
+                    'multi-step job send message + tasks (short steps in plain words); then '
+                    'step=N as you start task N, and done=true at the end. The cursor shows '
+                    'the current task instead of the tool name.'),
     'inputSchema': {
         'type': 'object',
         'properties': {
             'message': {'type': 'string',
                         'description': 'The goal, one line (max {} characters).'.format(NARRATE_MAX)},
+            'tasks': {'type': 'array', 'items': {'type': 'string'},
+                      'description': 'The plan: up to {} short tasks, in order.'.format(PLAN_MAX)},
+            'step': {'type': 'integer', 'description': 'The task you start now (1 = first).'},
+            'done': {'type': 'boolean', 'description': 'Every task is finished.'},
         },
-        'required': ['message'],
+        'required': [],
     },
 }
 
 
-def narrate(agent, message):
-    """t3lab_narrate: set the agent's goal banner. Any thread; never raises.
+def narrate(agent, message=None, tasks=None, step=None, done=False):
+    """t3lab_narrate: set the agent's goal and plan. Any thread; never raises.
     Returns the tool result."""
-    goal = clean_goal(message)
-    _session['goals'][agent_key(agent) or 'claude-desktop'] = goal
+    key = agent_key(agent) or 'claude-desktop'
+    if message is not None:
+        _session['goals'][key] = clean_goal(message)
+    plan = dict(_session['plans'].get(key) or {})
+    new_tasks = clean_tasks(tasks)
+    if new_tasks:
+        plan = {'tasks': new_tasks, 'step': 1}
+    if step is not None:
+        try:
+            plan['step'] = max(0, int(step))
+        except (TypeError, ValueError):
+            pass
+    if done and plan.get('tasks'):
+        plan['step'] = len(plan['tasks']) + 1
+    if plan.get('tasks'):
+        _session['plans'][key] = plan
+    goal = _session['goals'].get(key, '')
     try:
         if is_enabled() and _state.get('overlay') is not None:
-            _state['overlay'].call('narrate', agent or 'claude-desktop', goal)
+            _state['overlay'].call('narrate', agent or 'claude-desktop', goal, dict(plan))
     except Exception:
         pass
-    return {'success': True, 'goal': goal,
-            'shown': bool(goal) and is_enabled(),
-            'note': ('Shown over the model.' if is_enabled() else
-                     'Agent Cursors are off in Revit; the goal is kept for when they are on.')}
+    if not goal and not plan.get('tasks'):
+        return {'success': False, 'error': 'Send message (the goal) and/or tasks.',
+                'error_code': 'bad_arguments', 'nothing_ran': True}
+    out = {'success': True, 'goal': goal, 'shown': is_enabled(),
+           'note': ('Shown over the model.' if is_enabled() else
+                    'Agent Cursors are off in Revit; the goal is kept for when they are on.')}
+    if plan.get('tasks'):
+        out['tasks'] = plan['tasks']
+        out['step'] = plan['step']
+        out['current'] = current_task(plan) or ('all done' if plan['step'] > len(plan['tasks'])
+                                                else '')
+    return out
 
 
 def waiting(agent, tool, arguments=None, on=True):
@@ -1237,9 +1357,112 @@ def hide():
             pass
 
 
+# ─── Consent on the bar + the offer to turn cursors on (T3Lab Lite) ──────────
+
+OFFER_KEY = 'agent_cursors_offer'       # 'never' = do not offer again
+_asks = {}                              # request id -> on_answer(approved, always)
+_ask_seq = [0]
+
+
+def ask(app, agent, tool, arguments, main, content, expanded='', always_text='',
+        on_answer=None):
+    """Main thread: put a consent question on the bar (Allow / Deny) instead of
+    a modal Revit dialog, so Revit stays usable. on_answer(approved, always)
+    runs on the overlay thread. The request id when shown (cancel_ask takes
+    it); '' = the caller asks its own way (cursors off, no view, overlay down)."""
+    if on_answer is None or not is_enabled():
+        return ''
+    rid = None
+    try:
+        _doc, geos, active = _open_views(app)
+        if active is None:
+            return ''
+        ov = _overlay(_hwnd(app))
+        if not ov.alive:
+            return ''
+        _ask_seq[0] += 1
+        rid = 'ask{}'.format(_ask_seq[0])
+        _asks[rid] = on_answer
+        ov.call('ask', rid, agent or 'claude-desktop', tool,
+                describe_call(tool, arguments), '{}'.format(main or ''),
+                '{}'.format(content or ''), '{}'.format(expanded or ''),
+                '{}'.format(always_text or ''), geos[active]['rect'])
+        return rid
+    except Exception:
+        if rid is not None:
+            _asks.pop(rid, None)
+        return ''
+
+
+def cancel_ask(rid):
+    """The caller stopped waiting: take the card off the bar, no answer."""
+    if _asks.pop(rid, None) is not None and _state.get('overlay') is not None:
+        try:
+            _state['overlay'].call('cancel_ask', rid)
+        except Exception:
+            pass
+
+
+def answer(rid, approved, always=False):
+    """Overlay thread: Allow / Deny clicked. Never raises."""
+    fn = _asks.pop(rid, None)
+    if fn is not None:
+        try:
+            fn(bool(approved), bool(always))
+        except Exception:
+            pass
+
+
+def pending_asks():
+    return len(_asks)
+
+
+def offer_text(agent):
+    """(main instruction, content) of the one-time offer."""
+    tag = agent_style(agent)[0]
+    return (u'Follow {} in Revit?'.format(tag),
+            u'{} is working in this model through MCP. Agent Cursors shows each step on '
+            u'the model with its task list, and asks for your OK on its bar at the bottom '
+            u'of the view instead of in a dialog, so Revit stays free while the AI '
+            u'works.'.format(tag))
+
+
+def offer(app, agent):
+    """Main thread, an MCP call from `agent` with cursors off: offer once per
+    Revit session (never again after "Don't ask again"). True when the user
+    turned them on. Never raises."""
+    if is_enabled() or _state.get('offered') or not agent:
+        return False
+    _state['offered'] = True
+    try:
+        if '{}'.format(_settings().get(OFFER_KEY, '')).lower() == 'never':
+            return False
+        from Autodesk.Revit.UI import (TaskDialog, TaskDialogCommandLinkId,
+                                       TaskDialogResult)
+        main, content = offer_text(agent)
+        dlg = TaskDialog('T3Lab Agent Cursors')
+        dlg.TitleAutoPrefix = False
+        dlg.MainInstruction = main
+        dlg.MainContent = content
+        dlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, 'Turn on Agent Cursors',
+                           'You can turn them off with the x on the bar.')
+        dlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, 'Not now',
+                           'Confirmations stay in Revit dialogs.')
+        dlg.VerificationText = "Don't ask again"
+        turned_on = dlg.Show() == TaskDialogResult.CommandLink1
+        if dlg.WasVerificationChecked() and not turned_on:
+            _paths().set_setting(OFFER_KEY, 'never')
+            _cache['mtime'] = None
+        if turned_on:
+            set_enabled(True)
+        return turned_on
+    except Exception:
+        return False
+
+
 # ─── Overlay (core/agent_cursors_overlay.py) ──────────────────────────────────
 
-_state = {'overlay': None}
+_state = {'overlay': None, 'offered': False}
 
 
 def _overlay(hwnd):
@@ -1248,6 +1471,6 @@ def _overlay(hwnd):
     ov = _state.get('overlay')
     if ov is None or not ov.alive:
         from core.agent_cursors_overlay import OverlayHost
-        ov = OverlayHost(hwnd, {'select_touched': select_touched})
+        ov = OverlayHost(hwnd, {'select_touched': select_touched, 'answer': answer})
         _state['overlay'] = ov
     return ov

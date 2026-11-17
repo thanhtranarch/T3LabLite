@@ -44,6 +44,7 @@ python lite_guard/test_batchout_refs.py
 python lite_guard/test_batchout_pdf24.py
 python lite_guard/test_mcp_cad_clients.py
 python lite_guard/test_agent_cursors.py
+python lite_guard/test_cursor_consent.py
 python lite_guard/test_open_timing.py
 python lite_guard/test_lite_user.py
 python lite_guard/test_data_hub.py

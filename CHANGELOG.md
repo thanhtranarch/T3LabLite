@@ -19,6 +19,20 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-11-17
+
+Agent Cursors show the work on the model: one cursor per AI app, readable names, and the elements it builds highlighted as it goes.
+
+### Changed
+- **Agent Cursors — one cursor per AI app:** an app no longer leaves a second, faded cursor behind for each kind of action; its one cursor moves on and the action only tints the left edge of its tag.
+- **Agent Cursors — readable names and tags:** Claude Desktop's agent mode shows as "Claude" instead of `local-agent-mode-t…`, other unknown apps get a clean name ("Acme Bot"). A tag flips to the left of or above its pointer near the edge of the view instead of being cut off, and two tags never cover each other.
+- **Agent Cursors — the work shows on the model:** elements a call names are framed while it runs and the cursor goes to them. What the AI created or changed — also from code, which reports no ids — is highlighted for a few seconds with a chip ("Walls ×3 created") and a dotted line joining new elements in the order they were made (not with Less motion).
+- **Agent Cursors — calmer reads:** a call with no element ("Listing levels") scans next to where the cursor last worked instead of jumping across the view; a new cursor starts in the middle of the view.
+
+### Fixed
+- **pyRevit "Routes servers failed activation" (WinError 10013) at Revit start:** pyRevit's Routes server used port 48884, the same port as the T3Lab MCP server. T3Lab now moves Routes to port 48870 when it is switched on, on every pyRevit version (6.x and 7.x); nothing changes when Routes is off.
+- **Agent Cursors — boxes in plans and sections:** element boxes could be missing in plan and section views (they were only reliable in 3D).
+
 ## [2.4.3] - 2026-11-17
 
 A new Agent Cursors bar with a minimal cursor and a Pause button, and Connect keeps the AutoCAD add-in up to date.

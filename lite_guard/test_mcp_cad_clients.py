@@ -42,12 +42,16 @@ class Env(object):
         }
         self.bridge = os.path.join(self.dir, 'T3LabCAD', 'bridge.py')
         self.saved = {n: getattr(M, n) for n in (
-            '_resolve_client_path', '_find_python_executable', '_cad_bridge_path',
+            '_resolve_client_path', '_find_python_executable', '_app_bridge_path',
             '_claude_desktop_running', '_get_bridge_path')}
         self.desktop_running = False
         M._resolve_client_path = lambda spec: self.paths[spec['key']]
         M._find_python_executable = lambda: PY
-        M._cad_bridge_path = lambda: self.bridge.replace('\\', '/')
+        self.app_bridges = {}      # other apps: key -> path (default: none installed)
+        M._app_bridge_path = lambda app='autocad': (
+            self.bridge if app == 'autocad'
+            else self.app_bridges.get(app, os.path.join(self.dir, app, 'bridge.py'))
+        ).replace('\\', '/')
         M._claude_desktop_running = lambda: self.desktop_running
         M._get_bridge_path = lambda: 'C:/T3LabAI/bridge.py'
         return self
@@ -169,9 +173,44 @@ def test_snippets_and_revit_default():
             check('unknown server raises', True)
 
 
+def test_other_autodesk_apps():
+    print('[other Autodesk apps: listed, refused until their add-in, same entry shape]')
+    apps = M.MCPService.autodesk_apps()
+    keys = [a[0] for a in apps]
+    check('AutoCAD first, then the other apps',
+          keys[0] == 'autocad' and {'civil3d', 'navisworks', '3dsmax', 'inventor'} <= set(keys), keys)
+    names = [a[2] for a in apps]
+    check('server names unique and t3lab-*', len(set(names)) == len(names)
+          and all(n.startswith('t3lab-') for n in names), names)
+    check('Revit is not in the app list', 't3lab-revit' not in names)
+    with Env() as env:
+        ok, msg = M.MCPService.configure_client('claude', server='navisworks')
+        check('refused without its add-in', not ok and 'Navisworks add-in not installed' in msg, msg)
+        st = M.MCPService.app_bridge_status('navisworks')
+        check('status names the app and server',
+              not st['installed'] and st['label'] == 'Navisworks'
+              and st['server'] == 't3lab-navisworks', st)
+        path = os.path.join(env.dir, 'T3LabNavisworks', 'bridge.py')
+        os.makedirs(os.path.dirname(path))
+        open(path, 'w').close()
+        env.app_bridges['navisworks'] = path
+        ok, msg = M.MCPService.configure_client('antigravity', server='navisworks')
+        entry = _json(env.paths['antigravity'])['mcpServers'].get('t3lab-navisworks', {})
+        check('written once installed', ok, msg)
+        check('same stdio entry as AutoCAD (-I bridge, no port)',
+              entry.get('args') == ['-I', path.replace('\\', '/')], entry)
+        check('status configured', M.MCPService.client_status(
+            'antigravity', server='navisworks').get('configured'))
+        snip = M.MCPService.config_snippet(fmt='claude_code', server='inventor')
+        check('snippet per app', 't3lab-inventor' in snip and '-I' in snip, snip)
+    check('cad_bridge_status kept for older callers',
+          M.MCPService.cad_bridge_status()['server'] == 't3lab-autocad')
+
+
 def main():
     for t in (test_needs_bridge, test_json_keeps_revit_and_others,
-              test_desktop_running_guard, test_toml, test_snippets_and_revit_default):
+              test_desktop_running_guard, test_toml, test_snippets_and_revit_default,
+              test_other_autodesk_apps):
         t()
     if FAILURES:
         print('\n{} FAILED: {}'.format(len(FAILURES), ', '.join(FAILURES)))

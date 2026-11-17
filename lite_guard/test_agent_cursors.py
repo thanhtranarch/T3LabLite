@@ -107,6 +107,41 @@ def test_actions():
           AC.counts_text({'create': 3, 'read': 1}))
 
 
+def test_captions_and_tour():
+    print('[describe_call / badge_text / tour]')
+    cases = (
+        (('list_open_documents', None, 0, False), 'Listing open documents'),
+        (('revit_get_element_info', {'element_id': 1}, 1, False), 'Reading element info · 1 element'),
+        (('move_elements', {}, 3, False), 'Moving elements · 3 elements'),
+        (('operate_element', {'operation': 'hide'}, 5, False), 'Hiding elements · 5 elements'),
+        (('send_code_to_revit', {}, 0, False), 'Running code in Revit'),
+        (('delete_element', {}, 2, True), 'Failed: Deleting element · 2 elements'),
+        (('famigen_create_family', None, 0, False), 'Creating family'),
+        (('frobnicate_walls', None, 0, False), 'Frobnicating walls'),
+    )
+    for args, want in cases:
+        got = AC.describe_call(*args)
+        check('caption ' + args[0], got == want, got)
+    long = AC.describe_call('get_' + '_'.join(['parameter'] * 12))
+    check('long caption cut with an ellipsis', len(long) <= 46 and long.endswith('…'), long)
+    check('empty tool -> Working', AC.describe_call('') == 'Working')
+    check('badge with category', AC.badge_text('Walls', '1200 × 300') == 'Walls · 1200 × 300')
+    check('badge without category', AC.badge_text('', '10 × 10') == '10 × 10')
+    sched = AC.tour_schedule([(0, 0), (10, 5), (20, 20)], 300, 200)
+    check('tour: arrive / leave in order',
+          [s_[2:] for s_ in sched] == [(300, 500), (800, 1000), (1300, 1500)], sched)
+    check('one stop glides MOVE_MS', AC.hop_ms(1) == AC.MOVE_MS)
+    check('many stops glide faster, never under 260 ms',
+          AC.hop_ms(4) < AC.hop_ms(1) and AC.hop_ms(50) == 260)
+    rect = (100.0, 50.0, 900.0, 650.0)
+    pts = AC.review_points(rect, 7, 3)
+    check('review path: n points', len(pts) == 3)
+    check('review path inside the view',
+          all(rect[0] < x < rect[2] and rect[1] < y < rect[3] for x, y in pts), pts)
+    check('review path stable per seed', pts == AC.review_points(rect, 7, 3))
+    check('another seed, another path', pts != AC.review_points(rect, 8, 3))
+
+
 def test_views():
     print('[visible_views / union_rect / moved]')
     a, b = (0, 0, 500, 400), (500, 0, 1000, 400)
@@ -247,6 +282,7 @@ if __name__ == '__main__':
         test_extract_ids()
         test_view_ids()
         test_actions()
+        test_captions_and_tour()
         test_views()
         test_projection()
         test_agent_style()

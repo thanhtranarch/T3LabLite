@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-11-17
+
+MCP Control installs the AutoCAD / Civil 3D add-in for you when you click Connect, and BatchOut exports with PDF24 again.
+
 ### Added
 - **MCP Control — Connect installs the AutoCAD add-in:** pick AutoCAD or Civil 3D and click Connect: MCP Control downloads the T3Lab add-in (T3LabCAD) from GitHub and installs it for every AutoCAD and Civil 3D from 2022 to 2027, then connects your AI app. Restart AutoCAD once after the first install. Step 1 also lists the versions found on this PC. Civil 3D uses the AutoCAD add-in (`t3lab-autocad`).
 

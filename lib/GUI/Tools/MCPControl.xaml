@@ -1747,7 +1747,7 @@
                                RenderOptions.BitmapScalingMode="HighQuality"/>
                         <StackPanel Orientation="Vertical" VerticalAlignment="Center">
                             <TextBlock Text="MCP Control" Style="{StaticResource T3.Title}"/>
-                            <TextBlock Text="Connect AI apps such as Claude or ChatGPT to Revit and AutoCAD" Style="{StaticResource T3.Subtitle}"/>
+                            <TextBlock Text="Connect AI apps such as Claude or ChatGPT to Revit and Autodesk apps" Style="{StaticResource T3.Subtitle}"/>
                         </StackPanel>
                     </StackPanel>
 
@@ -1791,10 +1791,10 @@
                                      Style="{StaticResource T3.Chip}"
                                      Checked="tab_chip_checked" Tag="2"
                                      ToolTip="Port, auto-start, file task watcher and teaching capture"/>
-                        <RadioButton x:Name="chip_tab_autocad" Content="AutoCAD" GroupName="mcp_tabs"
+                        <RadioButton x:Name="chip_tab_autocad" Content="Autodesk" GroupName="mcp_tabs"
                                      Style="{StaticResource T3.Chip}"
                                      Checked="tab_chip_checked" Tag="3"
-                                     ToolTip="Connect AI apps to AutoCAD through the T3LabCAD add-in"/>
+                                     ToolTip="Connect AI apps to AutoCAD and other Autodesk apps through their T3Lab add-ins"/>
                     </StackPanel>
                     <Button Grid.Column="1" x:Name="refresh_btn" Content="Refresh"
                             Style="{StaticResource T3.Button.Ghost}"
@@ -2147,17 +2147,21 @@
                     </ScrollViewer>
                 </TabItem>
 
-                <!-- ════════ TAB 3: AUTOCAD ════════
-                     Registers the AutoCAD add-in's own bridge (t3lab-autocad,
-                     installed by t3lab_CADmcp/scripts/install.ps1) in the same AI apps. -->
+                <!-- ════════ TAB 3: AUTODESK APPS ════════
+                     Registers the picked Autodesk app's add-in bridge (AutoCAD:
+                     t3lab-autocad, from t3lab_CADmcp) in the same AI apps. -->
                 <TabItem>
                     <ScrollViewer VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   Padding="16,16,12,16">
                         <StackPanel>
 
+                            <TextBlock Text="AUTODESK APP" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                            <ComboBox x:Name="cad_app_cb" Style="{StaticResource T3.ComboBox}" Margin="0,0,0,16"
+                                      ToolTip="The Autodesk app whose T3Lab add-in the AI apps should reach"/>
+
                             <!-- Add-in -->
-                            <TextBlock Text="AUTOCAD ADD-IN" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                            <TextBlock Text="ADD-IN" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
@@ -2167,10 +2171,10 @@
                                         VerticalAlignment="Top" Margin="0,4,8,0"
                                         Background="{StaticResource T3.Border}"/>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                    <TextBlock x:Name="cad_bridge_label" Text="Checking the AutoCAD add-in..."
+                                    <TextBlock x:Name="cad_bridge_label" Text="Checking the add-in..."
                                                Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap"/>
                                     <TextBlock x:Name="cad_bridge_hint"
-                                               Text="AI apps reach AutoCAD through the T3LabCAD add-in's bridge."
+                                               Text="AI apps reach the app through its T3Lab add-in's bridge."
                                                Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Grid>
@@ -2178,7 +2182,7 @@
                             <Separator Style="{StaticResource T3.Rule}" Margin="0,16"/>
 
                             <!-- AI apps -->
-                            <TextBlock Text="CONNECT YOUR AI APP TO AUTOCAD" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                            <TextBlock Text="CONNECT YOUR AI APP" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
                             <Border Style="{StaticResource T3.Panel}" Padding="0">
                                 <StackPanel>
                                     <!-- Claude Desktop -->
@@ -2293,7 +2297,7 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock x:Name="cad_copy_status_label" Grid.Column="0"
-                                           Text="The bridge finds AutoCAD by itself — no port needed."
+                                           Text="The bridge finds its app by itself — no port needed."
                                            Style="{StaticResource T3.Caption}" TextWrapping="Wrap"
                                            Margin="0,0,12,0"/>
                                 <Button Grid.Column="1" x:Name="cad_copy_btn" Content="Copy to Clipboard"

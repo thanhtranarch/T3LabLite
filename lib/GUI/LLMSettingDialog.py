@@ -1337,7 +1337,7 @@ class LLMSettingWindow(T3WPFWindow):
         """Fill display name + action-mode + reasoning toggles from settings."""
         try:
             from config.user_profile import UserProfile
-            self.username_box.Text = UserProfile().get_name() or u""
+            self.username_box.Text = UserProfile().get_name(fallback=False) or u""
         except Exception:
             pass
         try:

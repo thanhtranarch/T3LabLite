@@ -1531,7 +1531,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                 self._greeting_tpl = tpl
                 self._greeting_key = key
             self.welcome_greeting_text.Text = _greetings.fill(
-                tpl, name or u"Thạnh")
+                tpl, name or u"")
         except Exception:
             pass
 
@@ -1539,7 +1539,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         """Refresh the greeting from settings; fresh=True only on New chat / Reset."""
         try:
             from config.user_profile import UserProfile
-            name = UserProfile().get_name() or u"Thạnh"
+            name = UserProfile().get_name()
             self._render_greeting(name, fresh=fresh)
 
             if self._persisted_msgs:
@@ -6631,6 +6631,26 @@ class T3LabAssistantWindow(T3WPFWindow):
 # ── MAIN SCRIPT ──
 
 
+def _ask_name_once():
+    """First open with no name known (Lite): ask what to call the user, once.
+    Cancel = greet without a name; LLMs Setting > General can set it later."""
+    try:
+        from config import lite_user
+        if not lite_user.needs_name():
+            return
+        from GUI.T3Dialog import ask_for_string
+        name = ask_for_string(
+            u"What should T3Lab Assistant call you?\n"
+            u"Saved on this computer only; change it in LLMs Setting > General.",
+            title=u"T3Lab Assistant")
+        if name and lite_user.clean(name):
+            lite_user.set_name(name)
+        else:
+            lite_user.mark_asked()
+    except Exception as ex:
+        logger.debug(u"ask name: {}".format(_exc_text(ex)))
+
+
 def show_assistant_dialog():
     """Show T3Lab Assistant docked in Revit, like the Properties palette.
 
@@ -6657,6 +6677,8 @@ def show_assistant_dialog():
     def _step(name):
         if timer is not None:
             timer.step(name)
+
+    _ask_name_once()
 
     # API context: (re)create the ExternalEvents, else after a reload
     # re-imports Services/ every tool launch runs outside the API context.

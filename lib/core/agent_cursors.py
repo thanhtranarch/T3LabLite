@@ -76,7 +76,7 @@ OPTION_LABELS = {
     'reduce': ('Less motion', 'No glides, ripples or scans: boxes and captions only'),
     'glow': ('Glow', 'Experimental: outline touched elements inside the Revit view '
                      '(DirectContext3D). Turn off if Revit misbehaves.'),
-    'keep': ('Keep bar', 'Keep the bar and cursors on screen between calls instead of '
+    'keep': ('Keep bar', 'Keep the bar (folded) on screen between calls instead of '
                          'fading out (the x on the bar turns Agent Cursors off)'),
 }
 
@@ -101,8 +101,9 @@ _ALIASES = {
     'cursor-vscode': 'cursor',
 }
 # Client names that carry a suffix: first matching prefix wins. Never map a
-# name we have not seen from that app (2026-11-17: 'local-agent-mode-...' was
-# taken for Claude and is Antigravity's); MCP Control writes --agent instead.
+# name on a guess (2026-11-17: 'local-agent-mode-...' was mapped to Claude,
+# then to Antigravity, both unverified). The bridge names the app from
+# --agent or from the process that launched it (bridge.host_agent).
 _ALIAS_PREFIXES = (
     ('claude-code', 'claude-code'),
     ('claude', 'claude-desktop'), ('codex', 'codex'), ('chatgpt', 'chatgpt'),
@@ -316,7 +317,7 @@ def agent_style(agent):
     if key in AGENTS:
         return AGENTS[key]
     if not key:
-        return AGENTS['claude-desktop']
+        return AGENTS['mcp-client']
     total = 0
     for ch in key:
         total = (total * 31 + ord(ch)) % 1000003
@@ -1471,7 +1472,7 @@ def _real_elements(doc, ids):
 
 
 def _plan_of(agent):
-    return _session['plans'].get(agent_key(agent) or 'claude-desktop') or {}
+    return _session['plans'].get(agent_key(agent) or 'mcp-client') or {}
 
 
 def _param_value(elem, name):
@@ -1646,7 +1647,7 @@ def notify(app, task):
             'show', agent, action, tool, failed, snap, followed, args=args,
             n_targets=len(ids), changes=changes, clashes=clashes,
             touched=len(_session['touched']),
-            goal=_session['goals'].get(agent_key(agent) or 'claude-desktop', ''),
+            goal=_session['goals'].get(agent_key(agent) or 'mcp-client', ''),
             task_text=current_task(_plan_of(agent)), created=label, fresh=fresh)
     except Exception:
         pass
@@ -1680,7 +1681,7 @@ NARRATE_SCHEMA = {
 def narrate(agent, message=None, tasks=None, step=None, done=False):
     """t3lab_narrate: set the agent's goal and plan. Any thread; never raises.
     Returns the tool result."""
-    key = agent_key(agent) or 'claude-desktop'
+    key = agent_key(agent) or 'mcp-client'
     if message is not None:
         _session['goals'][key] = clean_goal(message)
     plan = dict(_session['plans'].get(key) or {})
@@ -1699,7 +1700,7 @@ def narrate(agent, message=None, tasks=None, step=None, done=False):
     goal = _session['goals'].get(key, '')
     try:
         if is_enabled() and _state.get('overlay') is not None:
-            _state['overlay'].call('narrate', agent or 'claude-desktop', goal, dict(plan))
+            _state['overlay'].call('narrate', agent or 'mcp-client', goal, dict(plan))
     except Exception:
         pass
     if not goal and not plan.get('tasks'):
@@ -1721,7 +1722,7 @@ def waiting(agent, tool, arguments=None, on=True):
     Any thread; never raises."""
     try:
         if is_enabled() and _state.get('overlay') is not None:
-            _state['overlay'].call('waiting', agent or 'claude-desktop', tool,
+            _state['overlay'].call('waiting', agent or 'mcp-client', tool,
                                    describe_call(tool, arguments), bool(on))
     except Exception:
         pass
@@ -1746,10 +1747,16 @@ def _ensure_select_event():
                 __namespace__ = 'T3Lab.AgentCursorsSelect'
 
                 def Execute(self, uiapp):
-                    try:
-                        _select(uiapp.ActiveUIDocument, touched_ids())
-                    except Exception:
-                        pass
+                    actions, _session['ui_actions'] = _session.get('ui_actions') or [], []
+                    for action in actions or ['select']:
+                        try:
+                            if action == 'idle':        # agents went quiet: Glow off
+                                from core import agent_cursors_glow
+                                agent_cursors_glow.stop(uiapp)
+                            else:
+                                _select(uiapp.ActiveUIDocument, touched_ids())
+                        except Exception:
+                            pass
 
                 def GetName(self):
                     return 'T3Lab Agent Cursors - select touched'
@@ -1760,16 +1767,28 @@ def _ensure_select_event():
     return _session['select_event']
 
 
-def select_touched():
-    """HUD button: select every element the agents changed. Any thread."""
+def _raise_ui(action):
+    """Run `action` ('select' | 'idle') on Revit's main thread. Any thread."""
     event = _session.get('select_event')
     if event is not None:
         try:
+            _session.setdefault('ui_actions', []).append(action)
             event.Raise()
             return True
         except Exception:
             pass
     return False
+
+
+def select_touched():
+    """HUD button: select every element the agents changed. Any thread."""
+    return _raise_ui('select')
+
+
+def agents_idle():
+    """Overlay: the agents went quiet. Glow is taken off the model (it came
+    back on the next call); owner, 2026-11-17: it stayed after the agent stopped."""
+    return _raise_ui('idle')
 
 
 def hide():
@@ -1808,7 +1827,7 @@ def ask(app, agent, tool, arguments, main, content, expanded='', always_text='',
         _ask_seq[0] += 1
         rid = 'ask{}'.format(_ask_seq[0])
         _asks[rid] = on_answer
-        ov.call('ask', rid, agent or 'claude-desktop', tool,
+        ov.call('ask', rid, agent or 'mcp-client', tool,
                 describe_call(tool, arguments), '{}'.format(main or ''),
                 '{}'.format(content or ''), '{}'.format(expanded or ''),
                 '{}'.format(always_text or ''), geos[active]['rect'])
@@ -1917,6 +1936,7 @@ def _overlay(hwnd):
     if ov is None or not ov.alive:
         from core.agent_cursors_overlay import OverlayHost
         ov = OverlayHost(hwnd, {'select_touched': select_touched, 'answer': answer,
+                                'idle': agents_idle,
                                 'pause': set_paused})
         _state['overlay'] = ov
         _state['theme'] = None

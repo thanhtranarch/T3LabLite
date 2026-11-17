@@ -75,9 +75,15 @@ def _json(path):
 def test_needs_bridge():
     print('[autocad: refuses when the add-in bridge is missing]')
     with Env() as env:
-        ok, msg = M.MCPService.configure_client('claude', server='autocad')
+        real_install = M.MCPService.install_addin       # no download in this test
+        M.MCPService.install_addin = staticmethod(
+            lambda app='autocad': (False, 'AutoCAD add-in not installed: offline'))
+        try:
+            ok, msg = M.MCPService.configure_client('claude', server='autocad')
+        finally:
+            M.MCPService.install_addin = real_install
         check('refused', not ok)
-        check('says install.ps1', 'install.ps1' in msg, msg)
+        check('says the add-in is not installed', 'add-in not installed' in msg, msg)
         check('no file written', not os.path.exists(env.paths['claude']))
         check('bridge status not installed',
               M.MCPService.cad_bridge_status()['installed'] is False)
@@ -174,35 +180,30 @@ def test_snippets_and_revit_default():
 
 
 def test_other_autodesk_apps():
-    print('[other Autodesk apps: listed, refused until their add-in, same entry shape]')
+    print('[other Autodesk apps: only AutoCAD and Civil 3D, one add-in, one server entry]')
     apps = M.MCPService.autodesk_apps()
     keys = [a[0] for a in apps]
-    check('AutoCAD first, then the other apps',
-          keys[0] == 'autocad' and {'civil3d', 'navisworks', '3dsmax', 'inventor'} <= set(keys), keys)
-    names = [a[2] for a in apps]
-    check('server names unique and t3lab-*', len(set(names)) == len(names)
-          and all(n.startswith('t3lab-') for n in names), names)
-    check('Revit is not in the app list', 't3lab-revit' not in names)
+    check('only apps Connect installs in one click', keys == ['autocad', 'civil3d'], keys)
+    check('Civil 3D shares AutoCAD\'s server',
+          dict((a[0], a[2]) for a in apps)['civil3d'] == 't3lab-autocad', apps)
+    for dropped in ('navisworks', '3dsmax', 'inventor'):
+        try:
+            M.MCPService.config_snippet(server=dropped)
+            check('dropped app raises: ' + dropped, False)
+        except KeyError:
+            check('dropped app raises: ' + dropped, True)
     with Env() as env:
-        ok, msg = M.MCPService.configure_client('claude', server='navisworks')
-        check('refused without its add-in', not ok and 'Navisworks add-in not installed' in msg, msg)
-        st = M.MCPService.app_bridge_status('navisworks')
-        check('status names the app and server',
-              not st['installed'] and st['label'] == 'Navisworks'
-              and st['server'] == 't3lab-navisworks', st)
-        path = os.path.join(env.dir, 'T3LabNavisworks', 'bridge.py')
-        os.makedirs(os.path.dirname(path))
-        open(path, 'w').close()
-        env.app_bridges['navisworks'] = path
-        ok, msg = M.MCPService.configure_client('antigravity', server='navisworks')
-        entry = _json(env.paths['antigravity'])['mcpServers'].get('t3lab-navisworks', {})
-        check('written once installed', ok, msg)
-        check('same stdio entry as AutoCAD (-I bridge, no port)',
-              entry.get('args') == ['-I', path.replace('\\', '/')], entry)
+        env.install_bridge()
+        env.app_bridges['civil3d'] = env.bridge
+        ok, msg = M.MCPService.configure_client('antigravity', server='civil3d')
+        entry = _json(env.paths['antigravity'])['mcpServers'].get('t3lab-autocad', {})
+        check('Civil 3D writes the AutoCAD entry', ok, msg)
+        check('stdio entry (-I bridge, no port)',
+              entry.get('args') == ['-I', env.bridge.replace('\\', '/')], entry)
         check('status configured', M.MCPService.client_status(
-            'antigravity', server='navisworks').get('configured'))
-        snip = M.MCPService.config_snippet(fmt='claude_code', server='inventor')
-        check('snippet per app', 't3lab-inventor' in snip and '-I' in snip, snip)
+            'antigravity', server='civil3d').get('configured'))
+        snip = M.MCPService.config_snippet(fmt='claude_code', server='civil3d')
+        check('snippet per app', 't3lab-autocad' in snip and '-I' in snip, snip)
     check('cad_bridge_status kept for older callers',
           M.MCPService.cad_bridge_status()['server'] == 't3lab-autocad')
 

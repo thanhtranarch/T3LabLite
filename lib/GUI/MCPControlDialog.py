@@ -332,6 +332,7 @@ class MCPControlWindow(T3WPFWindow):
         self._app = 'revit'
         self._apps = [('revit', 'Revit', 't3lab-revit')]
         self._addin_installed = True
+        self._addin_installable = False
         self._app_cb             = self.FindName('app_cb')
         self._revit_server_panel = self.FindName('revit_server_panel')
         self._addin_panel        = self.FindName('addin_panel')
@@ -539,9 +540,10 @@ class MCPControlWindow(T3WPFWindow):
                 widgets, status, 'T3Lab' if revit else server_name,
                 'Rewrite the T3Lab entry — use after changing the port' if revit
                 else 'Rewrite the {} entry'.format(server_name),
-                enabled=revit or self._addin_installed)
+                enabled=revit or self._addin_installed or self._addin_installable)
         if self._configure_all_btn is not None:
-            self._configure_all_btn.IsEnabled = revit or self._addin_installed
+            self._configure_all_btn.IsEnabled = (revit or self._addin_installed
+                                                 or self._addin_installable)
 
     def _apply_client_row(self, widgets, status, entry, update_tip, enabled=True):
         """Dot, words and button of one AI app row from a client_status() dict."""
@@ -685,6 +687,7 @@ class MCPControlWindow(T3WPFWindow):
         app_label, server_name = self._app_spec()
         ok, msg = MCPService.configure_client(key, port=self._current_port(),
                                               server=self._app)
+        self._refresh_addin()
         if ok:
             logger.info('{} configured for {}: {}'.format(key, app_label, msg))
         else:
@@ -703,6 +706,7 @@ class MCPControlWindow(T3WPFWindow):
         app_label, server_name = self._app_spec()
         results = MCPService.configure_all_clients(port=self._current_port(),
                                                    server=self._app)
+        self._refresh_addin()
         done   = [r['label'] for r in results if r['ok']]
         failed = [r for r in results if not r['ok']]
         for r in failed:
@@ -814,22 +818,32 @@ class MCPControlWindow(T3WPFWindow):
         """Step 1 of an Autodesk app: is its add-in bridge on this machine?"""
         if self._app == 'revit':
             self._addin_installed = True
+            self._addin_installable = False
             return
         if not HAS_SERVICE:
+            self._addin_installable = False
             self._addin_installed = False
             return
         app_label, _server = self._app_spec()
         bridge = MCPService.app_bridge_status(self._app)
         self._addin_installed = bool(bridge.get('installed'))
+        self._addin_installable = bool(bridge.get('installable'))
+        years = bridge.get('years') or []
+        found = ('Found on this PC: {} {}.'.format(app_label, ', '.join(str(y) for y in years))
+                 if years else 'No {} 2022 or newer found on this PC.'.format(app_label))
         if self._addin_installed:
             self._set_dot(self._addin_dot, 'T3.Success.Accent')
-            label = '{} add-in bridge installed'.format(app_label)
-            hint = bridge.get('path') or ''
+            label = '{} add-in installed'.format(app_label)
+            hint = '{} {}'.format(found, bridge.get('path') or '')
+        elif self._addin_installable:
+            self._set_dot(self._addin_dot, 'T3.Warning.Accent')
+            label = '{} add-in not installed yet'.format(app_label)
+            hint = '{} Connect below downloads and installs it ({}).'.format(
+                found, bridge.get('hint') or '')
         else:
             self._set_dot(self._addin_dot, 'T3.Warning.Accent')
-            label = '{} add-in not installed'.format(app_label)
-            hint = '{} — then click Refresh. Expected: {}'.format(
-                (bridge.get('hint') or '').capitalize(), bridge.get('path') or '')
+            label = 'No T3Lab add-in for {} yet'.format(app_label)
+            hint = '{} Only AutoCAD and Civil 3D are supported; Connect stays off.'.format(found)
         if self._addin_label:
             self._addin_label.Text = label
         if self._addin_hint:

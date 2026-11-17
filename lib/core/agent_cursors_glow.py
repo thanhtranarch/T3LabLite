@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Agent cursors "Glow" (experimental, off by default): outline the elements
+"""Agent cursors "Glow" (experimental, on by default): outline the elements
 the agents touched inside Revit's own 3D views, drawn by Revit through a
 DirectContext3D server. The overlay only floats above the view; this sits in
 the model and follows orbit / zoom.
@@ -180,15 +180,19 @@ def stop(app=None):
 
 
 def update(app, ids):
-    """Outline `ids` of the active document (main thread). Never raises."""
+    """Outline `ids` of the active document (main thread). Never raises:
+    False when Revit refused the server (agent_cursors turns Glow off)."""
     try:
         from Snippets._compat import make_eid
         uidoc = app.ActiveUIDocument
         doc = uidoc.Document
         boxes = []
         for i in ids[:MAX_BOXES]:
-            elem = doc.GetElement(make_eid(i))
-            bb = elem.get_BoundingBox(None) if elem is not None else None
+            try:            # one odd element must not switch Glow off
+                elem = doc.GetElement(make_eid(i))
+                bb = elem.get_BoundingBox(None) if elem is not None else None
+            except Exception:
+                bb = None
             if bb is not None:
                 boxes.append(((bb.Min.X, bb.Min.Y, bb.Min.Z), (bb.Max.X, bb.Max.Y, bb.Max.Z)))
         _state['boxes'] = boxes
@@ -196,8 +200,9 @@ def update(app, ids):
         if boxes:
             _register()
         _refresh(app)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _refresh(app):

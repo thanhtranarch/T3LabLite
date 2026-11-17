@@ -40,10 +40,12 @@ class T3Dialog(_WPFWindow):
 
     def __init__(self, message, title="Notification", details=None,
                  mode="info", ok_text="OK", cancel_text="Cancel", danger=False, owner=None,
-                 default_text=u""):
+                 default_text=u"", options=None):
         _WPFWindow.__init__(self, _XAML)
         self.result = False
         self.value = None
+        self.option_values = {}
+        self._option_boxes = []
         self._mode = mode
         self._danger = danger
 
@@ -77,6 +79,9 @@ class T3Dialog(_WPFWindow):
                 self.txt_input.SelectAll()
             except Exception:
                 pass
+
+        if options:
+            self._add_options(options)
 
         # Wire Events
         if hasattr(self, 'btn_ok') and self.btn_ok:
@@ -133,10 +138,37 @@ class T3Dialog(_WPFWindow):
             if bg_brush:
                 self.icon_bg.Background = bg_brush
 
+    def _add_options(self, options):
+        """One T3.CheckBox per (key, label, tooltip, checked) in pnl_options."""
+        panel = getattr(self, 'pnl_options', None)
+        if panel is None:
+            return
+        from System.Windows import Thickness
+        from System.Windows.Controls import CheckBox
+        try:
+            style = self.FindResource('T3.CheckBox')
+        except Exception:
+            style = None
+        for key, label, tip, checked in options:
+            box = CheckBox()
+            if style is not None:
+                box.Style = style
+            box.Content = label
+            box.ToolTip = tip
+            box.IsChecked = bool(checked)
+            box.Margin = Thickness(0, 0, 16, 8)
+            panel.Children.Add(box)
+            self._option_boxes.append((key, box))
+        panel.Visibility = _Visibility.Visible
+        # Room for the checkboxes; the details still scroll below them.
+        self.Width = max(self.Width, 520)
+        self.Height = max(self.Height, 440)
+
     def _on_ok(self, sender, e):
         self.result = True
         if getattr(self, 'txt_input', None) is not None:
             self.value = self.txt_input.Text
+        self.option_values = dict((k, bool(b.IsChecked)) for k, b in self._option_boxes)
         self.Close()
 
     def _on_cancel(self, sender, e):
@@ -217,6 +249,26 @@ def confirm(message, title="Confirm Action", ok_text="Proceed", cancel_text="Can
                                  cancel_text=cancel_text, danger=danger,
                                  owner=owner),
                 message, title, details, buttons=2)
+
+
+def confirm_options(message, options, title="Confirm Action", ok_text="OK",
+                    cancel_text="Cancel", details=None, owner=None):
+    """Confirm with checkboxes. `options` = [(key, label, tooltip, checked)].
+    Returns {key: bool} on OK, None on Cancel. Without the WPF dialog it
+    falls back to a Yes/No TaskDialog and returns the given defaults."""
+    try:
+        dlg = T3Dialog(message, title=title, details=details, mode=T3Dialog.MODE_CONFIRM,
+                       ok_text=ok_text, cancel_text=cancel_text, owner=owner, options=options)
+        dlg.ShowDialog()
+        return dlg.option_values if dlg.result else None
+    except Exception as exc:
+        try:
+            note = (details + "\n\n" if details else "") + "(T3 dialog unavailable: %s)" % exc
+            if _task_dialog(message, title, note, buttons=2):
+                return dict((o[0], bool(o[3])) for o in options)
+        except Exception:
+            pass
+        return None
 
 
 def ask_for_string(message, default=u"", title="Input", owner=None):

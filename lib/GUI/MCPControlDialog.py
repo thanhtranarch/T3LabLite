@@ -696,7 +696,7 @@ class MCPControlWindow(T3WPFWindow):
             self._configure_all_label.Text = (
                 '{0} connected to {1} — restart {0} so it loads {2}.'.format(
                     label, app_label, server_name) if ok
-                else '{} failed: {}'.format(label, msg))
+                else '{} failed: {}'.format(label, msg)) + self._addin_note()
         self._refresh_clients()
         self._refresh_footer()
 
@@ -721,8 +721,16 @@ class MCPControlWindow(T3WPFWindow):
                     'Connected {} of {} — failed: {}'.format(
                         len(done), len(results),
                         ', '.join('{} ({})'.format(r['label'], r['message']) for r in failed)))
+            self._configure_all_label.Text += self._addin_note()
         self._refresh_clients()
         self._refresh_footer()
+
+    def _addin_note(self):
+        """' <what Connect installed or updated>' for the status line, or ''."""
+        if self._app == 'revit':
+            return ''
+        note = getattr(MCPService, 'last_addin_note', '') or ''
+        return ' ' + note if note else ''
 
     # ── Manual config snippet ──────────────────────────────────────────────────
 

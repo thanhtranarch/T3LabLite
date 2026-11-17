@@ -19,6 +19,7 @@ from __future__ import unicode_literals
 import os
 import re
 import sys
+import time
 
 # ─── Path helper ───────────────────────────────────────────────────────────────
 def _ensure_lib_in_path():
@@ -427,6 +428,10 @@ CAD_SERVER_NAME = 't3lab-autocad'
 SERVERS = dict([('revit', MCP_SERVER_NAME)] + [(a[0], a[2]) for a in AUTODESK_APPS])
 _APP_BY_KEY = dict((a[0], a) for a in AUTODESK_APPS)
 _BRIDGE_SERVERS = frozenset(a[2] for a in AUTODESK_APPS)
+# Connect also pulls the latest add-in release when one is installed, at most
+# once per package per _ADDIN_REFRESH_S (Connect All writes three clients).
+_ADDIN_REFRESH_S = 600
+_addin_refreshed = {}
 
 
 def _server_name(server):
@@ -1400,7 +1405,31 @@ class MCPService(object):
             return False, '{} add-in not installed: {}'.format(spec[1], ex)
         except Exception as ex:
             return False, '{} add-in install failed: {}'.format(spec[1], ex)
+        _addin_refreshed[spec[3]] = (time.time(), result)
         return True, addin_installer.summary(result)
+
+    # Set by configure_client when Connect updated the add-in; MCP Control shows it.
+    last_addin_note = ''
+
+    @staticmethod
+    def update_addin(app='autocad'):
+        """
+        Bring an installed add-in up to its latest release (Connect). Never
+        fatal: the installed copy keeps working offline.
+
+        Returns:
+            str: what changed ('' when nothing did, or the check was skipped).
+        """
+        spec = _APP_BY_KEY[app]
+        last = _addin_refreshed.get(spec[3])
+        if last and time.time() - last[0] < _ADDIN_REFRESH_S:
+            return ''
+        ok, msg = MCPService.install_addin(app)
+        if not ok:
+            _addin_refreshed[spec[3]] = (time.time(), None)
+            return ''
+        result = _addin_refreshed[spec[3]][1]
+        return msg if (result.get('written') or result.get('locked')) else ''
 
     @staticmethod
     def cad_bridge_status():
@@ -1468,10 +1497,14 @@ class MCPService(object):
                 port = 0
                 app = _APP_BY_KEY[server]
                 bridge = _app_bridge_path(server)
+                MCPService.last_addin_note = ''
                 if not os.path.isfile(bridge):
                     ok, msg = MCPService.install_addin(server)
                     if not ok:
                         return False, msg
+                    MCPService.last_addin_note = msg
+                else:
+                    MCPService.last_addin_note = MCPService.update_addin(server)
                 if not os.path.isfile(bridge):
                     return False, ('{} add-in not installed ({} is missing) — {}'.format(
                         app[1], bridge, app[4]))

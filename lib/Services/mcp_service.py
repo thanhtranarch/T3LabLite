@@ -1206,9 +1206,9 @@ class MCPService(object):
         The Claude Desktop config points at the deployed copy, never inside
         the extension folder — anyone can download the extension anywhere on
         their machine, and updating/moving/re-cloning it never breaks the MCP
-        connection. Content-compared before writing, so it is safe (and
-        cheap) to call on every Revit startup; extension updates propagate
-        to the deployed copy automatically.
+        connection. Content-compared before writing. Called from Connect
+        only: it always takes ownership, so startup.py refreshes through
+        bridge_deploy.refresh() instead (T3Lab and Lite share the folder).
 
         hub_store.py (t3lab_hub) goes with it, and this extension becomes the
         bridge's owner, so startup.py keeps it current (lib/bridge_deploy.py).

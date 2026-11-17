@@ -295,11 +295,14 @@ def test_agent_style():
 def test_agent_names():
     print('[agent names: raw MCP client ids read as names]')
     st = AC.agent_style
-    check('Claude Desktop local agent mode -> Claude',
-          st('local-agent-mode-t3lab')[0] == 'Claude' and st('local-agent-mode')[0] == 'Claude'
-          and AC.agent_key('Local-Agent-Mode-T3Lab_Lite') == 'claude-desktop')
+    check('an unseen client id is never guessed as Claude (2026-11-17: Antigravity)',
+          st('local-agent-mode-t3lab')[0] != 'Claude'
+          and AC.agent_key('Local-Agent-Mode-T3Lab_Lite') != 'claude-desktop')
+    check('Connect names the apps', st('antigravity')[0] == 'Antigravity'
+          and st('codex')[0] == 'GPT' and st('claude-desktop')[0] == 'Claude')
+    check('no name at all reads "AI app"', st('mcp-client')[0] == 'AI app')
     check('suffixed known clients', st('claude-code-cli')[0] == 'Claude Code'
-          and st('gemini-cli')[0] == 'Gemini' and st('codex_vscode')[0] == 'GPT'
+          and st('gemini-cli')[0] == 'Antigravity' and st('codex_vscode')[0] == 'GPT'
           and st('cursor-agent')[0] == 'Cursor')
     check('a prefix needs a separator', AC.agent_key('cursorless') == 'cursorless'
           and AC.agent_key('claudette') == 'claudette')
@@ -540,6 +543,9 @@ def test_agent_stamp():
     bsrc = open(os.path.join(LIB, 'core', 'bridge.py'), encoding='utf-8').read()
     check('bridge forwards the stamped call',
           '_forward(_stamp_agent(request, current), current, token)' in bsrc)
+    check('--agent from Connect wins over the self-declared clientInfo',
+          "arg.startswith('--agent=')" in bsrc and "current['agent_explicit'] = True" in bsrc
+          and "if current.get('agent_explicit'):" in bsrc)
 
 
 def test_settings_dialog():

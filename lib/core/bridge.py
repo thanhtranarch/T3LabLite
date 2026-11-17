@@ -710,6 +710,8 @@ AGENT_META = 't3lab/agent'
 
 
 def _remember_client(request, current):
+    if current.get('agent_explicit'):
+        return              # --agent from MCP Control's Connect wins
     info = (request.get('params') or {}).get('clientInfo')
     name = info.get('name') if isinstance(info, dict) else None
     if name:
@@ -1171,6 +1173,15 @@ def main():
             pass
 
     current = {'port': port}
+    # --agent=<id> (written by MCP Control > Connect) or T3LAB_AGENT names the
+    # AI app; clientInfo is self-declared and Antigravity's is not its name.
+    agent = os.environ.get('T3LAB_AGENT', '')
+    for arg in sys.argv[1:]:
+        if arg.startswith('--agent='):
+            agent = arg.split('=', 1)[1]
+    if agent.strip():
+        current['client'] = agent.strip()[:40]
+        current['agent_explicit'] = True
     token = _read_token()
 
     # Clients send UTF-8. Launched with -I / -E, Windows Python decodes a

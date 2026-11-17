@@ -27,6 +27,7 @@ os.environ['APPDATA'] = _TMP
 
 import core.agent_cursors as AC   # noqa: E402
 
+BUTTON = 'T3Lab.tab/Support.panel/Settings.pulldown/AgentCursors.pushbutton/script.py'
 FAILURES = []
 
 
@@ -419,6 +420,23 @@ def test_agent_stamp():
           '_forward(_stamp_agent(request, current), current, token)' in bsrc)
 
 
+def test_settings_dialog():
+    print('[settings dialog: every option is a checkbox]')
+    import re as _re
+    btn = open(os.path.join(REPO, *BUTTON.split('/')), encoding='utf-8').read()
+    check('Agent Cursors uses confirm_options', 'confirm_options(' in btn and 'confirm(' not in btn.replace('confirm_options(', ''))
+    check('rows come from OPTIONS (new options appear by themselves)',
+          'for name, _key, _default in agent_cursors.OPTIONS' in btn and 'set_option(name, value)' in btn)
+    check('on: an untickable on/off switch', "('enabled', 'Show agent cursors'" in btn)
+    dsrc = open(os.path.join(LIB, 'GUI', 'T3Dialog.py'), encoding='utf-8').read()
+    check('T3Dialog builds T3.CheckBox rows', "FindResource('T3.CheckBox')" in dsrc
+          and 'def confirm_options(' in dsrc and 'option_values' in dsrc)
+    xaml = open(os.path.join(LIB, 'GUI', 'Tools', 'T3Dialog.xaml'), encoding='utf-8').read()
+    rows = _re.findall(r'Grid\.Row="(\d)"', xaml.split('txt_message', 1)[1].split('ROW 2: FOOTER', 1)[0])
+    check('message row 0, pnl_options row 1, details row 2, input row 3',
+          'x:Name="pnl_options" Grid.Row="1"' in xaml and rows[:4] == ['0', '1', '2', '3'], rows)
+
+
 if __name__ == '__main__':
     try:
         test_extract_ids()
@@ -434,6 +452,7 @@ if __name__ == '__main__':
         test_setting()
         test_server_hook()
         test_agent_stamp()
+        test_settings_dialog()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

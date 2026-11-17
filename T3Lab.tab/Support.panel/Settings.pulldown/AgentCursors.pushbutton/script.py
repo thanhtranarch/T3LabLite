@@ -24,25 +24,40 @@ except Exception:
     pass
 
 from core import agent_cursors
-from GUI.T3Dialog import confirm, show_info, show_error
+from GUI.T3Dialog import confirm_options, show_info, show_error
+
+
+def _option_rows(on):
+    """Checkboxes for the dialog: the on/off switch (when on) + every bar option."""
+    current = agent_cursors.options()
+    rows = []
+    if on:
+        rows.append(('enabled', 'Show agent cursors', 'Untick to turn the cursors off', True))
+    for name, _key, _default in agent_cursors.OPTIONS:
+        label, tip = agent_cursors.OPTION_LABELS[name][:2]
+        rows.append((name, label, tip, current.get(name, True)))
+    return rows
 
 
 def main():
     on = agent_cursors.is_enabled()
     if on:
-        message = 'Agent cursors are ON. Turn them off?'
-        ok_text = 'Turn Off'
+        message = 'Agent cursors are on. Pick the options, or untick "Show agent cursors" to turn them off.'
+        ok_text = 'Save'
     else:
         message = ('Show a live cursor for each AI agent (Claude, GPT, Gemini…) '
                    'working in Revit through MCP?')
         ok_text = 'Turn On'
-    details = 'Options: {}\n\n{}'.format(agent_cursors.options_text(),
-                                         agent_cursors.pros_cons_text())
-    if not confirm(message, title='Agent Cursors', ok_text=ok_text,
-                            cancel_text='Cancel', details=details):
+    values = confirm_options(message, _option_rows(on), title='Agent Cursors', ok_text=ok_text,
+                             cancel_text='Cancel', details=agent_cursors.pros_cons_text())
+    if values is None:
         return
+    enable = values.pop('enabled', True)
     try:
-        agent_cursors.set_enabled(not on)
+        for name, value in values.items():
+            agent_cursors.set_option(name, value)
+        if enable != on:
+            agent_cursors.set_enabled(enable)
     except Exception as ex:
         show_error(
             'Could not save the Agent Cursors setting.',
@@ -50,18 +65,17 @@ def main():
             details='{}\nCheck that %APPDATA%\\T3LabAI\\mcp_paths.json is writable, '
                     'then try again.'.format(ex))
         return
-    if on:
+    if not enable:
         show_info('Agent cursors are off.', title='Agent Cursors')
-    else:
+    elif not on:
         show_info(
             'Agent cursors are on.', title='Agent Cursors',
             details='They appear on the next MCP tool call: one cursor per agent and '
                     'action, a plain caption of what it does and its goal, the elements '
                     'it visits and the values it changes. Long calls say "Working"; a '
                     'call waiting for your OK pulses amber. When the agents go idle the '
-                    'bar shows a summary with Select touched and Replay. The bar switches '
-                    'Follow, Zoom, Select, Tile, Less motion, Glow (experimental) and '
-                    'Speed; its X turns the cursors off again.\n\n'
+                    'bar shows a summary with Select touched and Replay. The same options, '
+                    'plus Speed, switch on the bar; its X turns the cursors off again.\n\n'
                     'Options: {}'.format(agent_cursors.options_text()))
 
 

@@ -115,6 +115,10 @@ def test_captions_and_tour():
         (('move_elements', {}, 3, False), 'Moving elements · 3 elements'),
         (('operate_element', {'operation': 'hide'}, 5, False), 'Hiding elements · 5 elements'),
         (('send_code_to_revit', {}, 0, False), 'Running code in Revit'),
+        (('send_code_to_revit', {'description': ' Number the  stair risers ', 'code': 'x'}, 0, False),
+         'Number the stair risers'),
+        (('send_code_to_revit', {'code': '# check door marks\nresult = 1'}, 0, False),
+         'Check door marks'),
         (('delete_element', {}, 2, True), 'Failed: Deleting element · 2 elements'),
         (('famigen_create_family', None, 0, False), 'Creating family'),
         (('frobnicate_walls', None, 0, False), 'Frobnicating walls'),
@@ -125,6 +129,20 @@ def test_captions_and_tour():
     long = AC.describe_call('get_' + '_'.join(['parameter'] * 12))
     check('long caption cut with an ellipsis', len(long) <= 46 and long.endswith('…'), long)
     check('empty tool -> Working', AC.describe_call('') == 'Working')
+    code_cases = (
+        ('# -*- coding: utf-8 -*-\n# Renumber the treads\nx = 1', 'Renumber the treads'),
+        ('"""List rooms without area."""\nresult = 1', 'List rooms without area'),
+        ('from Autodesk.Revit.DB import *\nt = Transaction(doc, "Renumber risers")\nt.Start()',
+         'Renumber risers'),
+        ('c = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_StairsRailing)\n'
+         'for r in c: r.LookupParameter("Mark").Set("R")', 'Editing stairs railing'),
+        ('els = FilteredElementCollector(doc).OfClass(Level)\nresult = [e.Name for e in els]',
+         'Reading levels'),
+        ('result = 1 + 1', ''),
+    )
+    for code, want in code_cases:
+        got = AC.summarize_code(code)
+        check('code summary ' + (want or 'none'), got == want, got)
     check('badge with category', AC.badge_text('Walls', '1200 × 300') == 'Walls · 1200 × 300')
     check('badge without category', AC.badge_text('', '10 × 10') == '10 × 10')
     sched = AC.tour_schedule([(0, 0), (10, 5), (20, 20)], 300, 200)
@@ -189,10 +207,28 @@ def test_perspective():
 def test_narrate_and_glow():
     print('[narrate / glow helpers]')
     check('narrate schema', AC.NARRATE_SCHEMA['name'] == AC.NARRATE_TOOL == 't3lab_narrate'
-          and AC.NARRATE_SCHEMA['inputSchema']['required'] == ['message'])
+          and AC.NARRATE_SCHEMA['inputSchema']['required'] == []
+          and set(AC.NARRATE_SCHEMA['inputSchema']['properties']) == {'message', 'tasks', 'step', 'done'})
     res = AC.narrate('claude-ai', '  Renumber doors on Level 2 ')
     check('narrate stores the goal', res['success'] and res['goal'] == 'Renumber doors on Level 2'
           and AC._session['goals'].get('claude-desktop') == res['goal'], res)
+    res = AC.narrate('codex', 'Renumber stairs', ['Read the stairs', '  Number   risers ',
+                                                  'x' * 80, ''], None)
+    check('plan stored, step 1', res['tasks'][:2] == ['Read the stairs', 'Number risers']
+          and len(res['tasks']) == 3 and len(res['tasks'][2]) == AC.TASK_MAX
+          and res['current'] == 'Step 1/3 · Read the stairs', res)
+    res = AC.narrate('codex', step=2)
+    check('step advances, goal kept', res['goal'] == 'Renumber stairs'
+          and res['current'] == 'Step 2/3 · Number risers', res)
+    check('plan rows', [r[0] for r in AC.plan_rows(AC._plan_of('codex'))] ==
+          ['done', 'current', 'todo'])
+    res = AC.narrate('codex', done=True)
+    check('done: every row done, no current task', res['current'] == 'all done'
+          and AC.current_task(AC._plan_of('codex')) == ''
+          and [r[0] for r in AC.plan_rows(AC._plan_of('codex'))] == ['done'] * 3, res)
+    check('plans are per agent', AC.current_task(AC._plan_of('claude-ai')) == '')
+    check('nothing to show is an error', AC.narrate('cursor')['error_code'] == 'bad_arguments')
+    check('too many tasks capped', len(AC.clean_tasks(['t'] * 20)) == AC.PLAN_MAX)
     AC.waiting('claude-ai', 'delete_element', {'element_ids': [1]}, True)   # no overlay: quiet
     check('waiting never raises without an overlay', True)
     import core.agent_cursors_glow as G
@@ -262,9 +298,16 @@ def test_setting():
     AC.set_enabled(False)
     check('off again', AC.is_enabled() is False)
     opts = AC.options()
-    check('options default: follow + zoom on, select / tile / less motion / glow off',
+    check('options default: follow + zoom + keep bar on, select / tile / less motion / glow off',
           opts == {'follow': True, 'zoom': True, 'select': False, 'tile': False,
-                   'reduce': False, 'glow': False}, opts)
+                   'reduce': False, 'glow': False, 'keep': True}, opts)
+    src = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
+    tick = src.split('    def _on_tick(self, sender, e):', 1)[1].split('    def ', 1)[0]
+    check('keep bar: never auto-hidden after the summary',
+          'now - self._summary >= SUMMARY_S and not self._keep()' in tick)
+    summary = src.split('    def _enter_summary(self, keep=False):', 1)[1].split('    def ', 1)[0]
+    check('keep bar: idle only dims the cursors, windows stay',
+          'if not keep:' in summary and summary.index('if not keep:') < summary.index('self.win.Hide()'))
     check('speed normal by default', AC.speed() == 'normal' and AC.speed_factor() == 1.0)
     AC.set_speed('calm')
     check('speed saved', AC.speed() == 'calm' and AC.speed_factor() > 1.0)
@@ -325,6 +368,8 @@ def test_server_hook():
     if 'def _external_policy_check(' in src:            # Lite server
         check('t3lab_narrate answered before the ExternalEvent queue',
               0 < src.find('if tool_name == agent_cursors.NARRATE_TOOL:') < src.find('task = _ToolTask(tool_name, arguments'))
+        check('narrate gets the plan arguments',
+              "args.get('tasks')" in src and "bool(args.get('done'))" in src)
         check('waiting() around the confirm dialog',
               src.find('agent_cursors.waiting(task.agent, task.tool_name, task.arguments, True)')
               < src.find('refusal = _ask_user_to_confirm(task)')

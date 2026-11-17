@@ -65,7 +65,7 @@ The first time it opens it asks what to call you (once), or keeps the name you s
 
 #### Settings (pulldown)
 - **MCP Control** — connect AI apps to Revit and other Autodesk apps. Two tabs:
-  - **Connect** — pick the app at the top: **Revit**, or **AutoCAD**, **Civil 3D**, **Navisworks**, **3ds Max**, **Inventor**. For Revit, step 1 starts and stops the local MCP server; for another app, it shows whether that app's T3Lab add-in (its MCP bridge) is installed. Step 2 connects Claude Desktop / ChatGPT (Codex) / Antigravity to the picked app in one click; **Manual config** at the bottom gives the JSON, TOML or `claude mcp add` entry for any other AI app. The last app you picked is remembered. See [MCP for other Autodesk apps](#mcp-for-other-autodesk-apps).
+  - **Connect** — pick the app at the top: **Revit**, or **AutoCAD**, **Civil 3D**, **Navisworks**, **3ds Max**. For Revit, step 1 starts and stops the local MCP server; for another app, it shows whether that app's T3Lab add-in (its MCP bridge) is installed. Step 2 connects Claude Desktop / ChatGPT (Codex) / Antigravity to the picked app in one click; **Manual config** at the bottom gives the JSON, TOML or `claude mcp add` entry for any other AI app. The last app you picked is remembered. See [MCP for other Autodesk apps](#mcp-for-other-autodesk-apps).
   - **Advanced** — auto-start, port (48884–48894), what AI apps may do (read-only mode, confirmations, code execution, toolset — see [MCP security](#mcp-security)), the file task watcher and teaching capture.
 - **Agent Cursors** — see what AI apps do in Revit while they work (off by default). See [Agent Cursors](#agent-cursors).
 - **LLMs Setting** — the settings hub shared by every AI-powered T3Lab tool: provider (Claude, OpenAI, Gemini, DeepSeek, any OpenAI-compatible server — OpenRouter, Azure OpenAI, vLLM/LiteLLM, Groq, Mistral, xAI —, Ollama, LM Studio), API key or server URL, live connection status per provider and a test message; plus your display name, "ask before model edits", auto model, deep reasoning / maximum quality, chat detail, and the Projects, Knowledge and Skills tabs. There is no model list to pick from: with **Auto model** (General) Claude picks Haiku, Sonnet or Opus for each request; other providers use their default model, and **Custom** uses the model name you type.
@@ -252,23 +252,23 @@ screenshots and screen recordings.
 ### MCP for other Autodesk apps
 
 MCP Control → **Connect** registers more than Revit: pick **AutoCAD**,
-**Civil 3D**, **Navisworks**, **3ds Max** or **Inventor** and connect your AI
-app to it. Each app is reached through its own T3Lab add-in, which puts an
+**Civil 3D**, **Navisworks** or **3ds Max** and connect your AI app to it. Each app is reached through its own T3Lab add-in, which puts an
 MCP bridge at `%APPDATA%\<folder>\bridge.py`; the AI app runs it with
 `python -I` and the bridge finds the app by itself (no port).
 
 | App | MCP server | Bridge |
 |---|---|---|
 | Revit | `t3lab-revit` | this extension (MCP Control starts the server) |
-| AutoCAD | `t3lab-autocad` | `%APPDATA%\T3LabCAD\bridge.py` — T3LabCAD add-in |
-| Civil 3D | `t3lab-civil3d` | `%APPDATA%\T3LabCivil3D\bridge.py` |
-| Navisworks | `t3lab-navisworks` | `%APPDATA%\T3LabNavisworks\bridge.py` |
-| 3ds Max | `t3lab-3dsmax` | `%APPDATA%\T3LabMax\bridge.py` |
-| Inventor | `t3lab-inventor` | `%APPDATA%\T3LabInventor\bridge.py` |
+| AutoCAD | `t3lab-autocad` | `%APPDATA%\T3LabCAD\bridge.py` — T3LabCAD add-in, 2022-2027 |
+| Civil 3D | `t3lab-autocad` | same as AutoCAD (T3LabCAD loads in Civil 3D too) |
+| Navisworks | `t3lab-navisworks` | `%APPDATA%\T3LabNavisworks\bridge.py` — no add-in yet |
+| 3ds Max | `t3lab-3dsmax` | `%APPDATA%\T3LabMax\bridge.py` — T3LabMax add-in, 2022-2027 |
 
-Today only the AutoCAD add-in ships. For the other apps MCP Control shows
-"add-in not installed" with the expected path and keeps **Connect** off until
-the add-in puts its bridge there. A bridge somewhere else can be set with
+For AutoCAD, Civil 3D and 3ds Max, **Connect** downloads the add-in from the
+[t3lab_CADmcp](https://github.com/thanhtranarch/t3lab_CADmcp) release and
+installs it before writing the AI-app entry; restart the app once after the
+first install. Navisworks shows "No T3Lab add-in for Navisworks yet" and keeps
+**Connect** off. A bridge somewhere else can be set with
 `"<app>_bridge": "<path>"` (e.g. `"navisworks_bridge"`) in
 `%APPDATA%\T3LabAI\mcp_paths.json`. MCP Control does not write to Claude
 Desktop's config while Claude Desktop is running (it would drop the entry

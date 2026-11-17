@@ -843,7 +843,7 @@ class MCPControlWindow(T3WPFWindow):
         else:
             self._set_dot(self._addin_dot, 'T3.Warning.Accent')
             label = 'No T3Lab add-in for {} yet'.format(app_label)
-            hint = '{} AutoCAD and Civil 3D are supported today; Connect stays off.'.format(found)
+            hint = '{} AutoCAD, Civil 3D and 3ds Max are supported today; Connect stays off.'.format(found)
         if self._addin_label:
             self._addin_label.Text = label
         if self._addin_hint:

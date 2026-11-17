@@ -495,6 +495,9 @@ def _cap_result(response):
     return response
 
 
+BRIDGE_AGENT = 't3lab-bridge'      # = core.agent_cursors.BRIDGE_AGENT
+
+
 def _documents_on(port, token):
     """list_open_documents on one instance; [] on any failure (including
     instances still running an older build without the tool)."""
@@ -502,7 +505,10 @@ def _documents_on(port, token):
         resp = _post_mcp(port, {
             'jsonrpc': '2.0', 'id': 'bridge-list',
             'method': 'tools/call',
-            'params': {'name': 'list_open_documents', 'arguments': {}},
+            # The bridge's own probe, not a step of the AI app: Agent Cursors
+            # draw nothing for it (2026-11-17: it showed as a "Claude" cursor).
+            'params': {'name': 'list_open_documents', 'arguments': {},
+                       '_meta': {'t3lab/agent': BRIDGE_AGENT}},
         }, token, timeout=10)
         return (_tool_payload(resp) or {}).get('documents', []) or []
     except Exception:
@@ -1244,6 +1250,9 @@ def _dispatch(request, current, token):
         return _handle_tools_list(request, current, token)
     if method == 'tools/call':
         name = (request.get('params') or {}).get('name')
+        # Stamped once here: the list / switch handlers forward it too, and an
+        # unnamed call drew a second cursor for the same AI app.
+        request = _stamp_agent(request, current)
         try:
             if name == 'list_revit_instances':
                 return _handle_instances(request, current, token)
@@ -1255,7 +1264,7 @@ def _dispatch(request, current, token):
                 return _handle_switch(request, current, token)
             if name == HUB_TOOL:
                 return _handle_hub(request, current, token)
-            return _forward(_stamp_agent(request, current), current, token)
+            return _forward(request, current, token)
         except Exception as e:
             if _is_conn_refused(e):
                 return _revit_down_response(request.get('id'))

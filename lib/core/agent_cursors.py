@@ -1388,7 +1388,13 @@ def _agent_of(task):
     return 't3lab-assistant' if source == 'assistant' else 'mcp-client'
 
 
+BRIDGE_AGENT = 't3lab-bridge'      # bridge.py's own probes (list_open_documents fan-out)
+
+
 def _internal(task):
+    """Calls that are plumbing, not a step of an AI app: no cursor, no count."""
+    if getattr(task, 'agent', None) == BRIDGE_AGENT:
+        return True
     return '{}'.format(getattr(task, 'tool_name', '')).startswith('__')
 
 
@@ -1875,7 +1881,7 @@ def offer(app, agent):
     """Main thread, an MCP call from `agent` with cursors off: offer once per
     Revit session (never again after "Don't ask again"). True when the user
     turned them on. Never raises."""
-    if is_enabled() or _state.get('offered') or not agent:
+    if is_enabled() or _state.get('offered') or not agent or agent == BRIDGE_AGENT:
         return False
     _state['offered'] = True
     try:

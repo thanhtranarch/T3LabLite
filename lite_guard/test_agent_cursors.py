@@ -568,8 +568,17 @@ def test_agent_stamp():
           'confirm=confirm, agent=agent)' in src
           and '_ToolTask(tool_name, arguments, confirm=confirm, agent=agent)' in src)
     bsrc = open(os.path.join(LIB, 'core', 'bridge.py'), encoding='utf-8').read()
-    check('bridge forwards the stamped call',
-          '_forward(_stamp_agent(request, current), current, token)' in bsrc)
+    check('bridge stamps every tools/call once, before its own handlers',
+          'request = _stamp_agent(request, current)' in bsrc
+          and bsrc.index('request = _stamp_agent(request, current)')
+          < bsrc.index("if name == 'list_open_documents':"))
+    check('bridge probes are plumbing: no cursor, no offer',
+          AC._internal(type('T', (), {'agent': AC.BRIDGE_AGENT, 'tool_name': 'list_open_documents'})())
+          and not AC._internal(type('T', (), {'agent': 'codex', 'tool_name': 'list_open_documents'})())
+          and AC.offer(None, AC.BRIDGE_AGENT) is False)
+    check('bridge names its own document probe',
+          "'_meta': {'t3lab/agent': BRIDGE_AGENT}" in bsrc
+          and "BRIDGE_AGENT = '{}'".format(AC.BRIDGE_AGENT) in bsrc)
     import importlib.util as _ilu
     _spec = _ilu.spec_from_file_location('t3_bridge', os.path.join(LIB, 'core', 'bridge.py'))
     BR = _ilu.module_from_spec(_spec)

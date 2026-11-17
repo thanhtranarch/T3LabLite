@@ -443,6 +443,16 @@ def install_ribbon_memory():
         return "failed", str(exc)
 
 
+def refresh_mcp_bridge():
+    """Keep the deployed MCP bridge (%APPDATA%\\T3LabAI\\bridge.py + hub_store.py)
+    in step with this extension, so a new bridge tool needs no visit to MCP
+    Control (lib/bridge_deploy.py). Returns (state, detail)."""
+    deploy = _load_lib_module("bridge_deploy")
+    if deploy is None:
+        return "failed", "lib/bridge_deploy.py not found"
+    return deploy.refresh()
+
+
 def main():
     # ─── 0. FIX: "The input string '3.12.3' was not in a correct format" ───────
     try:
@@ -485,6 +495,11 @@ def main():
     if state == "failed":
         _log("Split buttons will not remember the last-used button across "
              "Revit sessions: %s" % detail)
+
+    # ─── 2c. MCP clients start the deployed bridge, not the one in lib/core ───
+    state, detail = refresh_mcp_bridge()
+    if state == "failed":
+        _log("MCP bridge not refreshed (MCP Control > Connect redeploys it): %s" % detail)
 
     # ─── 3. Keep pyRevit patched (Reload protection) ──────────────────────────
     state, detail = auto_patch_pyrevit()

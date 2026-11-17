@@ -46,6 +46,8 @@ python lite_guard/test_mcp_cad_clients.py
 python lite_guard/test_agent_cursors.py
 python lite_guard/test_open_timing.py
 python lite_guard/test_lite_user.py
+python lite_guard/test_data_hub.py
+python lite_guard/test_bridge_deploy.py
 python dev/test_icons_t3space.py
 ```
 

@@ -3184,10 +3184,18 @@ class T3LabAIServer(object):
         # A tool the machine's toolset hides is refused before anything else,
         # the teaching tools below included (MCP Control > Security).
         policy = mcp_policy.load_policy()
+        read_only_names = self._read_only_tool_names()
         if not mcp_policy.toolset_allows(tool_name, policy.get('toolset'),
-                                         self._read_only_tool_names()):
+                                         read_only_names):
             return self._tool_call_result({
                 'error': mcp_policy.toolset_message(tool_name, policy.get('toolset')),
+                'blocked_by_policy': True, 'tool': tool_name})
+        # Read-only mode too: the teaching tools below change settings, start a
+        # fine-tune or rewrite exemplar files, and tools/list already hides
+        # them in read-only mode -- a direct call must not run them either.
+        if policy.get('read_only') and tool_name not in read_only_names:
+            return self._tool_call_result({
+                'error': mcp_policy._read_only_message(tool_name),
                 'blocked_by_policy': True, 'tool': tool_name})
 
         # Teaching session boundary tools are handled locally (no Revit) so the
@@ -5632,14 +5640,24 @@ class T3LabAIServer(object):
             t = Transaction(doc, "T3Lab AI Override Color")
             t.Start()
             overridden_count = 0
-            for eid_val in element_ids:
+            try:
+                for eid_val in element_ids:
+                    try:
+                        eid = make_eid(eid_val)
+                        view.SetElementOverrides(eid, override_settings)
+                        overridden_count += 1
+                    except Exception:
+                        pass
+                t.Commit()
+            except Exception:
+                # Never leave the transaction open for Revit to discard at the
+                # end of the external event (same pattern as every other tool).
                 try:
-                    eid = make_eid(eid_val)
-                    view.SetElementOverrides(eid, override_settings)
-                    overridden_count += 1
+                    if t.HasStarted() and not t.HasEnded():
+                        t.RollBack()
                 except Exception:
                     pass
-            t.Commit()
+                raise
             
             result = {
                 'success': True,

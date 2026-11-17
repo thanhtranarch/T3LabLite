@@ -599,6 +599,21 @@ class ToolCallTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertFalse(self._call('list_levels')['isError'])
 
+    def test_read_only_blocks_teaching_tools(self):
+        # They are hidden from tools/list in read-only mode; a direct call
+        # used to run anyway and rewrite settings (teaching_enabled,
+        # sandbox_doc) or start a fine-tune.
+        _set_settings(**{mp.READ_ONLY_KEY: True})
+        before = paths.load_settings()
+        for name, args in (('t3lab_set_teaching_mode', {'enabled': True}),
+                           ('t3lab_mark_sandbox', {}),
+                           ('t3lab_train_model', {}),
+                           ('t3lab_build_exemplars', {})):
+            res = self._call(name, args)
+            self.assertTrue(res['isError'], name)
+            self.assertIn('Read-only mode', res['content'][0]['text'], name)
+        self.assertEqual(paths.load_settings(), before)
+
     def test_code_off_blocks(self):
         _set_settings(**{mp.CODE_KEY: 'off'})
         res = self._call('send_code_to_revit', {'code': 'result = 1'})

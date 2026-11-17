@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """Agent cursors: a live overlay of which AI agent does what, where.
 
-Each MCP tool call moves one cursor per (agent, action) — Claude · Create,
-Claude · Modify, GPT · Read … — to each element it read, edited, created or
-deleted in turn (move, click, next), in every visible view, with a plain
-caption ("Moving elements · 3 elements"), a badge per element ("Walls ·
-1200 × 300") and an effect per action; a call with no element scans the view.
+Each MCP tool call moves the agent's one cursor (the action only tints its
+tag) to each element it read, edited, created or deleted in turn (move,
+click, next), in every visible view, with a plain caption ("Moving elements ·
+3 elements"), a badge per element ("Walls · 1200 × 300") and an effect per
+action. Elements a call names are framed while it runs; what it created or
+changed is taken from Revit's DocumentChanged too (code returns no ids) and
+stays highlighted with a chip ("Walls ×3 created"). A call with no element
+scans next to where the cursor last worked.
 The HUD lists the last steps and each agent's plan (t3lab_narrate tasks / step):
 while a step runs the cursor names that task, the call goes underneath; a
 send_code_to_revit call is named by its `purpose` or its code (summarize_code).
@@ -45,6 +48,11 @@ HUD_POS_KEY = 'agent_cursors_hud_pos'   # "dx,dy" DIP from the default spot, per
 NARRATE_MAX = 90            # goal banner text
 PLAN_MAX = 8                # tasks in an agent's plan (t3lab_narrate tasks=[...])
 TASK_MAX = 60               # characters per task
+NAME_MAX = 16               # characters of an unknown agent's name on its tag
+TAG_MAX = 36                # characters of "what it does" on a cursor tag
+MAX_CAPTURE = 60            # added / modified ids kept per call (DocumentChanged)
+FRESH_HOLD_S = 7.0          # created / changed elements stay highlighted this long
+SCAN_RADIUS = 70.0          # px round the cursor a call with no element scans
 
 # name -> (mcp_paths.json key, default). The HUD toggles them live. All on by
 # default (owner, 2026-11-17); a saved choice wins.
@@ -91,6 +99,17 @@ _ALIASES = {
     'gemini-cli-mcp-client': 'antigravity', 'gemini': 'antigravity',
     'cursor-vscode': 'cursor',
 }
+# Client names that carry a suffix (Claude Desktop's local agent mode sends
+# "local-agent-mode-<project>"): first matching prefix wins.
+_ALIAS_PREFIXES = (
+    ('local-agent-mode', 'claude-desktop'), ('claude-code', 'claude-code'),
+    ('claude', 'claude-desktop'), ('codex', 'codex'), ('chatgpt', 'chatgpt'),
+    ('openai', 'chatgpt'), ('gemini', 'antigravity'), ('antigravity', 'antigravity'),
+    ('cursor', 'cursor'),
+)
+_AGENT_NOISE = re.compile(r'([-_ ./]+(mcp|client|server|app|bridge|stdio))+$', re.I)
+_AGENT_VERSION = re.compile(r'[-_ /]+v?\d+(\.\d+)*$')
+_ACRONYMS = ('ai', 'api', 'bim', 'cli', 'gpt', 'ide', 'llm', 'mcp', 'qa')
 _SPARE = ('#E11D48', '#0EA5E9', '#22C55E', '#F59E0B', '#8B5CF6', '#14B8A6')
 _FT_TO_MM = 304.8
 # Views with no model geometry to box.
@@ -113,13 +132,13 @@ _ACTION = dict((a[0], a) for a in ACTIONS)
 PROS = (
     "See at a glance which AI app is working, what it does and on which elements.",
     "Plain-English captions, the agent's goal (t3lab_narrate) and a feed of the last steps on the bar.",
-    "The cursor moves to each target and clicks it; values it changed show as \"Mark: A-101 → A-102\".",
+    "One cursor per AI app moves to each target and clicks it; new or changed elements stay highlighted (\"Walls ×3 created\"), changed values show as \"Mark: A-101 → A-102\".",
     "Long calls show \"Working 8 s\"; a call waiting for your OK pulses amber.",
     "Two agents editing the same element flash red; targets off screen get an edge arrow.",
     "When the agents go idle: a summary, Select touched and Replay.",
 )
 CONS = (
-    "Each tool call does a little extra work (bounding boxes of up to {} elements, twice for a delete or move).".format(MAX_TARGETS),
+    "Each tool call does a little extra work (bounding boxes of up to {} elements, twice when the call names its elements).".format(MAX_TARGETS),
     "Follow switches the active view, so a later tool that works on 'the active view' works on the view the agent opened.",
     "Zoom and Select change your camera and selection while an agent works (both on by default).",
     "Boxes are a snapshot: pan or zoom while an agent works and they sit off until its next call; Replay uses the old positions.",
@@ -265,7 +284,28 @@ def options_text():
 
 def agent_key(agent):
     key = (agent or '').strip().lower()
-    return _ALIASES.get(key, key)
+    if key in _ALIASES:
+        return _ALIASES[key]
+    if key in AGENTS or '/' in key:
+        return key
+    for prefix, name in _ALIAS_PREFIXES:
+        if key == prefix or key.startswith(prefix + '-') or key.startswith(prefix + '_'):
+            return name
+    return key
+
+
+def pretty_agent(name):
+    """A raw MCP client id as a tag: 'acme-bot-mcp-client' -> 'Acme Bot'
+    (noise and version dropped, title case, at most NAME_MAX characters)."""
+    text = ' '.join('{}'.format(name or '').split())
+    for _ in range(3):
+        text = _AGENT_NOISE.sub('', _AGENT_VERSION.sub('', text))
+    words = [w for w in re.split(r'[-_./\s]+', text) if w]
+    if not words:
+        return 'Agent'
+    text = ' '.join(w.upper() if w.lower() in _ACRONYMS else w[0].upper() + w[1:]
+                    for w in words)
+    return text if len(text) <= NAME_MAX else text[:NAME_MAX - 1].rstrip() + '…'
 
 
 def agent_style(agent):
@@ -278,7 +318,7 @@ def agent_style(agent):
     total = 0
     for ch in key:
         total = (total * 31 + ord(ch)) % 1000003
-    return (agent.strip()[:18], _SPARE[total % len(_SPARE)])
+    return (pretty_agent(agent), _SPARE[total % len(_SPARE)])
 
 
 def action_style(action):
@@ -419,7 +459,9 @@ def extract_ids(*payloads, **kwargs):
     """
     return _walk_ids(
         payloads, lambda k: bool(_ID_KEY.search(k)) and not _NOT_ELEMENT.match(k),
-        kwargs.get('limit', MAX_TARGETS), 3, ('elements', 'created', 'items'))
+        kwargs.get('limit', MAX_TARGETS), 3,
+        ('elements', 'created', 'items', 'created_elements', 'new_elements', 'placed',
+         'instances', 'results'))
 
 
 def extract_view_ids(arguments, result=None, action=None, limit=MAX_FOLLOW_VIEWS):
@@ -638,6 +680,91 @@ def review_points(rect, seed, n=3):
         fy = 0.25 + 0.5 * ((state % 1000) / 1000.0)
         pts.append((left + w * fx, top + h * fy))
     return pts
+
+
+def scan_points(anchor, rect, seed, n=3, radius=SCAN_RADIUS):
+    """`n` points within `radius` px of anchor (x, y), kept inside rect
+    (l, t, r, b): a call with no element scans next to where the cursor last
+    worked instead of crossing the view. anchor None = the middle of rect;
+    n = 1 is the anchor itself; the same seed gives the same path."""
+    import math
+    left, top, right, bottom = rect
+    pad = min(24.0, max(0.0, (right - left) / 4.0), max(0.0, (bottom - top) / 4.0))
+
+    def clamp(x, y):
+        return (min(max(x, left + pad), right - pad), min(max(y, top + pad), bottom - pad))
+    if anchor is None:
+        anchor = ((left + right) / 2.0, (top + bottom) / 2.0)
+    ax, ay = clamp(anchor[0], anchor[1])
+    if n <= 1:
+        return [(ax, ay)]
+    state = (seed * 7919 + 17) % 2147483647 or 1
+    pts = []
+    for i in range(n):
+        state = (state * 48271) % 2147483647
+        ang = 2 * math.pi * ((i + (state % 1000) / 1000.0) / float(n))
+        state = (state * 48271) % 2147483647
+        dist = radius * (0.55 + 0.45 * (state % 1000) / 1000.0)
+        pts.append(clamp(ax + dist * math.cos(ang), ay + dist * math.sin(ang)))
+    return pts
+
+
+def place_tags(items, rect=None, gap=12.0, margin=4.0):
+    """Where each cursor's tag goes: [(dx, dy)] from its pointer tip, for
+    items [(x, y, tag_w, tag_h)] in priority order. Right-below by default;
+    flipped left / above when it would leave rect (l, t, r, b), and moved to
+    the next free spot when it would cover a tag placed before it."""
+    placed, out = [], []
+    for x, y, w, h in items:
+        spots = [(gap, gap), (-w - margin, gap), (gap, -h - margin), (-w - margin, -h - margin)]
+        for k in (1, 2, 3):
+            step = k * (h + 3.0)
+            spots += [(gap, gap + step), (-w - margin, gap + step),
+                      (gap, -h - margin - step), (-w - margin, -h - margin - step)]
+        inside = [(dx, dy) for dx, dy in spots if rect is None or (
+            x + dx >= rect[0] + margin and x + dx + w <= rect[2] - margin
+            and y + dy >= rect[1] + margin and y + dy + h <= rect[3] - margin)]
+        free = [(dx, dy) for dx, dy in inside if not any(
+            _overlaps((x + dx, y + dy, x + dx + w, y + dy + h), p) for p in placed)]
+        dx, dy = (free or inside or spots)[0]
+        placed.append((x + dx, y + dy, x + dx + w, y + dy + h))
+        out.append((dx, dy))
+    return out
+
+
+_WORK_VERBS = {'create': 'created', 'modify': 'changed', 'code': 'changed',
+               'delete': 'deleted'}
+
+
+def work_label(categories, action):
+    """'Walls ×3 created' / 'Walls ×3 · Doors ×2 · +4 more changed' for the
+    category names of the elements a call created or changed; '' for none."""
+    order, counts = [], {}
+    for name in categories or ():
+        name = '{}'.format(name or '').strip() or 'Elements'
+        if name not in counts:
+            order.append(name)
+        counts[name] = counts.get(name, 0) + 1
+    if not order:
+        return ''
+    order.sort(key=lambda n: -counts[n])        # stable: ties keep call order
+    parts = ['{} ×{}'.format(n, counts[n]) for n in order[:2]]
+    rest = sum(counts[n] for n in order[2:])
+    if rest:
+        parts.append('+{} more'.format(rest))
+    return '{} {}'.format(' · '.join(parts), _WORK_VERBS.get(action, 'touched'))
+
+
+def merge_targets(named, added=(), modified=(), limit=MAX_TARGETS):
+    """Element ids a call points at: the ones it names, then the ones Revit
+    says it added; what it merely modified only when there is nothing else."""
+    out = []
+    for i in list(named) + list(added):
+        if i not in out:
+            out.append(i)
+    if not out:
+        out = list(modified)
+    return out[:limit]
 
 
 def counts_text(counts):
@@ -963,7 +1090,8 @@ def _view_geometry(uiview, view):
     try:
         if '{}'.format(view.ViewType) in _NO_BOXES:
             return geo
-        if bool(view.IsPerspective):
+        # IsPerspective is a View3D property: a plan / section has none.
+        if bool(getattr(view, 'IsPerspective', False)):
             ori = view.GetOrientation()
             corners = uiview.GetZoomCorners()
             geo['persp'] = {'eye': _xyz(ori.EyePosition), 'forward': _xyz(ori.ForwardDirection),
@@ -1006,7 +1134,8 @@ def _shown_in(doc, view, ids):
 
 
 def _boxes(doc, geo, ids):
-    """[{'id', 'box', 'size'}] of the ids shown in one orthographic view."""
+    """[{'id', 'box', 'size', 'label'}] of the ids shown in one view
+    (orthographic or perspective), at most MAX_TARGETS."""
     out = []
     persp = geo.get('persp')
     if not (geo.get('ortho') or persp) or not ids:
@@ -1019,6 +1148,8 @@ def _boxes(doc, geo, ids):
     for i in ids:
         if i not in shown:
             continue
+        if len(out) >= MAX_TARGETS:
+            break
         try:
             elem = doc.GetElement(make_eid(i))
             if elem is None:
@@ -1105,9 +1236,10 @@ def _snapshot(app, ids, pre=None):
     return snap
 
 
-def _pre_snapshot(app, ids):
-    """{view id: {'rect', 'origin', 'boxes'}} before a delete / move."""
-    doc, geos, active = _open_views(app)
+def _pre_snapshot(app, ids, views=None):
+    """{view id: {'rect', 'origin', 'boxes'}} before a delete / move.
+    views = an _open_views() result to reuse."""
+    doc, geos, active = views or _open_views(app)
     if doc is None or active is None:
         return None
     out = {}
@@ -1262,7 +1394,76 @@ _PARAM_TOOLS = {
     'rename_element': ((), 'new_name'),
 }
 # Per Revit session: who edited what, the agents' goals, the select event.
-_session = {'touched': {}, 'goals': {}, 'plans': {}, 'select_event': None, 'select_cls': None}
+_session = {'touched': {}, 'goals': {}, 'plans': {}, 'select_event': None, 'select_cls': None,
+            'call': None, 'watch': None}
+_WATCH_KEY = 'T3Lab.AgentCursors.DocumentChanged'
+
+
+def _on_changed(sender, args):
+    """DocumentChanged: ids the running call added / modified. Never raises."""
+    call = _session.get('call')
+    if call is None:
+        return
+    try:
+        from Snippets._compat import eid_value
+        for kind, ids in (('added', args.GetAddedElementIds()),
+                          ('modified', args.GetModifiedElementIds())):
+            keep = call[kind]
+            for eid in ids:
+                if len(keep) >= MAX_CAPTURE:
+                    break
+                value = eid_value(eid)
+                if value not in keep:
+                    keep.append(value)
+    except Exception:
+        pass
+
+
+def _watch_changes(app):
+    """Hook Application.DocumentChanged once per session (main thread). The
+    delegate is kept on the AppDomain so a pyRevit reload detaches the old one."""
+    if _session.get('watch') is not None:
+        return
+    _session['watch'] = False           # tried: never again this session
+    try:
+        from System import AppDomain, EventHandler
+        from Autodesk.Revit.DB.Events import DocumentChangedEventArgs
+        application = app.Application
+        domain = AppDomain.CurrentDomain
+        old = domain.GetData(_WATCH_KEY)
+        if old is not None:
+            try:
+                application.DocumentChanged -= old
+            except Exception:
+                pass
+        delegate = EventHandler[DocumentChangedEventArgs](_on_changed)
+        application.DocumentChanged += delegate
+        domain.SetData(_WATCH_KEY, delegate)
+        _session['watch'] = delegate
+    except Exception:
+        pass
+
+
+def _real_elements(doc, ids):
+    """[(id, category name)] of the ids that are model / annotation elements
+    with a box: sketches, types and views a call adds on the side drop out."""
+    from Snippets._compat import make_eid
+    out = []
+    for i in ids:
+        try:
+            elem = doc.GetElement(make_eid(i))
+            cat = elem.Category if elem is not None else None
+            if cat is None or cat.Name.startswith('<'):
+                continue
+            kind = '{}'.format(getattr(cat, 'CategoryType', 'Model'))
+            if kind not in ('Model', 'Annotation'):
+                continue
+            if elem.get_BoundingBox(None) is None and elem.get_BoundingBox(doc.ActiveView) is None:
+                continue
+            out.append((i, cat.Name))
+        except Exception:
+            continue
+    return out
 
 
 def _plan_of(agent):
@@ -1323,20 +1524,30 @@ def before(app, task):
         args = getattr(task, 'arguments', None)
         action = classify_action(tool, args)
         ids = extract_ids(args)
+        _watch_changes(app)
+        _session['call'] = {'added': [], 'modified': []}
         try:
-            doc, geos, active = _open_views(app)
+            views = _open_views(app)
+            doc, geos, active = views
             if active is not None:
+                # Elements the call names: framed while it runs, cursor on them.
+                boxes = []
+                if ids and action in ('delete', 'modify'):
+                    task._cursor_pre = _pre_snapshot(app, ids, views)
+                    boxes = task._cursor_pre[geos[active]['id']]['boxes']
+                elif ids:
+                    boxes = _boxes(doc, geos[active], ids)
+                shown = [geos[i]['rect'] for i in visible_views([g['rect'] for g in geos], active)]
                 agent = _agent_of(task)
                 _overlay(_hwnd(app)).call(
                     'working', agent, action, describe_call(tool, args, len(ids)), tool,
-                    geos[active]['rect'], task_text=current_task(_plan_of(agent)))
+                    geos[active]['rect'], task_text=current_task(_plan_of(agent)),
+                    targets=[b['box'] for b in boxes[:MAX_STOPS]], canvas=union_rect(shown))
         except Exception:
             pass
         name, ok = _param_name(tool, args)
         if ok and ids:
             task._cursor_old = (name, _read_values(app, ids, name))
-        if action in ('delete', 'modify') and ids:
-            task._cursor_pre = _pre_snapshot(app, ids)
     except Exception:
         pass
 
@@ -1376,6 +1587,21 @@ def notify(app, task):
         agent = _agent_of(task)
         opts = options()
         uidoc = app.ActiveUIDocument
+        # What Revit says the call added / modified (code returns no ids).
+        call, _session['call'] = _session.get('call'), None
+        fresh, label, touch = [], '', action
+        if call and not failed and uidoc is not None:
+            added = _real_elements(uidoc.Document, call['added'])
+            changed = [] if ids or added else _real_elements(uidoc.Document, call['modified'])
+            if added or changed:
+                touch = 'create' if added else 'modify'
+                label = work_label([c for _i, c in added or changed], touch)
+                ids = merge_targets(ids, [i for i, _c in added], [i for i, _c in changed])
+                fresh = [i for i, _c in added or changed if i in ids]
+            elif action == 'create' and ids:
+                named = _real_elements(uidoc.Document, ids)
+                label = work_label([c for _i, c in named], 'create')
+                fresh = [i for i, _c in named]
         followed = []
         pre = getattr(task, '_cursor_pre', None)
         if uidoc is not None and not failed:
@@ -1395,7 +1621,7 @@ def notify(app, task):
             if len(list(uidoc.GetOpenUIViews())) >= 2:
                 _tile(app)
         changes = [] if failed else _changes(app, task, ids)
-        clashes = [] if failed else track_touches(_session['touched'], agent, ids, action)
+        clashes = [] if failed else track_touches(_session['touched'], agent, ids, touch)
         _ensure_select_event()
         try:
             from core import agent_cursors_glow
@@ -1417,7 +1643,7 @@ def notify(app, task):
             n_targets=len(ids), changes=changes, clashes=clashes,
             touched=len(_session['touched']),
             goal=_session['goals'].get(agent_key(agent) or 'claude-desktop', ''),
-            task_text=current_task(_plan_of(agent)))
+            task_text=current_task(_plan_of(agent)), created=label, fresh=fresh)
     except Exception:
         pass
 

@@ -211,15 +211,23 @@ Supports combined PDF, custom naming patterns, sheet ordering, and revision trac
 app does in Revit through MCP (off by default; the button lists the benefits
 and drawbacks before you switch).
 
-- **One cursor per AI app and action** — a small pointer in the app's colour
-  with one tag: the app and what it does ("Claude · Moving 12 walls"). The
-  tag spins while the call runs, turns amber while it waits for your OK and
-  red when it fails.
-- **Move, click, next** — the cursor visits each element the call works on;
-  a box with the category and size ("Walls · 1200 × 300") appears as it
-  arrives. New elements grow in, edits pulse, deletes show a red cross, moves
-  leave a dashed ghost. A read or review scans the view instead. More
-  targets than the cursor visits get one frame round them all ("×48 · Modify").
+- **One cursor per AI app** — a small pointer in the app's colour with one
+  tag: the app and what it does ("Claude · Moving 12 walls"); the left edge
+  of the tag takes the colour of the action (Read, Create, Modify…). A dot
+  pulses in the tag while the call runs, the tag turns amber while it waits
+  for your OK and red when it fails. Near the edge of the view the tag flips
+  to the other side of its pointer, and tags never cover each other.
+- **Move, click, next** — elements a call names are framed while it runs.
+  Then the cursor visits each element the call worked on; a box with the
+  category and size ("Walls · 1200 × 300") appears as it arrives. New
+  elements grow in, edits pulse, deletes show a red cross, moves leave a
+  dashed ghost. More targets than the cursor visits get one frame round them
+  all ("×48 · Modify"). A call with no element scans next to where the
+  cursor last worked.
+- **Created and changed elements stay in sight** — what the AI made or
+  changed (also from code it runs) is highlighted for a few seconds with a
+  chip ("Walls ×3 created") and a dotted line joining new elements in the
+  order they were made.
 - **Goal, tasks and changes** — an AI app shows its goal and its list of
   tasks over the model with the MCP tool `t3lab_narrate` ("Renumber the
   doors on Level 2": 1 Read the doors · 2 Number them · 3 Check). The bar

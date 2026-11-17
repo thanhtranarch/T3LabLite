@@ -416,7 +416,7 @@ class _Overlay(object):
     def _mark(self, color, size=16):
         """The agent's cursor, small: its avatar on the bar."""
         from System.Windows.Controls import Canvas
-        from System.Windows.Media import Geometry, PenLineJoin, ScaleTransform
+        from System.Windows.Media import Geometry, ScaleTransform
         from System.Windows.Shapes import Path
         holder = Canvas()
         holder.Width = size * 0.8
@@ -424,9 +424,6 @@ class _Overlay(object):
         arrow = Path()
         arrow.Data = Geometry.Parse(CURSOR_PATH)
         arrow.Fill = self._brush(color)
-        arrow.Stroke = self._brush('#FFFFFF')
-        arrow.StrokeThickness = 1.4
-        arrow.StrokeLineJoin = PenLineJoin.Round
         arrow.RenderTransform = ScaleTransform(size / 15.0, size / 15.0)
         holder.Children.Add(arrow)
         return holder
@@ -951,7 +948,7 @@ class _Overlay(object):
             return cur
         from System.Windows import Thickness, CornerRadius, Visibility
         from System.Windows.Controls import Canvas, Border
-        from System.Windows.Media import TranslateTransform, ScaleTransform, Geometry, PenLineJoin
+        from System.Windows.Media import TranslateTransform, ScaleTransform, Geometry
         from System.Windows.Media.Effects import DropShadowEffect
         from System.Windows.Shapes import Path, Ellipse
         tag, color = agent_style(agent)
@@ -959,10 +956,7 @@ class _Overlay(object):
         group = Canvas()
         arrow = Path()
         arrow.Data = Geometry.Parse(CURSOR_PATH)
-        arrow.Fill = self._brush(color)
-        arrow.Stroke = self._brush('#FFFFFF')
-        arrow.StrokeThickness = 1.4
-        arrow.StrokeLineJoin = PenLineJoin.Round
+        arrow.Fill = self._brush(color)            # no outline (owner, 2026-11-17)
         shadow = DropShadowEffect()
         shadow.BlurRadius, shadow.ShadowDepth, shadow.Opacity = 2, 0.5, 0.3
         arrow.Effect = shadow
@@ -970,19 +964,10 @@ class _Overlay(object):
         arrow.RenderTransform = press
         group.Children.Add(arrow)
 
-        spin = Ellipse()                    # turns inside the tag while the call runs
-        spin.Width = spin.Height = 8
-        spin.Stroke = self._brush('#FFFFFF')
-        spin.StrokeThickness = 1.4
-        from System.Windows.Media import DoubleCollection, RotateTransform
-        dash = DoubleCollection()
-        dash.Add(3)
-        dash.Add(2)
-        spin.StrokeDashArray = dash
-        rot = RotateTransform()
-        rot.CenterX = rot.CenterY = 4
-        spin.RenderTransform = rot
-        spin.Margin = Thickness(0, 0, 4, 0)
+        spin = Ellipse()                    # pulses in the tag while the call runs
+        spin.Width = spin.Height = 6
+        spin.Fill = self._brush('#FFFFFF')
+        spin.Margin = Thickness(0, 0, 5, 0)
         spin.Visibility = Visibility.Collapsed
         name = self._text(tag, 11, color='#FFFFFF')
         state = self._text('', 11, bold=False, color='#FFFFFF')     # " · what it does"
@@ -1011,11 +996,10 @@ class _Overlay(object):
         """idle | working (spinner) | waiting (amber, pulsing) | failed (red);
         `caption` (what it does) follows the name, None keeps the current one."""
         from System.Windows import Visibility
-        from System.Windows.Media import RotateTransform
         pill, spin = cur['pill'], cur['spin']
         pill.BeginAnimation(_opacity_property(), None)
         pill.Opacity = 1.0
-        spin.RenderTransform.BeginAnimation(RotateTransform.AngleProperty, None)
+        spin.BeginAnimation(_opacity_property(), None)
         spin.Visibility = Visibility.Collapsed
         pill.Background = self._brush({'waiting': '#F59E0B', 'failed': '#DC2626'}.get(
             state, cur['color']))
@@ -1027,16 +1011,13 @@ class _Overlay(object):
             cur['caption'] = caption
         text = cur.get('caption') or ''
         cur['state'].Text = u' \u00b7 ' + short_text(text, 40) if text else ''
-        if state == 'working' and not self._reduce():
-            from System import TimeSpan
-            from System.Windows import Duration
-            from System.Windows.Media.Animation import DoubleAnimation, RepeatBehavior
-            anim = DoubleAnimation()
-            anim.From, anim.To = 0.0, 360.0
-            anim.Duration = Duration(TimeSpan.FromMilliseconds(900))
-            anim.RepeatBehavior = RepeatBehavior.Forever
+        if state == 'working':
             spin.Visibility = Visibility.Visible
-            spin.RenderTransform.BeginAnimation(RotateTransform.AngleProperty, anim)
+            if not self._reduce():
+                from System.Windows.Media.Animation import RepeatBehavior
+                anim = self._anim(((1.0, 0), (0.25, 450), (1.0, 900)))
+                anim.RepeatBehavior = RepeatBehavior.Forever
+                spin.BeginAnimation(_opacity_property(), anim)
         elif state == 'waiting' and not self._reduce():
             from System.Windows.Media.Animation import RepeatBehavior
             anim = self._anim(((1.0, 0), (0.5, 500), (1.0, 1000)))
@@ -1157,12 +1138,10 @@ class _Overlay(object):
         group.Children.Add(frame)
         for hx, hy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
             handle = Rectangle()
-            handle.Width = handle.Height = 5
-            handle.Fill = self._brush('#FFFFFF')
-            handle.Stroke = self._brush(color)
-            handle.StrokeThickness = 1
-            Canvas.SetLeft(handle, hx - 2.5)
-            Canvas.SetTop(handle, hy - 2.5)
+            handle.Width = handle.Height = 4
+            handle.Fill = self._brush(color)       # solid corner, no white (owner)
+            Canvas.SetLeft(handle, hx - 2)
+            Canvas.SetTop(handle, hy - 2)
             group.Children.Add(handle)
         badge = self._pill(self._glyph_label(glyph, size, '#FFFFFF'), color, radius=2)
         badge.Padding = Thickness(4, 1, 4, 1)
@@ -1641,8 +1620,6 @@ class _Overlay(object):
             arrow = Path()
             arrow.Data = Geometry.Parse('M0,-9 L16,0 L0,9 L4,0 Z')
             arrow.Fill = self._brush(color)
-            arrow.Stroke = self._brush('#FFFFFF')
-            arrow.StrokeThickness = 1
             arrow.RenderTransform = RotateTransform(angle)
             Canvas.SetLeft(arrow, x)
             Canvas.SetTop(arrow, y)

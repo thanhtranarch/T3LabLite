@@ -75,7 +75,7 @@ if lib_dir not in sys.path:
 
 from Snippets._compat import eid_value, make_eid
 from core.paths import user_data_path
-from Services import batchout_report, batchout_profiles
+from Services import batchout_report, batchout_profiles, batchout_refs
 from Services.batchout_report import DEFAULT_COLUMNS as REPORT_DEFAULT_COLUMNS
 
 try:
@@ -667,6 +667,8 @@ class ExportProfile(object):
         self.CADExportLinksAsExternal = False
         # Colors / line weights / linetype scale as the Revit view shows them
         self.CADMatchRevitDisplay = True
+        # No image files next to the DWG (logos are dropped from the DWG)
+        self.CADSkipImageReferences = False
 
         # File organization
         self.OutputFolder = os.path.join(os.path.expanduser('~'), 'Documents', 'Revit Exports')
@@ -709,6 +711,7 @@ class ExportProfile(object):
             'CADExportViewsOnSheets': self.CADExportViewsOnSheets,
             'CADExportLinksAsExternal': self.CADExportLinksAsExternal,
             'CADMatchRevitDisplay': self.CADMatchRevitDisplay,
+            'CADSkipImageReferences': self.CADSkipImageReferences,
             'OutputFolder': self.OutputFolder,
             'SplitByFormat': self.SplitByFormat,
             'ReverseOrder': self.ReverseOrder,
@@ -1181,6 +1184,7 @@ class ExportManagerWindow(T3WPFWindow):
         profile.CADExportViewsOnSheets = self.cad_export_views_on_sheets.IsChecked if self.cad_export_views_on_sheets.IsChecked is not None else False
         profile.CADExportLinksAsExternal = self.cad_export_links_as_external.IsChecked if self.cad_export_links_as_external.IsChecked is not None else False
         profile.CADMatchRevitDisplay = bool(self.cad_match_revit_display.IsChecked)
+        profile.CADSkipImageReferences = bool(self.cad_skip_image_references.IsChecked)
 
         # File organization
         profile.OutputFolder = self.output_folder.Text if self.output_folder.Text else ""
@@ -1258,6 +1262,7 @@ class ExportManagerWindow(T3WPFWindow):
             self.cad_export_views_on_sheets.IsChecked = profile.CADExportViewsOnSheets
             self.cad_export_links_as_external.IsChecked = profile.CADExportLinksAsExternal
             self.cad_match_revit_display.IsChecked = bool(profile.CADMatchRevitDisplay)
+            self.cad_skip_image_references.IsChecked = bool(profile.CADSkipImageReferences)
 
             # File organization
             self.output_folder.Text = profile.OutputFolder
@@ -1998,6 +2003,64 @@ class ExportManagerWindow(T3WPFWindow):
             group.RollBack()
         except Exception as ex:
             logger.error("Safe-mode rollback FAILED: {} — undo manually".format(ex))
+
+    def _begin_hide_images(self, element, group):
+        """Hide the Raster Images category on `element` (sheet or view) and its
+        placed views so Revit writes no image file beside the DWG. Joins the
+        open safe-mode `group` or opens one; returns the group to roll back
+        with `_end_safe_mode` (None if nothing was hidden)."""
+        try:
+            category = DB.Category.GetCategory(self.doc, DB.BuiltInCategory.OST_RasterImages)
+        except Exception:
+            category = None
+        if category is None:
+            return group
+        views = [element]
+        try:
+            for vid in element.GetAllPlacedViews():
+                view = self.doc.GetElement(vid)
+                if view is not None and not view.IsTemplate:
+                    views.append(view)
+        except Exception:
+            pass  # a view, not a sheet
+
+        own_group = None
+        trans = None
+        try:
+            if group is None:
+                own_group = DB.TransactionGroup(self.doc, "BatchOut DWG without images")
+                own_group.Start()
+            trans = Transaction(self.doc, "Hide images for DWG export")
+            trans.Start()
+            changed = 0
+            for view in views:
+                try:
+                    # Raises when a view template owns V/G: the post-export
+                    # sweep in export_to_dwg still removes the files.
+                    if (view.CanCategoryBeHidden(category.Id)
+                            and not view.GetCategoryHidden(category.Id)):
+                        view.SetCategoryHidden(category.Id, True)
+                        changed += 1
+                except Exception as ex:
+                    logger.debug("Raster Images not hideable on {}: {}".format(view.Id, ex))
+            trans.Commit()
+            if changed or own_group is None:
+                return group or own_group
+            own_group.RollBack()
+            return None
+        except Exception as ex:
+            logger.warning("Could not hide images for DWG export: {}".format(ex))
+            try:
+                if trans is not None and trans.HasStarted() and not trans.HasEnded():
+                    trans.RollBack()
+            except Exception:
+                pass
+            if own_group is not None:
+                try:
+                    own_group.RollBack()
+                except Exception:
+                    pass
+            return group
 
     def _format_checkboxes(self):
         """(format, checkbox) pairs for the formats crash history tracks."""
@@ -4135,6 +4198,9 @@ class ExportManagerWindow(T3WPFWindow):
             except Exception as ex:
                 logger.debug("MergedViews not supported in Revit {}: {}".format(REVIT_VERSION, ex))
 
+            skip_images = bool(self.cad_skip_image_references.IsChecked)
+            removed_refs = 0
+
             exported_count = 0
 
             for item in items:
@@ -4188,6 +4254,11 @@ class ExportManagerWindow(T3WPFWindow):
                     # Expected output + its current mtime, so a stale file left by
                     # an earlier aborted run cannot be mistaken for a fresh export.
                     expected_file = os.path.join(output_folder, filename + ".dwg")
+                    folder_before = None
+                    if skip_images:
+                        safe_group = self._begin_hide_images(element, safe_group)
+                        folder_before = batchout_refs.snapshot(output_folder)
+
                     prev_mtime = os.path.getmtime(expected_file) if os.path.exists(expected_file) else None
                     started_at = time.time()
 
@@ -4220,6 +4291,16 @@ class ExportManagerWindow(T3WPFWindow):
                     # Export call returned -> Revit survived this sheet.
                     self._clear_crash_marker()
 
+                    if folder_before is not None:
+                        # Images the hide could not reach (e.g. inside a title
+                        # block family) still get written: delete them.
+                        deleted, failed = batchout_refs.delete_files(
+                            batchout_refs.written_reference_files(
+                                output_folder, folder_before, keep=[expected_file]))
+                        removed_refs += len(deleted)
+                        for path in failed:
+                            logger.warning("Could not delete image reference file: {}".format(path))
+
                     # Verify a FRESH file was written (not a leftover from an
                     # earlier aborted run).
                     if self._verify_export(expected_file, prev_mtime, started_at, ".dwg"):
@@ -4242,6 +4323,8 @@ class ExportManagerWindow(T3WPFWindow):
                     # Safe mode must NEVER leave the model modified.
                     self._end_safe_mode(safe_group)
 
+            if removed_refs:
+                logger.info("DWG export: deleted {} image reference file(s).".format(removed_refs))
             return exported_count
 
         except Exception as ex:

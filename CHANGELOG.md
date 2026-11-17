@@ -19,7 +19,23 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-11-17
+
+MCP fixes: AI-app tool calls no longer hang, Connect never wipes your AI-app config, Vietnamese names reach Revit intact, and read-only mode is enforced everywhere.
+
 ### Fixed
+- **AI apps — every tool call hung for 2 minutes:** calls from Claude Desktop, ChatGPT (Codex) or Antigravity waited 120 s and then failed with "still running in Revit", and other calls queued behind them. The T3Lab Assistant was not affected.
+- **MCP Control — Connect could wipe your AI-app config:** a Claude Desktop or Antigravity config saved with a BOM (Notepad, PowerShell), a comment or a trailing comma, or a Codex `config.toml` with a non-UTF-8 character, was replaced by the T3Lab entry alone, losing your other MCP servers and settings. Such a file is now read (BOM) or left untouched with a message saying what to fix.
+- **MCP Control — "App switch failed: no attribute '_configure_all_btn'"** when picking another app in the Connect tab.
+- **AI apps — Vietnamese text:** view, sheet and parameter names such as "Tầng 1" or "Đường ống" reached Revit garbled, and some characters closed the connection.
+- **AI apps behind a proxy:** with a system or company proxy, Revit showed as "not reachable" and MCP Control showed the server as "Stopped" while it was running. Local calls to Revit no longer go through a proxy.
+- **Read-only mode:** AI apps could still call the teaching and training tools (change teaching settings, start a fine-tune) while read-only mode was on. They are now blocked like every other change.
+- **T3Lab Assistant — tools missing after turning on MCP read-only mode:** MCP Control's read-only mode and toolsets are for AI apps only; the Assistant now always keeps its full tool list (e.g. `place_wall`).
+- **AI apps — placing elements by type name:** `place_wall` with a wall type, placing point-, line- and surface-based families, listing family types and finding title blocks failed with "Name" or "type not found".
+- **MCP Control — Antigravity path:** opening MCP Control before Antigravity created its config pinned a path Antigravity never reads, so Connect showed "Connected" with no effect. The live path is now used.
+- **MCP settings file:** `mcp_paths.json` (read-only mode, code execution, paths) is written safely, so two writers at once can no longer erase your security settings; a file that cannot be read is kept as `mcp_paths.json.unreadable`.
+- **T3Lab and T3Lab Lite on one machine:** they no longer overwrite each other's MCP bridge at every Revit start.
+- **AI apps — tool list after a reload:** when Revit answered with an error, AI apps saw only 3 tools until they restarted; they now get the last known list.
 - **Agent Cursors — broken icon on the bar:** icons on the bar fall back from Segoe Fluent Icons to Segoe MDL2 Assets, so none shows as an empty box; the "next" mark of a task list uses an icon every Windows version has.
 
 ## [2.4.0] - 2026-11-17

@@ -1210,27 +1210,17 @@ class MCPService(object):
         cheap) to call on every Revit startup; extension updates propagate
         to the deployed copy automatically.
 
+        hub_store.py (t3lab_hub) goes with it, and this extension becomes the
+        bridge's owner, so startup.py keeps it current (lib/bridge_deploy.py).
+
         Returns:
             (deployed_path: str|None, error: str|None)
         """
-        try:
-            src = _source_bridge_path()
-            with open(src, 'rb') as f:
-                data = f.read()
-
-            dst = os.path.join(_get_paths_module().settings_dir(), 'bridge.py')
-            try:
-                with open(dst, 'rb') as f:
-                    if f.read() == data:
-                        return dst, None          # already up to date
-            except Exception:
-                pass                              # missing/unreadable → write
-
-            with open(dst, 'wb') as f:
-                f.write(data)
-            return dst, None
-        except Exception as ex:
-            return None, str(ex)
+        _ensure_lib_in_path()
+        import bridge_deploy
+        deployed, error, _written = bridge_deploy.deploy(
+            _get_paths_module().settings_dir(), os.path.dirname(_source_bridge_path()))
+        return deployed, error
 
     @staticmethod
     def config_snippet(port=None, fmt='json', server='revit'):

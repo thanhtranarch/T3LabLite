@@ -261,6 +261,29 @@ the add-in puts its bridge there. A bridge somewhere else can be set with
 Desktop's config while Claude Desktop is running (it would drop the entry
 when it quits) — quit it from the tray icon first.
 
+### Data hub
+
+AI apps can ask about a model **with Revit closed**, across models, and ask
+what changed since last time. Revit saves a snapshot of the open model
+(elements, types, parameters, warnings) and the MCP bridge keeps the
+snapshots in a local database. Ask your AI app to "publish this model to the
+hub", then for example "how many doors per level", "which doors have no fire
+rating", "what changed since the last publish".
+
+- One MCP tool, `t3lab_hub`: `publish` (needs Revit), `summary`, `query`,
+  `diff`. Results are small (counts and filtered rows), so a question costs
+  far fewer tokens than reading elements one by one.
+- Stored in `%LOCALAPPDATA%\T3Lab\hub`: `snapshots\` holds the data,
+  `hub.db` is a cache rebuilt from it with
+  `python %APPDATA%\T3LabAI\bridge.py hub rebuild`. Do not move `hub.db`
+  to OneDrive or a network folder.
+- Nothing to switch on. After an update, restart Revit (it refreshes the
+  bridge files), then restart the AI app. A diff needs two publishes.
+- The hub never changes a model, and its data can be old: AI apps re-read the
+  live model before any edit.
+
+Details: [docs/data-hub.md](docs/data-hub.md).
+
 ### Slow tool opens
 
 To see where the time goes when a tool opens, turn on the timing log

@@ -157,6 +157,8 @@ SERVER_INSTRUCTIONS = (
     'Assistant and Claude Code): search it before you assume or ask; save a '
     'new lasting convention the user states with t3lab_memory_save.')
 
+HUB_TOOL, HUB_PUBLISH_TOOL = 't3lab_hub', 'hub_publish'     # docs/data-hub.md
+
 # Tools implemented by the bridge itself (multi-instance control lives here —
 # a server inside one Revit process cannot see the other processes). Injected
 # into every tools/list response on top of the server manifest; never cached.
@@ -195,6 +197,22 @@ BRIDGE_TOOLS = [
             'required': [],
         },
     },
+    {'name': HUB_TOOL,
+     'description': ('Data hub: saved snapshots of Revit models (elements, parameters, '
+                     'warnings), read without Revit and across models. Results carry as_of: '
+                     're-read the live model before any write. Actions and their options: '
+                     'summary (all models, or one). query: category, family, type, level, '
+                     'workset, phase, name_contains, kind (instance|type|any), where=[{param, '
+                     'op, value}] with op = != contains not_contains empty not_empty > >= < '
+                     '<=; group_by=[fields or "param:<Name>"] (+ sum=<param>) gives counts, '
+                     'else rows with select=[params], limit, offset; snapshot. diff: since, '
+                     'to (default previous -> latest), category. publish (needs Revit): '
+                     'categories, parameters, max_seconds, revit_document.'),
+     'inputSchema': {'type': 'object', 'properties': {
+         'action': {'type': 'string', 'enum': ['summary', 'query', 'diff', 'publish']},
+         'model': {'type': 'string', 'description': 'Document title, or part of it.'},
+         'options': {'type': 'object', 'description': 'Options of the action.'}},
+         'required': ['action']}},
 ]
 
 
@@ -955,6 +973,128 @@ def _handle_read(request, current, token):
                               request.get('method')))
 
 
+# ─── Data hub (docs/data-hub.md) ───
+# Snapshots Revit wrote (core/hub_snapshot.py) are ingested and read here,
+# outside Revit, by core/hub_store.py (deployed next to this file by
+# lib/bridge_deploy.py; stdlib sqlite3).
+def _load_hub_store():
+    try:
+        from core import hub_store                 # tests, in-extension copy
+        return hub_store
+    except ImportError:
+        pass
+    try:        # deployed next to bridge.py; by path, so `python -E/-I` finds it too
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hub_store.py')
+        spec = importlib.util.spec_from_file_location('hub_store', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+_hs = _load_hub_store()
+
+
+def _hub_response(request_id, payload):
+    """_tool_response without indentation: hub results are sized for tokens."""
+    return {'jsonrpc': '2.0', 'id': request_id,
+            'result': {'content': [{'type': 'text', 'text': json.dumps(
+                payload, ensure_ascii=False, separators=(',', ':'))}]}}
+
+
+def _hub_error(message, code, **extra):
+    out = {'error': message, 'error_code': code, 'retryable': False}
+    out.update(extra)
+    return out
+
+
+def _hub_publish(request, current, token, hub, args):
+    """hub_publish in Revit (same policy as any tool there), then ingest."""
+    rid = request.get('id')
+    call_args = dict((k, args[k]) for k in ('categories', 'parameters', 'max_seconds')
+                     if args.get(k) not in (None, '', []))
+    call = {'jsonrpc': '2.0', 'id': rid, 'method': 'tools/call',
+            'params': {'name': HUB_PUBLISH_TOOL, 'arguments': call_args}}
+    resp = _forward(_stamp_agent(call, current), current, token)
+    payload = _tool_payload(resp)
+    if not isinstance(payload, dict) or not payload.get('published'):
+        return resp
+    ingest = hub.ingest_pending()
+    mine = next((i for i in ingest['ingested']
+                 if i.get('snapshot') == payload.get('snapshot')), None)
+    payload.pop('file', None)
+    payload['hub'] = mine or {'ingested': False, 'errors': ingest['errors']}
+    return _hub_response(rid, payload)
+
+
+def _handle_hub(request, current, token):
+    """t3lab_hub: summary / query / diff from the local hub, publish via Revit."""
+    rid = request.get('id')
+    args = dict((request.get('params') or {}).get('arguments') or {})
+    options = args.pop('options', None)
+    if isinstance(options, dict):           # options may also be passed flat
+        args = dict(options, **args)
+    if _hs is None:
+        return _hub_response(rid, _hub_error(
+            'The data hub is not installed next to the bridge (hub_store.py, sqlite3).',
+            'hub_unavailable',
+            hint='Restart Revit (it refreshes the bridge files), then the AI app.'))
+    action = '{}'.format(args.get('action') or 'summary').lower()
+    hub = _hs.Hub()
+    try:
+        if action == 'publish':
+            return _hub_publish(request, current, token, hub, args)
+        ingest = hub.ingest_pending()
+        if action == 'summary':
+            out = hub.summary(args.get('model'))
+        elif action == 'query':
+            filters = dict((f, args.get(f)) for f in ('category', 'family', 'type', 'level',
+                                                      'workset', 'phase', 'name_contains'))
+            out = hub.query(model=args.get('model'), snapshot=args.get('snapshot'),
+                            kind=args.get('kind') or 'instance', where=args.get('where'),
+                            group_by=args.get('group_by'), sum_param=args.get('sum'),
+                            select=args.get('select'), limit=args.get('limit'),
+                            offset=args.get('offset'), **filters)
+        elif action == 'diff':
+            out = hub.diff(args.get('model'), args.get('since'), args.get('to'),
+                           args.get('category'), args.get('limit'))
+        else:
+            return _hub_response(rid, _hub_error(
+                'action is summary, query, diff or publish.', 'bad_arguments'))
+    except _hs.HubError as e:
+        return _hub_response(rid, e.payload)
+    if ingest['errors']:
+        out['ingest_errors'] = ingest['errors']
+    return _hub_response(rid, out)
+
+
+def _hub_cli(argv):
+    """bridge.py hub summary|query|diff|rebuild ['{json}']: the hub without an AI app."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    action = argv[0] if argv else 'summary'
+    if _hs is None:
+        out = _hub_error('hub_store.py is not next to the bridge.', 'hub_unavailable')
+    elif action == 'rebuild':
+        out = _hs.Hub().rebuild()
+    else:
+        try:
+            args = json.loads(argv[1]) if len(argv) > 1 else {}
+        except ValueError:
+            args = None
+        if not isinstance(args, dict):
+            out = _hub_error('Arguments must be a JSON object.', 'bad_arguments')
+        else:
+            request = {'id': 1, 'params': {'arguments': dict(args, action=action)}}
+            out = _tool_payload(_handle_hub(request, {'port': PORT_MIN}, _read_token()))
+    sys.stdout.write(json.dumps(out, ensure_ascii=False, indent=2) + '\n')
+    return 1 if isinstance(out, dict) and out.get('error') else 0
+
+
 def _handle(request, current, token):
     """One request -> response. Modern requests (version in params._meta)
     are checked here and their results get the modern fields."""
@@ -993,6 +1133,8 @@ def _dispatch(request, current, token):
                 return _handle_list(request, current, token)
             if name == 'switch_active_document':
                 return _handle_switch(request, current, token)
+            if name == HUB_TOOL:
+                return _handle_hub(request, current, token)
             return _forward(_stamp_agent(request, current), current, token)
         except Exception as e:
             if _is_conn_refused(e):
@@ -1009,6 +1151,8 @@ def _dispatch(request, current, token):
 
 
 def main():
+    if sys.argv[1:2] == ['hub']:
+        sys.exit(_hub_cli(sys.argv[2:]))
     port = PORT_MIN
     # Read port from arguments if provided
     for arg in sys.argv[1:]:

@@ -160,13 +160,14 @@ class WindowTimer(object):
         t0 = self.run['t0'] if self.first else self.start
         return (self.last - t0) * 1000.0
 
-    def finish(self):
+    def finish(self, last_step='first_render'):
         """ContentRendered: write the line once. Never raises."""
         if self.done:
             return None
         self.done = True
         try:
-            self.step('first_render')
+            if last_step:
+                self.step(last_step)
             _state['opens'] += 1
             tool = self.run['tool'] if self.run else '?'
             engine = 'IronPython' if sys.platform == 'cli' else 'CPython %d.%d' % sys.version_info[:2]

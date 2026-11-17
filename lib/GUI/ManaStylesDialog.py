@@ -1148,6 +1148,10 @@ class ManaStylesWindow(T3WPFWindow):
         self.param_names = []
         self.link_instances = []
         
+        # Color Splasher reads every element of the model to list categories
+        # (2.4 s on open, 2026-11-17 open_times.log): load it on its first visit.
+        self._splasher_ready = False
+
         # Sidebar nav is wired via Click="on_sidebar_clicked" in XAML
         self.main_tab_control.SelectionChanged += self._on_main_tab_changed
         self._go_to_main_tab(0)
@@ -1208,9 +1212,7 @@ class ManaStylesWindow(T3WPFWindow):
         self.btn_maximize.Click += self._maximize
         self.btn_close_chrome.Click += self._close_chrome
         
-        # Load style data and initialize splasher
         self._load_style_manager_data()
-        self._init_color_splasher()
 
         # Inline rename on the NAME column of the three Style Manager grids
         # (double-click / F2 / Enter). Same commit path as the Rename button.
@@ -1247,6 +1249,8 @@ class ManaStylesWindow(T3WPFWindow):
             self.btn_tab_styles.IsChecked    = (idx == 0)
             self.btn_tab_splasher.IsChecked  = (idx == 1)
             self.status_text.Text = self._NAV_STATUS[idx]
+            if idx == 1:
+                self._ensure_splasher()
         except Exception:
             pass
 
@@ -1255,6 +1259,14 @@ class ManaStylesWindow(T3WPFWindow):
         self.btn_tab_styles.IsChecked    = (index == 0)
         self.btn_tab_splasher.IsChecked  = (index == 1)
         self.status_text.Text = self._NAV_STATUS[index]
+        if index == 1:
+            self._ensure_splasher()
+
+    def _ensure_splasher(self):
+        """Color Splasher data, once, on the tab's first visit."""
+        if not self._splasher_ready:
+            self._splasher_ready = True
+            self._init_color_splasher()
             
     def _on_style_sub_tab_changed(self, sender, e):
         if sender == self.btn_sub_line_styles:

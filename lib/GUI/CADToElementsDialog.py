@@ -167,10 +167,26 @@ class CADToElementsWindow(T3WPFWindow):
         self.PreviewKeyDown += self._on_key_down
 
         self._apply_units()
-        self._load_all()
+        self._load_all(scan=False)
         self._busy = False
         self._apply_mode("wall")
         self.init_ai_badge()
+        # The DWG scan grows with the drawing (4.6 s before the window showed,
+        # 2026-11-17 open_times.log): show the window first, then read layers.
+        self._first_scan_handler = self._on_first_render
+        self.ContentRendered += self._first_scan_handler
+
+    def _on_first_render(self, sender, e):
+        try:
+            self.ContentRendered -= self._first_scan_handler
+        except Exception:
+            pass
+        self._busy = True
+        try:
+            self._scan_current_cad()
+        finally:
+            self._busy = False
+        self._apply_mode(self._mode)
 
     # ------------------------------------------------------------------
     # Units — labels, defaults and hints in the project's length unit
@@ -201,7 +217,7 @@ class CADToElementsWindow(T3WPFWindow):
     # Loading
     # ------------------------------------------------------------------
 
-    def _load_all(self):
+    def _load_all(self, scan=True):
         keep_cad = self._current_cad_id()
         keep_level = self._current_level_id()
         self._cad_list = cr.get_cad_instances(self._doc)
@@ -214,7 +230,8 @@ class CADToElementsWindow(T3WPFWindow):
                    default=self._default_level_index(keep_level))
         self._fill_types()
         self._fill_level_dependent()
-        self._scan_current_cad()
+        if scan:
+            self._scan_current_cad()
 
     def _fill_types(self):
         doc = self._doc

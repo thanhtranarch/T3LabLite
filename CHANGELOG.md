@@ -20,8 +20,8 @@ Releasing a new version:
 ## [Unreleased]
 
 ### Added
-- **Agent Cursors (Settings → Agent Cursors):** see what AI apps do in Revit. One coloured cursor per app and action (Read, Create, Modify, Delete, View, Export, Code) moves to the elements it works on, with an effect per action: new elements grow in, edits pulse, deletes show a red cross, moves leave a ghost. **Follow** opens the views the AI works in, **Zoom** brings off-screen elements into view, **Select** and **Tile** are optional. Off by default; the bar at the bottom of the view switches the options.
-- **MCP Control — AutoCAD tab:** connect Claude Desktop, ChatGPT (Codex) or Antigravity to AutoCAD through the T3LabCAD add-in (`t3lab-autocad`), or copy a JSON / TOML / `claude mcp add` entry.
+- **Agent Cursors (Settings → Agent Cursors):** see what AI apps do in Revit. One coloured cursor per app and action (Read, Create, Modify, Delete, View, Export, Code) moves to the elements it works on, with an effect per action: new elements grow in, edits pulse, deletes show a red cross, moves leave a ghost. The cursor moves to each element and clicks it, a read or review scans the view, captions say what the AI does in plain English ("Moving elements · 3 elements"), boxes name the element ("Walls · 1200 × 300"), and the bar lists the last 5 steps. **Follow** opens the views the AI works in, **Zoom** brings off-screen elements into view, **Select** and **Tile** are optional. Off by default; the bar at the bottom of the view switches the options.
+- **MCP Control — one Connect tab for Revit and other Autodesk apps:** pick the app (Revit, AutoCAD, Civil 3D, Navisworks, 3ds Max, Inventor), then connect Claude Desktop, ChatGPT (Codex) or Antigravity to it; the manual JSON / TOML / `claude mcp add` entry is folded at the bottom. AutoCAD connects through the T3LabCAD add-in (`t3lab-autocad`); the other apps connect once their T3Lab add-in is installed. The Setup, Manual Config and AutoCAD tabs are merged into this one.
 - **BatchOut — Skip image reference files (DWG):** export DWG without the logo/image files Revit writes next to it. Off by default; saved in the profile.
 
 ### Changed

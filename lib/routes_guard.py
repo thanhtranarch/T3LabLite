@@ -22,7 +22,7 @@ import io
 import os
 import re
 
-T3LAB_PORT_MIN, T3LAB_PORT_MAX = 48884, 48894   # = core.server PORT_MIN / PORT_MAX
+T3LAB_PORT_MIN, T3LAB_PORT_MAX = 48884, 48894   # covers T3Lab (…48892) and T3Lab Lite (…48894)
 ROUTES_PORT = 48870         # pyRevit walks up from here per Revit window: 14 before 48884
 ROUTES_DEFAULT_PORT = 48884  # pyRevit's own default when the config has no port
 

@@ -569,9 +569,11 @@ class ToolCallTests(unittest.TestCase):
         _clear_policy()
         self.s = _server()
         self.calls = []
+        self.agents = []
 
-        def fake_execute(name, arguments, confirm=None):
+        def fake_execute(name, arguments, confirm=None, agent=None):
             self.calls.append((name, arguments, confirm))
+            self.agents.append(agent)
             return {'error': 'boom'} if name == 'create_grid' else {'ok': name}
         self.s._execute_tool = fake_execute
         self.s._external_event = None
@@ -624,6 +626,13 @@ class ToolCallTests(unittest.TestCase):
         self.assertTrue(confirm1 and 'Delete 1 element' in confirm1[0])
         self.assertIn('delete_element', confirm1[2])
         self.assertIsNone(confirm2)
+
+    def test_agent_from_the_bridge_reaches_the_task(self):
+        # Agent cursors tell AI apps apart by the bridge's `t3lab/agent`.
+        self.s._handle_tool_call({'name': 'create_level', 'arguments': {},
+                                  '_meta': {'t3lab/agent': 'codex-mcp-client'}})
+        self._call('create_level')
+        self.assertEqual(self.agents, ['codex-mcp-client', 'claude-desktop'])
 
     def test_confirm_can_be_turned_off(self):
         _set_settings(**{mp.CONFIRM_KEY: False})
@@ -1081,7 +1090,7 @@ class ToolsetTests(unittest.TestCase):
         self.s = _server()
         self.calls = []
 
-        def fake_execute(name, arguments, confirm=None):
+        def fake_execute(name, arguments, confirm=None, agent=None):
             self.calls.append(name)
             return {'ok': name}
         self.s._execute_tool = fake_execute

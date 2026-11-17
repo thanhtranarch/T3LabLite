@@ -1,0 +1,4 @@
+title: "Agent\nCursors"
+tooltip: "Show or hide live cursors for AI agents (Claude, GPT, Gemini…) working in Revit through MCP: one cursor per agent and action (Read, Create, Modify, Delete, View, Export, Code) moves to the elements it works on, with an effect per action, and Follow opens the views it works in. Shows the benefits and drawbacks before you switch."
+author: "T3Lab"
+version: "1.1.0"

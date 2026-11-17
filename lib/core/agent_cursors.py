@@ -23,7 +23,6 @@ from __future__ import unicode_literals
 import numbers
 import os
 import re
-import time
 
 SETTING_KEY = 'agent_cursors_enabled'
 MAX_TARGETS = 12            # bounding boxes per call: keeps a bulk edit cheap
@@ -34,6 +33,9 @@ MOVE_MS = 650               # cursor glide (one stop; shorter per stop on a tour
 MAX_STOPS = 6               # targets the cursor visits one by one per call
 DWELL_MS = 220              # pause + click at each stop
 FEED_SIZE = 5               # last steps listed on the HUD
+REPLAY_SIZE = 20            # steps the HUD can replay
+SUMMARY_S = 20              # idle summary card stays this long
+NARRATE_MAX = 90            # goal banner text
 
 # name -> (mcp_paths.json key, default). The HUD toggles them live.
 OPTIONS = (
@@ -41,12 +43,20 @@ OPTIONS = (
     ('zoom', 'agent_cursors_zoom', True),
     ('select', 'agent_cursors_select', False),
     ('tile', 'agent_cursors_tile_views', False),
+    ('reduce', 'agent_cursors_reduce_motion', False),
+    ('glow', 'agent_cursors_glow', False),
 )
+# Motion speed (mcp_paths.json agent_cursors_speed): name -> time factor.
+SPEED_KEY = 'agent_cursors_speed'
+SPEEDS = (('calm', 1.6), ('normal', 1.0), ('fast', 0.55))
 OPTION_LABELS = {
     'follow': ('Follow', 'Open and switch to the views the agent works in'),
     'zoom': ('Zoom', 'Zoom the view to targets that are off screen'),
     'select': ('Select', "Select the agent's targets (replaces your selection)"),
     'tile': ('Tile', 'Tile the open views when the agent opens another one'),
+    'reduce': ('Less motion', 'No glides, ripples or scans: boxes and captions only'),
+    'glow': ('Glow', 'Experimental: outline touched elements inside the Revit view '
+                     '(DirectContext3D). Turn off if Revit misbehaves.'),
 }
 
 # agent id (bridge `t3lab/agent`) -> (tag, colour). Unknown agents get a
@@ -89,19 +99,19 @@ _ACTION = dict((a[0], a) for a in ACTIONS)
 
 PROS = (
     "See at a glance which AI app is working, what it does and on which elements.",
-    "Plain-English captions (\"Moving elements · 3 elements\") and a feed of the last steps on the bar.",
-    "The cursor moves to each target and clicks it; a read or review scans the view instead of standing still.",
-    "One cursor per action (Read, Create, Modify, Delete, View, Export, Code), each with its own effect.",
-    "Follow mode opens the views the agent works in; boxes show in every tiled view.",
-    "Spot a wrong target early and stop the agent before it goes further.",
-    "Several agents at once each get their own colour and name tag.",
+    "Plain-English captions, the agent's goal (t3lab_narrate) and a feed of the last steps on the bar.",
+    "The cursor moves to each target and clicks it; values it changed show as \"Mark: A-101 → A-102\".",
+    "Long calls show \"Working 8 s\"; a call waiting for your OK pulses amber.",
+    "Two agents editing the same element flash red; targets off screen get an edge arrow.",
+    "When the agents go idle: a summary, Select touched and Replay.",
 )
 CONS = (
     "Each tool call does a little extra work (bounding boxes of up to {} elements, twice for a delete or move).".format(MAX_TARGETS),
     "Follow switches the active view, so a later tool that works on 'the active view' works on the view the agent opened.",
     "Zoom and Select change your camera and selection while an agent works (Select is off by default).",
-    "Boxes are a snapshot: pan or zoom while an agent works and they sit off until its next call.",
-    "No boxes in perspective 3D views; the overlay shows up in screenshots and recordings.",
+    "Boxes are a snapshot: pan or zoom while an agent works and they sit off until its next call; Replay uses the old positions.",
+    "Glow (off by default) is experimental: it draws inside Revit's 3D views and is not tested on every Revit version.",
+    "The overlay shows up in screenshots and recordings.",
 )
 
 
@@ -150,6 +160,8 @@ def set_enabled(on):
     _cache['mtime'] = None
     if not on:
         hide()
+        _session['touched'].clear()     # the next session starts clean
+        _session['goals'].clear()
     return bool(on)
 
 
@@ -166,6 +178,27 @@ def set_option(name, value):
             _cache['mtime'] = None
             return bool(value)
     raise KeyError(name)
+
+
+def speed():
+    """'calm' | 'normal' | 'fast'."""
+    name = _settings().get(SPEED_KEY, 'normal')
+    return name if name in dict(SPEEDS) else 'normal'
+
+
+def speed_factor(name=None):
+    return dict(SPEEDS)[name or speed()]
+
+
+def next_speed(name):
+    names = [n for n, _f in SPEEDS]
+    return names[(names.index(name) + 1) % len(names)] if name in names else 'normal'
+
+
+def set_speed(name):
+    _paths().set_setting(SPEED_KEY, name if name in dict(SPEEDS) else 'normal')
+    _cache['mtime'] = None
+    return speed()
 
 
 def options_text():
@@ -514,6 +547,133 @@ def counts_text(counts):
     return ' · '.join(parts)
 
 
+def clean_goal(text):
+    """One line, at most NARRATE_MAX characters, or ''."""
+    text = ' '.join('{}'.format(text or '').split())
+    return text if len(text) <= NARRATE_MAX else text[:NARRATE_MAX - 1] + '…'
+
+
+def _short(value, limit=24):
+    text = '{}'.format(value if value is not None else '')
+    text = '""' if text == '' else text
+    return text if len(text) <= limit else text[:limit - 1] + '…'
+
+
+def change_text(param, old, new):
+    """'Comments: "" → Checked' for a parameter the call changed."""
+    return '{}: {} → {}'.format(_short(param, 20), _short(old), _short(new))
+
+
+EDIT_ACTIONS = ('create', 'modify', 'delete')
+
+
+def track_touches(touched, agent, ids, action):
+    """Remember which agent edited which element; return [(id, [other agents])]
+    for ids another agent edited before. `touched` = {id: set(agents)}."""
+    if action not in EDIT_ACTIONS:
+        return []
+    clashes = []
+    for i in ids:
+        others = touched.setdefault(i, set())
+        before = sorted(a for a in others if a != agent)
+        if before:
+            clashes.append((i, before))
+        others.add(agent)
+    return clashes
+
+
+def edge_point(rect, point, margin=18.0):
+    """Where the ray from rect's centre to `point` leaves rect (inset by
+    margin): (x, y, angle in degrees, 0 = right, 90 = down)."""
+    import math
+    left, top, right, bottom = rect
+    cx, cy = (left + right) / 2.0, (top + bottom) / 2.0
+    dx, dy = point[0] - cx, point[1] - cy
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        dx = 1.0
+    hw, hh = max((right - left) / 2.0 - margin, 1.0), max((bottom - top) / 2.0 - margin, 1.0)
+    t = min(hw / abs(dx) if abs(dx) > 1e-9 else 1e18, hh / abs(dy) if abs(dy) > 1e-9 else 1e18)
+    return cx + dx * t, cy + dy * t, math.degrees(math.atan2(dy, dx))
+
+
+def offscreen_markers(rect, points, margin=18.0):
+    """[(x, y, angle, count)]: one edge arrow per 45° sector holding targets
+    that sit outside rect."""
+    import math
+    left, top, right, bottom = rect
+    cx, cy = (left + right) / 2.0, (top + bottom) / 2.0
+    sectors = {}
+    for px, py in points:
+        if left <= px <= right and top <= py <= bottom:
+            continue
+        ang = math.atan2(py - cy, px - cx)
+        key = int(round(math.degrees(ang) / 45.0)) % 8
+        acc = sectors.setdefault(key, [0.0, 0.0, 0])
+        acc[0] += math.cos(ang)
+        acc[1] += math.sin(ang)
+        acc[2] += 1
+    out = []
+    for key in sorted(sectors):
+        sx, sy, n = sectors[key]
+        x, y, ang = edge_point(rect, (cx + sx * 1000.0, cy + sy * 1000.0), margin)
+        out.append((x, y, ang, n))
+    return out
+
+
+def summary_lines(counts_by_agent, touched_count):
+    """Idle card: one line per agent plus the elements changed."""
+    lines = []
+    for agent in sorted(counts_by_agent):
+        text = counts_text(counts_by_agent[agent])
+        if text:
+            lines.append('{}: {}'.format(agent_style(agent)[0], text))
+    if touched_count:
+        lines.append('{} element{} changed'.format(touched_count, '' if touched_count == 1 else 's'))
+    return lines
+
+
+def _cam(point, eye, right, up, forward):
+    d = (point[0] - eye[0], point[1] - eye[1], point[2] - eye[2])
+    z = d[0] * forward[0] + d[1] * forward[1] + d[2] * forward[2]
+    if z <= 1e-6:
+        return None             # behind the camera
+    x = d[0] * right[0] + d[1] * right[1] + d[2] * right[2]
+    y = d[0] * up[0] + d[1] * up[1] + d[2] * up[2]
+    return x / z, y / z
+
+
+def project_perspective(point, cam, rect):
+    """Model point -> screen (x, y) in a perspective 3D view, or None behind
+    the eye. cam: eye/right/up/forward + c0/c1, the zoom corners, which map
+    to the view's screen corners."""
+    p = _cam(point, cam['eye'], cam['right'], cam['up'], cam['forward'])
+    a = _cam(cam['c0'], cam['eye'], cam['right'], cam['up'], cam['forward'])
+    b = _cam(cam['c1'], cam['eye'], cam['right'], cam['up'], cam['forward'])
+    if p is None or a is None or b is None:
+        return None
+    u0, u1 = min(a[0], b[0]), max(a[0], b[0])
+    v0, v1 = min(a[1], b[1]), max(a[1], b[1])
+    if u1 - u0 < 1e-12 or v1 - v0 < 1e-12:
+        return None
+    left, top, right, bottom = rect
+    return (left + (p[0] - u0) / (u1 - u0) * (right - left),
+            bottom - (p[1] - v0) / (v1 - v0) * (bottom - top))
+
+
+def perspective_box(corners, cam, rect):
+    """Screen bounds of 3D box corners in a perspective view, clipped; None
+    when any corner is behind the eye or the box is off screen."""
+    pts = [project_perspective(c, cam, rect) for c in corners]
+    if any(p is None for p in pts):
+        return None
+    x0, x1 = min(p[0] for p in pts), max(p[0] for p in pts)
+    y0, y1 = min(p[1] for p in pts), max(p[1] for p in pts)
+    left, top, r, bottom = rect
+    if x1 < left or x0 > r or y1 < top or y0 > bottom:
+        return None
+    return (max(x0, left), max(y0, top), min(x1, r), min(y1, bottom))
+
+
 # ─── Revit snapshot (main thread) ──────────────────────────────────────────────
 
 def _xyz(p):
@@ -530,10 +690,17 @@ def _view_geometry(uiview, view):
     geo = {'rect': rect, 'id': eid_value(view.Id), 'name': view.Name,
            'view': view, 'boxes': [], 'gone': [], 'ghosts': [], 'ortho': False}
     try:
-        if bool(view.IsPerspective) or '{}'.format(view.ViewType) in _NO_BOXES:
+        if '{}'.format(view.ViewType) in _NO_BOXES:
+            return geo
+        if bool(view.IsPerspective):
+            ori = view.GetOrientation()
+            corners = uiview.GetZoomCorners()
+            geo['persp'] = {'eye': _xyz(ori.EyePosition), 'forward': _xyz(ori.ForwardDirection),
+                            'up': _xyz(ori.UpDirection), 'right': _xyz(view.RightDirection),
+                            'c0': _xyz(corners[0]), 'c1': _xyz(corners[1])}
             return geo
     except Exception:
-        pass
+        return geo
     try:
         corners = uiview.GetZoomCorners()
         c0, c1 = corners[0], corners[1]
@@ -570,12 +737,14 @@ def _shown_in(doc, view, ids):
 def _boxes(doc, geo, ids):
     """[{'id', 'box', 'size'}] of the ids shown in one orthographic view."""
     out = []
-    if not geo.get('ortho') or not ids:
+    persp = geo.get('persp')
+    if not (geo.get('ortho') or persp) or not ids:
         return out
     from Snippets._compat import make_eid
     view = geo['view']
     shown = _shown_in(doc, view, ids)
-    right, up = geo['right'], geo['up']
+    right, up = (persp['right'], persp['up']) if persp else (geo['right'], geo['up'])
+    geo.setdefault('offscreen', [])
     for i in ids:
         if i not in shown:
             continue
@@ -591,8 +760,17 @@ def _boxes(doc, geo, ids):
             if bb.Transform is not None and not bb.Transform.IsIdentity:
                 from Autodesk.Revit.DB import XYZ
                 pts = [_xyz(bb.Transform.OfPoint(XYZ(*p))) for p in pts]
-            box = screen_box(pts, geo['origin'], right, up, geo['w'], geo['h'], geo['rect'])
+            if persp:
+                box = perspective_box(pts, persp, geo['rect'])
+            else:
+                box = screen_box(pts, geo['origin'], right, up, geo['w'], geo['h'], geo['rect'])
             if box is None:
+                # In the view but off screen: an edge arrow points at it.
+                mid = tuple((lo_ + hi_) / 2.0 for lo_, hi_ in zip(pts[0], pts[-1]))
+                centre = (project_perspective(mid, persp, geo['rect']) if persp else
+                          project(mid, geo['origin'], right, up, geo['w'], geo['h'], geo['rect']))
+                if centre is not None:
+                    geo['offscreen'].append(centre)
                 continue
             ext = (hi.X - lo.X, hi.Y - lo.Y, hi.Z - lo.Z)
             w = abs(sum(ext[k] * abs(right[k]) for k in range(3)))
@@ -652,6 +830,7 @@ def _snapshot(app, ids, pre=None):
     snap = {'rect': union_rect([g['rect'] for g in shown]), 'views': shown,
             'active': shown[0], 'view': shown[0]['name']}
     snap['any_box'] = any(g['boxes'] for g in shown)
+    snap['offscreen'] = list(shown[0].get('offscreen') or [])
     return snap
 
 
@@ -805,21 +984,99 @@ def _internal(task):
     return '{}'.format(getattr(task, 'tool_name', '')).startswith('__')
 
 
+# set_parameter / bulk_set_parameter / rename_element: (name arg, value arg).
+_PARAM_TOOLS = {
+    'set_parameter': (('parameter_name', 'name'), 'value'),
+    'bulk_set_parameter': (('parameter_name', 'name'), 'value'),
+    'rename_element': ((), 'new_name'),
+}
+# Per Revit session: who edited what, the agents' goals, the select event.
+_session = {'touched': {}, 'goals': {}, 'select_event': None, 'select_cls': None}
+
+
+def _param_value(elem, name):
+    """Displayed value of a parameter (or the element's Name), or None."""
+    try:
+        if not name:
+            return elem.Name
+        prm = elem.LookupParameter(name)
+        if prm is None:
+            return None
+        return prm.AsValueString() or prm.AsString() or (
+            '{}'.format(prm.AsDouble()) if '{}'.format(prm.StorageType) == 'Double'
+            else '{}'.format(prm.AsInteger()) if '{}'.format(prm.StorageType) == 'Integer' else '')
+    except Exception:
+        return None
+
+
+def _param_name(tool, args):
+    spec = _PARAM_TOOLS.get(tool)
+    if spec is None or not isinstance(args, dict):
+        return None, False
+    for key in spec[0]:
+        if args.get(key):
+            return '{}'.format(args.get(key)), True
+    return ('Name', True) if not spec[0] else (None, False)
+
+
+def _read_values(app, ids, name):
+    from Snippets._compat import make_eid
+    doc = app.ActiveUIDocument.Document
+    out = {}
+    for i in ids[:MAX_STOPS]:
+        elem = doc.GetElement(make_eid(i))
+        if elem is not None:
+            out[i] = _param_value(elem, None if name == 'Name' else name)
+    return out
+
+
+def _hwnd(app):
+    try:
+        return app.MainWindowHandle
+    except Exception:
+        return None
+
+
 def before(app, task):
-    """Ahead of the tool: remember the boxes a delete / move will change.
-    Never raises; costs one mtime check while the feature is off."""
+    """Ahead of the tool: show the agent working, remember the boxes a delete /
+    move will change and the values an edit will overwrite. Never raises;
+    costs one mtime check while the feature is off."""
     try:
         if not is_enabled() or _internal(task):
             return
+        tool = getattr(task, 'tool_name', '')
         args = getattr(task, 'arguments', None)
-        action = classify_action(getattr(task, 'tool_name', ''), args)
-        if action not in ('delete', 'modify'):
-            return
+        action = classify_action(tool, args)
         ids = extract_ids(args)
-        if ids:
+        try:
+            doc, geos, active = _open_views(app)
+            if active is not None:
+                _overlay(_hwnd(app)).call(
+                    'working', _agent_of(task), action,
+                    describe_call(tool, args, len(ids)), tool, geos[active]['rect'])
+        except Exception:
+            pass
+        name, ok = _param_name(tool, args)
+        if ok and ids:
+            task._cursor_old = (name, _read_values(app, ids, name))
+        if action in ('delete', 'modify') and ids:
             task._cursor_pre = _pre_snapshot(app, ids)
     except Exception:
         pass
+
+
+def _changes(app, task, ids):
+    """['Comments: "" → Checked', ...] for the values the call changed."""
+    old = getattr(task, '_cursor_old', None)
+    if not old:
+        return []
+    name, before_values = old
+    after_values = _read_values(app, ids, name)
+    out = []
+    for i in ids:
+        if i in before_values and before_values[i] != after_values.get(i):
+            out.append((i, change_text(name, before_values[i], after_values.get(i))))
+    return out
 
 
 def notify(app, task):
@@ -837,6 +1094,7 @@ def notify(app, task):
             isinstance(result, dict) and bool(result.get('error')))
         action = classify_action(tool, args, result)
         ids = [] if failed else extract_ids(args, result)
+        agent = _agent_of(task)
         opts = options()
         uidoc = app.ActiveUIDocument
         followed = []
@@ -857,15 +1115,116 @@ def notify(app, task):
         if opts['tile'] and any(new for _v, _n, new in followed):
             if len(list(uidoc.GetOpenUIViews())) >= 2:
                 _tile(app)
-        hwnd = None
+        changes = [] if failed else _changes(app, task, ids)
+        clashes = [] if failed else track_touches(_session['touched'], agent, ids, action)
+        _ensure_select_event()
         try:
-            hwnd = app.MainWindowHandle
+            from core import agent_cursors_glow
+            if opts['glow']:
+                agent_cursors_glow.update(app, sorted(_session['touched']))
+            else:
+                agent_cursors_glow.stop(app)        # no-op when never started
         except Exception:
             pass
-        _overlay(hwnd).show(_agent_of(task), action, tool, failed, snap, followed,
-                            args=args, n_targets=len(ids))
+        _overlay(_hwnd(app)).call(
+            'show', agent, action, tool, failed, snap, followed, args=args,
+            n_targets=len(ids), changes=changes, clashes=clashes,
+            touched=len(_session['touched']),
+            goal=_session['goals'].get(agent_key(agent) or 'claude-desktop', ''))
     except Exception:
         pass
+
+
+# ─── Narration / approval wait (any thread) ────────────────────────────────────
+
+NARRATE_TOOL = 't3lab_narrate'
+NARRATE_SCHEMA = {
+    'name': NARRATE_TOOL,
+    'description': ('Say in one short line what you are about to do in Revit, e.g. '
+                    '"Renumber the doors on Level 2". Shown to the user as a goal banner '
+                    'over the model while Agent Cursors are on; changes nothing. Call it '
+                    'before a multi-step task and when the goal changes.'),
+    'inputSchema': {
+        'type': 'object',
+        'properties': {
+            'message': {'type': 'string',
+                        'description': 'The goal, one line (max {} characters).'.format(NARRATE_MAX)},
+        },
+        'required': ['message'],
+    },
+}
+
+
+def narrate(agent, message):
+    """t3lab_narrate: set the agent's goal banner. Any thread; never raises.
+    Returns the tool result."""
+    goal = clean_goal(message)
+    _session['goals'][agent_key(agent) or 'claude-desktop'] = goal
+    try:
+        if is_enabled() and _state.get('overlay') is not None:
+            _state['overlay'].call('narrate', agent or 'claude-desktop', goal)
+    except Exception:
+        pass
+    return {'success': True, 'goal': goal,
+            'shown': bool(goal) and is_enabled(),
+            'note': ('Shown over the model.' if is_enabled() else
+                     'Agent Cursors are off in Revit; the goal is kept for when they are on.')}
+
+
+def waiting(agent, tool, arguments=None, on=True):
+    """A call waits for the user's OK (approval dialog): pulse the cursor.
+    Any thread; never raises."""
+    try:
+        if is_enabled() and _state.get('overlay') is not None:
+            _state['overlay'].call('waiting', agent or 'claude-desktop', tool,
+                                   describe_call(tool, arguments), bool(on))
+    except Exception:
+        pass
+
+
+# ─── Select touched (HUD button -> ExternalEvent -> main thread) ──────────────
+
+def touched_ids():
+    return sorted(_session['touched'])
+
+
+def _ensure_select_event():
+    """ExternalEvent the HUD's "Select touched" raises. Created here, in an
+    API context (notify runs inside Execute); one per Revit session."""
+    if _session['select_event'] is not None:
+        return _session['select_event']
+    try:
+        from Autodesk.Revit.UI import ExternalEvent, IExternalEventHandler
+        cls = _session['select_cls']
+        if cls is None:
+            class _SelectTouched(IExternalEventHandler):
+                __namespace__ = 'T3Lab.AgentCursorsSelect'
+
+                def Execute(self, uiapp):
+                    try:
+                        _select(uiapp.ActiveUIDocument, touched_ids())
+                    except Exception:
+                        pass
+
+                def GetName(self):
+                    return 'T3Lab Agent Cursors - select touched'
+            cls = _session['select_cls'] = _SelectTouched
+        _session['select_event'] = ExternalEvent.Create(cls())
+    except Exception:
+        _session['select_event'] = None
+    return _session['select_event']
+
+
+def select_touched():
+    """HUD button: select every element the agents changed. Any thread."""
+    event = _session.get('select_event')
+    if event is not None:
+        try:
+            event.Raise()
+            return True
+        except Exception:
+            pass
+    return False
 
 
 def hide():
@@ -873,785 +1232,22 @@ def hide():
     ov = _state.get('overlay')
     if ov is not None:
         try:
-            ov.hide()
+            ov.call('hide')
         except Exception:
             pass
 
 
-# ─── WPF overlay ───────────────────────────────────────────────────────────────
+# ─── Overlay (core/agent_cursors_overlay.py) ──────────────────────────────────
 
 _state = {'overlay': None}
 
 
 def _overlay(hwnd):
+    """The overlay host (its own UI thread under IronPython, see
+    agent_cursors_overlay.OverlayHost); .call(method, ...) posts to it."""
     ov = _state.get('overlay')
     if ov is None or not ov.alive:
-        ov = _Overlay(hwnd)
+        from core.agent_cursors_overlay import OverlayHost
+        ov = OverlayHost(hwnd, {'select_touched': select_touched})
         _state['overlay'] = ov
     return ov
-
-
-def _NO_STYLE(enum):
-    # `WindowStyle.None` is a syntax error in Python.
-    return getattr(enum, 'None')
-
-
-_GWL_EXSTYLE = -20
-_WS_EX_TRANSPARENT = 0x20
-_WS_EX_TOOLWINDOW = 0x80
-_WS_EX_NOACTIVATE = 0x08000000
-_MAX_TRANSIENT = 400        # animation handlers kept alive (see _hook)
-
-
-def _set_exstyle(window, bits):
-    """Add extended window styles (click-through / no focus); best effort."""
-    try:
-        import ctypes
-        from System.Windows.Interop import WindowInteropHelper
-        hwnd = WindowInteropHelper(window).Handle.ToInt64()
-        user32 = ctypes.windll.user32
-        style = user32.GetWindowLongW(ctypes.c_void_p(hwnd), _GWL_EXSTYLE)
-        user32.SetWindowLongW(ctypes.c_void_p(hwnd), _GWL_EXSTYLE, style | bits)
-    except Exception:
-        pass
-
-
-def _opacity_property():
-    from System.Windows import UIElement
-    return UIElement.OpacityProperty
-
-
-class _Overlay(object):
-    """Two owned, non-activating windows: a click-through canvas over the
-    visible views for cursors, boxes and effects, and a small HUD with the
-    agents, their action counts, the views they opened and live toggles."""
-
-    def __init__(self, owner_hwnd):
-        import clr
-        for ref in ('PresentationCore', 'PresentationFramework', 'WindowsBase'):
-            try:
-                clr.AddReference(ref)
-            except Exception:
-                pass
-        from System.Windows import Window, WindowStyle, ResizeMode, SizeToContent
-        from System.Windows.Controls import Canvas
-        from System.Windows.Media import Brushes
-
-        self.alive = True
-        self._owner = owner_hwnd
-        self._cursors = {}          # 'agent|action' -> dict(group, tx, ...)
-        self._counts = {}           # agent -> {action: n}
-        self._views = []            # [(view id, name)] the agents worked in
-        self._feed = []             # last steps, newest first (HUD)
-        self._actions = 0
-        self._last = 0.0
-        self._scale = None
-        self._origin = (0.0, 0.0)   # screen px of the canvas top-left
-        self._handlers = []         # strong refs: delegates must outlive the GC
-        self._transient = []
-
-        self.win = Window()
-        self.win.WindowStyle = _NO_STYLE(WindowStyle)
-        self.win.AllowsTransparency = True
-        self.win.Background = Brushes.Transparent
-        self.win.ResizeMode = ResizeMode.NoResize
-        self.win.ShowInTaskbar = False
-        self.win.ShowActivated = False
-        self.win.Focusable = False
-        self.win.IsHitTestVisible = False
-        self.win.Title = 'T3Lab Agent Cursors'
-        self.canvas = Canvas()
-        self.canvas.IsHitTestVisible = False
-        self.win.Content = self.canvas
-        self._own(self.win)
-        self._hook(self.win, 'SourceInitialized',
-                   lambda s, e: _set_exstyle(self.win, _WS_EX_TRANSPARENT |
-                                             _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE))
-        self._hook(self.win, 'Closed', lambda s, e: setattr(self, 'alive', False))
-
-        self.hud = Window()
-        self.hud.WindowStyle = _NO_STYLE(WindowStyle)
-        self.hud.AllowsTransparency = True
-        self.hud.Background = Brushes.Transparent
-        self.hud.ResizeMode = ResizeMode.NoResize
-        self.hud.ShowInTaskbar = False
-        self.hud.ShowActivated = False
-        self.hud.SizeToContent = SizeToContent.WidthAndHeight
-        self.hud.Title = 'T3Lab Agent Cursors'
-        self._own(self.hud)
-        self._hook(self.hud, 'SourceInitialized',
-                   lambda s, e: _set_exstyle(self.hud, _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE))
-        self._build_hud()
-
-        from System import TimeSpan
-        from System.Windows.Threading import DispatcherTimer
-        self._timer = DispatcherTimer()
-        self._timer.Interval = TimeSpan.FromSeconds(1)
-        self._hook(self._timer, 'Tick', self._on_tick)
-
-    # ── plumbing ──────────────────────────────────────────────────────────────
-
-    def _hook(self, source, event, fn, transient=False):
-        keep = self._transient if transient else self._handlers
-        keep.append(fn)
-        if transient and len(keep) > _MAX_TRANSIENT:
-            del keep[:len(keep) - _MAX_TRANSIENT]
-        handler = getattr(source, event)
-        handler += fn
-        setattr(source, event, handler)
-
-    def _own(self, window):
-        if not self._owner:
-            return
-        try:
-            from System.Windows.Interop import WindowInteropHelper
-            WindowInteropHelper(window).Owner = self._owner
-        except Exception:
-            pass
-
-    @staticmethod
-    def _brush(hex_color, alpha=255):
-        from System.Windows.Media import SolidColorBrush, Color
-        h = hex_color.lstrip('#')
-        return SolidColorBrush(Color.FromArgb(alpha, int(h[0:2], 16),
-                                              int(h[2:4], 16), int(h[4:6], 16)))
-
-    def _dpi(self):
-        if self._scale:
-            return self._scale
-        try:
-            from System.Windows import PresentationSource
-            src = PresentationSource.FromVisual(self.win)
-            self._scale = float(src.CompositionTarget.TransformToDevice.M11) or 1.0
-        except Exception:
-            return 1.0
-        return self._scale
-
-    def _local(self, box):
-        """Screen px box -> canvas DIP (x0, y0, x1, y1)."""
-        s = self._dpi()
-        ox, oy = self._origin
-        return ((box[0] - ox) / s, (box[1] - oy) / s, (box[2] - ox) / s, (box[3] - oy) / s)
-
-    @staticmethod
-    def _text(text, size=11, bold=True, color='#FFFFFF', glyph=False):
-        from System.Windows import FontWeights
-        from System.Windows.Controls import TextBlock
-        from System.Windows.Media import FontFamily
-        tb = TextBlock()
-        tb.Text = text
-        tb.FontFamily = FontFamily('Segoe MDL2 Assets' if glyph else 'Segoe UI')
-        tb.FontSize = size
-        tb.FontWeight = FontWeights.SemiBold if bold and not glyph else FontWeights.Normal
-        tb.Foreground = _Overlay._brush(color)
-        return tb
-
-    @staticmethod
-    def _pill(child, color, radius=4, alpha=255):
-        from System.Windows import Thickness, CornerRadius
-        from System.Windows.Controls import Border
-        b = Border()
-        b.Background = _Overlay._brush(color, alpha)
-        b.CornerRadius = CornerRadius(radius)
-        b.Padding = Thickness(6, 2, 6, 2)
-        b.Child = child
-        return b
-
-    def _row(self, *children):
-        from System.Windows import VerticalAlignment
-        from System.Windows.Controls import StackPanel, Orientation
-        row = StackPanel()
-        row.Orientation = Orientation.Horizontal
-        for child in children:
-            child.VerticalAlignment = VerticalAlignment.Center
-            row.Children.Add(child)
-        return row
-
-    def _glyph_label(self, glyph, label, color, size=10):
-        from System.Windows import Thickness
-        icon = self._text(glyph, size, color=color, glyph=True)
-        icon.Margin = Thickness(0, 0, 4, 0)
-        return self._row(icon, self._text(label, size, color=color))
-
-    def _anim(self, frames, done=None):
-        """DoubleAnimationUsingKeyFrames from [(value, ms)]."""
-        from System import TimeSpan
-        from System.Windows.Media.Animation import (
-            DoubleAnimationUsingKeyFrames, LinearDoubleKeyFrame, KeyTime)
-        anim = DoubleAnimationUsingKeyFrames()
-        for value, ms in frames:
-            anim.KeyFrames.Add(LinearDoubleKeyFrame(
-                value, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(ms))))
-        if done is not None:
-            self._hook(anim, 'Completed', done, transient=True)
-        return anim
-
-    def _pulse(self, element, delay_ms, hold_ms, done=None):
-        """Fade in at delay, hold, fade out — one animation: a second
-        BeginAnimation on Opacity would replace the first."""
-        element.BeginAnimation(_opacity_property(), self._anim(
-            ((0.0, delay_ms), (1.0, delay_ms + 180), (1.0, delay_ms + 180 + hold_ms),
-             (0.0, delay_ms + 780 + hold_ms)), done))
-
-    def _remover(self, element):
-        def remove(s, e):
-            try:
-                self.canvas.Children.Remove(element)
-            except Exception:
-                pass
-        return remove
-
-    def _scale_anim(self, element, cx, cy, frames):
-        """Scale `element` around its own (cx, cy)."""
-        from System.Windows.Media import ScaleTransform
-        st = ScaleTransform()
-        st.CenterX, st.CenterY = cx, cy
-        element.RenderTransform = st
-        for prop in (ScaleTransform.ScaleXProperty, ScaleTransform.ScaleYProperty):
-            st.BeginAnimation(prop, self._anim(frames))
-
-    # ── HUD ───────────────────────────────────────────────────────────────────
-
-    def _build_hud(self):
-        from System.Windows import Thickness, CornerRadius
-        from System.Windows.Controls import Border, StackPanel, Orientation
-        from System.Windows.Input import Cursors
-
-        bar = Border()
-        bar.Background = self._brush('#1F2937', 235)
-        bar.CornerRadius = CornerRadius(8)
-        bar.Padding = Thickness(12, 8, 8, 8)
-        col = StackPanel()
-        bar.Child = col
-
-        top = StackPanel()
-        top.Orientation = Orientation.Horizontal
-        col.Children.Add(top)
-        self._agents_panel = StackPanel()
-        top.Children.Add(self._agents_panel)
-
-        self._toggles = StackPanel()
-        self._toggles.Orientation = Orientation.Horizontal
-        self._toggles.Margin = Thickness(16, 0, 0, 0)
-        top.Children.Add(self._toggles)
-
-        close = self._text('', 11, color='#CBD5E1', glyph=True)
-        close.Margin = Thickness(8, 2, 4, 0)
-        close.Cursor = Cursors.Hand
-        close.ToolTip = ('Turn agent cursors off. Settings > Agent Cursors '
-                         'turns them back on.')
-        self._hook(close, 'MouseLeftButtonUp', lambda s, e: set_enabled(False))
-        top.Children.Add(close)
-
-        self._views_text = self._text('', 11, bold=False, color='#CBD5E1')
-        self._views_text.Margin = Thickness(0, 4, 0, 0)
-        col.Children.Add(self._views_text)
-        self._feed_panel = StackPanel()
-        self._feed_panel.Margin = Thickness(0, 6, 0, 0)
-        col.Children.Add(self._feed_panel)
-        self.hud.Content = bar
-
-    def _toggle(self, name, on):
-        from System.Windows import Thickness
-        from System.Windows.Input import Cursors
-        label, tip = OPTION_LABELS[name]
-        glyph = '' if on else ''        # CheckMark / Checkbox
-        chip = self._pill(self._glyph_label(glyph, label, '#FFFFFF' if on else '#94A3B8'),
-                          '#374151' if on else '#1F2937')
-        chip.Margin = Thickness(4, 0, 0, 0)
-        chip.Cursor = Cursors.Hand
-        chip.ToolTip = tip
-
-        def flip(s, e):
-            try:
-                set_option(name, not options()[name])
-                self._refresh_hud()
-            except Exception:
-                pass
-        self._hook(chip, 'MouseLeftButtonUp', flip, transient=True)
-        return chip
-
-    def _refresh_hud(self):
-        from System.Windows import Thickness, CornerRadius, HorizontalAlignment
-        from System.Windows.Controls import Border
-        self._agents_panel.Children.Clear()
-        for agent in sorted(self._counts):
-            tag, color = agent_style(agent)
-            dot = Border()
-            dot.Width = dot.Height = 18
-            dot.CornerRadius = CornerRadius(9)
-            dot.Background = self._brush(color)
-            dot.Margin = Thickness(0, 0, 8, 0)
-            letter = self._text(tag[:1].upper(), 9)
-            letter.HorizontalAlignment = HorizontalAlignment.Center
-            dot.Child = letter
-            parts = [dot, self._text(tag, 11.5)]
-            counts = self._counts[agent]
-            for key, label, glyph, acolor in ACTIONS:
-                if not counts.get(key):
-                    continue
-                chip = self._pill(self._glyph_label(glyph, '{}'.format(counts[key]), '#FFFFFF'),
-                                  acolor, radius=2)
-                chip.Margin = Thickness(6, 0, 0, 0)
-                chip.ToolTip = '{} · {} {}'.format(tag, label, counts[key])
-                parts.append(chip)
-            row = self._row(*parts)
-            row.Margin = Thickness(0, 1, 0, 1)
-            row.ToolTip = '{}: {}'.format(tag, counts_text(counts))
-            self._agents_panel.Children.Add(row)
-        self._toggles.Children.Clear()
-        opts = options()
-        for name, _k, _d in OPTIONS:
-            self._toggles.Children.Add(self._toggle(name, opts[name]))
-        self._feed_panel.Children.Clear()
-        for step in self._feed:
-            self._feed_panel.Children.Add(self._feed_row(step))
-        n = self._actions
-        names = [v[1] for v in self._views[-3:]]
-        more = len(self._views) - len(names)
-        views = ' · '.join(names) + (' · +{}'.format(more) if more > 0 else '')
-        self._views_text.Text = '{} action{}{}'.format(
-            n, '' if n == 1 else 's', ('  ·  Views: ' + views) if views else '')
-
-    def _feed_row(self, step):
-        """[agent dot] [action glyph] caption · agent   ok / failed."""
-        from System.Windows import Thickness, CornerRadius
-        from System.Windows.Controls import Border
-        tag, color = agent_style(step['agent'])
-        label, glyph, acolor = action_style(step['action'])
-        dot = Border()
-        dot.Width = dot.Height = 8
-        dot.CornerRadius = CornerRadius(4)
-        dot.Background = self._brush(color)
-        dot.Margin = Thickness(0, 0, 6, 0)
-        icon = self._text(glyph, 10, color=acolor, glyph=True)
-        icon.Margin = Thickness(0, 0, 6, 0)
-        text = self._text(step['caption'], 11, bold=False, color='#F8FAFC')
-        who = self._text(u'  · ' + tag, 10.5, bold=False, color='#94A3B8')
-        state = self._text('\uE711' if step['failed'] else '\uE73E', 10,
-                           color='#F87171' if step['failed'] else '#4ADE80', glyph=True)
-        state.Margin = Thickness(8, 0, 0, 0)
-        row = self._row(dot, icon, text, who, state)
-        row.Margin = Thickness(0, 1, 0, 1)
-        row.ToolTip = step['tool']
-        return row
-
-    # ── cursors ──────────────────────────────────────────────────────────────
-
-    def _cursor(self, agent, action):
-        key = '{}|{}'.format(agent, action)
-        cur = self._cursors.get(key)
-        if cur is not None:
-            return cur
-        from System.Windows import Thickness
-        from System.Windows.Controls import Canvas, StackPanel
-        from System.Windows.Media import TranslateTransform, ScaleTransform, Geometry
-        from System.Windows.Shapes import Path
-        tag, color = agent_style(agent)
-        label, glyph, acolor = action_style(action)
-
-        group = Canvas()
-        arrow = Path()
-        arrow.Data = Geometry.Parse('M0,0 L0,17 L4.6,12.8 L7.6,19.6 L10.4,18.4 L7.4,11.6 L13.4,11.6 Z')
-        arrow.Fill = self._brush(color)
-        arrow.Stroke = self._brush('#FFFFFF')
-        arrow.StrokeThickness = 1.2
-        press = ScaleTransform()            # a "click" squeezes the arrow to its tip
-        arrow.RenderTransform = press
-        group.Children.Add(arrow)
-
-        tags = StackPanel()
-        Canvas.SetLeft(tags, 12)
-        Canvas.SetTop(tags, 18)
-        name = self._pill(self._row(self._text(tag), self._action_chip(glyph, label, acolor)),
-                          color)
-        tags.Children.Add(name)
-        tool = self._text('', 11, color='#111827')          # what it does
-        tool_name = self._text('', 9.5, bold=False, color='#6B7280')   # MCP tool
-        lines = StackPanel()
-        lines.Children.Add(tool)
-        lines.Children.Add(tool_name)
-        tool_pill = self._pill(lines, '#FFFFFF', alpha=238)
-        tool_pill.Margin = Thickness(0, 2, 0, 0)
-        tool_pill.BorderBrush = self._brush(acolor)
-        tool_pill.BorderThickness = Thickness(1)
-        tags.Children.Add(tool_pill)
-        group.Children.Add(tags)
-
-        tx = TranslateTransform()
-        group.RenderTransform = tx
-        self.canvas.Children.Add(group)
-        # Cursors start at different spots so a swarm never stacks up.
-        slot = len(self._cursors)
-        cur = {'group': group, 'tx': tx, 'tool': tool, 'tool_name': tool_name,
-               'tool_pill': tool_pill, 'press': press, 'color': acolor, 'x': 40.0 + 36 * slot, 'y': 40.0 + 24 * slot}
-        tx.X, tx.Y = cur['x'], cur['y']
-        self._cursors[key] = cur
-        return cur
-
-    def _action_chip(self, glyph, label, color):
-        from System.Windows import Thickness
-        chip = self._pill(self._glyph_label(glyph, label, '#FFFFFF', 9.5), color, radius=2)
-        chip.Padding = Thickness(4, 0, 4, 0)
-        chip.Margin = Thickness(6, 0, 0, 0)
-        return chip
-
-    def _tour(self, cur, sched, shake=False):
-        """Glide through sched [(x, y, arrive_ms, leave_ms)] on one keyframe
-        path per axis (a second BeginAnimation would cancel the first); a
-        failed call ends with a shake."""
-        from System import TimeSpan
-        from System.Windows.Media import TranslateTransform
-        from System.Windows.Media.Animation import (
-            DoubleAnimationUsingKeyFrames, EasingDoubleKeyFrame, LinearDoubleKeyFrame,
-            KeyTime, CubicEase, EasingMode)
-        ease = CubicEase()
-        ease.EasingMode = EasingMode.EaseInOut
-
-        def at(ms):
-            return KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(ms))
-        try:
-            start = (float(cur['tx'].X), float(cur['tx'].Y))   # where it is mid-tour
-        except Exception:
-            start = (cur['x'], cur['y'])
-        for axis, prop in ((0, TranslateTransform.XProperty), (1, TranslateTransform.YProperty)):
-            anim = DoubleAnimationUsingKeyFrames()
-            anim.KeyFrames.Add(LinearDoubleKeyFrame(start[axis], at(0)))
-            for stop in sched:
-                anim.KeyFrames.Add(EasingDoubleKeyFrame(stop[axis], at(stop[2]), ease))
-                anim.KeyFrames.Add(LinearDoubleKeyFrame(stop[axis], at(stop[3])))
-            if shake and axis == 0:
-                end, t = sched[-1][0], sched[-1][3]
-                for dx, dt in ((-6, 60), (6, 120), (-4, 180), (0, 240)):
-                    anim.KeyFrames.Add(LinearDoubleKeyFrame(end + dx, at(t + dt)))
-            cur['tx'].BeginAnimation(prop, anim)
-        cur['x'], cur['y'] = sched[-1][0], sched[-1][1]
-
-    def _press(self, cur, times):
-        """Squeeze the arrow at each arrival: the agent clicks."""
-        from System.Windows.Media import ScaleTransform
-        frames = [(1.0, 0)]
-        for t in times:
-            frames += [(1.0, max(t - 1, frames[-1][1] + 1)), (0.78, t + 70), (1.0, t + 170)]
-        for prop in (ScaleTransform.ScaleXProperty, ScaleTransform.ScaleYProperty):
-            cur['press'].BeginAnimation(prop, self._anim(frames))
-
-    # ── effects ──────────────────────────────────────────────────────────────
-
-    def _trail(self, x0, y0, x1, y1, color):
-        """Dashed path from where the cursor was to where it goes."""
-        from System.Windows.Media import DoubleCollection
-        from System.Windows.Shapes import Line
-        if abs(x1 - x0) + abs(y1 - y0) < 24:
-            return
-        line = Line()
-        line.X1, line.Y1, line.X2, line.Y2 = x0, y0, x1, y1
-        line.Stroke = self._brush(color, 170)
-        line.StrokeThickness = 1.5
-        dash = DoubleCollection()
-        dash.Add(3)
-        dash.Add(3)
-        line.StrokeDashArray = dash
-        line.Opacity = 0
-        self.canvas.Children.Insert(0, line)
-        line.BeginAnimation(_opacity_property(), self._anim(
-            ((0.0, 0), (0.9, 120), (0.9, MOVE_MS), (0.0, MOVE_MS + 700)),
-            self._remover(line)))
-
-    def _ripple(self, x, y, color, delay_ms, size=36):
-        """Click ring where the cursor lands."""
-        from System.Windows.Controls import Canvas
-        from System.Windows.Shapes import Ellipse
-        ring = Ellipse()
-        ring.Width = ring.Height = size
-        ring.Stroke = self._brush(color)
-        ring.StrokeThickness = 2
-        ring.Fill = self._brush(color, 40)
-        ring.Opacity = 0
-        Canvas.SetLeft(ring, x - size / 2.0)
-        Canvas.SetTop(ring, y - size / 2.0)
-        self.canvas.Children.Add(ring)
-        self._scale_anim(ring, size / 2.0, size / 2.0,
-                         ((0.1, delay_ms), (0.1, delay_ms), (1.0, delay_ms + 520)))
-        ring.BeginAnimation(_opacity_property(), self._anim(
-            ((0.0, delay_ms), (0.9, delay_ms + 40), (0.0, delay_ms + 560)),
-            self._remover(ring)))
-
-    def _frame(self, x0, y0, x1, y1, color, dashed=False, thickness=1.0, fill_alpha=18):
-        from System.Windows.Controls import Canvas
-        from System.Windows.Media import DoubleCollection
-        from System.Windows.Shapes import Rectangle
-        frame = Rectangle()
-        frame.Width = max(x1 - x0, 2)
-        frame.Height = max(y1 - y0, 2)
-        frame.Stroke = self._brush(color)
-        frame.StrokeThickness = thickness
-        frame.Fill = self._brush(color, fill_alpha)
-        if dashed:
-            dash = DoubleCollection()
-            dash.Add(4)
-            dash.Add(3)
-            frame.StrokeDashArray = dash
-        Canvas.SetLeft(frame, x0)
-        Canvas.SetTop(frame, y0)
-        return frame
-
-    def _draw_box(self, x0, y0, x1, y1, size, action, delay_ms):
-        """One target box; `size` is the badge text (category · size)."""
-        """One target box with the action's effect."""
-        from System.Windows import Thickness
-        from System.Windows.Controls import Canvas
-        from System.Windows.Shapes import Rectangle, Shape
-        from System.Windows.Media import TranslateTransform
-        label, glyph, color = action_style(action)
-        group = Canvas()
-        group.Opacity = 0
-        frame = self._frame(x0, y0, x1, y1, color, dashed=(action == 'code'))
-        group.Children.Add(frame)
-        for hx, hy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
-            handle = Rectangle()
-            handle.Width = handle.Height = 5
-            handle.Fill = self._brush('#FFFFFF')
-            handle.Stroke = self._brush(color)
-            handle.StrokeThickness = 1
-            Canvas.SetLeft(handle, hx - 2.5)
-            Canvas.SetTop(handle, hy - 2.5)
-            group.Children.Add(handle)
-        badge = self._pill(self._glyph_label(glyph, size, '#FFFFFF'), color, radius=2)
-        badge.Padding = Thickness(4, 1, 4, 1)
-        Canvas.SetLeft(badge, max(x0, (x0 + x1) / 2.0 - 60))
-        Canvas.SetTop(badge, y1 + 4)
-        group.Children.Add(badge)
-        self.canvas.Children.Insert(0, group)    # under the cursors
-        hold = int(BOX_HOLD_S * 1000)
-        start = delay_ms + 180
-
-        if action == 'create':
-            # Grows out of its centre.
-            self._scale_anim(group, (x0 + x1) / 2.0, (y0 + y1) / 2.0,
-                             ((0.4, delay_ms), (0.4, delay_ms),
-                              (1.08, start + 160), (1.0, start + 260)))
-        elif action == 'modify':
-            frame.BeginAnimation(Shape.StrokeThicknessProperty, self._anim(
-                ((1.0, start), (3.0, start + 200), (1.0, start + 400),
-                 (3.0, start + 600), (1.0, start + 800))))
-        elif action == 'read':
-            line = Rectangle()
-            line.Width = max(x1 - x0, 2)
-            line.Height = 2
-            line.Fill = self._brush(color, 200)
-            Canvas.SetLeft(line, x0)
-            Canvas.SetTop(line, y0)
-            tt = TranslateTransform()
-            line.RenderTransform = tt
-            group.Children.Add(line)
-            h = max(y1 - y0 - 2, 0)
-            tt.BeginAnimation(TranslateTransform.YProperty, self._anim(
-                ((0.0, start), (h, start + 700), (0.0, start + 1400))))
-        elif action == 'code':
-            frame.BeginAnimation(Shape.StrokeDashOffsetProperty, self._anim(
-                ((0.0, start), (-42.0, start + hold))))
-        elif action == 'export':
-            up = self._pill(self._text('', 11, glyph=True), color, radius=9)
-            Canvas.SetLeft(up, x1 - 10)
-            Canvas.SetTop(up, y0 - 10)
-            tt = TranslateTransform()
-            up.RenderTransform = tt
-            group.Children.Add(up)
-            tt.BeginAnimation(TranslateTransform.YProperty, self._anim(
-                ((0.0, start), (-28.0, start + 900))))
-        self._pulse(group, delay_ms, hold, self._remover(group))
-
-    def _draw_gone(self, x0, y0, x1, y1, delay_ms):
-        """A deleted element: red frame with a cross that shrinks away."""
-        from System.Windows.Controls import Canvas
-        from System.Windows.Shapes import Line
-        _l, _g, color = action_style('delete')
-        group = Canvas()
-        group.Opacity = 0
-        group.Children.Add(self._frame(x0, y0, x1, y1, color, dashed=True, fill_alpha=40))
-        for ax, ay, bx, by in ((x0, y0, x1, y1), (x0, y1, x1, y0)):
-            line = Line()
-            line.X1, line.Y1, line.X2, line.Y2 = ax, ay, bx, by
-            line.Stroke = self._brush(color, 200)
-            line.StrokeThickness = 1.5
-            group.Children.Add(line)
-        self.canvas.Children.Insert(0, group)
-        hold = 900
-        self._scale_anim(group, (x0 + x1) / 2.0, (y0 + y1) / 2.0,
-                         ((1.0, delay_ms + 180 + hold), (0.15, delay_ms + 780 + hold)))
-        self._pulse(group, delay_ms, hold, self._remover(group))
-
-    def _draw_ghost(self, old, new, color, delay_ms):
-        """Where a moved element was, with an arrow to where it is now."""
-        from System.Windows.Controls import Canvas
-        from System.Windows.Shapes import Line
-        group = Canvas()
-        group.Opacity = 0
-        group.Children.Add(self._frame(old[0], old[1], old[2], old[3], color,
-                                       dashed=True, fill_alpha=0))
-        line = Line()
-        line.X1, line.Y1 = (old[0] + old[2]) / 2.0, (old[1] + old[3]) / 2.0
-        line.X2, line.Y2 = (new[0] + new[2]) / 2.0, (new[1] + new[3]) / 2.0
-        line.Stroke = self._brush(color, 190)
-        line.StrokeThickness = 1.5
-        group.Children.Add(line)
-        head = self._ripple_dot(line.X2, line.Y2, color)
-        group.Children.Add(head)
-        self.canvas.Children.Insert(0, group)
-        self._pulse(group, delay_ms, int(BOX_HOLD_S * 1000), self._remover(group))
-
-    def _ripple_dot(self, x, y, color):
-        from System.Windows.Controls import Canvas
-        from System.Windows.Shapes import Ellipse
-        dot = Ellipse()
-        dot.Width = dot.Height = 7
-        dot.Fill = self._brush(color)
-        Canvas.SetLeft(dot, x - 3.5)
-        Canvas.SetTop(dot, y - 3.5)
-        return dot
-
-    def _flash_view(self, geo, text, color):
-        """Frame the whole view and name it: the agent opened / switched to it."""
-        from System.Windows import Thickness
-        from System.Windows.Controls import Canvas
-        x0, y0, x1, y1 = self._local(geo['rect'])
-        group = Canvas()
-        group.Opacity = 0
-        group.Children.Add(self._frame(x0 + 2, y0 + 2, x1 - 2, y1 - 2, color,
-                                       thickness=3, fill_alpha=0))
-        chip = self._pill(self._glyph_label('', text, '#FFFFFF', 11), color)
-        chip.Padding = Thickness(8, 4, 8, 4)
-        Canvas.SetLeft(chip, x0 + 12)
-        Canvas.SetTop(chip, y0 + 12)
-        group.Children.Add(chip)
-        self.canvas.Children.Insert(0, group)
-        self._pulse(group, 0, 1600, self._remover(group))
-
-    # ── public ────────────────────────────────────────────────────────────────
-
-    def show(self, agent, action, tool_name, failed, snap, followed=(),
-             args=None, n_targets=0):
-        left, top, right, bottom = snap['rect']
-        if not self.win.IsVisible:
-            self.win.Width = self.win.Height = 1
-            self.win.Show()
-        scale = self._dpi()
-        if self._origin != (left, top):
-            # Canvas moved: older cursors keep their canvas spot, so shift them.
-            dx = (self._origin[0] - left) / scale
-            dy = (self._origin[1] - top) / scale
-            for cur in self._cursors.values():
-                cur['x'] += dx
-                cur['y'] += dy
-                cur['tx'].BeginAnimation(_translate_x(), None)
-                cur['tx'].BeginAnimation(_translate_y(), None)
-                cur['tx'].X, cur['tx'].Y = cur['x'], cur['y']
-        self._origin = (left, top)
-        self.win.Left, self.win.Top = left / scale, top / scale
-        self.win.Width = (right - left) / scale
-        self.win.Height = (bottom - top) / scale
-
-        label, _glyph, acolor = action_style(action)
-        caption = describe_call(tool_name, args, n_targets, failed)
-        cur = self._cursor(agent, action)
-        cur['tool'].Text = caption
-        cur['tool_name'].Text = tool_name
-        cur['tool_pill'].BorderBrush = self._brush('#DC2626' if failed else acolor)
-
-        for vid, name, is_new in followed:
-            if vid not in [v[0] for v in self._views]:
-                self._views.append((vid, name))
-        if followed:
-            first = followed[0]
-            self._flash_view(snap['active'], '{} · {}'.format(
-                'Opened' if first[2] else 'Switched to', first[1]), action_style('view')[2])
-
-        # Stops: every box / deleted box, visited in order (move, click, next).
-        stops, ghosts = [], []
-        for geo in snap['views']:
-            for item in geo['boxes']:
-                b = self._local(item['box'])
-                stops.append(((b[2] - 4, b[1] + 4), 'box', b, item))
-            for item in geo['gone']:
-                b = self._local(item['box'])
-                stops.append((((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0), 'gone', b, item))
-            ghosts.extend(geo['ghosts'])
-        if stops:
-            points = [st[0] for st in stops[:MAX_STOPS]]
-        else:
-            # Nothing to point at (a read, a list, a review): scan the active
-            # view, a few clicks along a path of its own per agent and action.
-            slot = sorted(self._cursors).index('{}|{}'.format(agent, action))
-            n = 1 if failed else (3 if action in ('read', 'view', 'export', 'code') else 2)
-            points = review_points(self._local(snap['active']['rect']),
-                                   self._actions * 31 + slot * 7 + 1, n)
-        sched = tour_schedule(points, hop_ms(len(points)), DWELL_MS)
-        for k, (_pt, kind, b, item) in enumerate(stops):
-            arrive = sched[min(k, len(sched) - 1)][2]
-            if kind == 'box':
-                self._draw_box(b[0], b[1], b[2], b[3], item.get('label') or item['size'],
-                               action, arrive)
-            else:
-                self._draw_gone(b[0], b[1], b[2], b[3], arrive)
-        for old, new in ghosts:
-            self._draw_ghost(self._local(old['box']), self._local(new['box']),
-                             acolor, sched[0][2])
-        self._trail(cur['x'], cur['y'], points[0][0], points[0][1], acolor)
-        self._tour(cur, sched, shake=failed)
-        ring = '#DC2626' if failed else acolor
-        for x, y, arrive, _leave in sched:
-            self._ripple(x, y, ring, arrive)
-        self._press(cur, [st[2] for st in sched])
-        cur['group'].BeginAnimation(_opacity_property(), None)
-        cur['group'].Opacity = 1.0
-
-        self._feed.insert(0, {'agent': agent, 'action': action, 'caption': caption,
-                              'tool': tool_name, 'failed': failed})
-        del self._feed[FEED_SIZE:]
-        counts = self._counts.setdefault(agent, {})
-        counts[action] = counts.get(action, 0) + 1
-        self._actions += 1
-        self._last = time.time()
-        self._refresh_hud()
-        if not self.hud.IsVisible:
-            self.hud.Show()
-        self.hud.UpdateLayout()
-        aleft, _atop, aright, abottom = snap['active']['rect']
-        hud_w = self.hud.ActualWidth or 320
-        self.hud.Left = aleft / scale + ((aright - aleft) / scale - hud_w) / 2.0
-        self.hud.Top = abottom / scale - (self.hud.ActualHeight or 48) - 16
-        self._timer.Start()
-
-    def hide(self):
-        self._timer.Stop()
-        for cur in self._cursors.values():
-            cur['group'].BeginAnimation(_opacity_property(), None)
-        self.canvas.Children.Clear()
-        self._cursors = {}
-        self._counts = {}
-        self._views = []
-        self._feed = []
-        self._actions = 0
-        self._transient = []
-        self.win.Hide()
-        self.hud.Hide()
-
-    def _on_tick(self, sender, e):
-        try:
-            if self.hud.IsMouseOver:
-                self._last = time.time()        # reading the HUD / toggling
-            elif time.time() - self._last >= IDLE_HIDE_S:
-                self.hide()
-        except Exception:
-            pass
-
-
-def _translate_x():
-    from System.Windows.Media import TranslateTransform
-    return TranslateTransform.XProperty
-
-
-def _translate_y():
-    from System.Windows.Media import TranslateTransform
-    return TranslateTransform.YProperty

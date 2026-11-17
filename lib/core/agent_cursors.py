@@ -1357,9 +1357,112 @@ def hide():
             pass
 
 
+# ─── Consent on the bar + the offer to turn cursors on (T3Lab Lite) ──────────
+
+OFFER_KEY = 'agent_cursors_offer'       # 'never' = do not offer again
+_asks = {}                              # request id -> on_answer(approved, always)
+_ask_seq = [0]
+
+
+def ask(app, agent, tool, arguments, main, content, expanded='', always_text='',
+        on_answer=None):
+    """Main thread: put a consent question on the bar (Allow / Deny) instead of
+    a modal Revit dialog, so Revit stays usable. on_answer(approved, always)
+    runs on the overlay thread. The request id when shown (cancel_ask takes
+    it); '' = the caller asks its own way (cursors off, no view, overlay down)."""
+    if on_answer is None or not is_enabled():
+        return ''
+    rid = None
+    try:
+        _doc, geos, active = _open_views(app)
+        if active is None:
+            return ''
+        ov = _overlay(_hwnd(app))
+        if not ov.alive:
+            return ''
+        _ask_seq[0] += 1
+        rid = 'ask{}'.format(_ask_seq[0])
+        _asks[rid] = on_answer
+        ov.call('ask', rid, agent or 'claude-desktop', tool,
+                describe_call(tool, arguments), '{}'.format(main or ''),
+                '{}'.format(content or ''), '{}'.format(expanded or ''),
+                '{}'.format(always_text or ''), geos[active]['rect'])
+        return rid
+    except Exception:
+        if rid is not None:
+            _asks.pop(rid, None)
+        return ''
+
+
+def cancel_ask(rid):
+    """The caller stopped waiting: take the card off the bar, no answer."""
+    if _asks.pop(rid, None) is not None and _state.get('overlay') is not None:
+        try:
+            _state['overlay'].call('cancel_ask', rid)
+        except Exception:
+            pass
+
+
+def answer(rid, approved, always=False):
+    """Overlay thread: Allow / Deny clicked. Never raises."""
+    fn = _asks.pop(rid, None)
+    if fn is not None:
+        try:
+            fn(bool(approved), bool(always))
+        except Exception:
+            pass
+
+
+def pending_asks():
+    return len(_asks)
+
+
+def offer_text(agent):
+    """(main instruction, content) of the one-time offer."""
+    tag = agent_style(agent)[0]
+    return (u'Follow {} in Revit?'.format(tag),
+            u'{} is working in this model through MCP. Agent Cursors shows each step on '
+            u'the model with its task list, and asks for your OK on its bar at the bottom '
+            u'of the view instead of in a dialog, so Revit stays free while the AI '
+            u'works.'.format(tag))
+
+
+def offer(app, agent):
+    """Main thread, an MCP call from `agent` with cursors off: offer once per
+    Revit session (never again after "Don't ask again"). True when the user
+    turned them on. Never raises."""
+    if is_enabled() or _state.get('offered') or not agent:
+        return False
+    _state['offered'] = True
+    try:
+        if '{}'.format(_settings().get(OFFER_KEY, '')).lower() == 'never':
+            return False
+        from Autodesk.Revit.UI import (TaskDialog, TaskDialogCommandLinkId,
+                                       TaskDialogResult)
+        main, content = offer_text(agent)
+        dlg = TaskDialog('T3Lab Agent Cursors')
+        dlg.TitleAutoPrefix = False
+        dlg.MainInstruction = main
+        dlg.MainContent = content
+        dlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, 'Turn on Agent Cursors',
+                           'You can turn them off with the x on the bar.')
+        dlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, 'Not now',
+                           'Confirmations stay in Revit dialogs.')
+        dlg.VerificationText = "Don't ask again"
+        turned_on = dlg.Show() == TaskDialogResult.CommandLink1
+        if dlg.WasVerificationChecked() and not turned_on:
+            _paths().set_setting(OFFER_KEY, 'never')
+            _cache['mtime'] = None
+        if turned_on:
+            set_enabled(True)
+        return turned_on
+    except Exception:
+        return False
+
+
 # ─── Overlay (core/agent_cursors_overlay.py) ──────────────────────────────────
 
-_state = {'overlay': None}
+_state = {'overlay': None, 'offered': False}
 
 
 def _overlay(hwnd):
@@ -1368,6 +1471,6 @@ def _overlay(hwnd):
     ov = _state.get('overlay')
     if ov is None or not ov.alive:
         from core.agent_cursors_overlay import OverlayHost
-        ov = OverlayHost(hwnd, {'select_touched': select_touched})
+        ov = OverlayHost(hwnd, {'select_touched': select_touched, 'answer': answer})
         _state['overlay'] = ov
     return ov

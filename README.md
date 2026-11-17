@@ -225,6 +225,13 @@ and drawbacks before you switch).
   Number them") instead of the tool. Code an AI runs is named by its
   description or by the code itself ("Editing stairs"), not "Running code".
   Changed values show under the box: `Comments: "" → Checked`.
+- **Your OK on the bar** — when an AI app needs your OK (code, deletes,
+  sync…), the question appears on the bar with **Allow** / **Deny** (and
+  **Details** for the code) instead of a Revit dialog, so Revit stays free;
+  it stays in sight even while the AI app is in front. With the cursors off,
+  the Revit dialog is used as before. The first time an AI app works in
+  Revit while the cursors are off, T3Lab offers to turn them on (once per
+  session; "Don't ask again" stops it).
 - **While it works** — long calls say "Working 8 s"; a call waiting for your
   OK pulses amber. Two AI apps editing the same element flash it red.
   Targets outside the view get an edge arrow with a count.

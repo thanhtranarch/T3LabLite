@@ -101,10 +101,10 @@ _ALIASES = {
     'cursor-vscode': 'cursor',
 }
 # Client names that carry a suffix: first matching prefix wins. Never map a
-# name we have not seen from that app (2026-11-17: 'local-agent-mode-...' was
-# taken for Claude and is Antigravity's); MCP Control writes --agent instead.
+# name on a guess (2026-11-17: 'local-agent-mode-...' was mapped to Claude,
+# then to Antigravity, both unverified). The bridge names the app from
+# --agent or from the process that launched it (bridge.host_agent).
 _ALIAS_PREFIXES = (
-    ('local-agent-mode', 'antigravity'),    # seen from Antigravity (owner, 2026-11-17)
     ('claude-code', 'claude-code'),
     ('claude', 'claude-desktop'), ('codex', 'codex'), ('chatgpt', 'chatgpt'),
     ('openai', 'chatgpt'), ('gemini', 'antigravity'), ('antigravity', 'antigravity'),
@@ -317,7 +317,7 @@ def agent_style(agent):
     if key in AGENTS:
         return AGENTS[key]
     if not key:
-        return AGENTS['claude-desktop']
+        return AGENTS['mcp-client']
     total = 0
     for ch in key:
         total = (total * 31 + ord(ch)) % 1000003
@@ -1472,7 +1472,7 @@ def _real_elements(doc, ids):
 
 
 def _plan_of(agent):
-    return _session['plans'].get(agent_key(agent) or 'claude-desktop') or {}
+    return _session['plans'].get(agent_key(agent) or 'mcp-client') or {}
 
 
 def _param_value(elem, name):
@@ -1647,7 +1647,7 @@ def notify(app, task):
             'show', agent, action, tool, failed, snap, followed, args=args,
             n_targets=len(ids), changes=changes, clashes=clashes,
             touched=len(_session['touched']),
-            goal=_session['goals'].get(agent_key(agent) or 'claude-desktop', ''),
+            goal=_session['goals'].get(agent_key(agent) or 'mcp-client', ''),
             task_text=current_task(_plan_of(agent)), created=label, fresh=fresh)
     except Exception:
         pass
@@ -1681,7 +1681,7 @@ NARRATE_SCHEMA = {
 def narrate(agent, message=None, tasks=None, step=None, done=False):
     """t3lab_narrate: set the agent's goal and plan. Any thread; never raises.
     Returns the tool result."""
-    key = agent_key(agent) or 'claude-desktop'
+    key = agent_key(agent) or 'mcp-client'
     if message is not None:
         _session['goals'][key] = clean_goal(message)
     plan = dict(_session['plans'].get(key) or {})
@@ -1700,7 +1700,7 @@ def narrate(agent, message=None, tasks=None, step=None, done=False):
     goal = _session['goals'].get(key, '')
     try:
         if is_enabled() and _state.get('overlay') is not None:
-            _state['overlay'].call('narrate', agent or 'claude-desktop', goal, dict(plan))
+            _state['overlay'].call('narrate', agent or 'mcp-client', goal, dict(plan))
     except Exception:
         pass
     if not goal and not plan.get('tasks'):
@@ -1722,7 +1722,7 @@ def waiting(agent, tool, arguments=None, on=True):
     Any thread; never raises."""
     try:
         if is_enabled() and _state.get('overlay') is not None:
-            _state['overlay'].call('waiting', agent or 'claude-desktop', tool,
+            _state['overlay'].call('waiting', agent or 'mcp-client', tool,
                                    describe_call(tool, arguments), bool(on))
     except Exception:
         pass
@@ -1827,7 +1827,7 @@ def ask(app, agent, tool, arguments, main, content, expanded='', always_text='',
         _ask_seq[0] += 1
         rid = 'ask{}'.format(_ask_seq[0])
         _asks[rid] = on_answer
-        ov.call('ask', rid, agent or 'claude-desktop', tool,
+        ov.call('ask', rid, agent or 'mcp-client', tool,
                 describe_call(tool, arguments), '{}'.format(main or ''),
                 '{}'.format(content or ''), '{}'.format(expanded or ''),
                 '{}'.format(always_text or ''), geos[active]['rect'])

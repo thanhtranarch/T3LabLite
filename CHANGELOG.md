@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Changed
+- **Agent Cursors — every option on by default:** Follow, Zoom, Select, Tile, Less motion, Glow and Keep bar start switched on. An option you already turned off stays off.
+- **MCP Control — Connect keeps the AutoCAD add-in up to date:** with the add-in already installed, Connect also fetches the latest release (at most every 10 minutes; offline it just connects) and says when it updated it. The add-in's ribbon buttons have new icons that follow AutoCAD's light or dark theme.
+
 ## [2.4.2] - 2026-11-17
 
 MCP Control installs the AutoCAD / Civil 3D add-in for you when you click Connect, and BatchOut exports with PDF24 again.

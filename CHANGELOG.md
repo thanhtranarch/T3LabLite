@@ -21,6 +21,7 @@ Releasing a new version:
 
 ### Changed
 - **Agent Cursors — every option on by default:** Follow, Zoom, Select, Tile, Less motion, Glow and Keep bar start switched on. An option you already turned off stays off.
+- **Agent Cursors — options in the Settings dialog:** Settings › Agent Cursors now shows a checkbox for each option (Follow, Zoom, Select, Tile, Less motion, Glow, Keep bar) instead of a line of text. Tick what you want and click Turn On; when the cursors are on, the same dialog saves your changes or turns them off.
 - **MCP Control — Connect keeps the AutoCAD add-in up to date:** with the add-in already installed, Connect also fetches the latest release (at most every 10 minutes; offline it just connects) and says when it updated it. The add-in's ribbon buttons have new icons that follow AutoCAD's light or dark theme.
 
 ## [2.4.2] - 2026-11-17

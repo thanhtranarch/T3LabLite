@@ -403,11 +403,28 @@ def _host_outcome(code, result):
 
 MCP_SERVER_NAME = 't3lab-revit'
 
-# The AutoCAD add-in (sibling repo t3lab_CADmcp) ships its own stdio bridge,
-# deployed by its scripts/install.ps1 to %APPDATA%/T3LabCAD/bridge.py. It takes
-# no port (it scans 48900-48908 itself) and runs with `python -I`.
+# Other Autodesk apps: each add-in ships its own stdio bridge, deployed to
+# %APPDATA%/<folder>/bridge.py (AutoCAD: t3lab_CADmcp scripts/install.ps1).
+# A bridge takes no port (it finds its app itself) and runs with `python -I`.
+# mcp_paths.json '<key>_bridge' overrides the path. Only AutoCAD ships today;
+# the rest wait for their add-in (owner, 2026-11-17). Order = the tab's list.
+AUTODESK_APPS = (
+    # key,         label,        server name,        %APPDATA% folder,   add-in hint
+    ('autocad',    'AutoCAD',    't3lab-autocad',    'T3LabCAD',
+     'run scripts/install.ps1 from t3lab_CADmcp first'),
+    ('civil3d',    'Civil 3D',   't3lab-civil3d',    'T3LabCivil3D',
+     'install the T3Lab Civil 3D add-in first'),
+    ('navisworks', 'Navisworks', 't3lab-navisworks', 'T3LabNavisworks',
+     'install the T3Lab Navisworks add-in first'),
+    ('3dsmax',     '3ds Max',    't3lab-3dsmax',     'T3LabMax',
+     'install the T3Lab 3ds Max add-in first'),
+    ('inventor',   'Inventor',   't3lab-inventor',   'T3LabInventor',
+     'install the T3Lab Inventor add-in first'),
+)
 CAD_SERVER_NAME = 't3lab-autocad'
-SERVERS = {'revit': MCP_SERVER_NAME, 'autocad': CAD_SERVER_NAME}
+SERVERS = dict([('revit', MCP_SERVER_NAME)] + [(a[0], a[2]) for a in AUTODESK_APPS])
+_APP_BY_KEY = dict((a[0], a) for a in AUTODESK_APPS)
+_BRIDGE_SERVERS = frozenset(a[2] for a in AUTODESK_APPS)
 
 
 def _server_name(server):
@@ -417,14 +434,20 @@ def _server_name(server):
         raise KeyError('Unknown MCP server: {}'.format(server))
 
 
-def _cad_bridge_path():
-    """%APPDATA%/T3LabCAD/bridge.py, or mcp_paths.json 'autocad_bridge' if set."""
+def _app_bridge_path(app='autocad'):
+    """%APPDATA%/<folder>/bridge.py of an Autodesk app, or mcp_paths.json
+    '<key>_bridge' if set."""
+    spec = _APP_BY_KEY[app]
     try:
-        override = _get_paths_module().load_settings().get('autocad_bridge')
+        override = _get_paths_module().load_settings().get(app + '_bridge')
     except Exception:
         override = None
-    path = override or os.path.join(_appdata(), 'T3LabCAD', 'bridge.py')
+    path = override or os.path.join(_appdata(), spec[3], 'bridge.py')
     return path.replace('\\', '/')
+
+
+def _cad_bridge_path():
+    return _app_bridge_path('autocad')
 
 
 def _claude_desktop_running():
@@ -578,7 +601,7 @@ def _backup_once(path):
 
 def _server_entry(python, bridge, port, name=MCP_SERVER_NAME):
     """The JSON object describing our stdio server (Claude / Antigravity)."""
-    if name == CAD_SERVER_NAME:
+    if name in _BRIDGE_SERVERS:
         # -I = isolated: pyRevit's machine-wide PYTHONPATH cannot break it.
         return {'type': 'stdio', 'command': python, 'args': ['-I', bridge]}
     return {
@@ -663,7 +686,7 @@ def _toml_quote(value):
 
 
 def _codex_block(python, bridge, port, name=MCP_SERVER_NAME):
-    if name == CAD_SERVER_NAME:
+    if name in _BRIDGE_SERVERS:
         args = 'args = ["-I", "{}"]\n'.format(_toml_quote(bridge))
     else:
         args = 'args = ["{}", "{}"]\n'.format(_toml_quote(bridge), port)
@@ -1216,21 +1239,21 @@ class MCPService(object):
 
         Args:
             port (int|None): Port number to embed. Reads from running server if None.
-                Ignored for server='autocad' (its bridge finds AutoCAD itself).
+                Ignored for an Autodesk app bridge (it finds its app itself).
             fmt (str): 'json' for the "mcpServers" block used by Claude Desktop,
                 Antigravity, Cursor, Windsurf and Claude Code; 'toml' for the
                 `[mcp_servers.<name>]` table used by ChatGPT's Codex;
                 'claude_code' for a `claude mcp add` command line.
-            server (str): 'revit' (t3lab-revit) or 'autocad' (t3lab-autocad).
+            server (str): 'revit' (t3lab-revit) or an AUTODESK_APPS key.
 
         Returns:
             str: Formatted snippet.
         """
         name = _server_name(server)
         fmt = str(fmt).lower()
-        if name == CAD_SERVER_NAME:
+        if name in _BRIDGE_SERVERS:
             python = _find_python_executable()
-            bridge = _cad_bridge_path()
+            bridge = _app_bridge_path(server)
             if fmt == 'toml':
                 return _codex_block(python, bridge, 0, name).rstrip('\n')
             if fmt == 'claude_code':
@@ -1309,20 +1332,32 @@ class MCPService(object):
 
 
     @staticmethod
-    def cad_bridge_status():
+    def autodesk_apps():
+        """[(key, label, server name)] of the Autodesk apps the tab lists."""
+        return [(a[0], a[1], a[2]) for a in AUTODESK_APPS]
+
+    @staticmethod
+    def app_bridge_status(app='autocad'):
         """
-        Is the AutoCAD add-in's bridge deployed on this machine?
+        Is this Autodesk app's add-in bridge deployed on this machine?
 
         Returns:
-            dict: installed (bool), path (str)
+            dict: installed (bool), path (str), label, server, hint
         """
-        path = _cad_bridge_path()
-        return {'installed': os.path.isfile(path), 'path': path}
+        spec = _APP_BY_KEY[app]
+        path = _app_bridge_path(app)
+        return {'installed': os.path.isfile(path), 'path': path, 'label': spec[1],
+                'server': spec[2], 'hint': spec[4]}
+
+    @staticmethod
+    def cad_bridge_status():
+        """AutoCAD's app_bridge_status() (kept for older callers)."""
+        return MCPService.app_bridge_status('autocad')
 
     @staticmethod
     def client_status(key, server='revit'):
         """
-        Check one client's configuration status for `server` ('revit'|'autocad').
+        Check one client's configuration status for `server` ('revit' or an AUTODESK_APPS key).
 
         Returns:
             dict: key, label, fmt, path, file_exists, configured, error
@@ -1376,12 +1411,13 @@ class MCPService(object):
         try:
             python = _find_python_executable()
             path   = _resolve_client_path(spec)
-            if name == CAD_SERVER_NAME:
+            if name in _BRIDGE_SERVERS:
                 port = 0
-                bridge = _cad_bridge_path()
+                app = _APP_BY_KEY[server]
+                bridge = _app_bridge_path(server)
                 if not os.path.isfile(bridge):
-                    return False, ('AutoCAD add-in not installed ({} is missing) — '
-                                   'run scripts/install.ps1 from t3lab_CADmcp first'.format(bridge))
+                    return False, ('{} add-in not installed ({} is missing) — {}'.format(
+                        app[1], bridge, app[4]))
                 if key == 'claude' and _claude_desktop_running():
                     return False, ('Claude Desktop is running and would drop the entry '
                                    'when it quits — quit it from the tray icon, then Connect again')

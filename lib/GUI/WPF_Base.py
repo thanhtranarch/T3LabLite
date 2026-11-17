@@ -480,8 +480,46 @@ class T3WPFWindow(Window):
         except Exception:
             pass
         self._xaml_source = xaml_source
+        self._t3_timer = None
+        try:
+            import open_timing      # opt-in: which open step takes the time
+            self._t3_timer = open_timing.window_started(xaml_source, literal_string)
+        except Exception:
+            pass
         self.load_xaml(xaml_source, literal_string=literal_string,
                        handle_esc=handle_esc, set_owner=set_owner)
+        if self._t3_timer is not None:
+            self._t3_watch_open()
+
+    def _t3_step(self, name):
+        timer = getattr(self, '_t3_timer', None)
+        if timer is not None:
+            try:
+                timer.step(name)
+            except Exception:
+                pass
+
+    def _t3_watch_open(self):
+        """Time the tool's own __init__ (until SourceInitialized), layout
+        (until Loaded) and first render (ContentRendered); then log."""
+        timer = self._t3_timer
+
+        def on_source(s, e):
+            timer.step('init_data')
+
+        def on_loaded(s, e):
+            timer.step('layout')
+
+        def on_rendered(s, e):
+            timer.finish()
+            self._t3_timer = None
+        self._t3_timer_handlers = (on_source, on_loaded, on_rendered)
+        try:
+            self.SourceInitialized += on_source
+            self.Loaded += on_loaded
+            self.ContentRendered += on_rendered
+        except Exception:
+            self._t3_timer = None
 
     def FindName(self, name):
         """
@@ -529,6 +567,10 @@ class T3WPFWindow(Window):
 
             with io.open(xaml_path, 'r', encoding='utf-8-sig') as f:
                 xaml_content = f.read()
+            timer = getattr(self, '_t3_timer', None)
+            if timer is not None:
+                timer.xaml_lines = xaml_content.count('\n') + 1
+                self._t3_step('xaml_read')
             try:
                 st = os.stat(xaml_path)
                 self._sanitize_cache_key = (xaml_path, st.st_mtime, st.st_size)
@@ -556,12 +598,14 @@ class T3WPFWindow(Window):
         # T3 custom-chrome window behaves the same while resizing.
         self._install_rounded_window_clip()
         self._install_rounded_panel_clips()
+        self._t3_step('clips')
 
         if set_owner:
             self.setup_owner()
         if handle_esc:
             self.setup_default_handlers()
         self._install_dispatcher_guard()
+        self._t3_step('load_rest')
 
     def _install_rounded_window_clip(self):
         """Clip the content of a rounded root surface inside its outline.
@@ -762,6 +806,7 @@ class T3WPFWindow(Window):
             xaml_content = xaml_content.lstrip('\ufeff \t\r\n')
         clean_xaml, event_bindings, named_elements = _sanitize_xaml_cached(
             xaml_content, getattr(self, '_sanitize_cache_key', None))
+        self._t3_step('sanitize')
 
         loaded_win = None
         errors = []
@@ -874,6 +919,7 @@ class T3WPFWindow(Window):
             except Exception as ex:
                 errors.append("XmlReader.Create + Load: {}".format(ex))
 
+        self._t3_step('wpf_parse')
         if loaded_win is None:
             err_msg = "\n  - ".join(errors) if errors else "XAML parser returned None without error"
             raise RuntimeError(
@@ -1030,6 +1076,7 @@ class T3WPFWindow(Window):
 
         # Auto-wire window chrome controls (minimize, maximize, close)
         self._wire_window_controls()
+        self._t3_step('wiring')
 
     def _install_checkbox_bridge(self):
         """Write bridged row checkboxes back to their Python row.

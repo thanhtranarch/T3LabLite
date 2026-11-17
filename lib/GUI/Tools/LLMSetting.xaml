@@ -1994,12 +1994,16 @@
 
                     <!-- ════════ TAB 2: MODELS / PROVIDERS ════════ -->
                     <StackPanel x:Name="panel_provider">
-                        <TextBlock Text="AI PROVIDER &amp; MODEL" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
+                        <TextBlock Text="AI PROVIDER" Style="{StaticResource T3.Label}" Margin="0,0,0,8"/>
                         <Border Background="{StaticResource T3.SurfaceSunken}" BorderBrush="{StaticResource T3.Border}"
                                 BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,16">
                             <StackPanel>
-                                <TextBlock Text="Select Provider:" Style="{StaticResource T3.Caption}" Margin="0,0,0,4"/>
-                                <Grid Margin="0,0,0,12">
+                                <Grid Margin="0,0,0,4">
+                                    <TextBlock Text="Select Provider:" Style="{StaticResource T3.Caption}"/>
+                                    <TextBlock x:Name="model_saved_hint" Text="" HorizontalAlignment="Right"
+                                               Style="{StaticResource T3.Caption}" Foreground="{StaticResource T3.Success.Text}"/>
+                                </Grid>
+                                <Grid Margin="0,0,0,4">
                                     <ComboBox x:Name="provider_combo" Style="{StaticResource T3.ComboBox}"
                                               Padding="24,0,8,0" SelectionChanged="provider_changed">
                                         <ComboBoxItem Tag="claude">Claude (Anthropic)</ComboBoxItem>
@@ -2014,15 +2018,8 @@
                                              HorizontalAlignment="Left" VerticalAlignment="Center"
                                              Margin="8,0,0,0" IsHitTestVisible="False"/>
                                 </Grid>
-
-                                <Grid Margin="0,0,0,4">
-                                    <TextBlock Text="Model Selection:" Style="{StaticResource T3.Caption}"/>
-                                    <TextBlock x:Name="model_saved_hint" Text="" HorizontalAlignment="Right"
-                                               Style="{StaticResource T3.Caption}" Foreground="{StaticResource T3.Success.Text}"/>
-                                </Grid>
-                                <ComboBox x:Name="model_combo" Style="{StaticResource T3.ComboBox}"
-                                          Margin="0,0,0,4" SelectionChanged="model_changed"
-                                          ToolTip="Saved as soon as you pick it"/>
+                                <TextBlock Text="Claude picks Haiku, Sonnet or Opus for each request (General › Auto model). Other providers use their default model; Custom uses the model name you type."
+                                           Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
                             </StackPanel>
                         </Border>
 

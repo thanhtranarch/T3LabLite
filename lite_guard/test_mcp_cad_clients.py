@@ -75,9 +75,15 @@ def _json(path):
 def test_needs_bridge():
     print('[autocad: refuses when the add-in bridge is missing]')
     with Env() as env:
-        ok, msg = M.MCPService.configure_client('claude', server='autocad')
+        real_install = M.MCPService.install_addin       # no download in this test
+        M.MCPService.install_addin = staticmethod(
+            lambda app='autocad': (False, 'AutoCAD add-in not installed: offline'))
+        try:
+            ok, msg = M.MCPService.configure_client('claude', server='autocad')
+        finally:
+            M.MCPService.install_addin = real_install
         check('refused', not ok)
-        check('says install.ps1', 'install.ps1' in msg, msg)
+        check('says the add-in is not installed', 'add-in not installed' in msg, msg)
         check('no file written', not os.path.exists(env.paths['claude']))
         check('bridge status not installed',
               M.MCPService.cad_bridge_status()['installed'] is False)
@@ -180,12 +186,15 @@ def test_other_autodesk_apps():
     check('AutoCAD first, then the other apps',
           keys[0] == 'autocad' and {'civil3d', 'navisworks', '3dsmax', 'inventor'} <= set(keys), keys)
     names = [a[2] for a in apps]
-    check('server names unique and t3lab-*', len(set(names)) == len(names)
-          and all(n.startswith('t3lab-') for n in names), names)
+    others = [a[2] for a in apps if a[0] != 'civil3d']
+    check('server names unique and t3lab-* (Civil 3D shares AutoCAD\'s add-in)',
+          len(set(others)) == len(others) and all(n.startswith('t3lab-') for n in names)
+          and dict((a[0], a[2]) for a in apps)['civil3d'] == 't3lab-autocad', names)
     check('Revit is not in the app list', 't3lab-revit' not in names)
     with Env() as env:
         ok, msg = M.MCPService.configure_client('claude', server='navisworks')
-        check('refused without its add-in', not ok and 'Navisworks add-in not installed' in msg, msg)
+        check('refused: no Navisworks add-in exists yet',
+              not ok and 'no T3Lab add-in for Navisworks yet' in msg, msg)
         st = M.MCPService.app_bridge_status('navisworks')
         check('status names the app and server',
               not st['installed'] and st['label'] == 'Navisworks'

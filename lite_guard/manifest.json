@@ -151,6 +151,16 @@
       "file": "lib/Intelligence/skills/drawing-completion-rules.md",
       "pattern": "^name: drawing-completion-rules$",
       "why": "the MCP instructions and the t3lab_wiki description send AI apps to this page first"
+    },
+    {
+      "file": "lib/config/user_profile.py",
+      "pattern": "^\\s+return lite_user\\.get_name\\(\\)",
+      "why": "Lite keeps the Assistant user's name in its own file (t3lablite_user.json), never a built-in name; a copy from t3lab_dev would bring back the hardcoded default"
+    },
+    {
+      "file": "lib/GUI/T3LabAssistantDialog.py",
+      "pattern": "^\\s+_ask_name_once\\(\\)",
+      "why": "the Assistant must ask a new Lite user for their name once instead of greeting them with someone else's"
     }
   ],
   "lite_only": [
@@ -166,6 +176,7 @@
     "lib/Intelligence/memory_hub.py",
     "lib/Intelligence/remote_mcp.py",
     "lib/Services/mcp_service.py",
+    "lib/config/lite_user.py",
     "lib/core/bridge.py",
     "lib/core/call_summary.py",
     "lib/core/file_watcher.py",

@@ -26,7 +26,9 @@ import os
 import json
 import datetime
 
-_DEFAULT_NAME = u"Thạnh"
+# Lite keeps the user's name in its own file (config/lite_user.py), never a
+# built-in one; T3Lab AI shares user_profile.json on the same machine.
+_DEFAULT_NAME = u""
 
 
 def _now():
@@ -124,9 +126,7 @@ class UserProfile(object):
         try:
             if self._data.get("setup_completed"):
                 return False
-            if (self._data.get("user", {}).get("name") or u"").strip():
-                return False
-            if self._legacy_username():
+            if self.get_name():
                 return False
             if self._has_any_api_key():
                 return False
@@ -142,22 +142,15 @@ class UserProfile(object):
     # ── User info ──────────────────────────────────────────────────────────────
 
     def get_name(self, fallback=True):
-        name = (self._data.get("user", {}).get("name") or u"").strip()
-        if name:
-            return name
-        if fallback:
-            return self._legacy_username() or _DEFAULT_NAME
-        return u""
+        """The Lite user's name or ''. `fallback` is kept for callers; there
+        is no built-in name to fall back to."""
+        from config import lite_user
+        return lite_user.get_name()
 
     def set_name(self, name):
-        self._data.setdefault("user", {})["name"] = (name or u"").strip()
-        self.save()
-        # Keep legacy settings.username in sync for any code still reading it.
-        try:
-            from config.settings import T3LabAISettings
-            T3LabAISettings().set_username((name or u"").strip())
-        except Exception:
-            pass
+        """Saved to t3lablite_user.json only, never to the files T3Lab AI reads."""
+        from config import lite_user
+        return lite_user.set_name(name)
 
 
     # ── Model setup ────────────────────────────────────────────────────────────
@@ -186,15 +179,11 @@ class UserProfile(object):
 
     @staticmethod
     def _legacy_username():
-        """Return a custom username saved in old settings.json, else ''.
-
-        The settings default is _DEFAULT_NAME, which we treat as 'not set'.
-        """
+        """A username saved in old settings.json, else '' (shipped defaults too)."""
         try:
             from config.settings import T3LabAISettings
-            u = T3LabAISettings().get_username()
-            if u and u != _DEFAULT_NAME:
-                return u
+            from config import lite_user
+            return lite_user.clean(T3LabAISettings().get_username())
         except Exception:
             pass
         return u""

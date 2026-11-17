@@ -59,3 +59,5 @@ jobs:
         run: python3 lite_guard/test_agent_cursors.py
       - name: Test the opt-in tool open timing log
         run: python3 lite_guard/test_open_timing.py
+      - name: Test the Assistant user name (own file, asked once, no built-in name)
+        run: python3 lite_guard/test_lite_user.py

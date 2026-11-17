@@ -190,7 +190,7 @@ class T3LabAISettings(object):
             'endpoints': {
                 'custom': {'base_url': '', 'model': '', 'azure': False},
             },
-            'username': 'Thạnh',
+            'username': '',
             'window_state': {
                 'left':         None,
                 'top':          None,
@@ -439,8 +439,8 @@ class T3LabAISettings(object):
         return self._update(_m)
 
     def get_username(self):
-        """Return the saved user name, or default 'Thạnh'."""
-        return self._settings.get('username', 'Thạnh')
+        """Return the saved user name, or ''. Lite reads config/lite_user.py."""
+        return self._settings.get('username', '')
 
     def set_username(self, username):
         """Persist the user name."""

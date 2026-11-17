@@ -24,6 +24,11 @@ Releasing a new version:
 - **MCP Control — AutoCAD tab:** connect Claude Desktop, ChatGPT (Codex) or Antigravity to AutoCAD through the T3LabCAD add-in (`t3lab-autocad`), or copy a JSON / TOML / `claude mcp add` entry.
 - **BatchOut — Skip image reference files (DWG):** export DWG without the logo/image files Revit writes next to it. Off by default; saved in the profile.
 
+### Changed
+- **T3Lab Assistant — your name:** the Assistant no longer greets everyone with a built-in name. The first time it opens it asks what to call you (once), or keeps the name you set in an earlier install. Change it in LLMs Setting → General. Saved in its own file, `%APPDATA%\T3LabAI\t3lablite_user.json`.
+- **LLMs Setting → Models:** Model Selection is gone — Claude picks Haiku, Sonnet or Opus for each request (General → Auto model). Custom keeps its model name box.
+- **Faster opens:** Visual & Styles opens without reading the whole model (the Color Splasher tab loads when you open it), and CAD to Elements shows its window first, then reads the DWG layers.
+
 ## [2.3.0] - 2026-11-04
 
 BatchOut export report and shareable profiles, usage statistics that ask first, and an MCP option to run AI code without the Yes/No dialog.

@@ -54,9 +54,13 @@ MAX_CAPTURE = 60            # added / modified ids kept per call (DocumentChange
 FRESH_HOLD_S = 7.0          # created / changed elements stay highlighted this long
 SCAN_RADIUS = 70.0          # px round the cursor a call with no element scans
 
-# name -> (mcp_paths.json key, default). The HUD toggles them live. All on by
-# default (owner, 2026-11-17); a saved choice wins.
+# name -> (mcp_paths.json key, default). The HUD toggles them live; a saved
+# choice wins. 'model' is the master switch, OFF by default (owner,
+# 2026-11-18): only the bar shows; no cursor, boxes or effects on the views,
+# and Follow / Zoom / Select / Tile / Glow do nothing. Turned on, the others
+# apply as saved (all on by default, owner 2026-11-17).
 OPTIONS = (
+    ('model', 'agent_cursors_on_model', False),
     ('follow', 'agent_cursors_follow_views', True),
     ('zoom', 'agent_cursors_zoom', True),
     ('select', 'agent_cursors_select', True),
@@ -69,7 +73,9 @@ OPTIONS = (
 SPEED_KEY = 'agent_cursors_speed'
 SPEEDS = (('calm', 1.6), ('normal', 1.0), ('fast', 0.55))
 OPTION_LABELS = {
-    'follow': ('Follow', 'Open and switch to the views the agent works in'),
+    'model': ('On model', 'Draw the cursor, element boxes and effects on the views and let the '
+                          'options below act. Off: the bar only, nothing on the model'),
+    'follow':('Follow', 'Open and switch to the views the agent works in'),
     'zoom': ('Zoom', 'Zoom the view to targets that are off screen'),
     'select': ('Select', "Select the agent's targets (replaces your selection)"),
     'tile': ('Tile', 'Tile the open views when the agent opens another one'),
@@ -141,9 +147,9 @@ PROS = (
     "When the agents go idle: a summary, Select touched and Replay.",
 )
 CONS = (
-    "Each tool call does a little extra work (bounding boxes of up to {} elements, twice when the call names its elements).".format(MAX_TARGETS),
+    "By default only the bar shows. Turn on \"On model\" for the cursor, boxes and the options below; then each tool call does a little extra work (bounding boxes of up to {} elements, twice when the call names its elements).".format(MAX_TARGETS),
     "Follow switches the active view, so a later tool that works on 'the active view' works on the view the agent opened.",
-    "Zoom and Select change your camera and selection while an agent works (both on by default).",
+    "Zoom and Select change your camera and selection while an agent works (with On model).",
     "Boxes are a snapshot: pan or zoom while an agent works and they sit off until its next call; Replay uses the old positions.",
     "Glow (on by default) is experimental: it draws inside Revit's 3D views and is not tested on every Revit version.",
     "The overlay shows up in screenshots and recordings.",
@@ -205,6 +211,21 @@ def options():
     """{name: bool} for every OPTIONS entry."""
     data = _settings()
     return dict((name, bool(data.get(key, default))) for name, key, default in OPTIONS)
+
+
+def effective(opts):
+    """What actually acts: with 'model' off (the default) only 'keep' stays,
+    every option that draws on or moves the model is off."""
+    opts = dict(opts)
+    if not opts.get('model'):
+        for name in opts:
+            if name not in ('model', 'keep'):
+                opts[name] = False
+    return opts
+
+
+def on_model():
+    return bool(options().get('model'))
 
 
 def set_option(name, value):
@@ -539,6 +560,44 @@ def union_rect(rects):
 def moved(old, new, tolerance=3.0):
     """True when a screen box moved or resized by more than `tolerance` px."""
     return any(abs(a - b) > tolerance for a, b in zip(old, new))
+
+
+def _round_all(value, digits):
+    if value is None:
+        return None
+    return tuple(round(float(v), digits) for v in value)
+
+
+def layout_key(geos, active):
+    """What decides where a box lands on screen: each open view's id, window
+    rectangle and zoom (origin + extents), plus which one is active. Two equal
+    keys = Revit finished opening / tiling / zooming views."""
+    return (active, tuple((g.get('id'), _round_all(g.get('rect'), 0),
+                           _round_all(g.get('origin'), 4),
+                           round(float(g.get('w') or 0.0), 4),
+                           round(float(g.get('h') or 0.0), 4)) for g in geos))
+
+
+def overlap_px(a, b):
+    """(width, height) px of the overlap of two (l, t, r, b) rectangles;
+    (0, 0) when apart."""
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return (w, h) if w > 0 and h > 0 else (0, 0)
+
+
+def front_hides(front_is_revit, revit_minimized, front_rect, overlay_rect, min_px=16):
+    """Whether the topmost overlay must hide. It used to hide whenever Revit
+    was not the foreground app, so while the user typed in the AI app (the
+    normal MCP case) the cursors vanished and flashed back on every call.
+    Now it hides only when Revit is minimized or the app in front actually
+    covers the views the overlay draws over."""
+    if revit_minimized:
+        return True
+    if front_is_revit or front_rect is None or overlay_rect is None:
+        return False
+    w, h = overlap_px(front_rect, overlay_rect)
+    return w >= min_px and h >= min_px     # a window edge touching is not covering
 
 
 # First word of a tool / operation -> what the caption says the agent is doing.
@@ -903,6 +962,7 @@ HUD_PALETTES = {
 
 # Options drawer (⚙): group -> option names, in OPTIONS terms.
 OPTION_GROUPS = (
+    ('Show', ('model',)),
     ('View', ('follow', 'zoom', 'tile')),
     ('Selection', ('select',)),
     ('Motion', ('reduce', 'glow')),
@@ -1531,6 +1591,7 @@ def before(app, task):
     try:
         if not is_enabled() or _internal(task):
             return
+        _flush_pending()        # the previous step's show comes first
         tool = getattr(task, 'tool_name', '')
         args = getattr(task, 'arguments', None)
         action = classify_action(tool, args)
@@ -1542,11 +1603,13 @@ def before(app, task):
             doc, geos, active = views
             if active is not None:
                 # Elements the call names: framed while it runs, cursor on them.
+                # Bar only (the default): no boxes to measure.
                 boxes = []
-                if ids and action in ('delete', 'modify'):
+                model = on_model()
+                if model and ids and action in ('delete', 'modify'):
                     task._cursor_pre = _pre_snapshot(app, ids, views)
                     boxes = task._cursor_pre[geos[active]['id']]['boxes']
-                elif ids:
+                elif model and ids:
                     boxes = _boxes(doc, geos[active], ids)
                 shown = [geos[i]['rect'] for i in visible_views([g['rect'] for g in geos], active)]
                 agent = _agent_of(task)
@@ -1580,6 +1643,7 @@ def _changes(app, task, ids):
 def notify(app, task):
     """One finished tool call. Never raises."""
     try:
+        _flush_pending()        # keep the steps in order
         if not is_enabled():
             hide()              # switched off from another engine (Settings)
             return
@@ -1596,7 +1660,7 @@ def notify(app, task):
         action = classify_action(tool, args, result)
         ids = [] if failed else extract_ids(args, result)
         agent = _agent_of(task)
-        opts = options()
+        opts = effective(options())     # bar only: nothing below touches the model
         uidoc = app.ActiveUIDocument
         # What Revit says the call added / modified (code returns no ids).
         call, _session['call'] = _session.get('call'), None
@@ -1622,15 +1686,10 @@ def notify(app, task):
                     pre = None      # different view now: old boxes do not apply
             if opts['select'] and ids and action != 'delete':
                 _select(uidoc, ids)
-        snap = _snapshot(app, ids, pre)
-        if snap is None:
-            return
-        if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
-                and uidoc is not None and _zoom_to(uidoc, ids)):
-            snap = _snapshot(app, ids) or snap
+        tiled = False
         if opts['tile'] and any(new for _v, _n, new in followed):
             if len(list(uidoc.GetOpenUIViews())) >= 2:
-                _tile(app)
+                tiled = _tile(app)
         changes = [] if failed else _changes(app, task, ids)
         clashes = [] if failed else track_touches(_session['touched'], agent, ids, touch)
         _ensure_select_event()
@@ -1649,14 +1708,92 @@ def notify(app, task):
         except Exception:
             pass
         _sync_theme()
-        _overlay(_hwnd(app)).call(
-            'show', agent, action, tool, failed, snap, followed, args=args,
-            n_targets=len(ids), changes=changes, clashes=clashes,
-            touched=len(_session['touched']),
-            goal=_session['goals'].get(agent_key(agent) or 'mcp-client', ''),
-            task_text=current_task(_plan_of(agent)), created=label, fresh=fresh)
+        touched = len(_session['touched'])
+        goal = _session['goals'].get(agent_key(agent) or 'mcp-client', '')
+        task_text = current_task(_plan_of(agent))
+
+        def finish():
+            if not is_enabled():
+                return
+            # Bar only: the views place the bar; no element boxes to measure.
+            snap = _snapshot(app, ids if opts['model'] else [], pre)
+            if snap is None:
+                return
+            if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
+                    and uidoc is not None and _zoom_to(uidoc, ids)):
+                snap = _snapshot(app, ids) or snap
+            _overlay(_hwnd(app)).call(
+                'show', agent, action, tool, failed, snap, followed, args=args,
+                n_targets=len(ids), changes=changes, clashes=clashes,
+                touched=touched, goal=goal, task_text=task_text,
+                created=label, fresh=fresh)
+
+        # Opening views and the posted Tile land AFTER this event returns:
+        # measured now, every box and the cursor sat where the views used to
+        # be. Measure once Revit has laid the views out.
+        if (followed or tiled) and _when_settled(app, finish):
+            return
+        finish()
     except Exception:
         pass
+
+
+# ─── Deferred show: wait for Revit to finish laying views out ────────────────
+
+SETTLE_MAX_TICKS = 8        # Idling passes before showing anyway
+_pending = {'finish': None, 'handler': None, 'app': None}
+
+
+def _flush_pending():
+    """Run a deferred show now (a new call starts, so steps stay in order).
+    Never raises."""
+    finish, handler, app = _pending['finish'], _pending['handler'], _pending['app']
+    _pending.update(finish=None, handler=None, app=None)
+    if handler is not None and app is not None:
+        try:
+            app.Idling -= handler
+        except Exception:
+            pass
+    if finish is not None:
+        try:
+            finish()
+        except Exception:
+            pass
+
+
+def _when_settled(app, finish):
+    """Run finish() on a later Idling, once two passes in a row see the same
+    view layout (layout_key), or after SETTLE_MAX_TICKS. False when Idling
+    could not be hooked (the caller shows at once)."""
+    _flush_pending()
+    state = {'key': None, 'ticks': 0}
+
+    def on_idling(sender, args):
+        if _pending['handler'] is not on_idling:
+            return              # already flushed by a newer call
+        state['ticks'] += 1
+        try:
+            _doc, geos, active = _open_views(app)
+            key = layout_key(geos, active)
+        except Exception:
+            key = None
+        settled = key is not None and key == state['key']
+        state['key'] = key
+        if settled or state['ticks'] >= SETTLE_MAX_TICKS:
+            _flush_pending()
+            return
+        try:
+            args.SetRaiseWithoutDelay()     # next pass now, not in a second
+        except Exception:
+            pass
+
+    try:
+        _pending.update(finish=finish, handler=on_idling, app=app)
+        app.Idling += on_idling
+        return True
+    except Exception:
+        _pending.update(finish=None, handler=None, app=None)
+        return False
 
 
 # ─── Narration / approval wait (any thread) ────────────────────────────────────

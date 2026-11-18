@@ -19,6 +19,26 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Changed
+
+- Agent Cursors show only the bar by default: the agent, its goal and tasks,
+  the current step and the last steps. No cursor, boxes or effects on the
+  model, and no view switching, zooming, selecting, tiling or Glow. Turn on
+  **On model** (options on the bar, or Settings > Agent Cursors) to get them
+  back.
+
+### Fixed
+
+- Agent Cursors stay on screen while you work in the AI app next to Revit.
+  They hide only when Revit is minimized or another window covers its views,
+  and no longer flash up on every step.
+- Boxes and the cursor land on the right element after Follow opens a view or
+  Tile rearranges the views: Agent Cursors wait for Revit to finish the layout,
+  and drop boxes drawn for the old layout.
+- The cursor no longer jumps ahead mid-glide when the views change.
+- Faster steps with Glow on: the view is redrawn only when the outlined
+  elements change, not on every call.
+
 ## [2.5.1] - 2026-11-17
 
 Agent Cursors no longer show an extra "Claude" cursor next to the AI app you use.

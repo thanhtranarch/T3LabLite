@@ -70,9 +70,10 @@ def main():
     elif not on:
         show_info(
             'Agent cursors are on.', title='Agent Cursors',
-            details='They appear on the next MCP tool call: one cursor per agent and '
-                    'action, a plain caption of what it does and its goal, the elements '
-                    'it visits and the values it changes. Long calls say "Working"; a '
+            details='The bar appears on the next MCP tool call: each agent, its goal '
+                    'and tasks, a plain caption of each step and the values it changes. '
+                    'Tick "On model" to also draw a cursor per agent and the elements it '
+                    'visits on the views. Long calls say "Working"; a '
                     'call waiting for your OK pulses amber. When the agents go idle the '
                     'bar shows a summary with Select touched and Replay. The same options, '
                     'plus Speed, switch on the bar; its X turns the cursors off again.\n\n'

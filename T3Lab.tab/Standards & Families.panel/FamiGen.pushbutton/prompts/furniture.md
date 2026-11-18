@@ -15,8 +15,10 @@ JSON object — do not explain what changed.
 - All lengths/coordinates/radii are **millimeters** — the parser converts to Revit feet
   automatically (`* 1/304.8`); never pre-convert. **Angles are radians** (full turn =
   `6.283185307`).
-- The parser does **not** read `reference_planes`, `dimensions`, or `locks` — position every
-  profile with absolute XYZ mm coordinates directly in the curve segments.
+- Position every profile with absolute XYZ mm coordinates directly in the curve segments.
+  `reference_planes`, `dimensions` and `geometry[].locks` (schema v2, see the contract) only
+  ADD flexing on top: a face locked to a plane whose distance is labelled with a length
+  parameter resizes with that parameter. Lock only faces that lie exactly on the plane.
 - `"parameters"` (optional array of `{"name","type","value","instance"}`; `type` is `length`
   (mm, default), `number`, `integer` or `text`) sets a template parameter with that name and
   CREATES it when the template has none. Use `"instance": true` only for values that must vary

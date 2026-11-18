@@ -608,7 +608,13 @@ def _cylinder(mesh, geom):
 
 
 def build_preview(schema):
-    """PreviewModel for a schema dict; never raises for bad parts, warns instead."""
+    """PreviewModel for a schema dict; never raises for bad parts, warns instead.
+
+    ``repeat`` is written out first (``expand_schema``), the same way the
+    builder does it, so mesh indexes refer to the EXPANDED geometry list.
+    """
+    from Intelligence.family_schema import expand_schema
+    schema = expand_schema(schema)
     model = PreviewModel()
     geometry = schema.get('geometry') if isinstance(schema, dict) else None
     if not isinstance(geometry, list):

@@ -2109,6 +2109,8 @@
                                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                      FontFamily="Consolas" FontSize="12.5"
                                      Style="{StaticResource T3.TextBox}"
+                                     Height="Auto" VerticalAlignment="Stretch"
+                                     VerticalContentAlignment="Top" Padding="8"
                                      TextChanged="json_text_changed"
                                      Text="Paste your JSON schema here..."/>
                             </Grid>

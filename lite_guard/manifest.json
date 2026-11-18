@@ -161,6 +161,26 @@
       "file": "lib/GUI/T3LabAssistantDialog.py",
       "pattern": "^\\s+_ask_name_once\\(\\)",
       "why": "the Assistant must ask a new Lite user for their name once instead of greeting them with someone else's"
+    },
+    {
+      "file": "lib/Intelligence/family_schema.py",
+      "pattern": "^def expand_schema\\(",
+      "why": "FamiGen Studio: repeat, types, reference planes, detail levels and Auto category live in the shared schema"
+    },
+    {
+      "file": "lib/FamilyGen/builder.py",
+      "pattern": "^\\s+def apply_constraints\\(",
+      "why": "FamiGen Studio: builder creates types, reference planes, dimensions, locks and detail levels"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^\\s+elif tool_name == 'famigen_get_studio_state':",
+      "why": "FamiGen Studio MCP tools (studio state, validate, patch, templates)"
+    },
+    {
+      "file": "T3Lab.tab/Standards & Families.panel/FamiGen.pushbutton/script.py",
+      "pattern": "studio_host\\.open_studio\\(",
+      "why": "the FamiGen button opens FamiGen Studio (pyRevit 7+), Shift+Click the classic window"
     }
   ],
   "lite_only": [
@@ -192,7 +212,17 @@
     "lib/core/whats_new.py",
     "lib/tracking",
     "lite_guard",
-    "version.txt"
+    "version.txt",
+    "lib/FamilyGen/studio",
+    "lib/FamilyGen/studio_controller.py",
+    "lib/FamilyGen/studio_host.py",
+    "lib/FamilyGen/studio_page.py",
+    "lib/FamilyGen/studio_link.py",
+    "lib/FamilyGen/claude_designer.py",
+    "lib/FamilyGen/net_http.py",
+    "lib/FamilyGen/templates.py",
+    "lib/FamilyGen/builder_report.py",
+    "docs/famigen-studio-spec.md"
   ],
   "ignore_imports": [
     {

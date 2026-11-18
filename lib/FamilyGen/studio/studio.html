@@ -1,0 +1,219 @@
+<!doctype html>
+<!-- FamiGen Studio. studio_page.inline_page() inlines studio.css, the T3Lab logo,
+     three.js r158 and studio.js at the markers below into ONE file, so the page
+     never depends on how WebView2 resolves relative file URLs.
+     Spec: docs/famigen-studio-spec.md -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FamiGen Studio</title>
+<style>
+/*__STUDIO_CSS__*/
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ═══ Title bar: same anatomy as every T3 tool (logo · title · subtitle · AI badge) ═══ -->
+  <!-- ═══ Title bar = T3.TitleBar (48 px, SurfaceSunken, bottom rule): logo 28 · Title ·
+       Subtitle · AI badge (T3.Pill) … window controls (T3.WinCtrl 40 × 32) ═══ -->
+  <header class="titlebar">
+    <img class="logo" alt="T3Lab" src="__T3_LOGO_DATA__">
+    <div class="titles">
+      <div class="title">FamiGen Studio</div>
+      <div class="subtitle">Create Revit families with Claude · describe, review in 3D, create</div>
+    </div>
+    <span class="ai-badge" id="claude-pill" title=""><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 12.5h4M6.5 14.5h3M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.4.3.6.7.6 1.1v.7h4v-.7c0-.4.2-.8.6-1.1A4.5 4.5 0 0 0 8 1.5z"/></svg><span id="ai-text">AI …</span></span>
+    <span class="spacer"></span>
+    <select id="sel-model" class="compact" title="Claude model (live list for your API key)" aria-label="Claude model"></select>
+    <span class="winctrls">
+      <button class="winctrl" id="btn-min" title="Minimize" aria-label="Minimize"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5h9"/></svg></button>
+      <button class="winctrl" id="btn-max" title="Maximize" aria-label="Maximize"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/></svg></button>
+      <button class="winctrl close" id="btn-close" title="Close" aria-label="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+    </span>
+  </header>
+
+  <main class="grid">
+
+    <!-- ═══ Left: chat with Claude ═══ -->
+    <section class="pane chat" aria-label="Chat with Claude" id="chat-pane">
+      <div class="pane-head">
+        <span class="pane-title">Chat</span>
+        <select id="sel-category" class="compact" title="Family category. Auto-detect lets Claude pick it from what you describe."></select>
+        <span class="spacer"></span>
+        <button class="icon-btn" id="btn-history" title="My families: families generated before (Claude, T3Lab Assistant and MCP proposals)" aria-label="My families"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg></button>
+        <button class="icon-btn" id="btn-new" title="New chat: start a new conversation; the current model stays" aria-label="New chat"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/></svg></button>
+      </div>
+      <div class="messages" id="messages" aria-live="polite">
+        <div class="empty" id="chat-empty">
+          <div class="hero">What family do you need?</div>
+          <p>Describe it, or attach a photo, drawing or manufacturer cut sheet (paste or drop
+             it here). Claude drafts the family, FamiGen checks it, and you review it in 3D
+             before the Revit family is created.</p>
+          <div class="examples" id="examples"></div>
+        </div>
+      </div>
+      <div class="drop-hint hidden" id="drop-hint">Drop images, PDFs or text files to attach them</div>
+      <div class="composer">
+        <div class="composer-box">
+          <div class="chips" id="attachments"></div>
+          <textarea id="prompt" rows="3" aria-label="Message to Claude"
+            title="Ctrl+Enter sends · / opens templates · paste or drop images, PDFs and text files"
+            placeholder="Describe a family, or the change you want…"></textarea>
+          <div class="composer-row">
+            <button class="icon-btn" id="btn-attach" title="Attach photos, drawings, PDF cut sheets or text files (or paste / drop them)" aria-label="Attach"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 7.5l-5 5a3 3 0 0 1-4.2-4.2l5.3-5.3a2 2 0 0 1 2.8 2.8L6.6 11a1 1 0 0 1-1.4-1.4L10 4.8"/></svg></button>
+            <button class="btn ghost sm" id="btn-templates" title="Ready briefs from the template library ( / )"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5"/><rect x="9" y="2.5" width="4.5" height="4.5"/><rect x="2.5" y="9" width="4.5" height="4.5"/><rect x="9" y="9" width="4.5" height="4.5"/></svg> Templates</button>
+            <span class="spacer"></span>
+            <select id="sel-mode" class="compact mode" title="Fast answers quickly; Best and Deep think longer for better geometry (more tokens)"></select>
+            <button class="btn danger sm hidden" id="btn-stop" title="Stop waiting for Claude">Stop</button>
+            <button class="btn primary send" id="btn-send" title="Send (Ctrl+Enter)" aria-label="Send"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
+          </div>
+        </div>
+        <div class="composer-foot">
+          <label class="toggle" title="With a reference attached, Claude compares a render of its model with the reference once and fixes what differs">
+            <input type="checkbox" id="chk-check"> Compare with my reference
+          </label>
+          <select id="sel-engine" class="compact" title="Who answers: the built-in Claude, or the AI app connected over MCP (Claude Desktop, Claude Code, ChatGPT…). Auto switches to the AI app while it is working with FamiGen.">
+            <option value="auto">Auto</option>
+            <option value="claude">Built-in Claude</option>
+            <option value="mcp">AI app (MCP)</option>
+          </select>
+          <span class="spacer"></span>
+          <button class="link" id="btn-copy-prompt" title="Copy the FamiGen prompt for this category, for any other AI chat">Copy prompt</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ Center: 3D review (full-bleed viewport, floating controls) ═══ -->
+    <section class="pane stage" aria-label="3D review">
+      <div class="viewport" id="viewport">
+        <div class="float tl">
+          <div class="seg" role="group" aria-label="View">
+            <button class="seg-btn active" data-view="iso" title="3D view">3D</button>
+            <button class="seg-btn" data-view="front" title="Front elevation (looking +Y)">Front</button>
+            <button class="seg-btn" data-view="right" title="Right elevation (looking −X)">Right</button>
+            <button class="seg-btn" data-view="top" title="Plan (Ref. Level)">Plan</button>
+          </div>
+          <button class="icon-btn" id="btn-fit" title="Zoom to fit (double-click the view)" aria-label="Zoom to fit"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
+        </div>
+        <div class="float tr">
+          <label class="field inline hidden" id="type-field">
+            <span class="field-label">Type</span>
+            <select id="sel-type" class="compact" title="Family type: preview its materials"></select>
+          </label>
+          <label class="chip-toggle" title="Reference planes and the sizes that resize the model"><input type="checkbox" id="chk-planes" checked><span>Planes</span></label>
+          <label class="chip-toggle" title="Bounding box with the overall sizes"><input type="checkbox" id="chk-dims" checked><span>Size</span></label>
+        </div>
+        <div class="viewport-empty" id="viewport-empty">
+          <div class="hero">No model yet</div>
+          Describe it in the chat or pick a template: the model appears here.
+        </div>
+        <div id="labels"></div>
+        <div class="busy hidden" id="busy">
+          <div class="busy-bar"><div class="busy-fill"></div></div>
+          <div class="busy-text" id="busy-text">Working…</div>
+        </div>
+        <!-- Revit-like view control bar -->
+        <div class="float bl viewbar">
+          <span class="seg" role="group" aria-label="Detail level" title="Detail level: parts with detail_levels show only at those levels">
+            <button class="seg-btn" data-detail="coarse">Coarse</button>
+            <button class="seg-btn" data-detail="medium">Medium</button>
+            <button class="seg-btn active" data-detail="fine">Fine</button>
+          </span>
+          <select id="sel-style" class="compact" title="Visual style, as in Revit">
+            <option value="wireframe">Wireframe</option>
+            <option value="hidden">Hidden Line</option>
+            <option value="shaded" selected>Shaded</option>
+            <option value="consistent">Consistent Colors</option>
+            <option value="realistic">Realistic</option>
+          </select>
+        </div>
+        <div class="float br size-badge hidden" id="size-badge" title="Drag: orbit · Right-drag or Shift: pan · Wheel: zoom · Click: select a part"></div>
+      </div>
+    </section>
+
+    <!-- ═══ Right: inspector ═══ -->
+    <section class="pane inspect" aria-label="Family details">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="parts" role="tab">Parts</button>
+        <button class="tab" data-tab="materials" role="tab">Materials</button>
+        <button class="tab" data-tab="types" role="tab">Types</button>
+        <button class="tab" data-tab="planes" role="tab" title="Reference planes and the sizes that resize the model">Sizes</button>
+        <button class="tab" data-tab="issues" role="tab" title="What FamiGen found while checking the model">Checks <span class="count hidden" id="issue-count"></span></button>
+      </div>
+      <div class="tab-body">
+        <div class="tab-panel active" id="tab-parts">
+          <div class="summary" id="summary"></div>
+          <ul class="list" id="parts-list"><li class="note-row">No parts yet. Describe a family in the chat.</li></ul>
+        </div>
+        <div class="tab-panel" id="tab-materials"><ul class="list" id="materials-list"></ul></div>
+        <div class="tab-panel" id="tab-types">
+          <div class="table-wrap"><table class="table" id="types-table"></table></div>
+          <p class="note">Bold values differ from the default. A length resizes the model only
+             through a labelled dimension with locked faces (Planes tab); material values
+             change the finish.</p>
+        </div>
+        <div class="tab-panel" id="tab-planes">
+          <ul class="list" id="planes-list"></ul>
+          <p class="note">Reference planes, labelled dimensions and face locks make the family
+             flex: ask Claude "make it parametric: Width, Depth, Height".</p>
+        </div>
+        <div class="tab-panel" id="tab-issues"><ul class="issues" id="issues"></ul></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ═══ Footer ═══ -->
+  <!-- ═══ Footer = T3.FooterBar (48 px, SurfaceSunken, top rule):
+       © Copyright | status | count … actions ═══ -->
+  <footer class="bar">
+    <span class="copyright">© Copyright by T3Lab</span>
+    <span class="divider"></span>
+    <span class="status" id="status" data-tone="info">Ready</span>
+    <span class="divider"></span>
+    <span class="count-text" id="part-count">0 items</span>
+    <span class="spacer"></span>
+    <span class="ver" id="ver"></span>
+    <button class="folder" id="btn-folder" title="Folder the .rfa is saved in. Click to change.">Choose output folder…</button>
+    <label class="toggle" title="After saving the .rfa, load it into the active project (replaces a loaded family of the same name)">
+      <input type="checkbox" id="chk-load"> Load into project
+    </label>
+    <button class="btn primary" id="btn-create" title="Build and save the .rfa from the reviewed model, with the category's template">Create Family</button>
+  </footer>
+
+  <!-- ═══ Templates library ═══ -->
+  <div class="modal hidden" id="modal-templates" role="dialog" aria-modal="true" aria-label="Templates">
+    <div class="modal-card">
+      <div class="modal-head">
+        <span class="search-icon" aria-hidden="true">⌕</span>
+        <input id="tpl-search" type="text" placeholder="Search templates (door, valve, sink, …)" aria-label="Search templates">
+        <span class="modal-count" id="tpl-count"></span>
+        <button class="btn ghost sm" data-close="modal-templates" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="tpl-body"></div>
+    </div>
+  </div>
+
+  <!-- ═══ My families ═══ -->
+  <div class="modal hidden" id="modal-history" role="dialog" aria-modal="true" aria-label="My families">
+    <div class="modal-card narrow">
+      <div class="modal-head">
+        <span class="modal-title">My families</span>
+        <span class="modal-count" id="hist-count"></span>
+        <span class="spacer"></span>
+        <button class="btn ghost sm" data-close="modal-history" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body"><ul class="list" id="hist-list"></ul></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/*__THREE_JS__*/
+</script>
+<script>
+/*__STUDIO_JS__*/
+</script>
+</body>
+</html>

@@ -96,6 +96,8 @@ MODELING_TOOLS = READ_TOOLS | frozenset([
     # Loadable families modelled by the AI: contract -> reviewed proposal ->
     # saved .rfa (FamiGen, schema v2 with materials).
     "famigen_get_schema", "famigen_propose_family", "famigen_create_family",
+    "famigen_get_studio_state", "famigen_validate_family", "famigen_patch_family",
+    "famigen_list_templates",
 ])
 
 # Model QA / audit: read everything, highlight problems visually.

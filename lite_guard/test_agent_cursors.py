@@ -664,11 +664,22 @@ def test_hud_redesign():
           and AC.hud_place(view, (420, 200), (-5000, -5000)) == (4, 4))
     check('cluster', AC.union_box([(1, 5, 3, 9), (0, 6, 8, 7)]) == (0, 5, 8, 9)
           and AC.cluster_stops(AC.MAX_STOPS + 1) and not AC.cluster_stops(AC.MAX_STOPS))
-    for theme in ('dark', 'light'):
-        pal = AC.hud_palette(theme)
-        check('palette ' + theme + ' complete',
-              set(pal) == set(AC.HUD_PALETTES['dark']) and all(pal[k] for k in AC.STATES.values()
-                                                              for k in [k[1]]))
+    pal = AC.hud_palette()
+    check('palette complete', all(pal[k[1]] for k in AC.STATES.values()))
+    check('the bar is dark on every Revit theme (owner mockup, 2026-11-18)',
+          AC.hud_palette('light') == pal and pal['bg'] == '#1E2430' and pal['text'] == '#F8FAFC'
+          and list(AC.HUD_PALETTES) == ['dark'])
+    check('avatar letter', AC.avatar_letter('Claude') == 'C' and AC.avatar_letter('gpt') == 'G'
+          and AC.avatar_letter('') == '?' and AC.avatar_letter(None) == '?')
+    check('change chips: before / after',
+          AC.change_parts(u'Base: Level 1 \u2192 Level 2') == (u'Base: Level 1', u'Level 2')
+          and AC.change_parts(u'Mark: A-101') == (u'Mark: A-101', u''))
+    check('footer tail after one agent\'s counts',
+          AC.footer_tail(0, 0) == '' and AC.footer_tail(1, 2) == u' \u00b7 1 failed \u00b7 2 views'
+          and AC.footer_tail(0, 1) == u' \u00b7 1 view')
+    check('drawer names every option, in the mockup\'s words',
+          set(AC.DRAWER_LABELS) == set(n for n, _k, _d in AC.OPTIONS)
+          and AC.DRAWER_LABELS['keep'] == 'Keep bar on screen' and AC.BETA_OPTIONS == ('glow',))
     grouped = [n for _g, names in AC.OPTION_GROUPS for n in names]
     check('options drawer lists every option once',
           sorted(grouped) == sorted(n for n, _k, _d in AC.OPTIONS) and len(grouped) == len(set(grouped)))
@@ -688,8 +699,16 @@ def test_hud_redesign():
     check('minimal cursor: bare tip + one tag (name · what it does)',
           'CURSOR_PATH' in osrc and "'tool_pill'" not in osrc and "cur['tool']" not in osrc
           and 'def _cursor_state(self, cur, state, caption=None):' in osrc)
-    check('avatar on the bar is the cursor', 'def _mark(self, color, size=16):' in osrc
-          and 'Geometry.Parse(CURSOR_PATH)' in osrc.split('def _mark(', 1)[1].split('    def ', 1)[0])
+    check('avatar on the bar is a disc with the agent\'s letter',
+          'def _avatar(self, agent, size=20):' in osrc and '_mark(' not in osrc
+          and 'avatar_letter(tag)' in osrc.split('def _avatar(', 1)[1].split('    def ', 1)[0])
+    refresh = osrc.split('    def _refresh_hud(self):', 1)[1].split('    def ', 1)[0]
+    check('folded bar is a pill, open bar a card',
+          'CornerRadius(18 if folded else 8)' in refresh)
+    full = osrc.split('    def _fill_full(self, state):', 1)[1].split('    def ', 1)[0]
+    check('one agent: avatar in the header, counts by kind in the footer; several: a row each',
+          'if len(agents) == 1:' in full and 'self._counts_row(mine, flush=True)' in full
+          and 'if len(agents) > 1:' in full)
     check('options drawer replaces the chips', 'for group, names in OPTION_GROUPS' in osrc
           and 'WrapPanel()\n        self._toggles' not in osrc)
     check('header: pause, options, fold, close', all(t in osrc for t in (
@@ -702,7 +721,9 @@ def test_hud_redesign():
     check('drag to move, remembered', 'self.hud.DragMove()' in osrc and 'set_hud_offset(' in osrc
           and 'e.ClickCount == 2' in osrc)
     check('buttons never start a drag', osrc.count("'MouseLeftButtonDown', _swallow") >= 2)
-    check('theme follows Revit', 'def set_theme(self, theme):' in osrc)
+    check('no light bar: the overlay has no theme switch', 'set_theme' not in osrc
+          and '_sync_theme' not in open(os.path.join(LIB, 'core', 'agent_cursors.py'),
+                                        encoding='utf-8').read())
     acsrc = open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
     check('glow switches itself off when Revit refuses it', "set_option('glow', False)" in acsrc)
     ssrc = open(os.path.join(REPO, *SERVER.split('/')), encoding='utf-8').read()

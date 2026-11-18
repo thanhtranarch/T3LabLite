@@ -17,7 +17,8 @@ from core.agent_cursors import (
     describe_call, footer_text, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
     offscreen_markers, options, place_tags, plan_progress, scan_points, set_enabled,
     set_hud_offset, set_option, set_speed, short_text, should_collapse, speed, speed_factor,
-    status_text, tour_schedule, union_box)
+    status_text, tour_schedule, union_box,
+    BETA_OPTIONS, DRAWER_LABELS, avatar_letter, change_parts, footer_tail)
 
 
 class OverlayHost(object):
@@ -191,7 +192,7 @@ class _Overlay(object):
                                              _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE))
         self._hook(self.win, 'Closed', lambda s, e: setattr(self, 'alive', False))
 
-        self._pal = hud_palette('dark')     # set_theme() follows Revit
+        self._pal = hud_palette()           # dark on every Revit theme (owner's mockup)
         self._paused = False        # Pause on the bar (agent_cursors.set_paused)
         self._folded = False        # the user folded the bar to one line
         self._hover = False
@@ -394,13 +395,6 @@ class _Overlay(object):
         self._bar.BorderBrush = self._brush(self._c('line'))
         self._bar.BorderThickness = _thickness(1)
 
-    def set_theme(self, theme):
-        """Revit switched light / dark (agent_cursors._sync_theme)."""
-        self._pal = hud_palette(theme)
-        self._apply_theme()
-        if self.hud.IsVisible:
-            self._refresh_hud()
-
     def set_paused(self, on):
         self._paused = bool(on)
         if self.hud.IsVisible:
@@ -415,20 +409,21 @@ class _Overlay(object):
 
     # small parts
 
-    def _mark(self, color, size=16):
-        """The agent's cursor, small: its avatar on the bar."""
-        from System.Windows.Controls import Canvas
-        from System.Windows.Media import Geometry, ScaleTransform
-        from System.Windows.Shapes import Path
-        holder = Canvas()
-        holder.Width = size * 0.8
-        holder.Height = size
-        arrow = Path()
-        arrow.Data = Geometry.Parse(CURSOR_PATH)
-        arrow.Fill = self._brush(color)
-        arrow.RenderTransform = ScaleTransform(size / 15.0, size / 15.0)
-        holder.Children.Add(arrow)
-        return holder
+    def _avatar(self, agent, size=20):
+        """The agent on the bar: its letter on a disc of its colour."""
+        from System.Windows import CornerRadius, HorizontalAlignment, VerticalAlignment
+        from System.Windows.Controls import Border
+        tag, color = agent_style(agent)
+        letter = self._text(avatar_letter(tag), size * 0.5, color='#FFFFFF')
+        letter.HorizontalAlignment = HorizontalAlignment.Center
+        letter.VerticalAlignment = VerticalAlignment.Center
+        disc = Border()
+        disc.Width = disc.Height = size
+        disc.CornerRadius = CornerRadius(size / 2.0)
+        disc.Background = self._brush(color)
+        disc.Child = letter
+        disc.ToolTip = tag
+        return disc
 
     def _icon_button(self, glyph, tip, action, active=False):
         from System.Windows import Thickness, CornerRadius, HorizontalAlignment, VerticalAlignment
@@ -543,13 +538,13 @@ class _Overlay(object):
         grid.Margin = Thickness(0, margin_top, 0, 0)
         return grid
 
-    def _counts_row(self, counts):
+    def _counts_row(self, counts, flush=False):
         from System.Windows import Thickness
         parts = []
         for action, n in count_items(counts):
             _label, glyph, _color = action_style(action)
             item = self._glyph_label(glyph, '{}'.format(n), self._c('muted'), 11)
-            item.Margin = Thickness(8, 0, 0, 0)
+            item.Margin = Thickness(0 if flush and not parts else 8, 0, 0, 0)
             item.ToolTip = u'{} {}'.format(action_style(action)[0], n)
             parts.append(item)
         return self._row(*parts)
@@ -563,10 +558,12 @@ class _Overlay(object):
         return hud_state(busy, self._waiting, self._asks, self._paused)
 
     def _refresh_hud(self):
-        from System.Windows import Visibility
+        from System.Windows import Visibility, Thickness, CornerRadius
         state = self._state()
         idle_s = time.time() - self._last if state == 'idle' else 0
         folded = should_collapse(self._folded, idle_s, self._hover, self._asks)
+        self._bar.CornerRadius = CornerRadius(18 if folded else 8)
+        self._bar.Padding = Thickness(6, 5, 8, 5) if folded else Thickness(12, 10, 12, 10)
         self._full.Visibility = Visibility.Collapsed if folded else Visibility.Visible
         self._compact.Visibility = Visibility.Visible if folded else Visibility.Collapsed
         self._ask_panel.Visibility = (Visibility.Collapsed if folded else Visibility.Visible)
@@ -592,10 +589,12 @@ class _Overlay(object):
         self._compact.Children.Clear()
         agents = self._agents()
         parts = []
+        if self._asks:                      # the one who asks leads the line
+            agents = [self._asks[0]['agent']]
         for agent in agents[:3]:
-            mark = self._mark(agent_style(agent)[1], 14)
-            mark.Margin = Thickness(0, 0, 4, 0)
-            parts.append(mark)
+            disc = self._avatar(agent, 22)
+            disc.Margin = Thickness(0, 0, 4, 0)
+            parts.append(disc)
         dot = Ellipse()
         dot.Width = dot.Height = 7
         dot.Fill = self._brush(self._c(STATES[state][1]))
@@ -603,11 +602,14 @@ class _Overlay(object):
         parts.append(dot)
         caption, progress = self._now_caption()
         if self._asks:
-            item = self._asks[0]
-            caption = u'{} waits for your OK'.format(agent_style(item['agent'])[0])
-        text = self._text(compact_line(caption or status_text(state), progress), 12.5, bold=False,
+            caption, progress = u'Waiting for your OK', None
+        text = self._text(compact_line(caption or status_text(state)), 12.5, bold=False,
                           color=self._c('text'))
         parts.append(text)
+        if progress:
+            parts.append(self._text(u'  \u00b7 {}/{}'.format(
+                min(progress[0] + 1, progress[1]), progress[1]), 12.5, bold=False,
+                color=self._c('muted')))
         if self._asks:
             item = self._asks[0]
             parts.append(self._button(u'', 'Allow', 'Run it',
@@ -658,15 +660,13 @@ class _Overlay(object):
 
         # header
         left = []
-        for agent in agents[:4]:
-            mark = self._mark(agent_style(agent)[1], 16)
-            mark.Margin = Thickness(0, 0, 4, 0)
-            left.append(mark)
+        if len(agents) == 1:
+            disc = self._avatar(agents[0], 22)
+            disc.Margin = Thickness(0, 0, 8, 0)
+            left.append(disc)
         title = (agent_style(agents[0])[0] if len(agents) == 1 else
                  '{} agents'.format(len(agents)) if agents else 'Agent Cursors')
-        name = self._text(title, 13, color=self._c('text'))
-        name.Margin = Thickness(4, 0, 0, 0)
-        left.append(name)
+        left.append(self._text(title, 13, color=self._c('text')))
         left.append(self._status_pill(state, self._seconds()))
         buttons = self._row(
             self._icon_button(u'' if self._paused else u'',
@@ -698,8 +698,8 @@ class _Overlay(object):
                 label = u'{} · {}'.format(agent_style(agent)[0], label)
             right = None
             if progress:
-                right = self._text(u'Step {}/{}'.format(min(progress[0] + 1, progress[1]),
-                                                        progress[1]),
+                right = self._text(u'{} / {}'.format(min(progress[0] + 1, progress[1]),
+                                                     progress[1]),
                                    11.5, bold=False, color=self._c('text2'))
             line = self._text(u'Goal · ' + short_text(label, 52), 11.5, bold=False,
                               color=self._c('text2'))
@@ -723,14 +723,13 @@ class _Overlay(object):
                 feed.Children.Add(self._feed_row(step, len(agents) > 1))
             full.Children.Add(feed)
 
-        # agents with their counts (several agents, or a summary when idle)
-        if len(agents) > 1 or (state == 'idle' and self._counts):
+        # several agents: one row each with its counts (one agent: the footer)
+        if len(agents) > 1:
             for agent in agents:
-                tag, color = agent_style(agent)
-                mark = self._mark(color, 14)
-                mark.Margin = Thickness(0, 0, 8, 0)
-                row = self._line_row(self._row(mark, self._text(tag, 12.5, bold=False,
-                                                                color=self._c('text'))),
+                disc = self._avatar(agent, 20)
+                disc.Margin = Thickness(0, 0, 8, 0)
+                row = self._line_row(self._row(disc, self._text(agent_style(agent)[0], 12.5,
+                                                                bold=False, color=self._c('text'))),
                                      self._counts_row(self._counts.get(agent, {})), 6)
                 full.Children.Add(row)
 
@@ -741,16 +740,19 @@ class _Overlay(object):
         rule.Background = self._brush(self._c('line'))
         rule.Margin = Thickness(0, 10, 0, 8)
         full.Children.Add(rule)
-        note = self._note if self._note else footer_text(self._actions, self._failed,
-                                                         len(self._views))
-        if self._views and not self._note:
-            names = [v[1] for v in self._views[-3:]]
-            note_tip = u'Views: ' + u' · '.join(names)
+        mine = self._counts.get(agents[0], {}) if len(agents) == 1 else {}
+        if self._note:
+            foot_text = self._text(self._note, 11.5, bold=False, color=self._c('muted'))
+        elif count_items(mine):
+            foot_text = self._row(
+                self._counts_row(mine, flush=True),
+                self._text(footer_tail(self._failed, len(self._views)), 11.5, bold=False,
+                           color=self._c('muted')))
         else:
-            note_tip = None
-        foot_text = self._text(note, 11.5, bold=False, color=self._c('muted'))
-        if note_tip:
-            foot_text.ToolTip = note_tip
+            foot_text = self._text(footer_text(self._actions, self._failed, len(self._views)),
+                                   11.5, bold=False, color=self._c('muted'))
+        if self._views and not self._note:
+            foot_text.ToolTip = u'Views: ' + u' · '.join(v[1] for v in self._views[-3:])
         actions = self._row(
             self._button(u'', 'Select touched',
                          'Select every element the agents changed (no model change)',
@@ -800,11 +802,22 @@ class _Overlay(object):
             chips = WrapPanel()
             chips.Margin = Thickness(0, 4, 0, 0)
             for change in self._last_changes[:3]:
-                chip = self._pill(self._text(short_text(change, 40), 11, bold=False,
-                                             color=self._c('text')), self._c('chip'), radius=2)
-                chip.Child.FontFamily = FontFamily('Consolas')
-                chip.Margin = Thickness(0, 0, 6, 2)
-                chips.Children.Add(chip)
+                parts = []
+                for k, piece in enumerate(change_parts(change)):
+                    if not piece:
+                        continue
+                    if k:
+                        arrow = self._text(u'\u2192', 11, bold=False, color=self._c('muted'))
+                        arrow.Margin = Thickness(5, 0, 5, 0)
+                        parts.append(arrow)
+                    chip = self._pill(self._text(short_text(piece, 28), 11, bold=False,
+                                                 color=self._c('text')), self._c('chip'),
+                                      radius=2)
+                    chip.Child.FontFamily = FontFamily('Consolas')
+                    parts.append(chip)
+                line = self._row(*parts)
+                line.Margin = Thickness(0, 0, 10, 2)
+                chips.Children.Add(line)
             body.Children.Add(chips)
         return card
 
@@ -821,9 +834,9 @@ class _Overlay(object):
         icon.Margin = Thickness(0, 0, 8, 0)
         parts = [icon]
         if with_agent:
-            mark = self._mark(agent_style(step['agent'])[1], 12)
-            mark.Margin = Thickness(0, 0, 6, 0)
-            parts.append(mark)
+            disc = self._avatar(step['agent'], 16)
+            disc.Margin = Thickness(0, 0, 6, 0)
+            parts.append(disc)
         parts.append(self._text(short_text(step['caption'], 50), 12, bold=False,
                                 color=self._c('text2')))
         ago = self._text(ago_text(time.time() - step.get('t', time.time())), 11, bold=False,
@@ -850,7 +863,7 @@ class _Overlay(object):
             head.Margin = Thickness(0, 6, 0, 2)
             col.Children.Add(head)
             for name in names:
-                label, tip = OPTION_LABELS[name][:2]
+                label, tip = DRAWER_LABELS.get(name, OPTION_LABELS[name][0]), OPTION_LABELS[name][1]
 
                 def flip(s, e, name=name):
                     try:
@@ -859,6 +872,9 @@ class _Overlay(object):
                     except Exception:
                         pass
                 text = self._text(label, 12.5, bold=False, color=self._c('text'))
+                if name in BETA_OPTIONS:
+                    text = self._row(text, self._text(u'  beta', 10.5, bold=False,
+                                                      color=self._c('faint')))
                 text.ToolTip = tip
                 col.Children.Add(self._line_row(text, self._switch(opts[name], flip), 3))
             if group == 'Motion':
@@ -866,10 +882,10 @@ class _Overlay(object):
                 for value, _factor in SPEEDS:
                     on = value == speed()
                     part = self._pill(self._text(value.capitalize(), 11, bold=False,
-                                                 color=self._c('on_accent') if on else
+                                                 color=self._c('text') if on else
                                                  self._c('muted')),
-                                      self._c('accent') if on else self._c('chip'), radius=3)
-                    part.Margin = Thickness(2, 0, 0, 0)
+                                      self._c('chip_hot') if on else self._c('bg'), radius=4)
+                    part.Margin = Thickness(0 if not seg else 1, 0, 0, 0)
                     part.Cursor = Cursors.Hand
 
                     def pick(s, e, value=value):
@@ -880,8 +896,10 @@ class _Overlay(object):
                             pass
                     self._hook(part, 'MouseLeftButtonUp', pick, transient=True)
                     seg.append(part)
+                speeds = self._pill(self._row(*seg), self._c('bg'), radius=4)
+                speeds.Padding = Thickness(1)
                 col.Children.Add(self._line_row(
-                    self._text('Speed', 12.5, bold=False, color=self._c('text')), self._row(*seg), 3))
+                    self._text('Speed', 12.5, bold=False, color=self._c('text')), speeds, 3))
         return box
 
     def _toggle_drawer(self):

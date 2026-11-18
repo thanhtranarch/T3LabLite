@@ -892,16 +892,14 @@ STATES = {
     'idle': ('Idle', 'ok'),
 }
 
-# Bar colours per Revit theme. One orange accent (T3Lab / t3lab.space).
+# Bar colours: the dark bar of the owner's mockup, on a light and on a dark
+# Revit alike (owner, 2026-11-18: the white bar on a light Revit was not the
+# design). One orange accent (T3Lab / t3lab.space).
 HUD_PALETTES = {
     'dark': {'bg': '#1E2430', 'card': '#273042', 'line': '#334155', 'chip': '#334155',
              'chip_hot': '#475569', 'text': '#F8FAFC', 'text2': '#CBD5E1', 'muted': '#94A3B8',
              'faint': '#64748B', 'accent': '#F27522', 'on_accent': '#FFFFFF', 'ok': '#4ADE80',
              'bad': '#F87171', 'warn': '#FBBF24', 'info': '#93C5FD', 'track': '#475569'},
-    'light': {'bg': '#FFFFFF', 'card': '#F3F4F6', 'line': '#E5E7EB', 'chip': '#E5E7EB',
-              'chip_hot': '#D1D5DB', 'text': '#111827', 'text2': '#374151', 'muted': '#6B7280',
-              'faint': '#9CA3AF', 'accent': '#EA680C', 'on_accent': '#FFFFFF', 'ok': '#16A34A',
-              'bad': '#DC2626', 'warn': '#B45309', 'info': '#2563EB', 'track': '#D1D5DB'},
 }
 
 # Options drawer (⚙): group -> option names, in OPTIONS terms.
@@ -913,8 +911,41 @@ OPTION_GROUPS = (
 )
 
 
-def hud_palette(theme):
-    return HUD_PALETTES['light' if theme == 'light' else 'dark']
+# What the drawer calls each option (OPTION_LABELS are the short names).
+DRAWER_LABELS = {
+    'follow': "Follow the agent's views", 'zoom': 'Zoom to off-screen targets',
+    'tile': 'Tile views it opens', 'select': 'Select its targets',
+    'reduce': 'Less motion', 'glow': 'Glow in 3D', 'keep': 'Keep bar on screen',
+}
+BETA_OPTIONS = ('glow',)
+
+
+def hud_palette(theme=None):
+    """The bar's colours. `theme` is ignored: the bar is dark on every Revit theme."""
+    return HUD_PALETTES['dark']
+
+
+def avatar_letter(tag):
+    """'C' for Claude: the letter on an agent's disc."""
+    text = u'{}'.format(tag or '').strip()
+    return text[:1].upper() or u'?'
+
+
+def change_parts(change):
+    """('Base: Level 1', 'Level 2') from 'Base: Level 1 → Level 2'; the
+    second part is '' when the text has no arrow."""
+    before, arrow, after = u'{}'.format(change or '').partition(u' \u2192 ')
+    return (before, after) if arrow else (before, u'')
+
+
+def footer_tail(failed, views):
+    """' · 1 failed · 2 views' after one agent's counts, or ''."""
+    parts = []
+    if failed:
+        parts.append('{} failed'.format(failed))
+    if views:
+        parts.append('{} view{}'.format(views, '' if views == 1 else 's'))
+    return u''.join(u' \u00b7 ' + p for p in parts)
 
 
 def hud_state(working, waiting, asks, paused):
@@ -1651,7 +1682,6 @@ def notify(app, task):
                 agent_cursors_glow.stop(app)        # no-op when never started
         except Exception:
             pass
-        _sync_theme()
         _overlay(_hwnd(app)).call(
             'show', agent, action, tool, failed, snap, followed, args=args,
             n_targets=len(ids), changes=changes, clashes=clashes,
@@ -1915,27 +1945,7 @@ def offer(app, agent):
 
 # ─── Overlay (core/agent_cursors_overlay.py) ──────────────────────────────────
 
-_state = {'overlay': None, 'offered': False, 'theme': None}
-
-
-def revit_theme():
-    """'dark' | 'light' as Revit shows it (UIThemeManager, Revit 2024+;
-    earlier Revit has only light). Main thread."""
-    try:
-        import Autodesk.Revit.UI as RUI
-        mgr = getattr(RUI, 'UIThemeManager', None)
-        if mgr is not None and 'dark' in '{}'.format(mgr.CurrentTheme).lower():
-            return 'dark'
-    except Exception:
-        pass
-    return 'light'
-
-
-def _sync_theme():
-    theme = revit_theme()
-    if theme != _state.get('theme') and _state.get('overlay') is not None:
-        _state['theme'] = theme
-        _state['overlay'].call('set_theme', theme)
+_state = {'overlay': None, 'offered': False}
 
 
 def _overlay(hwnd):
@@ -1948,6 +1958,4 @@ def _overlay(hwnd):
                                 'idle': agents_idle,
                                 'pause': set_paused})
         _state['overlay'] = ov
-        _state['theme'] = None
-        _sync_theme()
     return ov

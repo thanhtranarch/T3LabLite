@@ -245,19 +245,21 @@ and drawbacks before you switch).
 - **While it works** — long calls say "Working 8 s"; a call waiting for your
   OK pulses amber. Two AI apps editing the same element flash it red.
   Targets outside the view get an edge arrow with a count.
-- **The bar** at the bottom of the view: each AI app (its pointer is its
-  avatar), a status (Working 8 s · Waiting for your OK · Paused · Idle), the
-  goal with "Step 2/5" and a progress bar, what runs now with the values it
-  changed, the last 3 steps (✓ / ✕, how long ago), and Select touched /
-  Replay. It follows Revit's light or dark theme. Drag it anywhere
-  (double-click puts it back); **—** folds it to one line, and it folds by
-  itself after 10 s without a call (the mouse opens it; a question for your
-  OK shows Allow / Deny on that line).
+- **The bar** at the bottom of the view, dark on every Revit theme: each AI
+  app (a round avatar in its colour with its first letter), a status
+  (Working 8 s · Waiting for your OK · Paused · Idle), the goal with "2 / 5"
+  and a progress bar, what runs now with the values it changed (before →
+  after), the last 3 steps (✓ / ✕, how long ago), the counts per kind of
+  action, and Select touched / Replay. Drag it anywhere (double-click puts
+  it back); **—** folds it to a one-line pill, and it folds by itself after
+  10 s without a call (the mouse opens it; a question for your OK shows
+  Allow / Deny on that line).
 - **⏸ Pause** holds every model change (the AI app is told it is paused and
   to try later); read-only tools still run. **▶** resumes.
-- **⚙ Options**: **Follow** opens the views the AI works in, **Zoom** brings
-  off-screen targets into view; **Select**, **Tile**, **Less motion**,
-  **Speed** (Calm / Normal / Fast) and **Glow** (experimental: outlines the
+- **⚙ Options**, each with its full name: **Follow the agent's views** opens
+  the views the AI works in, **Zoom to off-screen targets** brings them into
+  view; **Select its targets**, **Tile views it opens**, **Less motion**,
+  **Speed** (Calm / Normal / Fast) and **Glow in 3D** (beta: outlines the
   touched elements inside 3D views; it turns itself off if Revit cannot draw
   it). Every option is on until you turn it off; Settings › Agent Cursors has
   the same switches.

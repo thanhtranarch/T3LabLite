@@ -19,6 +19,9 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Changed
+- **Agent Cursors — new look for the bar:** dark on every Revit theme, so it reads the same over a white or a black view. Each AI app has a round avatar in its colour; the folded bar is a one-line pill (app · what it does · step 2 / 5); changed values show as before → after; when the AI stops, the bar counts what it did per kind of action (Read, Create, Modify…). Options are listed with their full names ("Follow the agent's views", "Zoom to off-screen targets"…), Glow is marked beta.
+
 ### Fixed
 - **Agent Cursors — Claude shown as "Local Agent Mod…", Antigravity as "AI app":** Claude Desktop's agent mode is now recognised as Claude. Antigravity sends no name of its own, so at Revit start T3Lab adds the app's name to the connection it wrote earlier in each AI app's settings (Antigravity, ChatGPT / Codex, Claude Desktop); nothing else in those files changes and a backup is kept. Restart the AI app once afterwards.
 

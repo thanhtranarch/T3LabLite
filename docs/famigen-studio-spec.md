@@ -115,6 +115,8 @@ a modal dialog) and builds directly.
 | Field | Shape | Builder |
 |---|---|---|
 | `types[]` | `{"name", "values": {param: value, material param: material}}` | first = current type renamed, others `NewType` |
+| `SweptBlend` (form) | `{"path": [one Line/Arc3P], "profile", "top_profile"}` (local sections) | `NewSweptBlend` |
+| `Sweep.profile_local` | `true` → profile drawn as the section seen along the path | profile placed at the path start |
 | `Tube` (form) | `{"points": [[x,y,z], …], "radius", "smooth"?, "closed"?}` | written out as spline segments (Cylinders lengthened by r·tan(turn/2) so bends close) + a ball only at turns > 35° |
 | `geometry[].repeat` | `{"count", "step":[dx,dy,dz]}` or `{"at":[[dx,dy,dz],…]}` (not Sweep, ≤ 200) | written out by `expand_schema` before building (preview does the same) |
 | `geometry[].detail_levels` | `["coarse","medium","fine"]` subset | `FamilyElementVisibility` |
@@ -126,6 +128,24 @@ a modal dialog) and builds directly.
 Template planes usable by name: `Center (Left/Right)`, `Center (Front/Back)`,
 `Ref. Level`. Constraint failures are warnings, never a failed build. The
 preview warns before Revit when a locked face does not lie on its plane.
+
+### 5.2 The whole Revit form toolbox
+
+| Revit tool | Schema | Typical use | Builder |
+|---|---|---|---|
+| Extrusion | `Extrusion` (+ `sketch_plane_x/y` for elevation outlines) | slabs, panels, gables, stringers | `NewExtrusion` |
+| Blend | `Blend` (`profile` → `top_profile`) | tapers, hoppers, chamfered plinths, cones | `NewBlend` |
+| Revolve | `Revolution` (axis, angles) | domes, bowls, knobs, balusters, rings | `NewRevolution` |
+| Sweep | `Sweep` + `"profile_local": true` | handrails, mouldings, kerbs, slide troughs | `NewSweep` (profile placed at the path start) |
+| Swept Blend | `SweptBlend` (ONE Line/Arc3P path, start + end local sections) | chutes, horns, transitions | `NewSweptBlend`; sections at the path ends, retried in the XY plane |
+| Void Forms | `"is_solid": false` on any form | openings, cavities, hollow tubes, holes | void form + `SolidSolidCutUtils.AddCutBetweenSolids` with every solid it overlaps (best effort) |
+| (FamiGen) | `Cylinder`, `Tube` | straight / curved rods | expanded to Cylinders (+ balls) |
+
+Local cross-sections (`FamilyGen/form_frames.py`): at a path point with tangent
+`t`, `u = Z × t` (sideways), `v = t × u` (up); `[u, v, 0]` in mm. Circles and
+ellipses become Arc3P pieces so Revit gets plain world curves. The contract's
+FORMS block tells Claude which tool fits which shape; Studio hides voids unless
+**Voids** is ticked (the preview does not subtract them; Revit does).
 
 ### 5.1 Continuity (why models no longer look "in pieces")
 

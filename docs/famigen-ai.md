@@ -85,8 +85,9 @@ Contract source: `T3Lab.extension/lib/Intelligence/family_schema.py`
 | `parameters[]` | `name`, optional `type` `length` (mm, default) / `number` / `integer` / `text`, `value` matching it, `instance` (default false). Existing template parameters are set; missing ones are created. |
 | names | No `\ : { } [ ] \| ; < > ? `` ` `` ~`, at most 60 characters. |
 
-Geometry forms: Extrusion, Blend, Revolution, Sweep, Cylinder, Tube (FamiGen-only, expanded
-before building); curve segments: Line, Arc3P/ArcThreePoint, Spline, Arc, Circle, Ellipse;
+Geometry forms: Extrusion, Blend, Revolution, Sweep (optionally `profile_local`), SweptBlend,
+Cylinder, Tube (FamiGen-only, expanded before building), and Void Forms (`is_solid: false` on any of
+them); see [famigen-studio-spec.md §5.2](famigen-studio-spec.md). Curve segments: Line, Arc3P/ArcThreePoint, Spline, Arc, Circle, Ellipse;
 millimeters and radians.
 
 ## What the builder creates

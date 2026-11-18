@@ -553,5 +553,76 @@ class ContinuityTests(unittest.TestCase):
         self.assertTrue(any('Not connected' in w for w in second.warnings))
 
 
+class FormToolboxTests(unittest.TestCase):
+    """Sweep with local profiles, SweptBlend and voids (docs §5.2)."""
+
+    U = [{'type': 'Line', 'start': [a[0], a[1], 0], 'end': [b[0], b[1], 0]} for a, b in
+         zip([[-300, 0], [300, 0], [300, 200], [-300, 200]], [[300, 0], [300, 200], [-300, 200], [-300, 0]])]
+
+    def family(self, *geometry):
+        s = copy.deepcopy(GOOD)
+        s['geometry'] = list(geometry)
+        return s
+
+    def test_frame_rule(self):
+        from FamilyGen.form_frames import frame
+        u, v = frame([1, 0, 0])
+        self.assertEqual([round(c, 6) for c in u], [0, 1, 0])     # sideways = +Y
+        self.assertEqual([round(c, 6) for c in v], [0, 0, 1])     # up = +Z
+        u, v = frame([0, 0, 1])                                    # vertical path
+        self.assertEqual([round(c, 6) for c in u], [1, 0, 0])
+
+    def test_local_profile_to_world_and_arc_tangents(self):
+        from FamilyGen.form_frames import local_to_world, segment_ends
+        world = local_to_world([{'type': 'Circle', 'center': [0, 0, 0], 'radius': 100}],
+                               [10, 20, 30], [0, 1, 0], [0, 0, 1])
+        self.assertEqual([w['type'] for w in world], ['Arc3P', 'Arc3P'])
+        self.assertEqual(world[0]['start'], [10.0, 120.0, 30.0])
+        (s, ts), (e, te) = segment_ends({'type': 'Arc3P', 'start': [0, 0, 0], 'end': [100, 0, 0],
+                                         'mid': [50, 0, 50]})
+        self.assertGreater(ts[2], 0.9)                             # leaves upwards
+        self.assertLess(te[2], -0.9)                               # arrives downwards
+
+    def test_local_sweep_preview_sits_on_the_path(self):
+        from FamilyGen.preview_mesh import build_preview
+        sweep = {'id': 'Trough', 'type': 'Sweep', 'material': 'Oak', 'profile_local': True,
+                 'sketch_plane_y': 0, 'profile': self.U,
+                 'path': [{'type': 'Line', 'start': [0, 0, 0], 'end': [1000, 0, 0]}]}
+        model = build_preview(self.family(sweep))
+        self.assertEqual(fs.validate_family_schema(self.family(sweep))[0], [])
+        self.assertEqual([round(v) for v in model.bbox_min], [0, -300, 0])
+        self.assertEqual([round(v) for v in model.bbox_max], [1000, 300, 200])
+
+    def test_swept_blend_rules_and_preview(self):
+        from FamilyGen.preview_mesh import build_preview
+        sb = {'id': 'Chute', 'type': 'SweptBlend', 'material': 'Oak', 'sketch_plane_y': 0,
+              'path': [{'type': 'Arc3P', 'start': [0, 0, 1000], 'end': [1000, 0, 0], 'mid': [700, 0, 700]}],
+              'profile': [{'type': 'Circle', 'center': [0, 0, 0], 'radius': 300}],
+              'top_profile': [{'type': 'Ellipse', 'center': [0, 0, 0], 'radius_x': 450, 'radius_y': 150}]}
+        self.assertEqual(fs.validate_family_schema(self.family(sb))[0], [])
+        model = build_preview(self.family(sb))
+        self.assertEqual(model.warnings, [])
+        self.assertAlmostEqual(model.size_mm()[1], 900, delta=5)  # widest section = end ellipse
+        two = dict(sb, path=sb['path'] + [{'type': 'Line', 'start': [1000, 0, 0], 'end': [2000, 0, 0]}])
+        self.assertIn('ONE segment', '\n'.join(fs.validate_family_schema(self.family(two))[0]))
+        spline = dict(sb, path=[{'type': 'Spline', 'points': [[0, 0, 0], [1, 0, 1], [2, 0, 0]]}])
+        self.assertTrue(fs.validate_family_schema(self.family(spline))[0])
+        rep = dict(sb, repeat={'count': 2, 'step': [10, 0, 0]})
+        self.assertIn('cannot repeat', '\n'.join(fs.validate_family_schema(self.family(rep))[0]))
+
+    def test_contract_names_every_form(self):
+        contract = fs.schema_contract()
+        for form in ('Extrusion', 'Blend', 'Revolution', 'Sweep', 'SweptBlend', 'Cylinder', 'Tube', 'Void'):
+            self.assertIn(form, contract['form_guide'])
+        prompt = fs.build_system_prompt('Site', delivery='tool')
+        self.assertIn('use the whole Revit toolbox', prompt)
+        self.assertIn('SweptBlend', prompt)
+
+    def test_studio_can_hide_voids(self):
+        with open(os.path.join(STUDIO, 'studio.js'), encoding='utf-8') as handle:
+            js = handle.read()
+        self.assertIn("m.part.solid || $('chk-voids').checked", js)
+
+
 if __name__ == '__main__':
     unittest.main()

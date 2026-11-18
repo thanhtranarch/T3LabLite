@@ -28,7 +28,7 @@ def _eid_int(eid):
     Revit 2026+: ElementId.Value (long, IntegerValue removed)
     """
     try:
-        return eid.Value
+        return int(eid.Value)       # System.Int64 is not JSON-serialisable under IronPython
     except AttributeError:
         return eid.IntegerValue
 

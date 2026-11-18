@@ -4501,6 +4501,27 @@ class T3LabAIServer(object):
                 pass
         return found, False
 
+    @staticmethod
+    def _pick_level(levels, name=None):
+        """(level, error). A name that matches no level is an error with the
+        model's level names: falling back to "some level" built the element on
+        the wrong storey and said success. No name: the lowest level."""
+        levels = list(levels or [])
+        if not levels:
+            return None, None
+        if not name:
+            return min(levels, key=lambda lv: lv.Elevation), None
+        want = u' '.join(u'{}'.format(name).split()).lower()
+        for lv in levels:
+            if lv.Name == name:
+                return lv, None
+        for lv in levels:
+            if u' '.join(u'{}'.format(lv.Name).split()).lower() == want:
+                return lv, None
+        return None, {'error': u"No level named '{}'.".format(name),
+                      'levels_in_model': sorted(u'{}'.format(lv.Name) for lv in levels),
+                      'hint': 'Retry with one of levels_in_model.', 'nothing_ran': True}
+
     def _resolve_bic(self, cat_arg):
         """Category name -> (bic, canonical_name, error_dict). Exactly one of
         bic / error_dict is non-None. Case-insensitive, and accepts the
@@ -5846,14 +5867,9 @@ class T3LabAIServer(object):
 
             # Find level
             levels = list(FilteredElementCollector(doc).OfClass(Level).ToElements())
-            target_level = None
-            if level_name_arg:
-                for lv in levels:
-                    if lv.Name == level_name_arg:
-                        target_level = lv
-                        break
-            if target_level is None and levels:
-                target_level = levels[0]
+            target_level, _lvl_err = self._pick_level(levels, level_name_arg)
+            if _lvl_err:
+                return _lvl_err
             if target_level is None:
                 return {'error': 'No levels found in the document'}
 
@@ -5986,6 +6002,14 @@ class T3LabAIServer(object):
             level_filter = ElementLevelFilter(target_level.Id)
             collector = FilteredElementCollector(doc).WherePasses(level_filter)
 
+            if category_arg and category_arg not in category_map:
+                # The shared resolver knows every category ("walls", "Rooms",
+                # "Structural Columns"); an unknown one used to return ALL
+                # elements on the level, with no warning.
+                _bic, _cat, _cat_err = self._resolve_bic(category_arg)
+                if _cat_err:
+                    return _cat_err
+                category_map[category_arg] = _bic
             if category_arg and category_arg in category_map:
                 from Autodesk.Revit.DB import ElementCategoryFilter
                 cat_filter = ElementCategoryFilter(category_map[category_arg])
@@ -6436,12 +6460,9 @@ class T3LabAIServer(object):
                 return {'error': 'Family type "{}" not found. Use get_available_family_types to list loaded types.'.format(ftype_name)}
 
             levels = list(FilteredElementCollector(doc).OfClass(Level).ToElements())
-            target_level = levels[0] if levels else None
-            if lvl_name:
-                for lv in levels:
-                    if lv.Name == lvl_name:
-                        target_level = lv
-                        break
+            target_level, _lvl_err = self._pick_level(levels, lvl_name)
+            if _lvl_err:
+                return _lvl_err
             if target_level is None:
                 return {'error': 'No levels found in the document'}
 
@@ -6538,12 +6559,9 @@ class T3LabAIServer(object):
                 return {'error': 'Family type "{}" not found. Use get_available_family_types to list loaded types.'.format(ftype_name)}
 
             levels = list(FilteredElementCollector(doc).OfClass(Level).ToElements())
-            target_level = levels[0] if levels else None
-            if lvl_name:
-                for lv in levels:
-                    if lv.Name == lvl_name:
-                        target_level = lv
-                        break
+            target_level, _lvl_err = self._pick_level(levels, lvl_name)
+            if _lvl_err:
+                return _lvl_err
             if target_level is None:
                 return {'error': 'No levels found in the document'}
 
@@ -6603,12 +6621,9 @@ class T3LabAIServer(object):
                 return {'error': 'boundary_points must have at least 3 points'}
 
             levels = list(FilteredElementCollector(doc).OfClass(Level).ToElements())
-            target_level = levels[0] if levels else None
-            if lvl_name:
-                for lv in levels:
-                    if lv.Name == lvl_name:
-                        target_level = lv
-                        break
+            target_level, _lvl_err = self._pick_level(levels, lvl_name)
+            if _lvl_err:
+                return _lvl_err
             if target_level is None:
                 return {'error': 'No levels found in the document'}
 
@@ -6674,8 +6689,16 @@ class T3LabAIServer(object):
                     ca = CurveArray()
                     for seg in segments:
                         ca.Append(seg)
-                    ma = ModelCurveArray()
-                    new_elem = doc.Create.NewFootPrintRoof(ca, target_level, rt, ma)
+                    # The 4th argument is `out`: IronPython needs a clr.Reference
+                    # box (a plain ModelCurveArray was a TypeError on every call);
+                    # pythonnet takes a placeholder and returns (roof, mapping).
+                    try:
+                        import clr as _clr
+                        ma = _clr.Reference[ModelCurveArray]()
+                    except Exception:
+                        ma = ModelCurveArray()
+                    made = doc.Create.NewFootPrintRoof(ca, target_level, rt, ma)
+                    new_elem = made[0] if isinstance(made, tuple) else made
                     type_used = elem_name(rt)
 
                 else:  # floor (default)
@@ -6788,12 +6811,9 @@ class T3LabAIServer(object):
             room_num  = arguments.get('number', '')
 
             levels = list(FilteredElementCollector(doc).OfClass(Level).ToElements())
-            target_level = levels[0] if levels else None
-            if lvl_name:
-                for lv in levels:
-                    if lv.Name == lvl_name:
-                        target_level = lv
-                        break
+            target_level, _lvl_err = self._pick_level(levels, lvl_name)
+            if _lvl_err:
+                return _lvl_err
             if target_level is None:
                 return {'error': 'No level found'}
 
@@ -6838,12 +6858,9 @@ class T3LabAIServer(object):
             oy = float(arguments.get('origin_y', 0)) * 3.28084
 
             levels = list(FilteredElementCollector(doc).OfClass(Level).ToElements())
-            target_level = levels[0] if levels else None
-            if lvl_name:
-                for lv in levels:
-                    if lv.Name == lvl_name:
-                        target_level = lv
-                        break
+            target_level, _lvl_err = self._pick_level(levels, lvl_name)
+            if _lvl_err:
+                return _lvl_err
 
             framing_syms = []
             for s in FilteredElementCollector(doc).OfClass(FamilySymbol):
@@ -7786,18 +7803,38 @@ class T3LabAIServer(object):
                         'available_links': [elem_name(lt) for _k, lt in links][:20],
                         'hint': 'Call operation "list" for the exact names.'}
 
-            t = Transaction(doc, 'T3Lab AI Manage Links')
-            t.Start()
             done, failed = [], []
-            try:
+            if op in ('reload', 'unload'):
+                # Revit refuses Reload / Unload while a transaction is open
+                # (Snippets/_links.py): inside one, every link failed.
                 for lkind, lt in targets:
                     name = elem_name(lt)
                     try:
                         if op == 'unload':
                             lt.Unload(None)      # arg is a save-coordinates callback
-                        elif op == 'reload':
-                            lt.Reload()
-                        elif op == 'delete':
+                        else:
+                            loaded = lt.Reload()
+                            status = getattr(loaded, 'LoadResult', None)
+                            text = status.ToString() if status is not None else ''
+                            if text and text not in ('LinkLoaded', 'LinkAlreadyLoaded',
+                                                     'UsedExisting'):
+                                raise Exception('Revit could not load it: {}'.format(text))
+                        done.append(name)
+                    except Exception as ex:
+                        failed.append({'name': name, 'error': str(ex)})
+                res = {'success': bool(done), 'operation': op, 'links': done,
+                       'count': len(done)}
+                if failed:
+                    res['failed'] = failed
+                return res
+
+            t = Transaction(doc, 'T3Lab AI Manage Links')
+            t.Start()
+            try:
+                for lkind, lt in targets:
+                    name = elem_name(lt)
+                    try:
+                        if op == 'delete':
                             doc.Delete(lt.Id)
                         else:   # pin / unpin
                             want = (op == 'pin')
@@ -8180,10 +8217,18 @@ class T3LabAIServer(object):
                 if fmt == 'dwf':
                     from Autodesk.Revit.DB import DWFExportOptions
                     opts = DWFExportOptions()
+                    done = doc.Export(out_dir, base, views, opts)
                 else:
-                    from Autodesk.Revit.DB import DGNExportOptions
-                    opts = DGNExportOptions()
-                doc.Export(out_dir, base, views, opts)
+                    # DGN takes ICollection<ElementId>, not a ViewSet (BatchOutDialog).
+                    from Autodesk.Revit.DB import DGNExportOptions, ElementId as _Eid
+                    from System.Collections.Generic import List as _NetList
+                    view_ids = _NetList[_Eid]()
+                    for v in views:
+                        view_ids.Add(v.Id)
+                    done = doc.Export(out_dir, base, view_ids, DGNExportOptions())
+                if done is False:
+                    return {'success': False, 'format': fmt, 'tool': tool_name,
+                            'error': 'Revit did not export to {}.'.format(fmt.upper())}
             except Exception as e:
                 return {'error': str(e)}
             return {'success': True, 'format': fmt, 'folder': out_dir,
@@ -10074,12 +10119,19 @@ class T3LabAIServer(object):
 
                 opts = PDFExportOptions()
                 opts.Combine = combined
+                opts.FileName = 'T3Lab_Export'      # the combined file; else Revit's naming rule
 
-                view_set = ViewSet()
+                # PDF takes (folder, IList<ElementId>, options): there is no
+                # (folder, name, ViewSet, options) overload (BatchOutDialog).
+                from Autodesk.Revit.DB import ElementId as _Eid
+                from System.Collections.Generic import List as _NetList
+                sheet_ids = _NetList[_Eid]()
                 for s in sheets:
-                    view_set.Insert(s)
+                    sheet_ids.Add(s.Id)
 
-                doc.Export(output_folder, 'T3Lab_Export', view_set, opts)
+                if not doc.Export(output_folder, sheet_ids, opts):
+                    return {'success': False, 'error': 'Revit did not export the sheets to PDF.',
+                            'output_folder': output_folder, 'tool': tool_name}
                 return {'success': True, 'sheet_count': len(sheets), 'output_folder': output_folder, 'combined': combined}
             except Exception as e:
                 return {'error': str(e)}

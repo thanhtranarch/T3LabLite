@@ -23,6 +23,17 @@ Releasing a new version:
 - **Agent Cursors — new look for the bar:** dark on every Revit theme, so it reads the same over a white or a black view. Each AI app has a round avatar in its colour; the folded bar is a one-line pill (app · what it does · step 2 / 5); changed values show as before → after; when the AI stops, the bar counts what it did per kind of action (Read, Create, Modify…). Options are listed with their full names ("Follow the agent's views", "Zoom to off-screen targets"…), Glow is marked beta.
 
 ### Fixed
+- **Connecting an AI app — "server disconnected":** on a computer where Python was not installed (or only the Microsoft Store shortcut existed), Connect wrote a Python command that cannot start. Connect now finds a real Python first, and when there is none it tells you to install Python 3 instead of reporting success.
+- **Revit start and opening a document are faster:** T3Lab looked for its own MCP server on 11 ports, one after another, at every Revit start and every document open. It now checks one port.
+- **ChatGPT / Codex settings:** the app-name update at Revit start could leave `config.toml` with a double comma, which Codex rejects. An entry written in another TOML form is no longer added twice.
+- **Two Revit windows open:** a tool call that already ran in one window is never repeated in the other window (the same change could land in a second model).
+- **AI tools that changed the wrong thing or always failed:**
+  - *Purge unused* could delete tag types that are in use (all their tags went with them). It now uses Revit's own unused list (Revit 2024+); on Revit 2022–2023 family types are counted but not deleted.
+  - A filter, selection or bulk edit given an empty saved set no longer falls back to "everything".
+  - A number sent for a length parameter was written in feet; a view filter whose parameter was not found hid the whole category; an unknown level name built the element on another level. Each is now handled or reported.
+  - Export sheets to PDF, export to DGN, create a roof, and reload / unload links always failed; text notes and room-to-floor reported an error after doing the work. Fixed.
+- **Agent Cursors:** Pause could stay on after the bar was closed, so every change was refused until Revit restarted; the bar went behind Revit after the first Allow / Deny; the "turn on Agent Cursors?" question held the first AI call of a session.
+- **T3Lab Assistant:** an AI error in the middle of a task was shown as "Completed"; the saved memory could be emptied by one unreadable file; a settings file saved with a BOM lost its API keys; Claude could refuse every message of a chat that began with the setup hint; the docked pane described the model it was opened in, not the one you are in.
 - **Agent Cursors — Claude shown as "Local Agent Mod…", Antigravity as "AI app":** Claude Desktop's agent mode is now recognised as Claude. Antigravity sends no name of its own, so at Revit start T3Lab adds the app's name to the connection it wrote earlier in each AI app's settings (Antigravity, ChatGPT / Codex, Claude Desktop); nothing else in those files changes and a backup is kept. Restart the AI app once afterwards.
 ## [2.6.1] - 2026-11-18
 

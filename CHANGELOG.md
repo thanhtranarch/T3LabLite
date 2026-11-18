@@ -19,7 +19,37 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Added
+
+- **FamiGen Studio (needs pyRevit 7.0+; the chat needs 7.1+):** the FamiGen
+  button now opens a chat-and-3D window. Describe a family or drop a photo /
+  PDF cut sheet; Claude builds it, you review it (detail levels, visual styles,
+  types, sizes), then Create Family. Shift+Click opens the classic window.
+- **FamiGen — families that resize and vary:** family types, reference planes,
+  labelled dimensions and locked faces, repeated parts and detail levels;
+  four new categories (Pipe Accessory, Duct Accessory, Sprinkler, Electrical
+  Fixture) and a design spec for every category.
+- **FamiGen — closer to your picture:** Claude first writes down what it sees
+  (camera, scale, every part with size and colour), then models it; the
+  check compares a render from the picture's own camera, up to twice. Pipes
+  and taps get real elbows (`bend_radius`) instead of kinks. New **Ref** view.
+- **FamiGen — every Revit form:** Swept Blend is new, Sweep profiles can be
+  drawn as the cross-section seen along the path, voids cut the solids they
+  overlap, and Claude is told which form fits which shape (not only
+  Extrusion). Studio has a **Voids** switch.
+- **FamiGen — models in one piece:** a new `Tube` form for curved rods, rails,
+  handles and tube slides (smooth, no kinks), a check that names parts left
+  floating (Claude fixes them once before you see the model), joint rules in
+  every category spec, and smooth shading for round parts in Studio.
+- **FamiGen — AI apps over MCP:** while Claude Desktop / Code or ChatGPT work
+  with FamiGen, Studio switches to them by itself. New MCP tools
+  `famigen_get_studio_state`, `famigen_validate_family`,
+  `famigen_patch_family` and `famigen_list_templates`.
+
 ### Fixed
+
+- **FamiGen (classic window) — the Family JSON box was one line high:** it now
+  fills its panel.
 
 - **MCP Control — "module 'core.paths' has no attribute 'atomic_write'":**
   after an update installed while Revit was open, MCP Control kept an old copy

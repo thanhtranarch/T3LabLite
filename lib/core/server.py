@@ -2446,13 +2446,87 @@ class T3LabAIServer(object):
                                      'Plumbing Fixture', 'Electrical Equipment',
                                      'Mechanical Equipment', 'Specialty Equipment',
                                      'Casework', 'Columns', 'Lighting Fixture', 'Site',
-                                     'Entourage'],
+                                     'Entourage', 'Pipe Accessory', 'Duct Accessory',
+                                     'Sprinkler', 'Electrical Fixture'],
                         },
                         'include_guidance': {
                             'type': 'boolean',
                             'description': ('With category: append the long category design '
                                             'guidance (recipes, proportions). Default false.'),
                         },
+                        'compact': {
+                            'type': 'boolean',
+                            'description': ('Token saver: rules only, no example and no '
+                                            'system prompt. Use once you know the format.'),
+                        },
+                    },
+                    'required': [],
+                },
+            },
+            'famigen_get_studio_state': {
+                'name': 'famigen_get_studio_state',
+                'description': ('Read FamiGen Studio (the family designer window in Revit): '
+                                'whether it is open, its category, the family on screen and '
+                                'the messages the user typed for you in Studio (marked read). '
+                                'Call it when the user says "continue in FamiGen" or before '
+                                'editing the family they are looking at.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'include_family': {
+                            'type': 'boolean',
+                            'description': 'Return the family JSON on screen (default true).',
+                        },
+                    },
+                    'required': [],
+                },
+            },
+            'famigen_validate_family': {
+                'name': 'famigen_validate_family',
+                'description': ('Check a FamiGen family JSON without showing or storing it: '
+                                'errors to fix, warnings, a summary and the size in mm. Cheap; '
+                                'use it to iterate before famigen_propose_family.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {'schema': {'type': 'object',
+                                              'description': 'The family JSON.'}},
+                    'required': ['schema'],
+                },
+            },
+            'famigen_patch_family': {
+                'name': 'famigen_patch_family',
+                'description': ('Change a few things in a family without resending all of it '
+                                '(saves tokens): replace top-level fields and add / change / '
+                                'remove parts by id. Works on a proposal_id, or on the family '
+                                'open in FamiGen Studio when no proposal_id is given. The '
+                                'result is validated and stored as a new proposal; Studio '
+                                'shows it at once.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'proposal_id': {'type': 'string',
+                                        'description': 'Family to edit; default: the one in Studio.'},
+                        'set': {'type': 'object',
+                                'description': ('Top-level fields to replace, e.g. {"family_name": '
+                                                '"...", "materials": [...]}; null removes one.')},
+                        'parts': {'type': 'array', 'items': {'type': 'object'},
+                                  'description': ('[{"id": "Leg", "radius": 25}, {"id": "Old", '
+                                                  '"remove": true}, {"id": "New", "type": '
+                                                  '"Cylinder", ...}] - merged by geometry id.')},
+                        'note': {'type': 'string', 'description': 'Short note shown in Studio.'},
+                    },
+                    'required': [],
+                },
+            },
+            'famigen_list_templates': {
+                'name': 'famigen_list_templates',
+                'description': ('FamiGen\'s template briefs (door, valve, sink, AHU, ...): '
+                                'title, category and a sized description to start from.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {'type': 'string', 'description': 'Words to match, e.g. "valve".'},
+                        'limit': {'type': 'integer', 'description': 'Default 10.'},
                     },
                     'required': [],
                 },
@@ -3240,6 +3314,16 @@ class T3LabAIServer(object):
         if not isinstance(arguments, dict):
             arguments = {}
 
+        # FamiGen Studio switches to "AI app" mode while an AI app uses the
+        # famigen_* tools (FamilyGen/studio_link.py: files, the Studio runs in
+        # another Python engine).
+        if tool_name.startswith('famigen_'):
+            try:
+                from FamilyGen import studio_link
+                studio_link.note_activity(agent, tool_name)
+            except Exception:
+                pass
+
         # Execute tool and return result
         t_start = time.time()
         try:
@@ -3701,7 +3785,8 @@ class T3LabAIServer(object):
         'say_hello', 'list_open_documents', 'switch_active_document',
         'open_document', 'close_document', 'list_recent_documents',
         'show_assistant_pane', 'file_watcher_status',
-        'famigen_get_schema',
+        'famigen_get_schema', 'famigen_get_studio_state', 'famigen_validate_family',
+        'famigen_patch_family', 'famigen_list_templates',
     ])
 
     def _show_elements_smart(self, uidoc, doc, ids):
@@ -9449,6 +9534,11 @@ class T3LabAIServer(object):
                     SUPPORTED_CATEGORIES, build_system_prompt, schema_contract)
                 category = arguments.get('category')
                 result = schema_contract()
+                if arguments.get('compact'):
+                    result.pop('example', None)
+                    result['workflow'] = ['famigen_validate_family -> famigen_propose_family '
+                                          '-> famigen_patch_family for edits -> user creates']
+                    return result
                 if category:
                     if category not in SUPPORTED_CATEGORIES:
                         return {'error': "Unsupported category '{}'.".format(category),
@@ -9461,8 +9551,11 @@ class T3LabAIServer(object):
                     result['category'] = category
                     result['system_prompt'] = build_system_prompt(category, overlay)
                 result['workflow'] = [
+                    'If FamiGen Studio is open, read famigen_get_studio_state first.',
                     'Model the object as schema-v2 JSON (millimeters, one material per solid).',
+                    'Check it with famigen_validate_family (cheap) until it has no errors.',
                     'Call famigen_propose_family with it; fix any returned errors and repeat.',
+                    'For later changes use famigen_patch_family (only the parts that change).',
                     'Ask the user to review the 3D preview and materials in FamiGen.',
                     'After approval: the user presses Create Family, or call '
                     'famigen_create_family with the proposal_id.',
@@ -9502,7 +9595,15 @@ class T3LabAIServer(object):
                           'summary': summary,
                           'size_mm': [round(v, 1) for v in preview.size_mm()],
                           'model_changed': False, 'window': 'not_opened'}
-                if open_window:
+                studio_open = False
+                try:
+                    from FamilyGen import studio_link
+                    studio_open = studio_link.studio_open()
+                except Exception:
+                    pass
+                if open_window and studio_open:
+                    result['window'] = 'studio'        # Studio loads new proposals itself
+                elif open_window:
                     try:
                         from FamilyGen.review import open_review
                         result['window'] = open_review(doc, doc.Application, schema,
@@ -9515,6 +9616,102 @@ class T3LabAIServer(object):
                     'Family there, or approve and you call famigen_create_family with '
                     'proposal_id "{}".'.format(proposal_id))
                 return result
+            except Exception as e:
+                return {'error': str(e), 'tool': tool_name}
+
+        elif tool_name == 'famigen_get_studio_state':
+            try:
+                from FamilyGen import studio_link
+                from Intelligence.family_schema import schema_summary
+                state = studio_link.read_state()
+                family = state.get('family') if isinstance(state.get('family'), dict) else None
+                result = {
+                    'studio_open': studio_link.studio_open(),
+                    'category': state.get('category'),
+                    'proposal_id': state.get('proposal_id'),
+                    'selected_part': state.get('selected_part'),
+                    'family_type': state.get('family_type'),
+                    'summary': schema_summary(family) if family else None,
+                    'messages': studio_link.take_unread(),
+                }
+                if family and arguments.get('include_family', True):
+                    result['family'] = family
+                result['next'] = ('Answer the messages. Edit with famigen_patch_family (parts by '
+                                  'id) or send a new family with famigen_propose_family.'
+                                  if result['studio_open'] else
+                                  'FamiGen Studio is closed: ask the user to open FamiGen.')
+                return result
+            except Exception as e:
+                return {'error': str(e), 'tool': tool_name}
+
+        elif tool_name == 'famigen_validate_family':
+            try:
+                import json as _json
+                from Intelligence.family_schema import schema_summary, validate_family_schema
+                from FamilyGen.preview_mesh import build_preview
+                schema = arguments.get('schema')
+                if isinstance(schema, str):
+                    schema = _json.loads(schema)
+                if not isinstance(schema, dict):
+                    return {'valid': False, 'errors': ['$: schema must be a JSON object']}
+                errors, warnings = validate_family_schema(schema)
+                result = {'valid': not errors, 'errors': errors, 'warnings': warnings,
+                          'summary': schema_summary(schema)}
+                if not errors:
+                    preview = build_preview(schema)
+                    result['size_mm'] = [round(v, 1) for v in preview.size_mm()]
+                    result['warnings'] = list(warnings) + list(preview.warnings)
+                return result
+            except Exception as e:
+                return {'error': str(e), 'tool': tool_name}
+
+        elif tool_name == 'famigen_patch_family':
+            try:
+                from FamilyGen import studio_link
+                from FamilyGen.proposals import ProposalStore
+                from Intelligence.family_schema import schema_summary, validate_family_schema
+                store = ProposalStore()
+                proposal_id = arguments.get('proposal_id')
+                if proposal_id:
+                    record = store.load(proposal_id)
+                    base = record.get('schema') if isinstance(record, dict) else None
+                    if base is None:
+                        return {'success': False, 'error': 'Unknown proposal_id.'}
+                else:
+                    base = studio_link.read_state().get('family')
+                    if not isinstance(base, dict):
+                        return {'success': False,
+                                'error': 'No family is open in FamiGen Studio; pass proposal_id.'}
+                try:
+                    patched, notes = studio_link.patch_family(
+                        base, arguments.get('set'), arguments.get('parts'))
+                except ValueError as ex:
+                    return {'success': False, 'error': str(ex)}
+                errors, warnings = validate_family_schema(patched)
+                if errors:
+                    return {'success': False, 'valid': False, 'errors': errors,
+                            'warnings': warnings, 'changes': notes,
+                            'hint': 'Nothing was stored. Fix the listed paths and patch again.'}
+                note = u'{}'.format(arguments.get('note') or u'; '.join(notes))[:200]
+                new_id = store.save(patched, source='mcp', note=note)
+                return {'success': True, 'proposal_id': new_id, 'changes': notes,
+                        'warnings': warnings, 'summary': schema_summary(patched),
+                        'studio': 'shown' if studio_link.studio_open() else 'closed',
+                        'model_changed': False}
+            except Exception as e:
+                return {'error': str(e), 'tool': tool_name}
+
+        elif tool_name == 'famigen_list_templates':
+            try:
+                from FamilyGen.templates import templates as _famigen_templates
+                words = [w for w in u'{}'.format(arguments.get('query') or '').lower().split() if w]
+                limit = max(1, min(int(arguments.get('limit') or 10), 50))
+                rows = [t for t in _famigen_templates()
+                        if all(w in (t['title'] + ' ' + t['prompt'] + ' ' + t['category'] + ' '
+                                     + t['group']).lower() for w in words)]
+                return {'templates': [{'title': t['title'], 'category': t['category'],
+                                       'brief': t['prompt']} for t in rows[:limit]],
+                        'total': len(rows)}
             except Exception as e:
                 return {'error': str(e), 'tool': tool_name}
 
@@ -9562,6 +9759,10 @@ class T3LabAIServer(object):
                     'parameters_created': report['parameters_created'],
                     'parameters_set': report['parameters_set'],
                     'subcategories': report['subcategories'],
+                    'types': report.get('types', []),
+                    'reference_planes': report.get('reference_planes', []),
+                    'dimensions': report.get('dimensions', []),
+                    'locked_faces': report.get('locks', 0),
                     'loaded_into_project': bool(report.get('loaded')),
                     'summary': '\n'.join(_famigen_builder.report_lines(report)),
                 }

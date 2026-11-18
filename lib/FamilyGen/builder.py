@@ -17,7 +17,16 @@ loop alignment, cylinder axis handling) moved here unchanged from
   in Materials and Finishes whose default is that material, and every solid's
   ``MATERIAL_ID_PARAM`` associated to its parameter;
 * ``subcategory`` - created under the family category and assigned to the form;
-* ``parameters[]`` - set when the template has them, created when it does not.
+* ``parameters[]`` - set when the template has them, created when it does not;
+* ``repeat`` - written out first (``expand_schema``), exactly as the preview does;
+* ``detail_levels`` - each form's FamilyElementVisibility (coarse/medium/fine);
+* ``reference_planes`` / ``dimensions`` / ``geometry[].locks`` - planes, length
+  dimensions labelled with their parameter, and solid faces aligned + locked to
+  the planes, so the family flexes. A constraint that Revit refuses is reported
+  as a warning and never stops the family from being built;
+* ``types[]`` - the current type is renamed to the first type, the others are
+  created with ``FamilyManager.NewType`` (which copies the current values) and
+  given their parameter and material values.
 """
 import logging
 import math
@@ -27,17 +36,21 @@ import re
 from Autodesk.Revit.DB import (
     Arc, BuiltInCategory, BuiltInParameter, Category, Color, CurveArrArray,
     CurveArray, Ellipse, FailureProcessingResult, FailureSeverity,
+    FamilyElementVisibility, FamilyElementVisibilityType,
     FilteredElementCollector, HermiteSpline, IFailuresPreprocessor,
-    IFamilyLoadOptions, FamilySource, Line, Material, Plane,
-    ProfilePlaneLocation, SaveAsOptions, SketchPlane, Transaction, XYZ,
+    IFamilyLoadOptions, FamilySource, Level, Line, Material, Options, Plane,
+    PlanarFace, ProfilePlaneLocation, ReferenceArray, ReferencePlane, SaveAsOptions,
+    SketchPlane, Solid, Transaction, View, ViewType, XYZ,
 )
 from System.Collections.Generic import List as _NetList
 
 from Intelligence.family_schema import (
-    category_bic_name, category_is_hosted, category_templates, material_parameter_name,
-    parse_color, validate_family_schema, SUPPORTED_CATEGORIES,
+    BUILTIN_PLANES, DETAIL_LEVELS, category_bic_name, category_is_hosted, category_templates,
+    expand_schema, material_parameter_name, parse_color, validate_family_schema,
+    SUPPORTED_CATEGORIES,
 )
 from Snippets._compat import add_family_parameter, disposing, family_parameter_kind
+from FamilyGen.form_frames import local_to_world, path_ends, profile_at
 
 logger = logging.getLogger('T3Lab.FamilyGen')
 
@@ -169,7 +182,9 @@ class JsonFamilyBuilder(object):
             'built': 0, 'total': 0, 'skipped': [], 'warnings': [],
             'materials_created': [], 'materials_reused': [], 'material_parameters': [],
             'parameters_created': [], 'parameters_set': [], 'subcategories': [],
+            'types': [], 'reference_planes': [], 'dimensions': [], 'locks': 0,
         }
+        self._forms = {}            # geometry index -> created forms
         self._materials = {}        # schema material name -> (Material, FamilyParameter|None)
         self._subcategories = {}
 
@@ -229,6 +244,70 @@ class JsonFamilyBuilder(object):
                 self.report['warnings'].append(
                     "Parameter '{}' was not set ({} parameter, value {!r}): {}"
                     .format(name, kind, value, ex))
+
+    # ── family types ────────────────────────────────────────────────────
+    def _type_by_name(self, name):
+        for ftype in self.fm.Types:
+            if ftype.Name == name:
+                return ftype
+        return None
+
+    def _set_type_value(self, type_name, params, key, value):
+        fparam = params.get(key.strip().lower())
+        if fparam is None:
+            self.report['warnings'].append(
+                "Type '{}': parameter '{}' is not in the family; value skipped"
+                .format(type_name, key))
+            return
+        kind = family_parameter_kind(fparam.Definition, getattr(fparam, 'StorageType', None))
+        try:
+            if kind == 'material':
+                entry = self._materials.get((u'{}'.format(value)).strip())
+                if entry is None:
+                    raise ValueError("material '{}' is not defined".format(value))
+                self.fm.Set(fparam, entry[0].Id)
+                return
+            if kind in ('length', 'number', 'integer') and isinstance(value, str):
+                value = float(value)
+            self._set_value(fparam, kind, value)
+        except Exception as ex:
+            self.report['warnings'].append(
+                "Type '{}': '{}' not set ({} parameter, value {!r}): {}"
+                .format(type_name, key, kind, value, ex))
+
+    def apply_types(self, types):
+        """First type = the current one (renamed); the rest via NewType."""
+        specs = [t for t in (types or []) if isinstance(t, dict)
+                 and isinstance(t.get('name'), str) and t['name'].strip()]
+        if not specs:
+            return
+        params = dict((p.Definition.Name.strip().lower(), p) for p in self.fm.Parameters)
+        first = None
+        for index, spec in enumerate(specs):
+            name = spec['name'].strip()
+            try:
+                ftype = self._type_by_name(name)
+                if ftype is not None:
+                    self.fm.CurrentType = ftype
+                elif index == 0 and self.fm.CurrentType is not None:
+                    self.fm.RenameCurrentType(name)
+                    ftype = self.fm.CurrentType
+                else:
+                    ftype = self.fm.NewType(name)
+            except Exception as ex:
+                self.report['warnings'].append("Type '{}' could not be created: {}".format(name, ex))
+                continue
+            if first is None:
+                first = ftype
+            for key, value in sorted((spec.get('values') or {}).items()):
+                if isinstance(key, str) and key.strip():
+                    self._set_type_value(name, params, key, value)
+            self.report['types'].append(name)
+        if first is not None:
+            try:
+                self.fm.CurrentType = first
+            except Exception:
+                pass
 
     # ── materials ───────────────────────────────────────────────────────
     def _material_by_name(self, name):
@@ -707,9 +786,17 @@ class JsonFamilyBuilder(object):
                 geom_data.get("start_angle", 0.0), geom_data.get("end_angle", FULL_TURN))
             return [rev], None
 
+        if geom_type == "SweptBlend":
+            return self._swept_blend(geom_data, plane, sketch_plane, is_solid)
+
         if geom_type == "Sweep":
             path_curves = self._json_loop(geom_data.get("path", []), plane, close=False)
-            prof_curves = self._json_loop(geom_data.get("profile", []), None)
+            profile_segs = geom_data.get("profile", [])
+            if geom_data.get("profile_local"):
+                # Local cross-section -> world, placed at the path start.
+                (start_pt, start_t), _ = path_ends(geom_data.get("path", []))
+                profile_segs = profile_at(profile_segs, start_pt, start_t)
+            prof_curves = self._json_loop(profile_segs, None)
             if not path_curves or not prof_curves:
                 return [], "Sweep needs both 'path' and 'profile'"
             prof_arr = CurveArrArray()
@@ -732,7 +819,7 @@ class JsonFamilyBuilder(object):
                         one_path.Append(pc)
                         seg_prof = CurveArrArray()
                         seg_prof.Append(self._curve_arr(
-                            self._json_loop(geom_data.get("profile", []), None)))
+                            self._json_loop(profile_segs, None)))
                         created.append(doc.FamilyCreate.NewSweep(
                             is_solid, one_path, sketch_plane,
                             doc.Application.Create.NewCurveLoopsProfile(seg_prof),
@@ -803,11 +890,250 @@ class JsonFamilyBuilder(object):
 
         return [], "unsupported type '{}'".format(geom_type)
 
+    # ── detail levels ───────────────────────────────────────────────────
+    def _set_detail_levels(self, form, levels, label):
+        if not levels or set(levels) >= set(DETAIL_LEVELS):
+            return
+        try:
+            vis = FamilyElementVisibility(FamilyElementVisibilityType.Model)
+            vis.IsShownInCoarse = 'coarse' in levels
+            vis.IsShownInMedium = 'medium' in levels
+            vis.IsShownInFine = 'fine' in levels
+            form.SetVisibility(vis)
+        except Exception as ex:
+            self.report['warnings'].append("{}: detail levels not set ({})".format(label, ex))
+
+    # ── reference planes, dimensions, locks ─────────────────────────────
+    def _views(self):
+        plan = elev = None
+        with disposing(FilteredElementCollector(self.doc)) as collector:
+            for view in collector.OfClass(View):
+                try:
+                    if view.IsTemplate:
+                        continue
+                    if view.ViewType == ViewType.FloorPlan and plan is None:
+                        plan = view
+                    elif (view.ViewType == ViewType.Elevation and elev is None
+                          and abs(view.ViewDirection.Y) > 0.99):
+                        elev = view
+                except Exception:
+                    continue
+        return plan, elev
+
+    def _builtin_references(self):
+        refs = {}
+        with disposing(FilteredElementCollector(self.doc)) as collector:
+            for rp in collector.OfClass(ReferencePlane):
+                if rp.Name in BUILTIN_PLANES:
+                    refs[rp.Name.lower()] = rp.GetReference()
+        with disposing(FilteredElementCollector(self.doc)) as collector:
+            for level in collector.OfClass(Level):
+                refs.setdefault('ref. level', level.GetPlaneReference())
+                break
+        return refs
+
+    def apply_constraints(self, schema, bbox):
+        planes = [p for p in schema.get('reference_planes') or [] if isinstance(p, dict)]
+        dims = [d for d in schema.get('dimensions') or [] if isinstance(d, dict)]
+        locked = [(i, g) for i, g in enumerate(schema.get('geometry') or [])
+                  if isinstance(g, dict) and isinstance(g.get('locks'), dict) and i in self._forms]
+        if not (planes or dims or locked):
+            return
+        plan, elev = self._views()
+        if plan is None or elev is None:
+            self.report['warnings'].append(
+                "The template has no plan or front elevation view; reference planes, "
+                "dimensions and locks were skipped.")
+            return
+        info = dict((n.lower(), (a, o * SCL)) for n, (a, o) in BUILTIN_PLANES.items())
+        refs = self._builtin_references()
+        big = 3.0   # ft: plane extent either side
+        for spec in planes:
+            name, axis, off = spec['name'].strip(), spec['axis'], float(spec['offset']) * SCL
+            try:
+                if axis == 'x':
+                    rp = self.doc.FamilyCreate.NewReferencePlane(
+                        XYZ(off, -big, 0), XYZ(off, big, 0), XYZ.BasisZ, plan)
+                elif axis == 'y':
+                    rp = self.doc.FamilyCreate.NewReferencePlane(
+                        XYZ(-big, off, 0), XYZ(big, off, 0), XYZ.BasisZ, plan)
+                else:
+                    rp = self.doc.FamilyCreate.NewReferencePlane(
+                        XYZ(-big, 0, off), XYZ(big, 0, off), XYZ.BasisY, elev)
+                rp.Name = name
+                refs[name.lower()] = rp.GetReference()
+                info[name.lower()] = (axis, off)
+                self.report['reference_planes'].append(name)
+            except Exception as ex:
+                self.report['warnings'].append("Reference plane '{}' not created: {}".format(name, ex))
+        self.doc.Regenerate()
+        # Locks before dimensions: labelling a dimension then flexes the locked faces.
+        for index, geom in locked:
+            self._lock_faces(index, geom, refs, info, plan, elev)
+        params = self._family_params()
+        lo = [v * SCL for v in (bbox[0] if bbox else (-500, -500, 0))]
+        hi = [v * SCL for v in (bbox[1] if bbox else (500, 500, 1000))]
+        margin = 300 * SCL
+        for spec in dims:
+            pname = (spec.get('parameter') or '').strip()
+            a, b = (spec.get('from') or '').strip().lower(), (spec.get('to') or '').strip().lower()
+            label = "Dimension '{}'".format(pname)
+            if a not in refs or b not in refs:
+                self.report['warnings'].append("{}: a plane is missing; skipped".format(label))
+                continue
+            axis = info[a][0]
+            try:
+                arr = ReferenceArray()
+                arr.Append(refs[a])
+                arr.Append(refs[b])
+                if axis == 'x':
+                    line, view = Line.CreateBound(XYZ(lo[0] - margin, hi[1] + margin, 0),
+                                                  XYZ(hi[0] + margin, hi[1] + margin, 0)), plan
+                elif axis == 'y':
+                    line, view = Line.CreateBound(XYZ(hi[0] + margin, lo[1] - margin, 0),
+                                                  XYZ(hi[0] + margin, hi[1] + margin, 0)), plan
+                else:
+                    line, view = Line.CreateBound(XYZ(hi[0] + margin, lo[1], lo[2] - margin),
+                                                  XYZ(hi[0] + margin, lo[1], hi[2] + margin)), elev
+                dim = self.doc.FamilyCreate.NewDimension(view, line, arr)
+                fparam = params.get(pname)
+                if dim is not None and fparam is not None:
+                    dim.FamilyLabel = fparam
+                self.report['dimensions'].append(pname)
+            except Exception as ex:
+                self.report['warnings'].append("{} not created or labelled: {}".format(label, ex))
+
+    # ── Void Forms ──────────────────────────────────────────────────────
+    def _cut_with_voids(self):
+        """Make every void cut the solids it overlaps (Revit's Cut Geometry).
+
+        Revit usually joins a new void to what it touches by itself; this asks
+        for the cut explicitly so openings and hollows never stay uncut. A pair
+        Revit refuses (already cut, not touching) is simply skipped.
+        """
+        voids, solids = [], []
+        for forms in self._forms.values():
+            for form in forms:
+                try:
+                    (solids if form.IsSolid else voids).append(form)
+                except Exception:
+                    continue
+        if not voids or not solids:
+            return
+        try:
+            from Autodesk.Revit.DB import SolidSolidCutUtils
+        except Exception:
+            return
+        self.doc.Regenerate()
+        cuts = 0
+        for void in voids:
+            vbox = void.get_BoundingBox(None)
+            for solid in solids:
+                sbox = solid.get_BoundingBox(None)
+                if vbox is None or sbox is None or not (
+                        vbox.Min.X <= sbox.Max.X and sbox.Min.X <= vbox.Max.X and
+                        vbox.Min.Y <= sbox.Max.Y and sbox.Min.Y <= vbox.Max.Y and
+                        vbox.Min.Z <= sbox.Max.Z and sbox.Min.Z <= vbox.Max.Z):
+                    continue
+                try:
+                    SolidSolidCutUtils.AddCutBetweenSolids(self.doc, solid, void)
+                    cuts += 1
+                except Exception:
+                    pass
+        self.report['void_cuts'] = cuts
+
+    # ── Swept Blend ─────────────────────────────────────────────────────
+    def _swept_blend(self, geom_data, plane, sketch_plane, is_solid):
+        """Revit Swept Blend: one path curve, a start and an end section.
+
+        The local sections are placed on the planes normal to the path at its
+        two ends (FamilyGen.form_frames). If Revit refuses that placement, the
+        sections are retried in the XY plane, which is how the Revit UI sketches
+        a swept-blend profile before mapping it onto the path.
+        """
+        doc = self.doc
+        path_segs = geom_data.get("path", [])
+        path_curves = self._json_loop(path_segs, plane, close=False)
+        if len(path_curves) != 1:
+            return [], "SweptBlend needs exactly one path curve"
+        (p0, t0), (p1, t1) = path_ends(path_segs)
+
+        def _profile(segs):
+            arr = CurveArrArray()
+            arr.Append(self._curve_arr(self._json_loop(segs, None)))
+            return doc.Application.Create.NewCurveLoopsProfile(arr)
+
+        bottom, top = geom_data.get("profile", []), geom_data.get("top_profile", [])
+        attempts = (
+            ('path ends', profile_at(bottom, p0, t0), profile_at(top, p1, t1)),
+            ('XY plane', local_to_world(bottom, [0, 0, 0], [1, 0, 0], [0, 1, 0]),
+             local_to_world(top, [0, 0, 0], [1, 0, 0], [0, 1, 0])),
+        )
+        last_error = None
+        for where, seg_a, seg_b in attempts:
+            try:
+                form = doc.FamilyCreate.NewSweptBlend(
+                    is_solid, path_curves[0], sketch_plane, _profile(seg_a), _profile(seg_b))
+                if form is not None:
+                    if where != 'path ends':
+                        self.report['warnings'].append(
+                            "{}: swept blend sections placed from the {}".format(
+                                geom_data.get('id') or 'SweptBlend', where))
+                    return [form], None
+            except Exception as ex:
+                last_error = ex
+        return [], "Revit refused the swept blend ({})".format(last_error)
+
+    def _lock_faces(self, index, geom, refs, info, plan, elev):
+        label = geom.get('id') or '#{}'.format(index + 1)
+        tol = 1.0 * SCL
+        opts = Options()
+        opts.ComputeReferences = True
+        for key, plane_name in sorted(geom['locks'].items()):
+            pkey = (u'{}'.format(plane_name)).strip().lower()
+            if pkey not in refs or pkey not in info:
+                self.report['warnings'].append("{}: lock {} -> unknown plane".format(label, key))
+                continue
+            axis, offset = info[pkey]
+            sign = -1.0 if key.endswith('_min') else 1.0
+            k = 'xyz'.index(axis)
+            done = False
+            for form in self._forms.get(index, []):
+                try:
+                    for obj in form.get_Geometry(opts):
+                        if not isinstance(obj, Solid):
+                            continue
+                        for face in obj.Faces:
+                            if not isinstance(face, PlanarFace):
+                                continue
+                            n = face.FaceNormal
+                            if [n.X, n.Y, n.Z][k] * sign < 0.99:
+                                continue
+                            if abs([face.Origin.X, face.Origin.Y, face.Origin.Z][k] - offset) > tol:
+                                continue
+                            align = self.doc.FamilyCreate.NewAlignment(
+                                elev if axis == 'z' else plan, refs[pkey], face.Reference)
+                            if align is not None:
+                                align.IsLocked = True
+                                self.report['locks'] += 1
+                                done = True
+                            break
+                except Exception as ex:
+                    self.report['warnings'].append("{}: {} not locked ({})".format(label, key, ex))
+                    done = True
+                if done:
+                    break
+            if not done:
+                self.report['warnings'].append(
+                    "{}: no face lies on plane '{}' for {}; not locked".format(label, plane_name, key))
+
     def build(self, schema):
-        """Materials, parameters, then every geometry entry. Returns the report."""
+        """Materials, parameters, geometry, then constraints. Returns the report."""
+        schema = expand_schema(schema)
         self._ensure_current_type(schema.get('family_name'))
         self.apply_materials(schema.get('materials'))
         self.apply_parameters(schema.get('parameters'))
+        self.apply_types(schema.get('types'))
         geometry = schema.get("geometry", [])
         self.report['total'] = len(geometry)
         for idx, geom_data in enumerate(geometry):
@@ -818,7 +1144,9 @@ class JsonFamilyBuilder(object):
                     self.report['skipped'].append("{}: {}".format(label, reason))
                     continue
                 is_solid = geom_data.get("is_solid", True)
+                self._forms[idx] = list(created)
                 for form in created:
+                    self._set_detail_levels(form, geom_data.get('detail_levels'), label)
                     if is_solid and geom_data.get('material'):
                         self._bind_material(form, geom_data['material'], label)
                     if geom_data.get('subcategory'):
@@ -837,6 +1165,17 @@ class JsonFamilyBuilder(object):
                     msg += " [blend loops may self-intersect or pair badly]"
                 self.report['skipped'].append("{}: {}".format(label, msg))
                 logger.warning("JSON geometry skip %s: %s", label, ex)
+        try:
+            from FamilyGen.preview_mesh import build_preview
+            model = build_preview(schema)
+            bbox = (model.bbox_min, model.bbox_max) if model.bbox_min is not None else None
+        except Exception:
+            bbox = None
+        self._cut_with_voids()
+        try:
+            self.apply_constraints(schema, bbox)
+        except Exception as ex:
+            self.report['warnings'].append("Constraints skipped: {}".format(ex))
         return self.report
 
 
@@ -942,30 +1281,5 @@ def create_family(app, schema, output_folder, project_doc=None, load_into_projec
     return report
 
 
-def report_lines(report, limit=12):
-    """English summary lines for a build report (what / where / next)."""
-    lines = ["Built {} of {} part(s).".format(report.get('built', 0), report.get('total', 0))]
-    if report.get('saved_path'):
-        lines.append("Saved to: {}".format(report['saved_path']))
-    if report.get('loaded'):
-        lines.append("Loaded into the active project.")
-    mats = report.get('materials_created', []) + report.get('materials_reused', [])
-    if mats:
-        lines.append("Materials: {} ({} new); {} material parameter(s)."
-                     .format(len(mats), len(report.get('materials_created', [])),
-                             len(report.get('material_parameters', []))))
-    if report.get('parameters_created') or report.get('parameters_set'):
-        lines.append("Parameters: {} created, {} set.".format(
-            len(report.get('parameters_created', [])), len(report.get('parameters_set', []))))
-    if report.get('subcategories'):
-        lines.append("Subcategories: {}.".format(', '.join(report['subcategories'])))
-    for title, key in (("Skipped", 'skipped'), ("Warnings", 'warnings')):
-        items = report.get(key) or []
-        if items:
-            lines.append("")
-            lines.append("{} ({}):".format(title, len(items)))
-            for item in items[:limit]:
-                lines.append("  - {}".format(item))
-            if len(items) > limit:
-                lines.append("  ... and {} more".format(len(items) - limit))
-    return lines
+# Pure, so FamiGen Studio's controller and its tests can read a report without Revit.
+from FamilyGen.builder_report import report_lines  # noqa: E402,F401

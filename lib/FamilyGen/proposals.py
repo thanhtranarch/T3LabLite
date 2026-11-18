@@ -75,6 +75,23 @@ class ProposalStore(object):
         names = [n[:-5] for n in os.listdir(self.folder) if n.endswith('.json')]
         return sorted(n for n in names if is_valid_id(n))
 
+    def recent(self, limit=30):
+        """Newest first: [{id, created, source, note, family_name, category, parts}]."""
+        out = []
+        for proposal_id in reversed(self.ids()):
+            record = self.load(proposal_id)
+            if not isinstance(record, dict):
+                continue
+            schema = record.get('schema') if isinstance(record.get('schema'), dict) else {}
+            out.append({'id': proposal_id, 'created': record.get('created'),
+                        'source': record.get('source') or '', 'note': record.get('note') or '',
+                        'family_name': schema.get('family_name') or '',
+                        'category': schema.get('family_category') or '',
+                        'parts': len(schema.get('geometry') or [])})
+            if len(out) >= limit:
+                break
+        return out
+
     def prune(self):
         ids = self.ids()
         for old in ids[:-MAX_RECORDS] if len(ids) > MAX_RECORDS else []:

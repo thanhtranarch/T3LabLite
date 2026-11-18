@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-11-18
+
+BatchOut no longer fails with "Duplicate type name within an assembly", and the error dialog now tells you when Revit needs a restart.
+
 ### Fixed
 
 - **BatchOut — "Duplicate type name within an assembly":** BatchOut's Revit

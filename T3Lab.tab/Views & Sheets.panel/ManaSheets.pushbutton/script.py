@@ -47,19 +47,32 @@ except NameError:
     except Exception:
         reload = None
 
-if reload:
-    # Nạp lại bộ lọc cột TRƯỚC dialog: dialog `from ... import` class này nên
-    # nếu module cũ còn trong sys.modules thì click lần 2 vẫn chạy code cũ.
-    # An toàn để reload vì nó chỉ chứa class Python thuần (không kế thừa CLR,
-    # không `__namespace__`) — xem CLAUDE.md · S15/S17.
-    if 'GUI.DataGridColumnFilter' in sys.modules:
-        reload(sys.modules['GUI.DataGridColumnFilter'])
-    if 'GUI.ManaSheetsDialog' in sys.modules:
-        reload(sys.modules['GUI.ManaSheetsDialog'])
-    elif 'ManaSheetsDialog' in sys.modules:
-        reload(sys.modules['ManaSheetsDialog'])
 
-from GUI.ManaSheetsDialog import show_sheet_manager
+def _main():
+    # Everything that loads the dialog runs inside the guard: when it cannot
+    # load (e.g. "cannot import name 'revit' from 'pyrevit'" after an update
+    # without a Revit restart) the user gets a readable dialog, not a raw
+    # traceback.
+    if reload:
+        # Nạp lại bộ lọc cột TRƯỚC dialog: dialog `from ... import` class này nên
+        # nếu module cũ còn trong sys.modules thì click lần 2 vẫn chạy code cũ.
+        # An toàn để reload vì nó chỉ chứa class Python thuần (không kế thừa CLR,
+        # không `__namespace__`) — xem CLAUDE.md · S15/S17.
+        if 'GUI.DataGridColumnFilter' in sys.modules:
+            reload(sys.modules['GUI.DataGridColumnFilter'])
+        if 'GUI.ManaSheetsDialog' in sys.modules:
+            reload(sys.modules['GUI.ManaSheetsDialog'])
+        elif 'ManaSheetsDialog' in sys.modules:
+            reload(sys.modules['ManaSheetsDialog'])
+
+    from GUI.ManaSheetsDialog import show_sheet_manager
+    show_sheet_manager()
+
 
 if __name__ == '__main__':
-    show_sheet_manager()
+    try:
+        from GUI.ErrorGuard import run_tool
+    except Exception:
+        _main()
+    else:
+        run_tool("Mana Sheets", _main)

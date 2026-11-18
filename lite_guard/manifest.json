@@ -222,7 +222,8 @@
     "lib/FamilyGen/net_http.py",
     "lib/FamilyGen/templates.py",
     "lib/FamilyGen/builder_report.py",
-    "docs/famigen-studio-spec.md"
+    "docs/famigen-studio-spec.md",
+    "lib/FamilyGen/form_frames.py"
   ],
   "ignore_imports": [
     {

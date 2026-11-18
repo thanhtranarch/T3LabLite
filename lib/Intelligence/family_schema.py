@@ -25,7 +25,7 @@ import re
 
 SCHEMA_VERSION = 2
 
-FORM_TYPES = ('Extrusion', 'Blend', 'Revolution', 'Sweep', 'Cylinder', 'Tube')
+FORM_TYPES = ('Extrusion', 'Blend', 'Revolution', 'Sweep', 'SweptBlend', 'Cylinder', 'Tube')
 # Tube is FamiGen-only: written out as Cylinders + joint spheres before preview and
 # build (expand_schema), so the builder never sees it.
 MAX_TUBE_POINTS = 120
@@ -220,13 +220,21 @@ forms/shapes/primitives/elements instead of geometry. All lengths and coordinate
 are millimeters; angles are radians. Every number must be finite (not bool).
 Supported family_category values: %s.
 Every geometry object must have an explicit case-sensitive type: Extrusion,
-Blend, Revolution, Sweep, or Cylinder. No aliases or unsupported forms.
+Blend, Revolution, Sweep, SweptBlend, Cylinder or Tube. No aliases or unsupported forms.
 Optional id is a string; is_solid is a boolean (default true).
 Extrusion: profile segments, extrusion_start and extrusion_end numeric offsets.
 Blend: profile and top_profile segments; optional base_offset/top_offset numbers.
 Revolution: profile segments, axis_start/axis_end coordinate triples; optional
 start_angle/end_angle (defaults 0 and 6.283185307).
 Sweep: path segments and profile segments. Path is open; profile is closed.
+With "profile_local": true (recommended) the profile is drawn as the cross-section
+seen along the path at its start: [u, v, 0] where u is sideways (horizontal, to the
+left of the direction of travel) and v is up; the path's first and last segments
+must then be Line, Arc3P or Spline.
+SweptBlend (Revit Swept Blend): "path" is ONE Line or Arc3P segment; "profile" (start
+section) and "top_profile" (end section) are local cross-sections like a local Sweep
+profile. Use it where a section changes along a curve: a chute that flattens, a
+tapering arm, a horn, a transition piece.
 Cylinder: start/end coordinate triples and positive radius. Use Cylinder for straight
 rods in any direction; do not guess a sketch plane for them.
 Tube: "points" (2+ [x,y,z] the centre line passes through), positive "radius",
@@ -290,6 +298,22 @@ otherwise it is data only.
 Names (materials, parameter, subcategory, parameters[].name, types[].name,
 reference_planes[].name) must not contain
 \\ : { } [ ] | ; < > ? ` ~ and are at most %d characters.
+FORMS - use the whole Revit toolbox, not only Extrusion:
+- Extrusion: prismatic parts with a constant plan or elevation outline (slabs, panels,
+  boards). Draw the outline in the plane where it is constant (sketch_plane_x/y for
+  elevation outlines such as a gable, a bracket, a stair stringer).
+- Blend: one outline changing into another between two heights (tapered legs, hoppers,
+  pyramid roofs, plinths with a chamfer, lamp shades with flat faces).
+- Revolution: anything turned or round about an axis (domes, bowls, knobs, bollards,
+  balusters, columns with mouldings, rings, wheels); partial angles for segments.
+- Sweep: a constant section along a path (handrails, mouldings, gutters, cable trays,
+  slide troughs, frames) - use profile_local.
+- SweptBlend: a section that changes along a curved or straight path.
+- Cylinder: straight rods, posts, pipes in any direction.  Tube: curved / 3D rods.
+- Void (is_solid false, any form above): cut openings, recesses, holes, grooves, hollow
+  tubes and basins out of the solids they overlap - prefer a void to fiddly inner loops
+  when the cut is a different shape or depth.
+A family that a person would model with several form types should use them too.
 CONTINUITY (the model must read as one built object, not loose pieces):
 - Every solid touches or overlaps another solid by 1-5 mm, and the chain of contacts
   reaches the base (the lowest part). Legs end ON the floor and INTO the part they carry;
@@ -533,6 +557,14 @@ def _validate(schema, category, strict_category):
                     number(geom.get('radius'), path + '.radius', positive=True)
             elif kind == 'Sweep':
                 segments(geom.get('path'), path + '.path')
+                if 'profile_local' in geom and not isinstance(geom['profile_local'], bool):
+                    error(path + '.profile_local', 'must be true or false')
+                elif geom.get('profile_local'):
+                    _check_local_path(geom.get('path'), path + '.path', error, single=False)
+            elif kind == 'SweptBlend':
+                segments(geom.get('path'), path + '.path')
+                segments(geom.get('top_profile'), path + '.top_profile')
+                _check_local_path(geom.get('path'), path + '.path', error, single=True)
             if 'inner_loops' in geom:
                 loops = geom['inner_loops']
                 if not isinstance(loops, list):
@@ -588,10 +620,23 @@ def _validate(schema, category, strict_category):
     return errors, warnings
 
 
+def _check_local_path(value, path, error, single):
+    """Local profiles need a tangent at the path ends: Line / Arc3P / Spline only."""
+    if not isinstance(value, list) or not value:
+        return
+    if single and len(value) != 1:
+        error(path, 'a SweptBlend path is ONE segment (Line or Arc3P), as in Revit')
+    allowed = ('Line', 'Arc3P', 'ArcThreePoint') if single else ('Line', 'Arc3P', 'ArcThreePoint', 'Spline')
+    for i in (0, len(value) - 1):
+        seg = value[i]
+        if isinstance(seg, dict) and seg.get('type') not in allowed:
+            error('{}[{}]'.format(path, i), 'must be {} for a local profile'.format(' or '.join(allowed[:2] + allowed[3:])))
+
+
 def _validate_repeat(geom, path, error, number, point):
     rep = geom['repeat']
-    if geom.get('type') == 'Sweep':
-        error(path, 'Sweep cannot repeat; write the copies out')
+    if geom.get('type') in ('Sweep', 'SweptBlend'):
+        error(path, '{} cannot repeat; write the copies out'.format(geom.get('type')))
         return
     if not isinstance(rep, dict) or ('at' in rep) == ('count' in rep):
         error(path, 'must be {"count": n, "step": [dx,dy,dz]} or {"at": [[dx,dy,dz], ...]}')
@@ -768,7 +813,7 @@ def expand_schema(schema):
     geometry = []
     for geom in schema['geometry']:
         rep = geom.get('repeat') if isinstance(geom, dict) else None
-        if not isinstance(rep, dict) or geom.get('type') == 'Sweep':
+        if not isinstance(rep, dict) or geom.get('type') in ('Sweep', 'SweptBlend'):
             geometry.append(geom)
             continue
         base = dict(geom)
@@ -1102,6 +1147,16 @@ def schema_contract():
         'units': {'length': 'millimeters', 'angle': 'radians'},
         'supported_categories': list(SUPPORTED_CATEGORIES),
         'form_types': list(FORM_TYPES),
+        'form_guide': {
+            'Extrusion': 'constant outline: slabs, panels, boards, gables (sketch_plane_x/y)',
+            'Blend': 'outline A -> outline B between two heights: tapers, hoppers, chamfered plinths',
+            'Revolution': 'turned / round about an axis: domes, bowls, knobs, balusters, rings',
+            'Sweep': 'constant section along a path (profile_local: true): rails, mouldings, troughs',
+            'SweptBlend': 'section changing along ONE Line/Arc3P path (local profiles): chutes, horns',
+            'Cylinder': 'straight rods and posts', 'Tube': 'curved / 3D rods, rails, tube slides',
+            'Void': 'is_solid false on any form: openings, recesses, hollow tubes, basins',
+        },
+        'local_profile': 'u sideways (Z x tangent), v up; points [u, v, 0] in mm',
         'segment_types': list(SEGMENT_TYPES),
         'material_rules': {
             'fields': {'name': 'unique, required', 'color': '"#RRGGBB" or [r,g,b] 0-255, required',
@@ -1112,6 +1167,7 @@ def schema_contract():
                         'parameter (Materials and Finishes) whose default is that '
                         'material; each solid that names it is bound to the parameter.'),
             'geometry_fields': {'material': 'one materials[].name; ignored on voids',
+                                'is_solid': 'false = Void Form: cuts the solids it overlaps',
                                 'subcategory': 'optional subcategory name under the family category'},
         },
         'parameter_rules': {

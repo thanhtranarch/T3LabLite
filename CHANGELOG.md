@@ -29,6 +29,10 @@ Releasing a new version:
   labelled dimensions and locked faces, repeated parts and detail levels;
   four new categories (Pipe Accessory, Duct Accessory, Sprinkler, Electrical
   Fixture) and a design spec for every category.
+- **FamiGen — every Revit form:** Swept Blend is new, Sweep profiles can be
+  drawn as the cross-section seen along the path, voids cut the solids they
+  overlap, and Claude is told which form fits which shape (not only
+  Extrusion). Studio has a **Voids** switch.
 - **FamiGen — models in one piece:** a new `Tube` form for curved rods, rails,
   handles and tube slides (smooth, no kinks), a check that names parts left
   floating (Claude fixes them once before you see the model), joint rules in

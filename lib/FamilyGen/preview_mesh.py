@@ -16,6 +16,9 @@ Revit will be asked to build:
 * Revolution turns the profile about the projected axis (right-hand rule);
 * Sweep profiles are used as drawn and carried along the path - an
   approximation (parallel transport, no mitre scaling at sharp corners);
+* Sweep with ``profile_local`` and SweptBlend carry a local cross-section
+  (u sideways, v up - ``FamilyGen.form_frames``) along the path; a SweptBlend
+  morphs its start section into its end section;
 * Cylinder is a ring between ``start`` and ``end``.
 
 It is a preview, not a validator: what Revit rejects (self-intersecting
@@ -589,6 +592,63 @@ def _sweep(mesh, geom, plane):
     mesh.add_cap(sections[-1], tris)
 
 
+def _resample_loop3(loop, count):
+    """`count` 3D points evenly spaced by length along a closed loop."""
+    pts = list(loop)
+    if pts[0] != pts[-1]:
+        pts.append(pts[0])
+    lengths = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        lengths.append(lengths[-1] + _length(_sub(b, a)))
+    total = lengths[-1] or 1.0
+    out, j = [], 0
+    for i in range(count):
+        target = total * i / count
+        while j < len(lengths) - 2 and lengths[j + 1] < target:
+            j += 1
+        span = (lengths[j + 1] - lengths[j]) or 1.0
+        t = (target - lengths[j]) / span
+        out.append(_add(pts[j], _mul(_sub(pts[j + 1], pts[j]), t)))
+    return out
+
+
+def _local_sweep(mesh, geom, plane, top_key=None):
+    """Sweep with profile_local / SweptBlend: local sections carried along the path.
+
+    Same frame rule as the builder (FamilyGen.form_frames): u = Z x t, v = t x u.
+    A SweptBlend morphs `profile` into `top_profile` along the path.
+    """
+    from FamilyGen.form_frames import frame
+    path = sample_loop(geom.get('path', []), plane, closed=False)
+    if len(path) < 2:
+        raise ValueError('the path needs two points')
+    bottom = sample_loop(geom.get('profile', []), None)
+    top = sample_loop(geom.get(top_key) or geom.get('profile', []), None) if top_key else bottom
+    if len(bottom) < 3 or len(top) < 3:
+        raise ValueError('the profile needs a closed outline')
+    count = 64
+    bottom, top = _resample_loop3(bottom, count), _resample_loop3(top, count)
+    shift = min(range(count), key=lambda k: _length(_sub(top[k], bottom[0])))
+    top = top[shift:] + top[:shift]
+    sections = []
+    last = len(path) - 1
+    for i, station in enumerate(path):
+        tangent = _unit(_sub(path[min(i + 1, last)], path[max(i - 1, 0)]))
+        u, v = frame(tangent)
+        w = i / float(last)
+        ring = []
+        for b, t in zip(bottom, top):
+            a_ = b[0] + (t[0] - b[0]) * w
+            b_ = b[1] + (t[1] - b[1]) * w
+            ring.append(_add(station, _add(_mul(tuple(u), a_), _mul(tuple(v), b_))))
+        sections.append(ring)
+    for i in range(last):
+        mesh.add_strip(sections[i], sections[i + 1], closed=True)
+    for ring, uv_loop, flip in ((sections[0], bottom, True), (sections[-1], top, False)):
+        _, tris = triangulate([(p[0], p[1]) for p in uv_loop])
+        mesh.add_cap(ring, tris, flip=flip)
+
+
 def _cylinder(mesh, geom):
     s = _point(geom['start'])
     e = _point(geom['end'])
@@ -647,8 +707,12 @@ def build_preview(schema):
                 _blend(mesh, geom, plane)
             elif kind == 'Revolution':
                 _revolution(mesh, geom, plane)
+            elif kind == 'Sweep' and geom.get('profile_local'):
+                _local_sweep(mesh, geom, plane)
             elif kind == 'Sweep':
                 _sweep(mesh, geom, plane)
+            elif kind == 'SweptBlend':
+                _local_sweep(mesh, geom, plane, top_key='top_profile')
             elif kind == 'Cylinder':
                 _cylinder(mesh, geom)
             else:

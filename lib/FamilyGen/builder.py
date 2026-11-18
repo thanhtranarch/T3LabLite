@@ -50,6 +50,7 @@ from Intelligence.family_schema import (
     SUPPORTED_CATEGORIES,
 )
 from Snippets._compat import add_family_parameter, disposing, family_parameter_kind
+from FamilyGen.form_frames import local_to_world, path_ends, profile_at
 
 logger = logging.getLogger('T3Lab.FamilyGen')
 
@@ -785,9 +786,17 @@ class JsonFamilyBuilder(object):
                 geom_data.get("start_angle", 0.0), geom_data.get("end_angle", FULL_TURN))
             return [rev], None
 
+        if geom_type == "SweptBlend":
+            return self._swept_blend(geom_data, plane, sketch_plane, is_solid)
+
         if geom_type == "Sweep":
             path_curves = self._json_loop(geom_data.get("path", []), plane, close=False)
-            prof_curves = self._json_loop(geom_data.get("profile", []), None)
+            profile_segs = geom_data.get("profile", [])
+            if geom_data.get("profile_local"):
+                # Local cross-section -> world, placed at the path start.
+                (start_pt, start_t), _ = path_ends(geom_data.get("path", []))
+                profile_segs = profile_at(profile_segs, start_pt, start_t)
+            prof_curves = self._json_loop(profile_segs, None)
             if not path_curves or not prof_curves:
                 return [], "Sweep needs both 'path' and 'profile'"
             prof_arr = CurveArrArray()
@@ -810,7 +819,7 @@ class JsonFamilyBuilder(object):
                         one_path.Append(pc)
                         seg_prof = CurveArrArray()
                         seg_prof.Append(self._curve_arr(
-                            self._json_loop(geom_data.get("profile", []), None)))
+                            self._json_loop(profile_segs, None)))
                         created.append(doc.FamilyCreate.NewSweep(
                             is_solid, one_path, sketch_plane,
                             doc.Application.Create.NewCurveLoopsProfile(seg_prof),
@@ -994,6 +1003,87 @@ class JsonFamilyBuilder(object):
             except Exception as ex:
                 self.report['warnings'].append("{} not created or labelled: {}".format(label, ex))
 
+    # ── Void Forms ──────────────────────────────────────────────────────
+    def _cut_with_voids(self):
+        """Make every void cut the solids it overlaps (Revit's Cut Geometry).
+
+        Revit usually joins a new void to what it touches by itself; this asks
+        for the cut explicitly so openings and hollows never stay uncut. A pair
+        Revit refuses (already cut, not touching) is simply skipped.
+        """
+        voids, solids = [], []
+        for forms in self._forms.values():
+            for form in forms:
+                try:
+                    (solids if form.IsSolid else voids).append(form)
+                except Exception:
+                    continue
+        if not voids or not solids:
+            return
+        try:
+            from Autodesk.Revit.DB import SolidSolidCutUtils
+        except Exception:
+            return
+        self.doc.Regenerate()
+        cuts = 0
+        for void in voids:
+            vbox = void.get_BoundingBox(None)
+            for solid in solids:
+                sbox = solid.get_BoundingBox(None)
+                if vbox is None or sbox is None or not (
+                        vbox.Min.X <= sbox.Max.X and sbox.Min.X <= vbox.Max.X and
+                        vbox.Min.Y <= sbox.Max.Y and sbox.Min.Y <= vbox.Max.Y and
+                        vbox.Min.Z <= sbox.Max.Z and sbox.Min.Z <= vbox.Max.Z):
+                    continue
+                try:
+                    SolidSolidCutUtils.AddCutBetweenSolids(self.doc, solid, void)
+                    cuts += 1
+                except Exception:
+                    pass
+        self.report['void_cuts'] = cuts
+
+    # ── Swept Blend ─────────────────────────────────────────────────────
+    def _swept_blend(self, geom_data, plane, sketch_plane, is_solid):
+        """Revit Swept Blend: one path curve, a start and an end section.
+
+        The local sections are placed on the planes normal to the path at its
+        two ends (FamilyGen.form_frames). If Revit refuses that placement, the
+        sections are retried in the XY plane, which is how the Revit UI sketches
+        a swept-blend profile before mapping it onto the path.
+        """
+        doc = self.doc
+        path_segs = geom_data.get("path", [])
+        path_curves = self._json_loop(path_segs, plane, close=False)
+        if len(path_curves) != 1:
+            return [], "SweptBlend needs exactly one path curve"
+        (p0, t0), (p1, t1) = path_ends(path_segs)
+
+        def _profile(segs):
+            arr = CurveArrArray()
+            arr.Append(self._curve_arr(self._json_loop(segs, None)))
+            return doc.Application.Create.NewCurveLoopsProfile(arr)
+
+        bottom, top = geom_data.get("profile", []), geom_data.get("top_profile", [])
+        attempts = (
+            ('path ends', profile_at(bottom, p0, t0), profile_at(top, p1, t1)),
+            ('XY plane', local_to_world(bottom, [0, 0, 0], [1, 0, 0], [0, 1, 0]),
+             local_to_world(top, [0, 0, 0], [1, 0, 0], [0, 1, 0])),
+        )
+        last_error = None
+        for where, seg_a, seg_b in attempts:
+            try:
+                form = doc.FamilyCreate.NewSweptBlend(
+                    is_solid, path_curves[0], sketch_plane, _profile(seg_a), _profile(seg_b))
+                if form is not None:
+                    if where != 'path ends':
+                        self.report['warnings'].append(
+                            "{}: swept blend sections placed from the {}".format(
+                                geom_data.get('id') or 'SweptBlend', where))
+                    return [form], None
+            except Exception as ex:
+                last_error = ex
+        return [], "Revit refused the swept blend ({})".format(last_error)
+
     def _lock_faces(self, index, geom, refs, info, plan, elev):
         label = geom.get('id') or '#{}'.format(index + 1)
         tol = 1.0 * SCL
@@ -1081,6 +1171,7 @@ class JsonFamilyBuilder(object):
             bbox = (model.bbox_min, model.bbox_max) if model.bbox_min is not None else None
         except Exception:
             bbox = None
+        self._cut_with_voids()
         try:
             self.apply_constraints(schema, bbox)
         except Exception as ex:

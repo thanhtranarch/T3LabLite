@@ -19,6 +19,16 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP Control — "module 'core.paths' has no attribute 'atomic_write'":**
+  after an update installed while Revit was open, MCP Control kept an old copy
+  of the settings code in memory and could not configure Claude Desktop,
+  ChatGPT (Codex) or Antigravity. It now loads the new copy by itself.
+- **Model Auditor, Mana Sheets — raw "cannot import name 'revit' from
+  'pyrevit'" traceback:** these tools now show the T3Lab error dialog, which
+  says to restart Revit, and log the error to `%APPDATA%\T3LabAI\errors.log`.
+
 ## [2.6.1] - 2026-11-18
 
 BatchOut no longer fails with "Duplicate type name within an assembly", and the error dialog now tells you when Revit needs a restart.

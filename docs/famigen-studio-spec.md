@@ -105,8 +105,14 @@ a modal dialog) and builds directly.
   verbatim, every `tool_use` gets its `tool_result` first in the next user turn.
 * Editor context: when the family on screen differs from Claude's last one
   (opened from history, MCP, a template), it is sent as "Current family JSON".
-* Reference check: `begin_check(renders)` sends up to 4 PNG renders; Claude
-  either submits a fix or answers "Matches …". One round per user message.
+* Reference analysis: with a reference attached Claude must first call
+  `record_analysis` (camera azimuth/elevation in FamiGen axes, view type,
+  scale basis, overall size, every component with form, size, position,
+  colour and count). Studio shows it as a "What Claude sees" card and adds a
+  **Ref** view with that camera.
+* Reference check: `begin_check(renders)` sends renders from the **reference
+  camera** and the 3D view; Claude either submits a fix or answers
+  "Matches …". Up to 2 rounds per user message.
 * Attachments: PNG/JPG/GIF/WEBP ≤ 5 MB, PDF ≤ 32 MB, TXT/MD/CSV/JSON/XML ≤ 400 KB;
   at most 8 per message.
 
@@ -117,6 +123,7 @@ a modal dialog) and builds directly.
 | `types[]` | `{"name", "values": {param: value, material param: material}}` | first = current type renamed, others `NewType` |
 | `SweptBlend` (form) | `{"path": [one Line/Arc3P], "profile", "top_profile"}` (local sections) | `NewSweptBlend` |
 | `Sweep.profile_local` | `true` → profile drawn as the section seen along the path | profile placed at the path start |
+| `Tube.bend_radius` | straight runs + true circular elbows of that centre-line radius (pipes, taps, handrails) | fillet arcs sampled every 12° |
 | `Tube` (form) | `{"points": [[x,y,z], …], "radius", "smooth"?, "closed"?}` | written out as spline segments (Cylinders lengthened by r·tan(turn/2) so bends close) + a ball only at turns > 35° |
 | `geometry[].repeat` | `{"count", "step":[dx,dy,dz]}` or `{"at":[[dx,dy,dz],…]}` (not Sweep, ≤ 200) | written out by `expand_schema` before building (preview does the same) |
 | `geometry[].detail_levels` | `["coarse","medium","fine"]` subset | `FamilyElementVisibility` |

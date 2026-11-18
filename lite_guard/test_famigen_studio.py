@@ -624,5 +624,63 @@ class FormToolboxTests(unittest.TestCase):
         self.assertIn("m.part.solid || $('chk-voids').checked", js)
 
 
+class ReferenceAnalysisTests(unittest.TestCase):
+    """Pipe elbows (Tube bend_radius) and the record_analysis -> camera check flow."""
+
+    def test_bend_radius_makes_round_elbows_without_balls(self):
+        pipe = {'id': 'Pipe', 'type': 'Tube', 'material': 'Oak', 'radius': 150, 'bend_radius': 300,
+                'points': [[0, 0, 0], [0, 0, 2500], [0, -1300, 2500], [0, -1300, 2000]]}
+        s = copy.deepcopy(GOOD)
+        s['geometry'] = [pipe]
+        self.assertEqual(fs.validate_family_schema(s)[0], [])
+        parts = fs.expand_schema(s)['geometry']
+        self.assertFalse([p for p in parts if 'joint' in p['id']])
+        self.assertGreater(len(parts), 10)                         # two arcs of short segments
+        from FamilyGen.preview_mesh import build_preview
+        model = build_preview(s)
+        self.assertEqual([round(v) for v in model.bbox_min], [-150, -1450, 0])
+        self.assertLess(model.bbox_max[2], 2651)                   # the elbow stays inside the corner
+        too_tight = dict(pipe, bend_radius=100)
+        s['geometry'] = [too_tight]
+        self.assertIn('at least the tube radius', '\n'.join(fs.validate_family_schema(s)[0]))
+
+    def test_analysis_tool_only_with_references_then_continue(self):
+        from FamilyGen import claude_designer as designer
+        plain = designer.ClaudeFamilySession('Furniture', 'claude-opus-5-5')
+        body = plain.begin_turn('A side table')
+        self.assertNotIn('record_analysis', [t['name'] for t in body['tools']])
+        ref = designer.ClaudeFamilySession('Furniture', 'claude-opus-5-5')
+        att = {'name': 'p.png', 'kind': 'image', 'media_type': 'image/png', 'size': 10, 'data': PNG}
+        body = ref.begin_turn('Model this', attachments=[att])
+        self.assertIn('record_analysis', [t['name'] for t in body['tools']])
+        self.assertIn('REFERENCE ANALYSIS', body['system'][0]['text'])
+        analysis = {'camera': {'azimuth_deg': -110, 'elevation_deg': 30},
+                    'overall_size_mm': [500, 500, 550], 'components': [{'name': 'Top', 'form': 'Extrusion'}]}
+        reply = json.dumps({'content': [{'type': 'tool_use', 'id': 'an1', 'name': 'record_analysis',
+                                         'input': analysis}], 'stop_reason': 'tool_use', 'usage': {}})
+        out = ref.handle_http(200, reply)
+        self.assertEqual(out.kind, 'continue')
+        self.assertEqual(out.analysis['camera']['azimuth_deg'], -110)
+        owed = out.request['messages'][-1]['content'][0]
+        self.assertEqual((owed['tool_use_id'], owed.get('is_error')), ('an1', None))
+
+    def test_controller_shows_analysis_and_checks_from_the_reference_camera(self):
+        analysis = {'camera': {'azimuth_deg': -112, 'elevation_deg': 31}, 'view_type': 'render',
+                    'overall_size_mm': [500, 500, 550], 'scale_basis': 'seat height',
+                    'components': [{'name': 'Leg', 'form': 'Cylinder', 'count': 4}]}
+        first = json.dumps({'content': [{'type': 'tool_use', 'id': 'an1', 'name': 'record_analysis',
+                                         'input': analysis}], 'stop_reason': 'tool_use', 'usage': {}})
+        http = FakeHttp((200, first), (200, submit(GOOD, 's1')))
+        ctl, posts = controller(http=http)
+        ctl.handle({'type': 'attach_data', 'name': 'photo.png', 'media_type': 'image/png', 'data': PNG})
+        ctl.handle({'type': 'send', 'text': 'Model this'})
+        card = [p for p in of_type(posts, 'chat') if p.get('role') == 'analysis'][0]
+        self.assertIn('Leg ×4 · Cylinder', card['assumptions'])
+        self.assertEqual(of_type(posts, 'ref_camera')[0]['azimuth_deg'], -112.0)
+        request = of_type(posts, 'snapshot_request')[0]
+        self.assertEqual(request['views'], ['ref', 'iso'])
+        self.assertEqual(request['camera']['elevation_deg'], 31.0)
+
+
 if __name__ == '__main__':
     unittest.main()

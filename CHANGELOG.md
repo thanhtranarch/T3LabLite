@@ -29,6 +29,10 @@ Releasing a new version:
   labelled dimensions and locked faces, repeated parts and detail levels;
   four new categories (Pipe Accessory, Duct Accessory, Sprinkler, Electrical
   Fixture) and a design spec for every category.
+- **FamiGen — closer to your picture:** Claude first writes down what it sees
+  (camera, scale, every part with size and colour), then models it; the
+  check compares a render from the picture's own camera, up to twice. Pipes
+  and taps get real elbows (`bend_radius`) instead of kinks. New **Ref** view.
 - **FamiGen — every Revit form:** Swept Blend is new, Sweep profiles can be
   drawn as the cross-section seen along the path, voids cut the solids they
   overlap, and Claude is told which form fits which shape (not only

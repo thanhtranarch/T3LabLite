@@ -42,7 +42,7 @@ MESSAGING_PYREVIT = (7, 1)
 PREVIEW_DECIMALS = 1
 MAX_JSON_CHARS = 2000000
 THUMB_MAX_BYTES = 2 * 1024 * 1024
-MAX_CHECKS = 1          # render-vs-reference rounds per user message
+MAX_CHECKS = cd.MAX_CHECKS   # render-vs-reference rounds per user message
 
 def type_table(schema):
     """Parameters × types grid for the Studio's Parameters tab (pure)."""
@@ -278,6 +278,7 @@ class StudioController(object):
         if self.category not in SUPPORTED_CATEGORIES + (AUTO_CATEGORY,):
             self.category = AUTO_CATEGORY
         self.check_refs = bool(prefs.get('check_refs', True))
+        self._ref_camera = None
         self._checks_left = 0
         self._snapshot_token = 0
         self.effort = prefs.get('effort', cd.DEFAULT_EFFORT)
@@ -409,6 +410,7 @@ class StudioController(object):
                 pass
             self._set_busy(False)
         self.session = None
+        self._ref_camera = None
         self.attachments = []
         self._post_attachments()
         self.post({'type': 'chat_reset'})
@@ -572,6 +574,8 @@ class StudioController(object):
         if rid != self._request_id or session is not self.session:
             return                                   # stale (cancelled / reset)
         outcome = session.handle_http(status, raw)
+        if outcome.analysis:
+            self._show_analysis(outcome.analysis)
         if outcome.kind == 'continue':
             if outcome.errors and outcome.errors[0].startswith(u'Not connected'):
                 text = u'Claude is joining loose parts so the model reads as one piece…'
@@ -624,7 +628,8 @@ class StudioController(object):
             self._snapshot_token += 1
             self._set_busy(True, u'Rendering the model to compare it with your reference…')
             self.post({'type': 'snapshot_request', 'token': self._snapshot_token,
-                       'views': ['iso', 'front']})
+                       'views': ['ref', 'iso'] if self._ref_camera else ['iso', 'front'],
+                       'camera': self._ref_camera})
             return
         if outcome.errors:
             self._status(u'Claude could not fix every problem; see Checks, then '
@@ -642,12 +647,40 @@ class StudioController(object):
             self._status(u'The 3D view could not be captured; the reference check was skipped.',
                          'warning')
             return
-        body = self.session.begin_check(images, views=u', '.join(message.get('views') or []))
+        views = [u'the reference camera' if v == 'ref' else v for v in message.get('views') or []]
+        body = self.session.begin_check(images, views=u', '.join(views))
         self.post({'type': 'chat', 'role': 'system',
                    'text': u'Claude is comparing the model with your reference…',
                    'thumbs': [u'data:image/png;base64,' + images[0]]})
         self._set_busy(True, u'Claude is comparing the model with your reference…')
         self._send(body)
+
+    def _show_analysis(self, analysis):
+        """Claude's reading of the reference, as a chat card + the 'Ref' camera."""
+        camera = analysis.get('camera') if isinstance(analysis.get('camera'), dict) else None
+        if camera:
+            try:
+                self._ref_camera = {'azimuth_deg': float(camera.get('azimuth_deg', -135)),
+                                    'elevation_deg': float(camera.get('elevation_deg', 30))}
+                self.post(dict({'type': 'ref_camera'}, **self._ref_camera))
+            except (TypeError, ValueError):
+                self._ref_camera = None
+        size = analysis.get('overall_size_mm') or []
+        lines = []
+        for comp in (analysis.get('components') or [])[:40]:
+            if isinstance(comp, dict):
+                bits = [u'{}'.format(comp.get('name') or u'?')]
+                if comp.get('count') and comp.get('count') > 1:
+                    bits[0] += u' ×{}'.format(comp['count'])
+                bits += [u'{}'.format(comp[k]) for k in ('form', 'size_mm', 'color') if comp.get(k)]
+                lines.append(u' · '.join(bits))
+        self.post({'type': 'chat', 'role': 'analysis',
+                   'text': u'What Claude sees: {}{}'.format(
+                       analysis.get('view_type') or u'reference',
+                       u', about {} mm'.format(u' × '.join(u'{:,.0f}'.format(v) for v in size[:3]))
+                       if size else u''),
+                   'assumptions': lines,
+                   'meta': analysis.get('scale_basis') or u''})
 
     def _usage(self, session):
         usage = session.usage_summary()

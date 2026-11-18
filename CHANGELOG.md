@@ -19,6 +19,14 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Changed
+
+- Agent Cursors show only the bar by default: the agent, its goal and tasks,
+  the current step and the last steps. No cursor, boxes or effects on the
+  model, and no view switching, zooming, selecting, tiling or Glow. Turn on
+  **On model** (options on the bar, or Settings > Agent Cursors) to get them
+  back.
+
 ### Fixed
 
 - Agent Cursors stay on screen while you work in the AI app next to Revit.

@@ -83,6 +83,53 @@ def _get_bridge_path():
     return (deployed or _source_bridge_path()).replace('\\', '/')
 
 
+def _shown_bridge_path():
+    """The path the snippet shows, without deploying: only Connect may copy the
+    bridge and take its ownership (T3Lab and T3Lab Lite share the folder;
+    opening MCP Control used to switch the bridge to this extension)."""
+    try:
+        target = os.path.join(_get_paths_module().settings_dir(), 'bridge.py')
+        if os.path.isfile(target):
+            return target.replace('\\', '/')
+    except Exception:
+        pass
+    return _source_bridge_path().replace('\\', '/')
+
+
+def _is_store_stub(path):
+    """The WindowsApps app-execution alias: opens the Microsoft Store unless
+    Python was installed from there. Tried last, never cached."""
+    return '\\windowsapps\\' in (path or '').replace('/', '\\').lower()
+
+
+def _store_python_installed():
+    """Python from the Microsoft Store is really there (the alias then works)."""
+    try:
+        import glob
+        root = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Microsoft', 'WindowsApps')
+        return bool(glob.glob(os.path.join(root, 'PythonSoftwareFoundation.Python.3*')))
+    except Exception:
+        return False
+
+
+def _python_usable(python):
+    """False when the command Connect would write cannot start: no Python
+    found (bare name), or only the Store alias that opens the Store."""
+    if not python or not os.path.isfile(python):
+        return False
+    return not _is_store_stub(python) or _store_python_installed()
+
+
+NO_PYTHON_TEXT = ('Python 3 was not found on this computer. The AI app needs it to run the '
+                  'T3Lab connection: install Python 3 from python.org (tick "Add python.exe '
+                  'to PATH"), then click Connect again.')
+
+
+def _python_version_key(path):
+    m = re.search(r'python(\d)(\d+)', os.path.basename(os.path.dirname(path)).lower())
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
 def _find_python_executable():
     """
     Locate a CPython 3 interpreter to run core/bridge.py.
@@ -103,7 +150,7 @@ def _find_python_executable():
     """
     paths = _get_paths_module()
     cached_path = paths.load_settings().get('python_executable')
-    if cached_path and os.path.isfile(cached_path):
+    if cached_path and os.path.isfile(cached_path) and not _is_store_stub(cached_path):
         return cached_path
 
     is_windows = os.name == 'nt'
@@ -112,10 +159,14 @@ def _find_python_executable():
 
     # 1) Search PATH directories for a real interpreter.
     path_dirs = os.environ.get('PATH', '').split(os.pathsep)
+    stub = None
     for d in path_dirs:
         for name in exe_names:
             candidate = os.path.join(d, name)
             if os.path.isfile(candidate):
+                if _is_store_stub(candidate):
+                    stub = stub or candidate
+                    continue
                 found = candidate
                 break
         if found:
@@ -127,7 +178,6 @@ def _find_python_executable():
         fallback_globs = []
         if is_windows:
             fallback_globs.append(os.path.join(home, 'AppData', 'Local', 'Programs', 'Python', 'Python*', 'python.exe'))
-            fallback_globs.append(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Microsoft', 'WindowsApps', 'python.exe'))
             fallback_globs.append('C:/Python*/python.exe')
             fallback_globs.append('C:/Program Files/Python*/python.exe')
         else:
@@ -138,7 +188,8 @@ def _find_python_executable():
         try:
             import glob
             for pattern in fallback_globs:
-                matches = sorted(glob.glob(pattern), reverse=True)
+                # Newest first by number: a string sort puts Python39 above Python312.
+                matches = sorted(glob.glob(pattern), key=_python_version_key, reverse=True)
                 if matches:
                     found = matches[0]
                     break
@@ -148,6 +199,8 @@ def _find_python_executable():
     if found:
         paths.set_setting('python_executable', found)
         return found
+    if stub:
+        return stub     # may work (Store Python installed); never cached
 
     # 3) Give up — return the bare command name and let the OS PATH try.
     # Not cached: it isn't a real resolved path, so nothing to reuse.
@@ -190,6 +243,17 @@ def _probe_health(port, timeout=0.35):
         return None
 
 
+def _recorded_port():
+    """Port recorded by the server in this Revit: 0 = stopped, None = no
+    record (outside Revit, or a server from before the record existed)."""
+    try:
+        from System import AppDomain
+        value = AppDomain.CurrentDomain.GetData('_t3lab_mcp_server_singleton.port')
+        return None if value is None else int(value)
+    except Exception:
+        return None
+
+
 def _local_servers():
     """
     [(port, /health payload)] for every T3Lab server inside THIS Revit process.
@@ -201,6 +265,18 @@ def _local_servers():
         mypid = os.getpid()
     except Exception:
         return []
+    # The server records its port for the whole process (core.server
+    # _record_port): one probe instead of the whole range. The scan cost
+    # seconds on Revit's UI thread at every start and document open (a closed
+    # loopback port is slow to refuse; IronPython ignores the connect timeout).
+    recorded = _recorded_port()
+    if recorded is not None:
+        info = _probe_health(recorded, 1.0) if recorded else None
+        if info and info.get('status') == 'ok' and info.get('pid') == mypid:
+            return [(recorded, info)]
+        return []
+    if sys.platform == 'cli':
+        return []       # IronPython hosts the server: no record = not started in this Revit
     found = []
     for port in range(SERVER_PORT_MIN, SERVER_PORT_MAX + 1):
         info = _probe_health(port)
@@ -736,8 +812,10 @@ def _codex_block(python, bridge, port, name=MCP_SERVER_NAME, agent=None):
     if name in _BRIDGE_SERVERS:
         args = 'args = ["-I", "{}"]\n'.format(_toml_quote(bridge))
     else:
+        # -E: pyRevit's machine-wide PYTHONPATH must not reach the bridge
+        # (same as the JSON entry).
         args = 'args = [{}]\n'.format(', '.join('"{}"'.format(_toml_quote(a)) for a in
-                                               [bridge, str(port)] + _agent_args(agent)))
+                                               ['-E', bridge, str(port)] + _agent_args(agent)))
     return (
         '[mcp_servers.{}]\n'.format(name) +
         'type = "stdio"\n' +
@@ -789,6 +867,26 @@ def _read_toml_text(path):
         return ''
     with codecs.open(path, 'r', encoding='utf-8-sig') as f:
         return f.read()
+
+
+def _toml_other_form(text, name=MCP_SERVER_NAME):
+    """True when `name` is declared other than as a [mcp_servers.<name>]
+    header: a key under [mcp_servers], a dotted key, or an inline
+    `mcp_servers = {...}`. _toml_upsert cannot rewrite those, and appending a
+    table would declare it twice: Codex then rejects the whole file."""
+    key = r'["\']?' + re.escape(name) + r'["\']?'
+    in_servers = False
+    for line in text.splitlines():
+        if _TOML_HEADER_RE.match(line):
+            in_servers = re.match(r'^\s*\[\s*mcp_servers\s*\]', line) is not None
+            continue
+        if in_servers and re.match(r'^\s*' + key + r'\s*[=.]', line):
+            return True
+        if re.match(r'^\s*mcp_servers\s*\.\s*' + key + r'\s*[=.]', line):
+            return True
+        if re.match(r'^\s*mcp_servers\s*=', line) and name in text:
+            return True
+    return False
 
 
 def _toml_is_configured(path, name=MCP_SERVER_NAME):
@@ -845,7 +943,10 @@ def _toml_add_agent(path, agent):
         if '--agent=' in line or 'bridge.py' not in line:
             return False
         end = '\r' if line.endswith('\r') else ''
-        lines[i] = '{}, "{}"]{}{}'.format(m.group(1), _agent_args(agent)[0], m.group(2), end)
+        head = m.group(1).rstrip()
+        if head.endswith(','):          # ["...", "48884",] : a second comma breaks the file
+            head = head[:-1].rstrip()
+        lines[i] = '{}, "{}"]{}{}'.format(head, _agent_args(agent)[0], m.group(2), end)
         _backup_once(path)
         _write_text(path, '\n'.join(lines))
         return True
@@ -861,6 +962,11 @@ def _write_toml_config(path, python, bridge, port, name=MCP_SERVER_NAME, agent=N
     except Exception as ex:
         raise ValueError('Could not read {} ({}). Save it as UTF-8, then '
                          'Connect again.'.format(path, ex))
+
+    if _toml_other_form(text, name):
+        raise ValueError('{} already declares {} as a key under [mcp_servers] (not '
+                         'as its own [mcp_servers.{}] table). Remove that entry by '
+                         'hand, then Connect again.'.format(path, name, name))
 
     cfg_dir = os.path.dirname(path)
     if cfg_dir and not os.path.isdir(cfg_dir):
@@ -1365,7 +1471,7 @@ class MCPService(object):
             except Exception:
                 port = 48884
 
-        bridge = _get_bridge_path()
+        bridge = _shown_bridge_path()
 
         if fmt == 'claude_code':
             return 'claude mcp add --scope user {} -- "{}" -E "{}" {}'.format(
@@ -1564,6 +1670,8 @@ class MCPService(object):
 
         try:
             python = _find_python_executable()
+            if not _python_usable(python):
+                return False, NO_PYTHON_TEXT     # else the AI app shows "server disconnected"
             path   = _resolve_client_path(spec)
             if name in _BRIDGE_SERVERS:
                 port = 0

@@ -3,6 +3,7 @@
 deploys and takes ownership, startup.py refreshes only what this extension
 owns. Runs on Linux, no Revit."""
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -76,6 +77,14 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(D.refresh(self.target, self.lite)[0], 'skipped')
         self.assertEqual(read(os.path.join(self.target, 'bridge.py')), '# bridge dev\n')
 
+    def test_an_owner_folder_that_is_gone_owns_nothing(self):
+        # Extension moved or re-downloaded: the old path is still in bridge_source.txt.
+        D.deploy(self.target, self.dev)
+        shutil.rmtree(self.dev)
+        write(os.path.join(self.lite, 'bridge.py'), 'NEW')
+        self.assertEqual(D.refresh(self.target, self.lite)[0], 'updated')
+        self.assertEqual(read(os.path.join(self.target, 'bridge.py')), 'NEW')
+
     def test_bridge_from_before_ownership_is_adopted(self):
         write(os.path.join(self.target, 'bridge.py'), '# old bridge\n')
         self.assertEqual(D.refresh(self.target, self.dev)[0], 'updated')
@@ -101,6 +110,15 @@ class WiringTests(unittest.TestCase):
         body = src.split('def deploy_bridge():', 1)[1].split('@staticmethod', 1)[0]
         self.assertIn('bridge_deploy.deploy(', body)
 
+
+    def test_the_snippet_never_deploys(self):
+        # Opening MCP Control must not take the shared bridge (Connect does).
+        src = read(os.path.join(LIB, 'Services', 'mcp_service.py'))
+        body = src.split('def config_snippet(', 1)[1].split('@staticmethod', 1)[0]
+        self.assertIn('_shown_bridge_path()', body)
+        self.assertNotIn('_get_bridge_path()', body)
+        shown = src.split('def _shown_bridge_path():', 1)[1].split('\ndef ', 1)[0]
+        self.assertNotIn('deploy', shown.split('"""')[2])
 
 if __name__ == '__main__':
     unittest.main()

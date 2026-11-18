@@ -145,7 +145,9 @@ def refresh(target=None, source=None):
         if not os.path.isfile(os.path.join(target, BRIDGE)):
             return 'skipped', 'no bridge deployed yet (MCP Control deploys it)'
         current = owner(target)
-        if current and not _same_dir(current, source):
+        # An owner folder that is gone (extension moved or re-downloaded) owns
+        # nothing: without this the bridge was never updated again.
+        if current and not _same_dir(current, source) and os.path.isdir(current):
             return 'skipped', 'deployed by another extension: {}'.format(current)
         _path, error, written = deploy(target, source)
         if error:

@@ -271,7 +271,7 @@ def _save_cached_list(key, items):
         data = _load_cache()
         data['bridge_version'] = BRIDGE_VERSION
         data[key] = items
-        tmp = _cache_file() + '.tmp'
+        tmp = '{}.{}.tmp'.format(_cache_file(), os.getpid())    # one per bridge process
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f)
         os.replace(tmp, _cache_file())
@@ -578,13 +578,21 @@ def _forward(request, current, token, timeout=CALL_TIMEOUT):
     call timing out) are NOT retried elsewhere — re-running the call on a
     different instance would target the wrong document."""
     _ensure_alive_target(current)
+    first = current['port']
     try:
-        return _post_mcp(current['port'], request, token, timeout)
+        return _post_mcp(first, request, token, timeout)
     except Exception as e:
-        if not _is_conn_refused(e) and _port_alive(current['port']):
-            raise
+        # Check the target again before the next call: a port whose Revit
+        # died still accepts, and would time out on every call.
+        current['validated'] = False
+        if not _is_conn_refused(e):
+            # Delivered (reset / timeout after sending): a tools/call may have
+            # run, so re-sending to another Revit would run it on another
+            # document. Only reads of a dead port fail over.
+            if request.get('method') == 'tools/call' or _port_alive(first):
+                raise
         for port in _alive_ports():
-            if port != current['port']:
+            if port != first:
                 resp = _post_mcp(port, request, token, timeout)
                 current['port'] = port
                 return resp
@@ -1193,6 +1201,10 @@ def _handle_hub(request, current, token):
                 'action is summary, query, diff or publish.', 'bad_arguments'))
     except _hs.HubError as e:
         return _hub_response(rid, e.payload)
+    except Exception as e:      # corrupt / locked hub.db: not a Revit connection failure
+        return _hub_response(rid, _hub_error(
+            'The data hub could not be read ({}). hub.db is a cache: close other AI apps, '
+            'or delete it and publish again.'.format(e), 'hub_unavailable'))
     if ingest['errors']:
         out['ingest_errors'] = ingest['errors']
     return _hub_response(rid, out)
@@ -1326,7 +1338,7 @@ def main():
         if not line:
             break
         try:
-            request = json.loads(line)
+            request = json.loads(line.lstrip('\ufeff'))     # a BOM before the first request
         except Exception:
             continue
 

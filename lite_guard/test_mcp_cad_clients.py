@@ -42,11 +42,13 @@ class Env(object):
         }
         self.bridge = os.path.join(self.dir, 'T3LabCAD', 'bridge.py')
         self.saved = {n: getattr(M, n) for n in (
-            '_resolve_client_path', '_find_python_executable', '_app_bridge_path',
+            '_resolve_client_path', '_find_python_executable', '_python_usable',
+            '_app_bridge_path',
             '_claude_desktop_running', '_get_bridge_path')}
         self.desktop_running = False
         M._resolve_client_path = lambda spec: self.paths[spec['key']]
         M._find_python_executable = lambda: PY
+        M._python_usable = lambda python: True     # PY is not a file here
         self.app_bridges = {}      # other apps: key -> path (default: none installed)
         M._app_bridge_path = lambda app='autocad': (
             self.bridge if app == 'autocad'

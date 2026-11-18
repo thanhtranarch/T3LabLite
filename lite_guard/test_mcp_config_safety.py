@@ -48,9 +48,10 @@ class _TempHome(unittest.TestCase):
         os.environ['HOME'] = os.environ['USERPROFILE'] = self.dir
         os.environ['APPDATA'] = os.path.join(self.dir, 'AppData')
         os.environ.pop('CODEX_HOME', None)
-        self.saved = {n: getattr(M, n) for n in ('_find_python_executable', '_get_bridge_path',
+        self.saved = {n: getattr(M, n) for n in ('_find_python_executable', '_python_usable', '_get_bridge_path',
                                                   '_claude_desktop_running')}
         M._find_python_executable = lambda: PY
+        M._python_usable = lambda python: True     # PY is not a file here
         M._get_bridge_path = lambda: 'C:/T3LabAI/bridge.py'
         M._claude_desktop_running = lambda: False
 
@@ -141,6 +142,69 @@ class SettingsFileTests(_TempHome):
         paths.set_setting('x', 1)
         self.assertEqual(paths.load_settings(), {'x': 1})
 
+
+class NoPythonTests(_TempHome):
+    """Connect must not write a command that cannot start (2026-11-18: the
+    Store alias python.exe was written; the AI app showed "server disconnected")."""
+
+    def test_connect_is_refused_without_python(self):
+        M._python_usable = self.saved['_python_usable']
+        M._find_python_executable = lambda: 'python'            # nothing found: the bare name
+        ok, msg = M.MCPService.configure_client('antigravity')
+        self.assertFalse(ok)
+        self.assertIn('Python 3 was not found', msg)
+        self.assertFalse(os.path.exists(self.ag_live()))
+
+    def test_store_alias_alone_is_not_python(self):
+        usable, is_stub = self.saved['_python_usable'], M._is_store_stub
+        self.assertTrue(is_stub('C:\\Users\\a\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe'))
+        self.assertFalse(is_stub('C:\\Python312\\python.exe'))
+        local = os.path.join(self.dir, 'Local')
+        apps = os.path.join(local, 'Microsoft', 'WindowsApps')
+        alias, real = os.path.join(apps, 'python.exe'), os.path.join(self.dir, 'Py312', 'python.exe')
+        _write(alias, b'')
+        _write(real, b'MZ')
+        saved = os.environ.get('LOCALAPPDATA')
+        os.environ['LOCALAPPDATA'] = local
+        M._is_store_stub = lambda p: p == alias         # Windows separators are tested above
+        try:
+            self.assertTrue(usable(real))
+            self.assertFalse(usable('python'))          # the bare name: nothing was found
+            self.assertFalse(usable(alias))             # the alias only opens the Store
+            os.makedirs(os.path.join(apps, 'PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0'))
+            self.assertTrue(usable(alias))              # Store Python is installed: it works
+        finally:
+            M._is_store_stub = is_stub
+            if saved is None:
+                os.environ.pop('LOCALAPPDATA', None)
+            else:
+                os.environ['LOCALAPPDATA'] = saved
+
+class CodexTomlTests(_TempHome):
+    def toml(self):
+        return os.path.join(self.dir, '.codex', 'config.toml')
+
+    def test_agent_is_added_after_a_trailing_comma(self):
+        _write(self.toml(), b'[mcp_servers.t3lab-revit]\ncommand = "py"\n'
+                            b'args = ["C:/T3LabAI/bridge.py", "48884",]\n')
+        self.assertTrue(M._toml_add_agent(self.toml(), 'codex'))
+        text = _read(self.toml()).decode('utf-8')
+        self.assertIn('args = ["C:/T3LabAI/bridge.py", "48884", "--agent=codex"]', text)
+        self.assertNotIn(',,', text)
+        self.assertFalse(M._toml_add_agent(self.toml(), 'codex'))      # second start: no rewrite
+
+    def test_entry_in_another_form_is_not_declared_twice(self):
+        original = b'[mcp_servers]\nt3lab-revit = { command = "py", args = ["x/bridge.py"] }\n'
+        _write(self.toml(), original)
+        ok, msg = M.MCPService.configure_client('chatgpt')
+        self.assertFalse(ok)
+        self.assertIn('Remove that entry by hand', msg)
+        self.assertEqual(_read(self.toml()), original)
+
+    def test_codex_runs_the_bridge_without_pyrevits_pythonpath(self):
+        ok, msg = M.MCPService.configure_client('chatgpt')
+        self.assertTrue(ok, msg)
+        self.assertIn('args = ["-E", ', _read(self.toml()).decode('utf-8'))
 
 if __name__ == '__main__':
     unittest.main()

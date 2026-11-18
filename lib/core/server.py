@@ -98,6 +98,17 @@ def _get_process_anchor():
     return fallback if _anchor_usable(fallback) else None
 
 
+def _record_port(port):
+    """Tell every engine in this Revit which port serves (0 = stopped), so
+    Services.mcp_service probes one port instead of scanning the range on
+    Revit's UI thread at every start and document open."""
+    try:
+        from System import AppDomain
+        AppDomain.CurrentDomain.SetData(_PROCESS_SINGLETON_KEY + '.port', int(port))
+    except Exception:
+        pass
+
+
 def _set_process_anchor(inst):
     try:
         from System import AppDomain
@@ -11453,11 +11464,13 @@ class T3LabAIServer(object):
         def run_server():
             try:
                 self._is_running = True
+                _record_port(port)
                 http_server.serve_forever()
             except Exception as e:
                 self._start_error = e
             finally:
                 self._is_running = False
+                _record_port(0)
 
         self._server_thread = threading.Thread(target=run_server)
         self._server_thread.daemon = True

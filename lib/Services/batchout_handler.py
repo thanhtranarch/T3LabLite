@@ -3,19 +3,26 @@
 BatchOut External Event Handler
 ===============================
 Provides an IExternalEventHandler implementation for BatchOut (ExportManagerWindow).
-Defined in lib/Services to ensure the CLR type is registered only once in PythonNet,
-preventing 'Duplicate type name within an assembly' while fully satisfying
-IExternalEventHandler on both CPython 3 and IronPython 2.
+Satisfies IExternalEventHandler on both CPython 3 and IronPython 2.
+
+The .NET type name gets a per-import suffix (rule S15). A fixed name only
+works while this module stays in sys.modules; once it is imported a second
+time in the same Revit session, the .NET type from the first import still
+exists and pythonnet raises "Duplicate type name within an assembly". That
+happens when a run drops the module, the engine restarts, or the
+BatchOutDialog fallback defines the handler again. BatchOut then failed on
+every click until Revit was restarted.
 """
 
 import sys
+import uuid
 import clr
 clr.AddReference('RevitAPIUI')
 from Autodesk.Revit.UI import IExternalEventHandler
 
 
 class BatchOutEventHandler(IExternalEventHandler):
-    __namespace__ = "T3Lab.BatchOut"
+    __namespace__ = "T3Lab.BatchOut_" + uuid.uuid4().hex[:8]
     """Runs queued window actions inside a valid Revit API context.
 
     Required because the window is modeless (Show, not ShowDialog): ALL Revit

@@ -54,6 +54,30 @@ _MAX_DISPATCHER_LOGS = 20
 _NEXT_STEP = ("Try again. If it happens again, save your work, restart Revit "
               "(not pyRevit > Reload) and send the log file below to T3Lab.")
 
+# The Python modules were loaded a second time in this Revit session (after a
+# pyRevit Reload, an extension switched off and on, or an update applied
+# without a restart), but the .NET types from the first load cannot be
+# unloaded. Every class that implements a .NET interface under a fixed name,
+# pyRevit's own pyrevit.revit.events included, then fails with "Duplicate type
+# name within an assembly". `from pyrevit import revit` fails with it, so
+# other tools show "cannot import name 'revit' from 'pyrevit'". Trying again
+# never helps: only a Revit restart does.
+_RESTART_MARKERS = ("Duplicate type name within an assembly",
+                    "cannot import name 'revit' from 'pyrevit'")
+_RESTART_STEP = ("Python in this Revit session was reloaded (pyRevit > Reload, an "
+                 "extension switched off and on, or an update without a restart), "
+                 "and T3Lab and pyRevit tools cannot load again until Revit restarts. "
+                 "Save your work, close Revit and open it again. Avoid "
+                 "pyRevit > Reload; restart Revit after an update instead.")
+
+
+def next_step(details):
+    """What to tell the user to do, from the full error text."""
+    text = u'{}'.format(details or '')
+    if any(marker in text for marker in _RESTART_MARKERS):
+        return _RESTART_STEP
+    return _NEXT_STEP
+
 
 def log_path():
     base = os.environ.get('APPDATA', '') or os.path.expanduser('~')
@@ -150,7 +174,7 @@ def report_exception(tool, context, exc, owner=None, show=True):
     path = log_exception(tool, context, details)
     if show:
         message = u'{} hit an error while {}.\n\n{}'.format(tool, context, _one_line(exc))
-        footer = _NEXT_STEP
+        footer = next_step(details)
         if path:
             footer += u'\nLog: {}'.format(path)
         _show_error(message, u'{} error'.format(tool), footer + u'\n\n' + details,

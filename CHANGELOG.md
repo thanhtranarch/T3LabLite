@@ -19,6 +19,17 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+
+- **BatchOut — "Duplicate type name within an assembly":** BatchOut's Revit
+  event handler now gets a new .NET type name each time it loads, so BatchOut
+  no longer fails when its code is loaded a second time in the same Revit
+  session.
+- When Python in a Revit session was reloaded (pyRevit > Reload, an extension
+  switched off and on, or an update without a restart), the error dialog now
+  says to restart Revit instead of "Try again". This covers "Duplicate type
+  name within an assembly" and "cannot import name 'revit' from 'pyrevit'".
+
 ## [2.6.0] - 2026-11-18
 
 Agent Cursors now show only the bar by default, stay on screen beside your AI app, and slow Revit down less.

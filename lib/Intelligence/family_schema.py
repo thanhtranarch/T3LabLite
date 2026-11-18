@@ -239,6 +239,10 @@ Cylinder: start/end coordinate triples and positive radius. Use Cylinder for str
 rods in any direction; do not guess a sketch plane for them.
 Tube: "points" (2+ [x,y,z] the centre line passes through), positive "radius",
 optional "smooth" (default true: a spline through the points) and "closed" (a loop).
+With "bend_radius" the tube runs STRAIGHT between the points and turns every corner
+with a true elbow of that centre-line radius (1.5-3 x radius) - use it for pipes,
+taps, faucets, handrails and frames with bends; use smooth spline tubes for free
+curves (slides, organic arms).
 Use Tube for every CURVED or 3D rod, pipe, rail, handle, cable, frame or tube slide
 (helix, S-bend, arch): FamiGen turns it into short overlapping cylinders (ball joints
 only at sharp corners), so it reads as one continuous piece. Never chain separate
@@ -535,6 +539,12 @@ def _validate(schema, category, strict_category):
                 for flag in ('smooth', 'closed'):
                     if flag in geom and not isinstance(geom[flag], bool):
                         error(path + '.' + flag, 'must be true or false')
+                if 'bend_radius' in geom:
+                    number(geom['bend_radius'], path + '.bend_radius', positive=True)
+                    if _finite_number(geom.get('radius')) and _finite_number(geom['bend_radius']) \
+                            and geom['bend_radius'] < geom['radius']:
+                        error(path + '.bend_radius', 'must be at least the tube radius '
+                              '(1.5 x radius is a normal pipe elbow)')
                 continue
             if kind != 'Cylinder':
                 segments(geom.get('profile'), path + '.profile')
@@ -751,6 +761,52 @@ def _turn_angle(a, b, c):
     return math.acos(cos)
 
 
+def _fillet_polyline(points, bend):
+    """Straight runs joined by circular elbows of centre-line radius `bend`.
+
+    Each corner is replaced by an arc tangent to both runs, sampled finely; the
+    tangent distance is limited to half of each run so short runs still work.
+    """
+    pts = [tuple(float(c) for c in p) for p in points]
+    out = [pts[0]]
+    for i in range(1, len(pts) - 1):
+        a, b, c = pts[i - 1], pts[i], pts[i + 1]
+        u = [a[k] - b[k] for k in range(3)]
+        w = [c[k] - b[k] for k in range(3)]
+        lu = math.sqrt(sum(x * x for x in u))
+        lw = math.sqrt(sum(x * x for x in w))
+        if lu < 1e-6 or lw < 1e-6:
+            continue
+        u = [x / lu for x in u]
+        w = [x / lw for x in w]
+        cos = max(-1.0, min(1.0, sum(u[k] * w[k] for k in range(3))))
+        corner = math.acos(cos)                     # angle between the two runs
+        if corner > math.pi - 1e-3:                 # straight on: no elbow
+            out.append(b)
+            continue
+        half = corner / 2.0
+        dist = min(bend / math.tan(half), 0.5 * lu, 0.5 * lw)
+        radius = dist * math.tan(half)
+        p1 = [b[k] + u[k] * dist for k in range(3)]
+        p2 = [b[k] + w[k] * dist for k in range(3)]
+        bis = [u[k] + w[k] for k in range(3)]
+        lb = math.sqrt(sum(x * x for x in bis))
+        bis = [x / lb for x in bis]
+        centre = [b[k] + bis[k] * radius / math.sin(half) for k in range(3)]
+        turn = math.pi - corner
+        steps = max(3, int(math.ceil(turn / math.radians(12))))
+        r1 = [p1[k] - centre[k] for k in range(3)]
+        r2 = [p2[k] - centre[k] for k in range(3)]
+        for s in range(steps + 1):
+            t = s / float(steps)
+            # slerp between the two radius vectors
+            sa = math.sin((1 - t) * turn) / math.sin(turn)
+            sb = math.sin(t * turn) / math.sin(turn)
+            out.append(tuple(centre[k] + sa * r1[k] + sb * r2[k] for k in range(3)))
+    out.append(pts[-1])
+    return out
+
+
 def expand_tube(geom):
     """One Tube -> Cylinders along its (spline) centre line, joints closed.
 
@@ -761,7 +817,10 @@ def expand_tube(geom):
     radius = float(geom['radius'])
     closed = bool(geom.get('closed', False))
     smooth = geom.get('smooth', True) is not False
-    line = _catmull(geom['points'], closed, TUBE_SUBDIVISIONS if smooth else 1)
+    if geom.get('bend_radius'):
+        line = _fillet_polyline(geom['points'], float(geom['bend_radius']))
+    else:
+        line = _catmull(geom['points'], closed, TUBE_SUBDIVISIONS if smooth else 1)
     clean = [line[0]]
     for p in line[1:]:
         if sum((p[c] - clean[-1][c]) ** 2 for c in range(3)) > 1e-6:
@@ -775,7 +834,8 @@ def expand_tube(geom):
     if closed and n > 3:
         turns[0] = turns[-1] = _turn_angle(clean[-2], clean[0], clean[1])
     base = dict((k, v) for k, v in geom.items()
-                if k not in ('type', 'points', 'radius', 'smooth', 'closed', 'id', 'locks', 'repeat'))
+                if k not in ('type', 'points', 'radius', 'smooth', 'closed', 'bend_radius', 'id', 'locks',
+                             'repeat'))
     label = geom.get('id') or 'Tube'
     parts = []
     for i in range(n - 1):

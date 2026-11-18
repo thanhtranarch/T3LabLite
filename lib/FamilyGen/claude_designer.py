@@ -111,6 +111,51 @@ GUIDE_TOOL = {
 }
 MAX_GUIDE_CALLS = 3
 
+ANALYSIS_TOOL = {
+    'name': 'record_analysis',
+    'description': (
+        'With reference images or drawings attached: record what you see BEFORE modelling - '
+        'the camera of the picture, the overall size, and every component with its form, '
+        'size, position and colour. FamiGen shows it to the user and renders your model '
+        'from the same camera to compare. Call it once per reference, then submit_family.'),
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'camera': {
+                'type': 'object',
+                'description': ('Viewpoint of the main picture in FamiGen axes (X right, Y back, Z up; '
+                                'the front of the object faces -Y). azimuth_deg: direction from the '
+                                'object to the camera, from +X counter-clockwise (front = -90, '
+                                'front-left = -135, front-right = -45, right = 0). elevation_deg: '
+                                'above the horizon (0 = eye level, 90 = plan).'),
+                'properties': {'azimuth_deg': {'type': 'number'}, 'elevation_deg': {'type': 'number'}},
+                'required': ['azimuth_deg', 'elevation_deg'],
+            },
+            'view_type': {'type': 'string',
+                          'description': 'photo, render, sketch, elevation, plan, section, cut sheet'},
+            'overall_size_mm': {'type': 'array', 'items': {'type': 'number'},
+                                'description': '[width X, depth Y, height Z] and how you derived it in notes'},
+            'scale_basis': {'type': 'string',
+                            'description': 'What sets the scale: a dimension in the reference, a standard '
+                                           'size (door 2100, seat 450, rail 1100 ...), or an assumption.'},
+            'components': {
+                'type': 'array',
+                'description': 'Every visible part group, largest first.',
+                'items': {'type': 'object', 'properties': {
+                    'name': {'type': 'string'},
+                    'form': {'type': 'string', 'description': 'Extrusion, Blend, Revolution, Sweep, '
+                                                              'SweptBlend, Cylinder, Tube or Void'},
+                    'size_mm': {'type': 'string'}, 'position': {'type': 'string'},
+                    'color': {'type': 'string'}, 'count': {'type': 'integer'}},
+                    'required': ['name', 'form']},
+            },
+            'notes': {'type': 'string'},
+        },
+        'required': ['camera', 'overall_size_mm', 'components'],
+    },
+}
+MAX_CHECKS = 2
+
 _WORKFLOW = u'''
 WORKING WITH THE USER (FamiGen Studio, direct Claude session):
 - The user is a BIM modeller in Autodesk Revit. They review your family in a 3D
@@ -132,6 +177,15 @@ WORKING WITH THE USER (FamiGen Studio, direct Claude session):
   merge parts that share a material and would never be scheduled separately.
 - Keep summary to one or two sentences. Plain language, no JSON terms.
 
+REFERENCE ANALYSIS (when images, drawings or cut sheets are attached):
+- First call record_analysis: the camera of the picture, the scale basis, the overall
+  size and EVERY component (form, size, position, colour, count). Count repeated
+  members (pickets, slats, legs) instead of guessing. Then build exactly that list.
+- Measure in proportions: pick the most reliable known size (a door, a seat height, a
+  stated dimension), convert every other length by its ratio to it in the picture,
+  and correct for perspective (parts farther from the camera look smaller).
+- Positions follow the picture's layout: what is left / right / in front / behind in
+  the picture keeps that place in plan once the camera azimuth is accounted for.
 FIDELITY TO REFERENCES:
 - With a photo, render, drawing or cut sheet attached, reproduce THAT product:
   same number and arrangement of parts, same proportions, same profile shapes
@@ -169,6 +223,7 @@ class Outcome(object):
         self.errors = list(fields.get('errors') or [])
         self.warnings = list(fields.get('warnings') or [])
         self.request = fields.get('request')
+        self.analysis = fields.get('analysis')
         self.message = fields.get('message') or u''
         self.repairs = fields.get('repairs', 0)
 
@@ -293,6 +348,7 @@ class ClaudeFamilySession(object):
             self.system_prompt += (u'\nAUTO-DETECT: decide the category first, call '
                                    u'get_category_spec with it, then build the family.\n')
         self.has_references = False    # an image / PDF / text file was attached
+        self.analysis = None           # last record_analysis input
         self.detected_category = None  # Auto mode: the category Claude chose
         self.messages = []           # append-only transcript
         self._pending_results = []   # tool_result blocks owed to the next user message
@@ -319,7 +375,8 @@ class ClaudeFamilySession(object):
             'model': self.model,
             'max_tokens': self.max_tokens,
             'system': [{'type': 'text', 'text': self.system_prompt}],
-            'tools': [SUBMIT_TOOL] + ([GUIDE_TOOL] if self.guide_reader is not None else []),
+            'tools': [SUBMIT_TOOL] + ([GUIDE_TOOL] if self.guide_reader is not None else [])
+                     + ([ANALYSIS_TOOL] if self.has_references else []),
             'tool_choice': {'type': 'auto'},
             'messages': self.messages,
         }
@@ -358,7 +415,7 @@ class ClaudeFamilySession(object):
         self.turns += 1
         return self.build_request()
 
-    def begin_check(self, renders, views=u'isometric and front'):
+    def begin_check(self, renders, views=u'the reference camera and isometric'):
         """A verification turn: renders of the last family vs. the references.
 
         ``renders`` are base64 PNG strings captured from the 3D view. Returns
@@ -493,9 +550,16 @@ class ClaudeFamilySession(object):
 
         submit = None
         guided = False
+        analysis = None
         for call in calls:
             if call.get('name') == 'submit_family' and submit is None:
                 submit = call
+            elif call.get('name') == 'record_analysis':
+                analysis = call.get('input') or {}
+                self.analysis = analysis
+                guided = True
+                self._owe(call, u'Recorded and shown to the user. Now build exactly these '
+                                u'components with submit_family.', False)
             elif call.get('name') == 'get_category_spec' and self.guide_reader is not None:
                 guided = True
                 self._guide_calls += 1
@@ -516,14 +580,17 @@ class ClaudeFamilySession(object):
                 self._owe(call, u'Unknown tool. Use submit_family only.', True)
         if submit is None and guided:
             self._flush_pending_as_user()
-            return Outcome('continue', request=self.build_request())
+            return Outcome('continue', request=self.build_request(), analysis=analysis)
         if submit is None:
             if stop == 'pause_turn':
                 self._append_user_text(u'Continue.')
                 return Outcome('continue', request=self.build_request())
             return Outcome('reply', text=text or u'Claude did not return a family. '
                                                   u'Describe the object in more detail.')
-        return self._handle_submit(submit, text)
+        outcome = self._handle_submit(submit, text)
+        if analysis is not None:
+            outcome.analysis = analysis
+        return outcome
 
     def _handle_submit(self, call, text):
         args = call.get('input') or {}

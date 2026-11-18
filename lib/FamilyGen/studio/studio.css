@@ -311,3 +311,5 @@ select.mode { border-radius: 999px; padding: 0 8px; }
   .inspect { display: none; }
 }
 .list li.note-row { display: block; color: var(--muted); font-size: var(--fs-caption); }
+.msg.analysis { align-self: stretch; padding: 8px 12px; border-radius: 8px; background: var(--sunken); font-size: var(--fs-caption); color: var(--text-2); }
+.msg.analysis details { margin-top: 4px; }

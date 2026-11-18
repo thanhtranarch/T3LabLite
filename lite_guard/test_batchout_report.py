@@ -214,5 +214,31 @@ class DialogWiringTests(unittest.TestCase):
         self.assertGreaterEqual(self.source.count('self._last_output_file = '), 5)
 
 
+class DuplicateTypeNameTests(unittest.TestCase):
+    """BatchOut died with "Duplicate type name within an assembly" once its
+    handler module was imported a second time in one Revit session."""
+
+    def _read(self, *parts):
+        with open(os.path.join(LIB, *parts), encoding='utf-8') as f:
+            return f.read()
+
+    def test_handler_type_name_is_unique_per_import(self):
+        src = self._read('Services', 'batchout_handler.py')
+        self.assertIn('__namespace__ = "T3Lab.BatchOut_" + uuid.uuid4().hex[:8]', src)
+        self.assertNotIn('__namespace__ = "T3Lab.BatchOut"\n', src)
+
+    def test_dialog_fallback_never_reuses_the_handler_name(self):
+        src = self._read('GUI', 'BatchOutDialog.py')
+        self.assertIn('__namespace__ = "T3Lab.BatchOutFallback_" + uuid.uuid4().hex[:8]', src)
+        self.assertNotIn('__namespace__ = "T3Lab.BatchOut"\n', src)
+
+    def test_error_dialog_says_restart_revit(self):
+        from GUI import ErrorGuard as eg
+        for text in ('TypeError: Duplicate type name within an assembly.',
+                     "ImportError: cannot import name 'revit' from 'pyrevit' (x)"):
+            self.assertIn('close Revit and open it again', eg.next_step(text))
+        self.assertTrue(eg.next_step('ValueError: bad sheet').startswith('Try again.'))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=1)

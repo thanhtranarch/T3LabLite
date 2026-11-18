@@ -693,15 +693,33 @@ def test_hud_redesign():
     AC.set_paused(False)
     check('not paused: nothing held', AC.paused_refusal('set_parameter', True) is None)
     AC.set_paused(True)
+    was_enabled = AC.is_enabled
     try:
+        AC.is_enabled = lambda: True
         held = AC.paused_refusal('set_parameter', True)
         check('paused: a write is held, nothing ran',
               held and held['error_code'] == 'paused' and held['nothing_ran'] and 'Resume' in held['error'])
         check('paused: reads and narrate still run',
               AC.paused_refusal('list_views', False) is None
               and AC.paused_refusal(AC.NARRATE_TOOL, True) is None)
+        # 2026-11-18: Pause outlived the bar and refused every write until Revit restarted.
+        AC.is_enabled = lambda: False
+        check('paused but cursors off (no bar, no Resume): nothing is held',
+              AC.paused_refusal('set_parameter', True) is None)
     finally:
+        AC.is_enabled = was_enabled
         AC.set_paused(False)
+    src_ac = open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
+    src_ov = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
+    off = src_ac.split('def set_enabled(on):', 1)[1].split('\ndef ', 1)[0]
+    check('turning the cursors off ends Pause', "_pause['on'] = False" in off)
+    tick = src_ov.split('    def _on_tick(self, sender, e):', 1)[1].split('\n    def ', 1)[0]
+    check('the bar stays while paused, and leaves when switched off elsewhere',
+          'or self._paused' in tick and 'if not is_enabled():' in tick)
+    hide = src_ov.split('    def hide(self):', 1)[1].split('\n    def ', 1)[0]
+    check('hiding the bar ends Pause', 'if self._paused:' in hide and 'fn(False)' in hide)
+    check('an exception in a bar handler cannot end the overlay thread (and Revit)',
+          'UnhandledException += swallow' in src_ov and 'e.Handled = True' in src_ov)
     osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
     check('minimal cursor: bare tip + one tag (name · what it does)',
           'CURSOR_PATH' in osrc and "'tool_pill'" not in osrc and "cur['tool']" not in osrc

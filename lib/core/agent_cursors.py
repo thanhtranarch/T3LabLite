@@ -204,6 +204,7 @@ def set_enabled(on):
     _cache['mtime'] = None
     if not on:
         hide()
+        _pause['on'] = False            # (2026-11-18: Pause outlived the bar, every write refused)
         _session['touched'].clear()     # the next session starts clean
         _session['goals'].clear()
         _session['plans'].clear()
@@ -292,7 +293,8 @@ def set_paused(on):
 
 def paused_refusal(tool_name, is_write):
     """The tool result for a write refused while paused, else None."""
-    if not (_pause['on'] and is_write) or tool_name == NARRATE_TOOL:
+    # Only while the bar exists: with the cursors off there is no Resume to click.
+    if not (_pause['on'] and is_write and is_enabled()) or tool_name == NARRATE_TOOL:
         return None
     return {'success': False, 'error_code': 'paused', 'nothing_ran': True,
             'error': ('Paused by the user in Revit (Agent Cursors bar): model changes wait '

@@ -957,8 +957,9 @@ class AgentLoop(object):
                 return self._finish(status, last_text, None, iteration, tool_runs)
 
             if resp is None:
-                # Later turns failing still leave earlier work worth reporting.
-                status = "failed" if iteration == 1 else "done"
+                # A later turn failing is not "done": the dialog showed a green
+                # "Completed N tool steps" and hid the provider's error.
+                status = "failed" if iteration == 1 else "incomplete"
                 return self._finish(status, last_text, None, iteration, tool_runs)
 
             self._note_usage(resp.get("usage"), resp.get("model"))

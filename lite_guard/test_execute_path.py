@@ -105,6 +105,30 @@ def main():
     check('the task is done and carries the error', task.done.is_set()
           and isinstance(task.exception, RuntimeError))
 
+    print('AI code that calls sys.exit() ends the call, not Execute')
+
+    def leave(*a, **k):
+        raise SystemExit(0)
+
+    task = S._ToolTask('read_tool', {})
+    server, err = run([task], tool=leave)
+    check('Execute returns', err is None)
+    check('the task is done', task.done.is_set())
+
+    if hasattr(AC, 'offer'):
+        print('the "turn on Agent Cursors?" dialog never sits in front of a plain call')
+        asked = []
+        saved_offer = AC.offer
+        AC.offer = lambda app, agent: asked.append(agent)
+        try:
+            task = S._ToolTask('write_tool', {})
+            task.agent = 'codex'
+            server, err = run([task])
+            check('no dialog, the call ran', asked == [] and task.done.is_set()
+                  and server.calls == ['write_tool'])
+        finally:
+            AC.offer = saved_offer
+
     print('a task the read fallback took is skipped')
     task = S._ToolTask('read_tool', {})
     task.claim('fallback')

@@ -15,6 +15,7 @@ from core.agent_cursors import (
     OPTION_GROUPS, OPTION_LABELS, REPLAY_SIZE, SPEEDS, STATES, SUMMARY_S, TAG_MAX, action_style,
     agent_style, ago_text, classify_action, cluster_stops, compact_line, count_items,
     describe_call, footer_text, front_hides, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
+    is_enabled,
     on_model,
     offscreen_markers, options, place_tags, plan_progress, scan_points, set_enabled,
     set_hud_offset, set_option, set_speed, short_text, should_collapse, speed, speed_factor,
@@ -57,9 +58,17 @@ class OverlayHost(object):
 
         def run():
             try:
+                import clr
+                clr.AddReference('WindowsBase')         # before the import below
                 from System.Windows.Threading import Dispatcher
                 box['ov'] = _Overlay(None, self)
                 box['disp'] = Dispatcher.CurrentDispatcher
+
+                # An exception leaving a handler ends Dispatcher.Run(), and an
+                # unhandled one on this thread ends Revit.
+                def swallow(sender, e):
+                    e.Handled = True
+                box['disp'].UnhandledException += swallow
             except Exception as ex:
                 box['error'] = ex
             finally:
@@ -409,11 +418,14 @@ class _Overlay(object):
             self._refresh_hud()
 
     def _set_hover(self, on):
-        self._hover = on
-        if on:
-            self._last_hover = time.time()
-        if self.hud.IsVisible:
-            self._refresh_hud()
+        try:
+            self._hover = on
+            if on:
+                self._last_hover = time.time()
+            if self.hud.IsVisible:
+                self._refresh_hud()
+        except Exception:
+            pass
 
     # small parts
 
@@ -1634,7 +1646,10 @@ class _Overlay(object):
                 chip.Margin = Thickness(0, 0, 8, 0)
 
                 def click(s, e, rid=item['rid'], ok=ok, always=always):
-                    self._answer(rid, ok, bool(always is not None and always.IsChecked))
+                    try:
+                        self._answer(rid, ok, bool(always is not None and always.IsChecked))
+                    except Exception:
+                        pass        # unanswered: cancel_ask ends the wait
                 self._hook(chip, 'MouseLeftButtonUp', click, transient=True)
             buttons = self._row(allow, deny)
             buttons.Margin = Thickness(0, 8, 0, 0)
@@ -1642,7 +1657,9 @@ class _Overlay(object):
             self._ask_panel.Children.Add(card)
         if not self._asks:
             try:
-                self.hud.Topmost = False
+                # On its own thread the bar has no owner window: Topmost is all
+                # that keeps it above Revit (it was buried after the first ask).
+                self.hud.Topmost = getattr(self, '_front_timer', None) is not None
             except Exception:
                 pass
 
@@ -1970,13 +1987,26 @@ class _Overlay(object):
         self._wanted = False
         self.win.Hide()
         self.hud.Hide()
+        if self._paused:                # no bar, no Resume: Pause ends with it
+            self._paused = False
+            try:
+                fn = (self.host.callbacks if self.host is not None else {}).get('pause')
+                if fn is not None:
+                    fn(False)
+            except Exception:
+                pass
 
     def _on_tick(self, sender, e):
         try:
             now = time.time()
+            if not is_enabled():        # switched off in Settings (another engine)
+                self.hide()
+                return
             if self._working and self._status_label is not None:
                 self._status_label.Text = status_text('working', self._seconds())
-            if self._working or self._waiting or self._asks or self._replay is not None:
+            # Paused: the bar is the only place to click Resume, so it stays.
+            if (self._working or self._waiting or self._asks or self._paused
+                    or self._replay is not None):
                 self._last = now
                 return
             if self.hud.IsVisible and self._fold_due():

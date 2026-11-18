@@ -359,6 +359,10 @@ class ClaudeProvider(BaseLLMProvider):
             return self._fail_no_model("chat()")
 
         msgs = list(messages or [])
+        # The API rejects a transcript that starts with an assistant turn (the
+        # setup nudge is stored first; trimming can also cut there).
+        while msgs and msgs[0].get("role") != "user":
+            msgs.pop(0)
         msgs.append({"role": "user", "content": user_content})
 
         payload = {
@@ -419,6 +423,10 @@ class ClaudeProvider(BaseLLMProvider):
             return self._fail_no_model("chat_stream()")
 
         msgs = list(messages or [])
+        # The API rejects a transcript that starts with an assistant turn (the
+        # setup nudge is stored first; trimming can also cut there).
+        while msgs and msgs[0].get("role") != "user":
+            msgs.pop(0)
         msgs.append({"role": "user", "content": user_content})
 
         payload = {

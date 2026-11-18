@@ -137,7 +137,8 @@ def _fetch_dotnet(url):
     clr.AddReference('System')
     from System.Net import WebClient, ServicePointManager, SecurityProtocolType
     try:
-        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
+        ServicePointManager.SecurityProtocol = (      # OR it in: never switch TLS 1.3 off
+            ServicePointManager.SecurityProtocol | SecurityProtocolType.Tls12)
     except Exception:
         pass
     client = WebClient()

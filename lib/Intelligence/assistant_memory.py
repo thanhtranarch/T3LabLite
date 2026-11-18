@@ -70,10 +70,11 @@ def _memory_file():
 
 
 def _load():
+    path = None
     try:
         path = _memory_file()
         if os.path.exists(path):
-            with io.open(path, 'r', encoding='utf-8') as f:
+            with io.open(path, 'r', encoding='utf-8-sig') as f:    # a BOM is not corruption
                 data = json.load(f)
             if isinstance(data, dict):
                 if not isinstance(data.get('global'), list):
@@ -83,16 +84,29 @@ def _load():
                 return data
     except Exception:
         pass
+    _keep_unreadable(path)
     return {'version': 1, 'global': [], 'projects': {}}
+
+
+def _keep_unreadable(path):
+    """Copy a memory file that exists but cannot be used, before the next
+    _save replaces it with only the new fact (every stored fact was lost)."""
+    try:
+        if path and os.path.exists(path) and os.path.getsize(path) > 0:
+            import shutil
+            import time
+            shutil.copyfile(path, '{}.unreadable-{}'.format(path, time.strftime('%Y%m%d-%H%M%S')))
+    except Exception:
+        pass
 
 
 def _save(data):
     try:
         payload = json.dumps(data, ensure_ascii=True, indent=2)
-        if isinstance(payload, bytes):
-            payload = payload.decode('ascii')
-        with io.open(_memory_file(), 'w', encoding='utf-8') as f:
-            f.write(payload)
+        if not isinstance(payload, bytes):
+            payload = payload.encode('ascii')
+        from core.paths import atomic_write     # temp file then replace: no half-written file
+        atomic_write(_memory_file(), payload)
         return True
     except Exception:
         return False

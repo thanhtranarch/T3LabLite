@@ -231,7 +231,9 @@ def _fetch_dotnet(url, timeout):
                             SecurityProtocolType)
     from System.IO import MemoryStream
     try:
-        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
+        # OR it in: assigning switched TLS 1.3 off for every add-in in this Revit.
+        ServicePointManager.SecurityProtocol = (
+            ServicePointManager.SecurityProtocol | SecurityProtocolType.Tls12)
     except Exception:
         pass
     req = HttpWebRequest.Create(url)

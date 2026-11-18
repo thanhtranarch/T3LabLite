@@ -729,6 +729,12 @@ class AssistantSessions(object):
         try:
             if not path or not os.path.exists(path):
                 return
+            if getattr(self.win, '_busy', False):      # the running turn would write into the resumed chat
+                self.win._append_bot_message(
+                    u"Still working on the current request \u2014 press Stop first, "
+                    u"then resume a conversation.",
+                    icon=_ICON_WARNING, icon_color=_ICON_AMBER)
+                return
 
             if getattr(self.win, '_persisted_msgs', None):
                 self._archive_current_session()

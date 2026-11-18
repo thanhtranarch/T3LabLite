@@ -692,7 +692,9 @@ class T3LabAssistantWindow(T3WPFWindow):
         (saves a local model read round-trips). Empty until a snapshot exists."""
         try:
             from Intelligence.learning.enrichers import model_snapshot
-            digest = model_snapshot.load_digest(self._doc_key)
+            # The live document, not the one the pane opened with: a docked
+            # pane outlives it and described model A while the user was in B.
+            digest = model_snapshot.load_digest(_get_doc_key() or self._doc_key)
             return model_snapshot.digest_to_grounding_text(digest) or u""
         except Exception:
             return u""
@@ -701,7 +703,7 @@ class T3LabAssistantWindow(T3WPFWindow):
         """Build the open-model digest in the background if this document has
         none. Once per document per session; the enricher marshals to Revit."""
         try:
-            key = self._doc_key
+            key = _get_doc_key() or self._doc_key      # the live document (docked pane)
             if self._snapshot_built_for == key or self._snapshot_building:
                 return
             from Intelligence.learning.enrichers import model_snapshot
@@ -715,7 +717,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                     model_snapshot.run(doc_key=key)
                     self._snapshot_built_for = key
                 except Exception:
-                    pass
+                    self._snapshot_built_for = key      # once per document: no retry storm from the tick
                 finally:
                     self._snapshot_building = False
 
@@ -943,6 +945,8 @@ class T3LabAssistantWindow(T3WPFWindow):
         else:
             self._ctx_failures = 0
             self._warm_live_context()
+            if self.is_docked:      # no Window.Activated here; guarded once per document
+                self._maybe_refresh_model_snapshot()
 
     def _warm_live_context(self):
         """Keep ContextScout's levels/grids digest warm. UI THREAD (tick).
@@ -4466,7 +4470,7 @@ class T3LabAssistantWindow(T3WPFWindow):
                         if _parsed and _parsed.get("intent"):
                             intent = _parsed.get("intent")
                             params = _parsed.get("params", {}) or {}
-                            message = _parsed.get("message", "")
+                            message = _parsed.get("message") or u""     # JSON null from small models
 
                             # C4 meta-intent: feed one tool's full schema back;
                             # the real call comes next iteration.
@@ -4728,10 +4732,10 @@ class T3LabAssistantWindow(T3WPFWindow):
                             # Streamed chat reply → keep the bubble, apply markdown.
                             if has_stream and r_intent in _conv:
                                 if r_intent == "help":
-                                    msg = result.get("params", {}).get(
-                                        "answer", result.get("message", ""))
+                                    msg = ((result.get("params") or {}).get("answer")
+                                           or result.get("message") or u"")
                                 else:
-                                    msg = result.get("message", "")
+                                    msg = result.get("message") or u""
                                 msg = self._clean_bot_response(msg) if msg else u""
                                 if not msg:
                                     try:
@@ -4837,9 +4841,9 @@ class T3LabAssistantWindow(T3WPFWindow):
     def _execute_result(self, result):
         """Execute a parsed result dict: show + record the reply, learn the
         pattern, release busy (also after background exports)."""
-        intent  = result.get("intent", "unknown")
-        message = result.get("message", "")
-        params  = result.get("params", {})
+        intent  = result.get("intent") or "unknown"
+        message = result.get("message") or u""      # a JSON null is not ""
+        params  = result.get("params") or {}
         raw     = self._last_raw
 
         def _bot(msg):

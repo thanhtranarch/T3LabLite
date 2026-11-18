@@ -116,7 +116,9 @@ class T3LabAISettings(object):
             return self._get_default_settings()
 
         try:
-            with io.open(self._settings_file, 'r', encoding='utf-8') as f:
+            # utf-8-sig: an editor's BOM is not corruption (the file was
+            # quarantined and every saved API key read as gone).
+            with io.open(self._settings_file, 'r', encoding='utf-8-sig') as f:
                 return json.load(f)
         except ValueError as ex:
             # Malformed / truncated JSON. json.JSONDecodeError subclasses

@@ -386,11 +386,24 @@ try:
                 # makes the name local and these calls raise
                 # UnboundLocalError.)
                 try:
-                    if task.agent and not task.answered:
+                    if task.agent and not task.answered and getattr(task, 'confirm', None):
+                        # Offer only before a call that needs the user's OK in
+                        # Revit anyway: in front of any other call the modal
+                        # offer held it for 120 s when nobody looked at Revit,
+                        # and the call still ran after its caller had given up.
+                        with task._claim_lock:
+                            task.awaiting_user = True
                         try:
                             agent_cursors.offer(app, task.agent)   # once per session, cursors off
                         except Exception:
                             pass
+                        if not task.proceed_after_confirm():
+                            task.result = {'error': ('The request had already timed out when the '
+                                                     'Agent Cursors question was answered, so it '
+                                                     'was not run.'), 'tool': task.tool_name}
+                            task.exception = None
+                            task.done.set()
+                            continue
                     if getattr(task, 'confirm', None) and not task.answered:
                         if _ask_on_bar(self, app, task):
                             continue  # Allow on the bar re-queues it

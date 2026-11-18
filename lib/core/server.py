@@ -401,7 +401,10 @@ try:
                     continue
                 is_write = task.tool_name in self.server._WRITE_TOOLS
                 # Pause on the Agent Cursors bar holds model changes; reads run.
-                held = agent_cursors.paused_refusal(task.tool_name, is_write)
+                try:
+                    held = agent_cursors.paused_refusal(task.tool_name, is_write)
+                except Exception:
+                    held = None     # the task is claimed: it must still run
                 if held is not None:
                     task.result = held
                     task.exception = None

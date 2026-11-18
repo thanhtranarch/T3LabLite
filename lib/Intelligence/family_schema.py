@@ -556,7 +556,9 @@ def generate_family_schema(bridge, description, category, overlay='', max_tokens
         try:
             result = bridge.ask_json(prompt, system_prompt=system_prompt, max_tokens=max_tokens)
         except Exception as ex:
-            raise ValueError('AI provider request failed: {}'.format(ex)) from ex
+            # No `from ex`: the MCP server imports this file under IronPython 2.7,
+            # where that is a SyntaxError (famigen_* tools, test_ipy_closure.py).
+            raise ValueError('AI provider request failed: {}'.format(ex))
         if result is None:
             raise ValueError('AI provider returned no parseable JSON. Check provider availability or response length and try again.')
         errors = validate_ai_schema(result, category)

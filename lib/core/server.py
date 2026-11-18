@@ -4557,6 +4557,17 @@ class T3LabAIServer(object):
                     out.append(item)
             if not used:
                 continue
+            if not out and key != 'element_id':
+                # An empty set must not reach the handler: several tools read
+                # "no ids" as "the selection" or "the whole category / model".
+                return {
+                    'error': ('The saved set given for {} is empty, so there is '
+                              'nothing to work on.').format(key),
+                    'nothing_ran': True,
+                    'hint': ('Check the filter that built the set (its count was '
+                             '0), or pass literal ids.'),
+                    'tool': tool_name,
+                }
             if key == 'element_id':
                 # Singular argument: a handle only makes sense here when it
                 # resolved to exactly one element.

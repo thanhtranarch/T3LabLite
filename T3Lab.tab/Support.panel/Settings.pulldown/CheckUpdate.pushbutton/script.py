@@ -96,9 +96,10 @@ def _run_update(remote_text):
 
     if failed:
         forms.alert(
-            "Updated with warnings -- {} file(s) could not be replaced:\n\n{}".format(
+            "The update is not complete -- {} file(s) could not be replaced:\n\n{}\n\n"
+            "Restart Revit, then run Check Update again to finish it.".format(
                 len(failed), "\n".join(failed[:15])),
-            title="Update finished with warnings")
+            title="Update not complete")
     _offer_reload(remote_text)
 
 

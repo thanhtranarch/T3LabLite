@@ -369,7 +369,7 @@ def update_with_zip():
         raise Exception("Downloaded archive has an unexpected layout.")
     src_root = os.path.join(extract_dir, top_dirs[0])
 
-    failed = []
+    failed, version_src = [], None
     for folder, dirs, files in os.walk(src_root):
         dirs[:] = [d for d in dirs if d not in ('.git', '__pycache__')]
         rel = os.path.relpath(folder, src_root)
@@ -377,11 +377,22 @@ def update_with_zip():
         if not os.path.isdir(dest_folder):
             os.makedirs(dest_folder)
         for name in files:
+            if rel == '.' and name == 'version.txt':
+                version_src = os.path.join(folder, name)    # copied last, below
+                continue
             try:
                 shutil.copy2(os.path.join(folder, name),
                              os.path.join(dest_folder, name))
             except Exception as ex:
                 failed.append("{}\\{} ({})".format(rel, name, ex))
+
+    # version.txt last, and only after a clean copy: it was copied first, so a
+    # copy cut short (Revit closed) read as "up to date" and was never repaired.
+    if version_src and not failed:
+        try:
+            shutil.copy2(version_src, os.path.join(EXTENSION_DIR, 'version.txt'))
+        except Exception as ex:
+            failed.append("version.txt ({})".format(ex))
 
     shutil.rmtree(work_dir, ignore_errors=True)
     return failed
@@ -480,7 +491,8 @@ def auto_apply_update():
 
     failed = update_with_zip()
     if failed:
-        return True, "updated via zip, {} file(s) could not be replaced: {}".format(
+        # Not "updated": the version is unchanged, so the next start tries again.
+        return False, "zip update incomplete, {} file(s) could not be replaced: {}".format(
             len(failed), "; ".join(failed[:5]))
     return True, "updated via zip"
 

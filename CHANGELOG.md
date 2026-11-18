@@ -35,6 +35,7 @@ Releasing a new version:
 - **Agent Cursors:** Pause could stay on after the bar was closed, so every change was refused until Revit restarted; the bar went behind Revit after the first Allow / Deny; the "turn on Agent Cursors?" question held the first AI call of a session.
 - **T3Lab Assistant:** an AI error in the middle of a task was shown as "Completed"; the saved memory could be emptied by one unreadable file; a settings file saved with a BOM lost its API keys; Claude could refuse every message of a chat that began with the setup hint; the docked pane described the model it was opened in, not the one you are in.
 - **Agent Cursors — Claude shown as "Local Agent Mod…", Antigravity as "AI app":** Claude Desktop's agent mode is now recognised as Claude. Antigravity sends no name of its own, so at Revit start T3Lab adds the app's name to the connection it wrote earlier in each AI app's settings (Antigravity, ChatGPT / Codex, Claude Desktop); nothing else in those files changes and a backup is kept. Restart the AI app once afterwards.
+- **Automatic update:** an update that was cut short (Revit closed while files were being copied) was recorded as finished and never repaired. The version is now recorded last, so the next Revit start finishes it.
 - **MCP Control — "module 'core.paths' has no attribute 'atomic_write'":**
   after an update installed while Revit was open, MCP Control kept an old copy
   of the settings code in memory and could not configure Claude Desktop,

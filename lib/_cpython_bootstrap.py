@@ -42,8 +42,11 @@ import time
 _BOOT_TIME = time.time()
 
 # Hot-reloaded by init_cpython_paths() when their file changes on disk.
+# core.paths is plain Python (no .NET types), so a reload is safe; a stale copy
+# broke MCP Control after an update without a Revit restart.
 HOT_RELOAD_MODULES = ('GUI.WPF_Base', 'WPF_Base', 'GUI.forms',
-                      'pyrevit.forms._cpy', 'Snippets._host', '_host')
+                      'pyrevit.forms._cpy', 'Snippets._host', '_host',
+                      'core.paths')
 _RELOADED_AT = {}
 
 # Probed by verify_stdlib(); these are the imports that actually broke tools.

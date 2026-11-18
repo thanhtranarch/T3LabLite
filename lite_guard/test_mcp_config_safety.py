@@ -206,5 +206,37 @@ class CodexTomlTests(_TempHome):
         self.assertTrue(ok, msg)
         self.assertIn('args = ["-E", ', _read(self.toml()).decode('utf-8'))
 
+
+class StalePathsModuleTests(unittest.TestCase):
+    """An update applied without a Revit restart left the old core.paths in
+    sys.modules: MCP Control failed with "module 'core.paths' has no attribute
+    'atomic_write'". _get_paths_module() reloads it from disk instead."""
+
+    def test_stale_module_is_reloaded(self):
+        saved = paths.atomic_write
+        del paths.atomic_write
+        try:
+            fresh = M._get_paths_module()
+            self.assertTrue(callable(getattr(fresh, 'atomic_write', None)))
+        finally:
+            if not hasattr(paths, 'atomic_write'):
+                paths.atomic_write = saved
+
+    def test_current_module_is_not_reloaded(self):
+        import importlib
+        calls = []
+        real = importlib.reload
+        importlib.reload = lambda m: calls.append(m) or m
+        try:
+            M._get_paths_module()
+        finally:
+            importlib.reload = real
+        self.assertEqual(calls, [])
+
+    def test_bootstrap_hot_reloads_paths(self):
+        import _cpython_bootstrap as B
+        self.assertIn('core.paths', B.HOT_RELOAD_MODULES)
+
+
 if __name__ == '__main__':
     unittest.main()

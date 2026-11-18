@@ -42,9 +42,22 @@ def _get_watcher():
     return get_task_watcher()
 
 
+# Newest core.paths API this module calls. When one is missing, the copy in
+# sys.modules predates an update applied without a Revit restart (the CPython
+# engine keeps modules for the whole session), and MCP Control failed with
+# "module 'core.paths' has no attribute 'atomic_write'".
+_PATHS_API = ('atomic_write', 'replace_file', 'get_setting', 'load_settings')
+
+
 def _get_paths_module():
     _ensure_lib_in_path()
     from core import paths
+    if not all(hasattr(paths, name) for name in _PATHS_API):
+        try:
+            import importlib
+            paths = importlib.reload(paths)
+        except Exception:
+            pass
     return paths
 
 

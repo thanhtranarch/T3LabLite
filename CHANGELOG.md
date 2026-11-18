@@ -35,6 +35,14 @@ Releasing a new version:
 - **Agent Cursors:** Pause could stay on after the bar was closed, so every change was refused until Revit restarted; the bar went behind Revit after the first Allow / Deny; the "turn on Agent Cursors?" question held the first AI call of a session.
 - **T3Lab Assistant:** an AI error in the middle of a task was shown as "Completed"; the saved memory could be emptied by one unreadable file; a settings file saved with a BOM lost its API keys; Claude could refuse every message of a chat that began with the setup hint; the docked pane described the model it was opened in, not the one you are in.
 - **Agent Cursors — Claude shown as "Local Agent Mod…", Antigravity as "AI app":** Claude Desktop's agent mode is now recognised as Claude. Antigravity sends no name of its own, so at Revit start T3Lab adds the app's name to the connection it wrote earlier in each AI app's settings (Antigravity, ChatGPT / Codex, Claude Desktop); nothing else in those files changes and a backup is kept. Restart the AI app once afterwards.
+- **MCP Control — "module 'core.paths' has no attribute 'atomic_write'":**
+  after an update installed while Revit was open, MCP Control kept an old copy
+  of the settings code in memory and could not configure Claude Desktop,
+  ChatGPT (Codex) or Antigravity. It now loads the new copy by itself.
+- **Model Auditor, Mana Sheets — raw "cannot import name 'revit' from
+  'pyrevit'" traceback:** these tools now show the T3Lab error dialog, which
+  says to restart Revit, and log the error to `%APPDATA%\T3LabAI\errors.log`.
+
 ## [2.6.1] - 2026-11-18
 
 BatchOut no longer fails with "Duplicate type name within an assembly", and the error dialog now tells you when Revit needs a restart.

@@ -105,8 +105,15 @@ def _save(data):
         payload = json.dumps(data, ensure_ascii=True, indent=2)
         if not isinstance(payload, bytes):
             payload = payload.encode('ascii')
-        from core.paths import atomic_write     # temp file then replace: no half-written file
-        atomic_write(_memory_file(), payload)
+        try:
+            from core.paths import atomic_write     # temp file then replace: no half-written file
+        except ImportError:     # an old core.paths still in memory (update without a restart)
+            atomic_write = None
+        if atomic_write is not None:
+            atomic_write(_memory_file(), payload)
+        else:
+            with io.open(_memory_file(), 'wb') as f:
+                f.write(payload)
         return True
     except Exception:
         return False

@@ -195,11 +195,16 @@ def update(app, ids):
                 bb = None
             if bb is not None:
                 boxes.append(((bb.Min.X, bb.Min.Y, bb.Min.Z), (bb.Max.X, bb.Max.Y, bb.Max.Z)))
+        same = (boxes == _state['boxes'] and doc.Title == _state['doc']
+                and (_state['server'] is not None or not boxes))
         _state['boxes'] = boxes
         _state['doc'] = doc.Title
         if boxes:
             _register()
-        _refresh(app)
+        if not same:
+            # A full redraw of the active view, once per call, made every
+            # step slower on a big model; reads touch nothing new, so skip.
+            _refresh(app)
         return True
     except Exception:
         return False

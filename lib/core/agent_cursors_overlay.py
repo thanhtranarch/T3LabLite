@@ -14,7 +14,8 @@ from core.agent_cursors import (
     BOX_HOLD_S, DWELL_MS, FEED_SHOWN, FEED_SIZE, FRESH_HOLD_S, IDLE_HIDE_S, MAX_STOPS, MOVE_MS,
     OPTION_GROUPS, OPTION_LABELS, REPLAY_SIZE, SPEEDS, STATES, SUMMARY_S, TAG_MAX, action_style,
     agent_style, ago_text, classify_action, cluster_stops, compact_line, count_items,
-    describe_call, footer_text, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
+    describe_call, footer_text, front_hides, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
+    on_model,
     offscreen_markers, options, place_tags, plan_progress, scan_points, set_enabled,
     set_hud_offset, set_option, set_speed, short_text, should_collapse, speed, speed_factor,
     status_text, tour_schedule, union_box)
@@ -30,6 +31,7 @@ class OverlayHost(object):
 
     def __init__(self, owner_hwnd, callbacks=None):
         self.callbacks = callbacks or {}
+        self.revit_hwnd = owner_hwnd    # Revit's main window, also on our own thread
         self.threaded = False
         self._ov = None
         self._dispatcher = None
@@ -233,6 +235,8 @@ class _Overlay(object):
             self._hook(self._front_timer, 'Tick', self._on_front_tick)
             self._front_timer.Start()
         self._wanted = False        # overlay should be visible when Revit is in front
+        self._front_ok = True       # nothing covers Revit's views (_on_front_tick)
+        self._canvas_px = None      # screen px rect the canvas covers (_place)
         self._resting = False       # idle with Keep bar on: summary shown, nothing hidden
 
     # ── plumbing ──────────────────────────────────────────────────────────────
@@ -267,6 +271,10 @@ class _Overlay(object):
             return self._scale
         try:
             from System.Windows import PresentationSource
+            from System.Windows.Interop import WindowInteropHelper
+            # The window may not be shown yet (Revit covered): create its
+            # handle so the scale is real, not the 1.0 fallback.
+            WindowInteropHelper(self.win).EnsureHandle()
             src = PresentationSource.FromVisual(self.win)
             self._scale = float(src.CompositionTarget.TransformToDevice.M11) or 1.0
         except Exception:
@@ -1375,17 +1383,27 @@ class _Overlay(object):
     def _place(self, rect):
         """Cover `rect` (screen px) with the canvas; shift cursors to match."""
         left, top, right, bottom = rect
+        self._canvas_px = (left, top, right, bottom)
         if not self.win.IsVisible:
-            self.win.Width = self.win.Height = 1
             self._wanted = True
-            self.win.Show()
+            # Shown only when nothing covers Revit: showing it anyway let it
+            # flash up on every call until the next front tick hid it again.
+            if self._front_ok:
+                self.win.Width = self.win.Height = 1
+                self.win.Show()
         scale = self._dpi()
         if self._origin != (left, top):
             dx = (self._origin[0] - left) / scale
             dy = (self._origin[1] - top) / scale
+            self._clear_effects()
             for cur in self._cursors.values():
-                cur['x'] += dx
-                cur['y'] += dy
+                # From where it is now (mid-glide too), not from where its
+                # last tour ends: that made the cursor jump ahead.
+                try:
+                    x, y = float(cur['tx'].X), float(cur['tx'].Y)
+                except Exception:
+                    x, y = cur['x'], cur['y']
+                cur['x'], cur['y'] = x + dx, y + dy
                 cur['tx'].BeginAnimation(_translate_x(), None)
                 cur['tx'].BeginAnimation(_translate_y(), None)
                 cur['tx'].X, cur['tx'].Y = cur['x'], cur['y']
@@ -1394,10 +1412,27 @@ class _Overlay(object):
         self.win.Width = (right - left) / scale
         self.win.Height = (bottom - top) / scale
 
+    def _clear_effects(self):
+        """The views moved (tile, follow, resize): boxes, frames, trails and
+        arrows were drawn for the old layout and would sit beside their
+        elements. Drop them; the cursors stay (_place shifts them)."""
+        try:
+            from System import Object
+            groups = [cur['group'] for cur in self._cursors.values()]
+            for child in list(self.canvas.Children):
+                if not any(Object.ReferenceEquals(child, g) for g in groups):
+                    self.canvas.Children.Remove(child)
+        except Exception:
+            pass
+        self._focus = {}
+        self._marks = []
+
     def _show_hud(self, rect):
         scale = self._dpi()
         self._view_dip = (rect[0] / scale, rect[1] / scale, rect[2] / scale, rect[3] / scale)
-        if not self.hud.IsVisible:
+        if self._canvas_px is None or not self.win.IsVisible:
+            self._canvas_px = tuple(rect)   # bar only: the view the bar sits in
+        if not self.hud.IsVisible and (self._front_ok or self._asks):
             self.hud.Show()
         self._refresh_hud()             # places it too (_place_hud)
         self._timer.Start()
@@ -1410,11 +1445,17 @@ class _Overlay(object):
         it ends, the cursor goes to the first. None: the cursor stays where
         it last worked."""
         self._end_summary()
+        if task_text:
+            caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
+        if not self._model():
+            self._working[agent] = (time.time(), caption)
+            self._bar_only()
+            self._last = time.time()
+            self._show_hud(rect)
+            return
         if canvas or not self.win.IsVisible or self._origin == (0.0, 0.0):
             self._place(canvas or rect)
         cur = self._cursor(agent, action)
-        if task_text:
-            caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
         self._working[agent] = (time.time(), caption)
         self._cursor_state(cur, 'working', caption)
         cur['group'].BeginAnimation(_opacity_property(), None)
@@ -1439,12 +1480,11 @@ class _Overlay(object):
         cur = self._cursors.get(agent)
         if on:
             self._waiting[agent] = caption
-            if cur is None:
-                if not self.win.IsVisible:
-                    return          # nothing on screen yet: no view to draw in
+            if cur is None and self.win.IsVisible and self._model():
                 cur = self._cursor(agent, classify_action(tool_name))
                 cur['group'].Opacity = 1.0
-            self._cursor_state(cur, 'waiting')
+            if cur is not None:
+                self._cursor_state(cur, 'waiting')
         else:
             self._waiting.pop(agent, None)
             if cur is not None:
@@ -1478,7 +1518,10 @@ class _Overlay(object):
         """A call waits for the user's OK: a card with Allow / Deny on the bar
         and the cursor pulsing, instead of a modal Revit dialog."""
         self._end_summary()
-        self._place(rect)
+        if self._model():
+            self._place(rect)
+        else:
+            self._bar_only()
         self._asks.append({'rid': rid, 'agent': agent, 'tool': tool_name, 'caption': caption,
                            'main': main, 'content': content, 'expanded': expanded,
                            'always_text': always_text})
@@ -1607,25 +1650,54 @@ class _Overlay(object):
         self._touched = touched or self._touched
         if goal and agent not in self._goals:
             self._goals[agent] = goal
-        self._place(snap['rect'])
-        f = speed_factor()
-        reduce = self._reduce()
-
         label, _glyph, acolor = action_style(action)
         caption = describe_call(tool_name, args, n_targets, failed)
         detail = tool_name
         if task_text:           # the plan's task leads; what the call did goes underneath
             detail = u'{} · {}'.format(caption, tool_name)
             caption = (u'Failed: ' if failed else u'') + task_text
-        cur = self._cursor(agent, action)
         self._working.pop(agent, None)
         self._waiting.pop(agent, None)
-        self._clear_focus(agent)
-        self._cursor_state(cur, 'failed' if failed else 'idle', caption)
-
         for vid, name, is_new in followed:
             if vid not in [v[0] for v in self._views]:
                 self._views.append((vid, name))
+        if self._model():
+            self._draw_step(agent, action, failed, snap, followed, n_targets, changes,
+                            clashes, created, fresh, caption, label, acolor)
+        else:
+            self._bar_only()            # the default: the bar, nothing on the model
+        self._log_step(agent, action, tool_name, failed, caption, detail, changes, clashes,
+                       record)
+        self._show_hud(snap['active']['rect'])
+
+    def _bar_only(self):
+        """Bar only (On model off): the bar may show, the canvas never does;
+        a cursor left from before the switch goes."""
+        self._wanted = True
+        if self._cursors or self.canvas.Children.Count:
+            for cur in self._cursors.values():
+                cur['group'].BeginAnimation(_opacity_property(), None)
+            self.canvas.Children.Clear()
+            self._cursors = {}
+            self._focus = {}
+        if self.win.IsVisible:
+            self.win.Hide()
+
+    def _model(self):
+        try:
+            return on_model()
+        except Exception:
+            return False
+
+    def _draw_step(self, agent, action, failed, snap, followed, n_targets, changes,
+                   clashes, created, fresh, caption, label, acolor):
+        """The step on the model (On model): cursor tour, boxes, effects."""
+        self._place(snap['rect'])
+        f = speed_factor()
+        reduce = self._reduce()
+        cur = self._cursor(agent, action)
+        self._clear_focus(agent)
+        self._cursor_state(cur, 'failed' if failed else 'idle', caption)
         if followed:
             first = followed[0]
             self._flash_view(snap['active'], '{} · {}'.format(
@@ -1699,6 +1771,9 @@ class _Overlay(object):
         cur['group'].BeginAnimation(_opacity_property(), None)
         cur['group'].Opacity = 1.0
 
+    def _log_step(self, agent, action, tool_name, failed, caption, detail, changes, clashes,
+                  record):
+        """The step on the bar: feed row, counts, changed values."""
         self._feed.insert(0, {'agent': agent, 'action': action, 'caption': caption,
                               'tool': detail, 'failed': failed, 't': time.time()})
         self._last_changes = [text for _i, text in changes]
@@ -1716,7 +1791,6 @@ class _Overlay(object):
             self._failed += 1 if failed else 0
             self._note = ''
         self._last = time.time()
-        self._show_hud(snap['active']['rect'])
 
     # ── chips, conflicts, off-screen arrows ──────────────────────────────────
 
@@ -1913,17 +1987,23 @@ class _Overlay(object):
         return want != folded
 
     def _on_front_tick(self, sender, e):
-        """Own thread only: show while Revit (this process) is in front."""
+        """Own thread only (the windows are Topmost): hide while Revit is
+        minimized or another app's window covers its views; stay visible
+        while the AI app sits beside Revit or on another screen."""
         try:
-            front = _process_in_front()
+            front, minimized, rect = _front_info(self.host.revit_hwnd if self.host else None)
+            self._front_ok = ok = not front_hides(front, minimized, rect, self._canvas_px)
+            model = self._model()
             for window in (self.win, self.hud):
+                if window is self.win and not model:
+                    continue                # bar only: the canvas stays hidden
                 if window is self.hud and self._asks:
                     if not window.IsVisible:
                         window.Visibility = _visibility('Visible')
                     continue                # a question waits: stay in sight
-                if not front and window.IsVisible:
+                if not ok and window.IsVisible:
                     window.Visibility = _visibility('Hidden')
-                elif front and self._wanted and not window.IsVisible and (
+                elif ok and self._wanted and not window.IsVisible and (
                         window is self.hud or self._summary is None):
                     window.Visibility = _visibility('Visible')
         except Exception:
@@ -1953,18 +2033,45 @@ def _visibility(name):
     return getattr(Visibility, name)
 
 
-def _process_in_front():
-    """True when the foreground window belongs to this process (Revit)."""
+_PID = [None]
+
+
+def _hwnd_int(hwnd):
+    try:
+        return int(hwnd.ToInt64())      # System.IntPtr
+    except AttributeError:
+        return int(hwnd or 0)
+
+
+def _front_info(revit_hwnd):
+    """(foreground window is Revit, Revit minimized, foreground window rect in
+    screen px or None). Unknown -> (True, False, None): keep showing."""
     try:
         import ctypes
-        from System.Diagnostics import Process
+
+        class _RECT(ctypes.Structure):
+            _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long),
+                        ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+
         user32 = ctypes.windll.user32
+        if _PID[0] is None:
+            from System.Diagnostics import Process
+            _PID[0] = Process.GetCurrentProcess().Id
+        minimized = False
+        main = _hwnd_int(revit_hwnd)
+        if main:
+            minimized = bool(user32.IsIconic(ctypes.c_void_p(main)))
         hwnd = user32.GetForegroundWindow()
         pid = ctypes.c_ulong(0)
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        return pid.value == Process.GetCurrentProcess().Id
+        if pid.value == _PID[0]:
+            return True, minimized, None
+        r = _RECT()
+        if not hwnd or not user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(r)):
+            return False, minimized, None
+        return False, minimized, (r.left, r.top, r.right, r.bottom)
     except Exception:
-        return True
+        return True, False, None
 
 
 def _light(snap):

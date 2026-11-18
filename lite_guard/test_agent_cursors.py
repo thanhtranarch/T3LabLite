@@ -709,6 +709,108 @@ def test_hud_redesign():
           and gate < ssrc.index('self.server._execute_tool_in_context(', gate))
 
 
+class _FakeEvent(object):
+    def __init__(self):
+        self.handlers = []
+
+    def __iadd__(self, fn):
+        self.handlers.append(fn)
+        return self
+
+    def __isub__(self, fn):
+        self.handlers = [h for h in self.handlers if h is not fn]
+        return self
+
+
+class _FakeArgs(object):
+    def __init__(self):
+        self.no_delay = 0
+
+    def SetRaiseWithoutDelay(self):
+        self.no_delay += 1
+
+
+class _FakeApp(object):
+    def __init__(self):
+        self.Idling = _FakeEvent()
+
+    def idle(self):
+        args = _FakeArgs()
+        for h in list(self.Idling.handlers):
+            h(self, args)
+        return args
+
+
+def test_stability():
+    print('[stability: front rule, settle before drawing, glow redraw]')
+    view = (0, 0, 1000, 800)
+    fh = AC.front_hides
+    check('Revit in front: shown', not fh(True, False, None, view))
+    check('AI app beside Revit / other screen: shown',
+          not fh(False, False, (1000, 0, 1900, 800), view)
+          and not fh(False, False, (2000, 0, 3000, 900), view))
+    check('app over the views: hidden', fh(False, False, (200, 100, 900, 700), view))
+    check('a sliver of overlap is not covering', not fh(False, False, (995, 0, 1900, 800), view))
+    check('Revit minimized: hidden even if in front', fh(True, True, None, view))
+    check('unknown front window or canvas: shown',
+          not fh(False, False, None, view) and not fh(False, False, (0, 0, 9, 9), None))
+
+    g1 = [{'id': 5, 'rect': (0, 0, 800, 600), 'origin': (1.0, 2.0, 0.0), 'w': 10.0, 'h': 8.0}]
+    g2 = [dict(g1[0], rect=(0, 0, 400, 600))]
+    check('layout key: same layout equal, tiled differs',
+          AC.layout_key(g1, 0) == AC.layout_key([dict(g1[0])], 0)
+          and AC.layout_key(g1, 0) != AC.layout_key(g2, 0)
+          and AC.layout_key(g1, 0) != AC.layout_key(g1, None))
+
+    layouts = [(None, [], None)]
+    saved = AC._open_views
+    AC._open_views = lambda app: layouts[-1]
+    try:
+        shown = []
+        app = _FakeApp()
+        layouts.append((None, g1, 0))
+        check('deferred: hooked on Idling', AC._when_settled(app, lambda: shown.append('a')))
+        args = app.idle()
+        check('deferred: not drawn while the layout is new', shown == [] and args.no_delay == 1)
+        layouts.append((None, g2, 0))           # Tile lands
+        app.idle()
+        check('deferred: not drawn while views still move', shown == [])
+        app.idle()                              # same layout twice: settled
+        check('deferred: drawn once settled, handler removed',
+              shown == ['a'] and app.Idling.handlers == [])
+        app2 = _FakeApp()
+        AC._when_settled(app2, lambda: shown.append('b'))
+        AC._flush_pending()                     # the next call starts
+        check('next call flushes the pending show first',
+              shown == ['a', 'b'] and app2.Idling.handlers == [])
+        app3 = _FakeApp()
+        AC._when_settled(app3, lambda: shown.append('c'))
+        for _ in range(AC.SETTLE_MAX_TICKS):
+            layouts.append((None, [dict(g1[0], w=float(len(layouts)))], 0))   # never settles
+            app3.idle()
+        check('never settles: drawn after SETTLE_MAX_TICKS', shown[-1] == 'c')
+    finally:
+        AC._open_views = saved
+        AC._flush_pending()
+
+    acsrc = open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
+    notify = acsrc.split('def notify(app, task):', 1)[1].split('\ndef ', 1)[0]
+    check('notify: tile decided before measuring, show deferred after follow / tile',
+          notify.index('tiled = _tile(app)') < notify.index('def finish():')
+          and '(followed or tiled) and _when_settled(app, finish)' in notify)
+    before = acsrc.split('def before(app, task):', 1)[1].split('\ndef ', 1)[0]
+    check('before: flushes the previous show', '_flush_pending()' in before)
+    gsrc = open(os.path.join(LIB, 'core', 'agent_cursors_glow.py'), encoding='utf-8').read()
+    check('glow: no full view redraw when nothing new is outlined',
+          'if not same:\n' in gsrc.split('def update(app, ids):', 1)[1])
+    osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
+    place = osrc.split('    def _place(self, rect):', 1)[1].split('\n    def ', 1)[0]
+    check('overlay: no Show() while Revit is covered (no flash per call)',
+          'if self._front_ok:' in place and 'self._clear_effects()' in place)
+    check('overlay: hides by covering, not by focus', 'front_hides(' in osrc
+          and '_process_in_front' not in osrc)
+
+
 if __name__ == '__main__':
     try:
         test_extract_ids()
@@ -728,6 +830,7 @@ if __name__ == '__main__':
         test_agent_stamp()
         test_settings_dialog()
         test_hud_redesign()
+        test_stability()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

@@ -541,6 +541,44 @@ def moved(old, new, tolerance=3.0):
     return any(abs(a - b) > tolerance for a, b in zip(old, new))
 
 
+def _round_all(value, digits):
+    if value is None:
+        return None
+    return tuple(round(float(v), digits) for v in value)
+
+
+def layout_key(geos, active):
+    """What decides where a box lands on screen: each open view's id, window
+    rectangle and zoom (origin + extents), plus which one is active. Two equal
+    keys = Revit finished opening / tiling / zooming views."""
+    return (active, tuple((g.get('id'), _round_all(g.get('rect'), 0),
+                           _round_all(g.get('origin'), 4),
+                           round(float(g.get('w') or 0.0), 4),
+                           round(float(g.get('h') or 0.0), 4)) for g in geos))
+
+
+def overlap_px(a, b):
+    """(width, height) px of the overlap of two (l, t, r, b) rectangles;
+    (0, 0) when apart."""
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return (w, h) if w > 0 and h > 0 else (0, 0)
+
+
+def front_hides(front_is_revit, revit_minimized, front_rect, overlay_rect, min_px=16):
+    """Whether the topmost overlay must hide. It used to hide whenever Revit
+    was not the foreground app, so while the user typed in the AI app (the
+    normal MCP case) the cursors vanished and flashed back on every call.
+    Now it hides only when Revit is minimized or the app in front actually
+    covers the views the overlay draws over."""
+    if revit_minimized:
+        return True
+    if front_is_revit or front_rect is None or overlay_rect is None:
+        return False
+    w, h = overlap_px(front_rect, overlay_rect)
+    return w >= min_px and h >= min_px     # a window edge touching is not covering
+
+
 # First word of a tool / operation -> what the caption says the agent is doing.
 _GERUNDS = {
     'get': 'Reading', 'read': 'Reading', 'list': 'Listing', 'find': 'Finding',
@@ -1531,6 +1569,7 @@ def before(app, task):
     try:
         if not is_enabled() or _internal(task):
             return
+        _flush_pending()        # the previous step's show comes first
         tool = getattr(task, 'tool_name', '')
         args = getattr(task, 'arguments', None)
         action = classify_action(tool, args)
@@ -1580,6 +1619,7 @@ def _changes(app, task, ids):
 def notify(app, task):
     """One finished tool call. Never raises."""
     try:
+        _flush_pending()        # keep the steps in order
         if not is_enabled():
             hide()              # switched off from another engine (Settings)
             return
@@ -1622,15 +1662,10 @@ def notify(app, task):
                     pre = None      # different view now: old boxes do not apply
             if opts['select'] and ids and action != 'delete':
                 _select(uidoc, ids)
-        snap = _snapshot(app, ids, pre)
-        if snap is None:
-            return
-        if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
-                and uidoc is not None and _zoom_to(uidoc, ids)):
-            snap = _snapshot(app, ids) or snap
+        tiled = False
         if opts['tile'] and any(new for _v, _n, new in followed):
             if len(list(uidoc.GetOpenUIViews())) >= 2:
-                _tile(app)
+                tiled = _tile(app)
         changes = [] if failed else _changes(app, task, ids)
         clashes = [] if failed else track_touches(_session['touched'], agent, ids, touch)
         _ensure_select_event()
@@ -1649,14 +1684,91 @@ def notify(app, task):
         except Exception:
             pass
         _sync_theme()
-        _overlay(_hwnd(app)).call(
-            'show', agent, action, tool, failed, snap, followed, args=args,
-            n_targets=len(ids), changes=changes, clashes=clashes,
-            touched=len(_session['touched']),
-            goal=_session['goals'].get(agent_key(agent) or 'mcp-client', ''),
-            task_text=current_task(_plan_of(agent)), created=label, fresh=fresh)
+        touched = len(_session['touched'])
+        goal = _session['goals'].get(agent_key(agent) or 'mcp-client', '')
+        task_text = current_task(_plan_of(agent))
+
+        def finish():
+            if not is_enabled():
+                return
+            snap = _snapshot(app, ids, pre)
+            if snap is None:
+                return
+            if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
+                    and uidoc is not None and _zoom_to(uidoc, ids)):
+                snap = _snapshot(app, ids) or snap
+            _overlay(_hwnd(app)).call(
+                'show', agent, action, tool, failed, snap, followed, args=args,
+                n_targets=len(ids), changes=changes, clashes=clashes,
+                touched=touched, goal=goal, task_text=task_text,
+                created=label, fresh=fresh)
+
+        # Opening views and the posted Tile land AFTER this event returns:
+        # measured now, every box and the cursor sat where the views used to
+        # be. Measure once Revit has laid the views out.
+        if (followed or tiled) and _when_settled(app, finish):
+            return
+        finish()
     except Exception:
         pass
+
+
+# ─── Deferred show: wait for Revit to finish laying views out ────────────────
+
+SETTLE_MAX_TICKS = 8        # Idling passes before showing anyway
+_pending = {'finish': None, 'handler': None, 'app': None}
+
+
+def _flush_pending():
+    """Run a deferred show now (a new call starts, so steps stay in order).
+    Never raises."""
+    finish, handler, app = _pending['finish'], _pending['handler'], _pending['app']
+    _pending.update(finish=None, handler=None, app=None)
+    if handler is not None and app is not None:
+        try:
+            app.Idling -= handler
+        except Exception:
+            pass
+    if finish is not None:
+        try:
+            finish()
+        except Exception:
+            pass
+
+
+def _when_settled(app, finish):
+    """Run finish() on a later Idling, once two passes in a row see the same
+    view layout (layout_key), or after SETTLE_MAX_TICKS. False when Idling
+    could not be hooked (the caller shows at once)."""
+    _flush_pending()
+    state = {'key': None, 'ticks': 0}
+
+    def on_idling(sender, args):
+        if _pending['handler'] is not on_idling:
+            return              # already flushed by a newer call
+        state['ticks'] += 1
+        try:
+            _doc, geos, active = _open_views(app)
+            key = layout_key(geos, active)
+        except Exception:
+            key = None
+        settled = key is not None and key == state['key']
+        state['key'] = key
+        if settled or state['ticks'] >= SETTLE_MAX_TICKS:
+            _flush_pending()
+            return
+        try:
+            args.SetRaiseWithoutDelay()     # next pass now, not in a second
+        except Exception:
+            pass
+
+    try:
+        _pending.update(finish=finish, handler=on_idling, app=app)
+        app.Idling += on_idling
+        return True
+    except Exception:
+        _pending.update(finish=None, handler=None, app=None)
+        return False
 
 
 # ─── Narration / approval wait (any thread) ────────────────────────────────────

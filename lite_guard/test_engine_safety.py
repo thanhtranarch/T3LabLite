@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Two crash classes no unit test sees, because nothing here runs Revit.
+"""Three crash classes no unit test sees, because nothing here runs Revit.
 
 1. A name read before the function's own local import of it: Python makes
    the name local for the whole function, so the read raises
@@ -8,14 +8,23 @@
    (startup.py, the MCP server and what they reach): SyntaxError or
    NameError at the first call (2026-11-18: `raise ... from` in
    family_schema.py killed the famigen_* MCP tools).
+3. A name no import or assignment defines (NameError when that line runs):
+   handlers get Revit classes from imports inside their own function, so a
+   helper moved out of one loses them.
 
 Run: python lite_guard/test_engine_safety.py
 """
 import ast
 import io
 import os
+import symtable
 import sys
 import tokenize
+
+try:
+    import builtins
+except ImportError:                 # never under IronPython; keeps the file py2-clean
+    import __builtin__ as builtins
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -213,6 +222,47 @@ def py2_traps(source):
     return sorted(set(out))
 
 
+# ── 3 · names nothing defines ────────────────────────────────────────────
+# Python 2 builtins (IronPython files use them) and what pyRevit injects.
+EXTRA_BUILTINS = {
+    'unicode', 'long', 'basestring', 'xrange', 'unichr', 'reload', 'raw_input', 'file',
+    'execfile', 'reduce', 'cmp', 'buffer', 'intern', 'WindowsError', '__file__', '__name__',
+    '__doc__', '__builtins__', '__package__', '__spec__', '__loader__', '__path__',
+    '__revit__', '__window__', '__commandpath__', '__commandname__', '__shiftclick__',
+    '__forceddebugmode__', '__eventargs__', '__eventsender__', '__class__', '__debug__',
+    '__externalcommand__', '__commanddata__', '__elements__', '__messagesink__', '__result__',
+    '__uiControlledApplication__', '__executorparams__', '__cached__'}
+
+
+def undefined_names(source):
+    """[(line, name)] read somewhere, defined nowhere in the module."""
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == '*' for a in node.names):
+            return []               # star import: the module's names are unknown
+    top = symtable.symtable(source, '<module>', 'exec')
+    known = set(dir(builtins)) | EXTRA_BUILTINS | set(s.get_name() for s in top.get_symbols())
+    first = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            known.update(node.names)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            first.setdefault(node.id, node.lineno)
+    out = set()
+
+    def walk(table):
+        for child in table.get_children():
+            for sym in child.get_symbols():
+                name = sym.get_name()
+                if (sym.is_referenced() and sym.is_global() and not sym.is_assigned()
+                        and not sym.is_parameter() and name not in known):
+                    out.add((first.get(name, 0), name))
+            walk(child)
+
+    walk(top)
+    return sorted(out)
+
+
 # ── run ──────────────────────────────────────────────────────────────────
 FAILED = []
 
@@ -238,6 +288,22 @@ def main():
     check('io.open and a guarded fallback are clean', py2_traps(
         "import io\ntry:\n    import queue\nexcept ImportError:\n    import Queue as queue\n"
         "io.open('p', encoding='utf-8')\n") == [])
+
+    check('a name nothing defines is found', undefined_names(
+        "import os\nclass A(object):\n    @staticmethod\n    def f(doc):\n"
+        "        return [x for x in Collector(doc)]\n    def g(self):\n"
+        "        return os.path, unicode\n") == [(5, 'Collector')])
+
+    print('every name read is defined')
+    hits = []
+    for path in _py_files(EXT):
+        try:
+            found = undefined_names(_read(path))
+        except SyntaxError:
+            continue
+        for line, name in found:
+            hits.append('{}:{} `{}` is not defined'.format(os.path.relpath(path, REPO), line, name))
+    check('extension is clean', not hits, '\n       '.join(hits))
 
     print('no name is read above its own local import')
     hits = []

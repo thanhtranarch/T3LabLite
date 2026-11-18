@@ -425,7 +425,7 @@ try:
                     task.result = self.server._execute_tool_in_context(
                         task.tool_name, task.arguments, uiapp=app)
                     task.exception = None
-                except Exception as e:
+                except BaseException as e:      # SystemExit too: never escape into Revit
                     task.exception = e
                     task.result = None
                 finally:
@@ -542,6 +542,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Content-Length', '0')     # HTTP/1.1 keep-alive needs a length
         self.end_headers()
 
 
@@ -599,14 +600,18 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({'error': 'Forbidden origin'}, 403)
             return
 
-        content_length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
-
         try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
             request = json.loads(body) if body else {}
-        except ValueError:      # IronPython 2.7 has no json.JSONDecodeError
+        except ValueError:      # bad length, bad UTF-8, bad JSON (no JSONDecodeError in IronPython)
             self._send_json({'jsonrpc': '2.0', 'id': None,
                              'error': {'code': -32700, 'message': 'Parse error: invalid JSON'}}, 400)
+            return
+        if not isinstance(request, dict):
+            self._send_json({'jsonrpc': '2.0', 'id': None, 'error': {
+                'code': -32600, 'message': 'Invalid Request: one JSON object per POST '
+                                           '(batches are not supported)'}}, 400)
             return
 
         if path == '/message' or path == '/mcp':
@@ -841,10 +846,11 @@ class T3LabAIServer(object):
         self._teach_session = None        # {'id','goal','steps':[...]} or None
         self._restore_teaching_state()
 
-        self._initialized = True
-
-        # Register default Revit tools
+        # Register default Revit tools. _initialized comes after: this object is
+        # already anchored on the AppDomain, and a half-built one must be
+        # rebuilt by the next T3LabAIServer(), not served with no tools.
         self._register_default_tools()
+        self._initialized = True
 
     def _get_or_create_token(self):
         """Return the shared-secret token every /message and /mcp request
@@ -4430,6 +4436,47 @@ class T3LabAIServer(object):
         self._bic_cache = out
         return out
 
+    @staticmethod
+    def _unused_family_types(doc):
+        """(family types nothing uses, exact).
+
+        exact=True: Revit's own list (Document.GetUnusedElements, 2024+), safe
+        to delete. exact=False (Revit 2022-2023): an estimate for reports only -
+        a type held by another type (profile, baluster, level head, a fitting
+        in routing preferences) looks unused from here, and deleting an in-use
+        tag type deletes every tag of it.
+        """
+        from Autodesk.Revit.DB import (FamilySymbol, ElementId, CategoryType,
+                                       FilteredElementCollector)
+        getter = getattr(doc, 'GetUnusedElements', None)
+        if getter is not None:
+            try:
+                from System.Collections.Generic import HashSet
+                found = []
+                for eid in getter(HashSet[ElementId]()):
+                    el = doc.GetElement(eid)
+                    if isinstance(el, FamilySymbol):
+                        found.append(el)
+                return found, True
+            except Exception:
+                pass
+        used = set()
+        for el in FilteredElementCollector(doc).WhereElementIsNotElementType():
+            try:
+                used.add(eid_value(el.GetTypeId()))     # tags, rooms tags... not only FamilyInstance
+            except Exception:
+                pass
+        found = []
+        for sym in FilteredElementCollector(doc).OfClass(FamilySymbol):
+            try:
+                cat = sym.Category
+                if (eid_value(sym.Id) not in used and cat is not None
+                        and cat.CategoryType == CategoryType.Model):
+                    found.append(sym)
+            except Exception:
+                pass
+        return found, False
+
     def _resolve_bic(self, cat_arg):
         """Category name -> (bic, canonical_name, error_dict). Exactly one of
         bic / error_dict is non-None. Case-insensitive, and accepts the
@@ -4499,14 +4546,19 @@ class T3LabAIServer(object):
         if sets is None:
             sets = {}
             self._selection_sets = sets
-        return sets.setdefault(self._selset_key(doc), {})
+        from collections import OrderedDict     # oldest set is evicted first
+        return sets.setdefault(self._selset_key(doc), OrderedDict())
 
     def _selset_store(self, doc, name, ids):
         bucket = self._selset_bucket(doc)
         bucket.pop(name, None)
         bucket[name] = [int(v) for v in ids]
+        # IronPython 2.7 dicts are unordered: never evict the set just stored.
         while len(bucket) > self._SELSET_MAX:
-            bucket.pop(next(iter(bucket)))
+            victim = next((k for k in bucket if k != name), None)
+            if victim is None:
+                break
+            bucket.pop(victim)
         return len(bucket[name])
 
     def _selset_get(self, doc, name):
@@ -5140,24 +5192,34 @@ class T3LabAIServer(object):
             return False, 'parameter not found'
         if param.IsReadOnly:
             return False, 'read-only'
+        # A JSON number must become text first: IronPython will not pass an int
+        # to SetValueString(String), and the raw Set() below is in feet.
+        if isinstance(value, bool):
+            value = 1 if value else 0
+        if not hasattr(value, 'strip'):
+            if isinstance(value, float) and value == int(value):
+                value = int(value)
+            value = '{}'.format(value)
         try:
             st = param.StorageType
             if st == StorageType.String:
-                param.Set(value)
+                done = param.Set(value)
             elif st == StorageType.Double:
-                parsed = False
+                done = False
                 try:
-                    parsed = param.SetValueString(value)
+                    done = param.SetValueString(value)
                 except Exception:
-                    parsed = False
-                if not parsed:
-                    param.Set(float(value))
+                    done = False
+                if not done:
+                    done = param.Set(float(value))
             elif st == StorageType.Integer:
-                param.Set(int(float(value)))
+                done = param.Set(int(float(value)))
             elif st == StorageType.ElementId:
-                param.Set(make_eid(int(value)))
+                done = param.Set(make_eid(int(value)))
             else:
                 return False, 'unsupported storage type'
+            if done is False:
+                return False, 'Revit refused the value'
             return True, None
         except Exception as e:
             return False, str(e)
@@ -8656,8 +8718,9 @@ class T3LabAIServer(object):
                 'doc_path': doc.PathName,
             }
             out_path = _stored_data_file(doc.PathName, doc.Title, 'project_data.json')
+            text = jsonsafe.dumps(data, indent=2)     # before open: a failure must not truncate
             with open(out_path, 'w') as f:
-                _json.dump(data, f, indent=2)
+                f.write(text)
             return {'success': True, 'file': out_path, 'data': data}
 
         # ── store_room_data ──────────────────────────────────────────────────
@@ -8683,8 +8746,9 @@ class T3LabAIServer(object):
                 except Exception:
                     pass
             out_path = _stored_data_file(doc.PathName, doc.Title, 'room_data.json')
+            text = jsonsafe.dumps({'rooms': rooms_out}, indent=2)   # Vietnamese room names
             with open(out_path, 'w') as f:
-                _json.dump({'rooms': rooms_out}, f, indent=2)
+                f.write(text)
             return {'success': True, 'file': out_path, 'room_count': len(rooms_out)}
 
         # ── query_stored_data ────────────────────────────────────────────────
@@ -8734,7 +8798,10 @@ class T3LabAIServer(object):
             try:
                 _sys.stdout = _buf
                 try:
-                    exec(code, local_ctx)   # noqa: S102
+                    try:
+                        exec(code, local_ctx)   # noqa: S102
+                    except SystemExit:
+                        pass    # sys.exit() / script.exit(): end of the script, not of Execute
                 finally:
                     _sys.stdout = _old_stdout
                 printed      = _buf.getvalue().strip()
@@ -8756,8 +8823,9 @@ class T3LabAIServer(object):
                     import json as _json, time as _time
                     _res = {'task_id': 'mcp', 'status': 'success', 'output': out_str,
                             'error': '', 'timestamp': _time.time()}
+                    _text = jsonsafe.dumps(_res, indent=2)
                     with open(RESULT_FILE, 'w') as _f:
-                        _json.dump(_res, _f, indent=2)
+                        _f.write(_text)
                     with open(RESULT_TXT, 'w') as _f:
                         _f.write(out_str)
                 except Exception:
@@ -8772,8 +8840,9 @@ class T3LabAIServer(object):
                     import json as _json, time as _time
                     _res = {'task_id': 'mcp', 'status': 'error', 'output': '',
                             'error': err_str, 'timestamp': _time.time()}
+                    _text = jsonsafe.dumps(_res, indent=2)
                     with open(RESULT_FILE, 'w') as _f:
-                        _json.dump(_res, _f, indent=2)
+                        _f.write(_text)
                     with open(RESULT_TXT, 'w') as _f:
                         _f.write('ERROR: {}'.format(err_str))
                 except Exception:
@@ -8808,24 +8877,13 @@ class T3LabAIServer(object):
                 t = Transaction(doc, 'T3Lab AI Set Parameter')
                 t.Start()
                 try:
-                    st = param.StorageType
-                    if st == StorageType.String:
-                        param.Set(value)
-                    elif st == StorageType.Double:
-                        # Try display-unit parsing first ("3000" mm, "3.5 m",
-                        # etc. — matches what the user sees in Revit), then
-                        # fall back to a raw internal-unit float.
-                        parsed = False
-                        try:
-                            parsed = param.SetValueString(value)
-                        except Exception:
-                            parsed = False
-                        if not parsed:
-                            param.Set(float(value))
-                    elif st == StorageType.Integer:
-                        param.Set(int(float(value)))
-                    elif st == StorageType.ElementId:
-                        param.Set(make_eid(int(value)))
+                    # Display units first ("3000" mm, "3.5 m"), then a raw
+                    # internal-unit float: _apply_param_value.
+                    ok, why = self._apply_param_value(param, value)
+                    if not ok:
+                        t.RollBack()
+                        return {'success': False, 'element_id': eid, 'parameter': pname,
+                                'error': 'Could not set {}: {}'.format(pname, why)}
                     t.Commit()
                     return {'success': True, 'element_id': eid, 'parameter': pname, 'value': value}
                 except Exception as e:
@@ -9272,7 +9330,7 @@ class T3LabAIServer(object):
                     note = TextNote.Create(doc, active_view.Id, XYZ(x, y, 0), text, opts)
                     t.Commit()
                     return {'success': True, 'text_note_id': eid_value(note.Id),
-                            'text': text, 'type_used': tn_type.Name,
+                            'text': text, 'type_used': elem_name(tn_type),
                             'view': active_view.Name}
                 except Exception as e:
                     # RollBack itself throws when the transaction never
@@ -10755,10 +10813,23 @@ class T3LabAIServer(object):
                             continue
                         for e in FilteredElementCollector(doc).OfCategory(bic).WhereElementIsNotElementType():
                             p = e.LookupParameter(pname)
+                            if not p:               # a type parameter (Fire Rating...)
+                                try:
+                                    etype = doc.GetElement(e.GetTypeId())
+                                    p = etype.LookupParameter(pname) if etype is not None else None
+                                except Exception:
+                                    p = None
                             if p:
-                                pid = p.Id; break
+                                pid = p.Id
+                            break                   # one sample element per category is enough
                         if pid:
                             break
+                    if pid is None:
+                        # Without the rule the filter would match the whole category.
+                        return {'error': ("Parameter '{}' was not found on {} elements, so no "
+                                          "filter was created.").format(pname, ', '.join(cats)),
+                                'hint': 'Check the parameter name with get_all_parameters.',
+                                'tool': tool_name}
                     if pid is not None:
                         rule = None
                         try:
@@ -10770,6 +10841,9 @@ class T3LabAIServer(object):
                                 rule = None
                         if rule is not None:
                             elem_filter = ElementParameterFilter(rule)
+                    if elem_filter is None:
+                        return {'error': ("Revit cannot filter on '{}' with a text rule, so no "
+                                          "filter was created.").format(pname), 'tool': tool_name}
 
                 t = Transaction(doc, 'T3Lab AI Create View Filter')
                 t.Start()
@@ -11077,7 +11151,8 @@ class T3LabAIServer(object):
                 ftype = None
                 if ftype_name:
                     for f in ftypes:
-                        if f.Name == ftype_name or ftype_name.lower() in f.Name.lower():
+                        fname = elem_name(f)        # FloorType.Name is hidden from IronPython
+                        if fname == ftype_name or ftype_name.lower() in fname.lower():
                             ftype = f; break
                 if ftype is None and ftypes:
                     ftype = ftypes[0]
@@ -11085,16 +11160,19 @@ class T3LabAIServer(object):
                     return {'error': 'No floor types available.'}
 
                 bopts = SpatialElementBoundaryOptions()
-                created = []
+                created, skipped = [], []
                 t = Transaction(doc, 'T3Lab AI Room To Floor')
                 t.Start()
                 try:
                     for rid in ids:
                         room = doc.GetElement(make_eid(int(rid)))
                         if room is None:
+                            skipped.append({'room_id': rid, 'reason': 'not found'})
                             continue
                         loops = room.GetBoundarySegments(bopts)
                         if not loops or loops.Count == 0:
+                            skipped.append({'room_id': rid, 'reason': 'room has no boundary '
+                                                                      '(not placed or not enclosed)'})
                             continue
                         loop = CurveLoop()
                         for seg in loops[0]:
@@ -11105,22 +11183,19 @@ class T3LabAIServer(object):
                             profile.Add(loop)
                             fl = Floor.Create(doc, profile, ftype.Id, level_id)
                             created.append(eid_value(fl.Id))
-                        except Exception:
-                            # Older Revit fallback (NewFloor) — best effort.
-                            try:
-                                from Autodesk.Revit.DB import CurveArray
-                                ca = CurveArray()
-                                for seg in loops[0]:
-                                    ca.Append(seg.GetCurve())
-                                fl = doc.Create.NewFloor(ca, False)
-                                created.append(eid_value(fl.Id))
-                            except Exception:
-                                pass
+                        except Exception as ex:
+                            # Floor.Create exists in every supported Revit (2022+).
+                            skipped.append({'room_id': rid, 'reason': str(ex)})
+                    if not created:
+                        t.RollBack()
+                        return {'success': False, 'floors_created': 0, 'skipped': skipped,
+                                'error': 'No floor was created.', 'tool': tool_name}
                     t.Commit()
                 except Exception as e:
                     t.RollBack()
                     return {'error': str(e), 'tool': tool_name}
-                return {'success': True, 'floors_created': len(created), 'floor_ids': created}
+                return {'success': True, 'floors_created': len(created), 'floor_ids': created,
+                        'skipped': skipped}
             except Exception as e:
                 return {'error': str(e), 'tool': tool_name}
 
@@ -11130,18 +11205,16 @@ class T3LabAIServer(object):
                                            ElementId)
             try:
                 dry_run = bool(arguments.get('dry_run', True))
-                used_type_ids = set()
-                from Autodesk.Revit.DB import FamilyInstance
-                for fi in FilteredElementCollector(doc).OfClass(FamilyInstance):
-                    try:
-                        used_type_ids.add(eid_value(fi.GetTypeId()))
-                    except Exception:
-                        pass
-                unused_syms = [s for s in FilteredElementCollector(doc).OfClass(FamilySymbol)
-                               if eid_value(s.Id) not in used_type_ids]
+                unused_syms, exact = self._unused_family_types(doc)
 
                 views = list(FilteredElementCollector(doc).OfClass(View))
                 used_tpl = set()
+                try:        # "View Template applied to new views" of a view type
+                    from Autodesk.Revit.DB import ViewFamilyType
+                    for vft in FilteredElementCollector(doc).OfClass(ViewFamilyType):
+                        used_tpl.add(eid_value(vft.DefaultTemplateId))
+                except Exception:
+                    pass
                 for v in views:
                     try:
                         if not v.IsTemplate and eid_value(v.ViewTemplateId) != -1:
@@ -11156,6 +11229,12 @@ class T3LabAIServer(object):
                     'unused_view_templates': len(unused_tpl),
                     'unused_view_template_names': [v.Name for v in unused_tpl[:30]],
                 }
+                if not exact:
+                    report['family_types_estimate'] = True
+                    report['family_types_note'] = (
+                        'This Revit version cannot tell which family types are safe to '
+                        'delete, so they are counted but never deleted here. Use Manage > '
+                        'Purge Unused in Revit for them.')
                 if dry_run:
                     report['dry_run'] = True
                     report['note'] = 'Set dry_run=false to delete these items.'
@@ -11165,7 +11244,7 @@ class T3LabAIServer(object):
                 t = Transaction(doc, 'T3Lab AI Purge Unused')
                 t.Start()
                 try:
-                    for s in unused_syms:
+                    for s in (unused_syms if exact else []):
                         try:
                             doc.Delete(s.Id); deleted += 1
                         except Exception:
@@ -11210,14 +11289,7 @@ class T3LabAIServer(object):
                     except Exception:
                         pass
 
-                used_type_ids = set()
-                for fi in FilteredElementCollector(doc).OfClass(FamilyInstance):
-                    try:
-                        used_type_ids.add(eid_value(fi.GetTypeId()))
-                    except Exception:
-                        pass
-                unused_syms = sum(1 for s in FilteredElementCollector(doc).OfClass(FamilySymbol)
-                                  if eid_value(s.Id) not in used_type_ids)
+                unused_syms = len(self._unused_family_types(doc)[0])
 
                 views = list(FilteredElementCollector(doc).OfClass(View))
                 default_named = sum(1 for v in views if not v.IsTemplate and (

@@ -747,8 +747,12 @@ try:
     from Services.batchout_handler import BatchOutEventHandler
 except Exception:
     import uuid
+    # Own unique namespace (rule S15): the fixed "T3Lab.BatchOut" here clashed
+    # with the type Services.batchout_handler had already registered, and
+    # BatchOut died with "Duplicate type name within an assembly".
     class BatchOutEventHandler(IExternalEventHandler):
-        __namespace__ = "T3Lab.BatchOut"
+        __namespace__ = "T3Lab.BatchOutFallback_" + uuid.uuid4().hex[:8]
+
         def __init__(self, logger):
             self._logger = logger
             self._queue = []

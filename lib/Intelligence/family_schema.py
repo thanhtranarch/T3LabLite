@@ -15,6 +15,8 @@ validity: profile closure, self-intersection and buildability are still Revit's
 call when the family is created.
 
 Schema v1 (no ``materials``, numeric length ``parameters``) stays valid as-is.
+``types`` (family types: named sets of parameter and material values) is an
+optional v2 addition; a schema without it builds one type, as before.
 No Revit or WPF import here - dev/test_family_schema.py loads this file alone.
 """
 import json
@@ -43,11 +45,52 @@ CATEGORY_TABLE = (
     ("Lighting Fixture",     ("Lighting Fixture.rft", "Metric Lighting Fixture.rft"), "OST_LightingFixtures", False),
     ("Site",                 ("Site.rft", "Metric Site.rft"), "OST_Site", False),
     ("Entourage",            ("Entourage.rft", "Metric Entourage.rft"), "OST_Entourage", False),
+    # MEP categories (2026-11, FamiGen Studio templates). Geometry only: no
+    # connectors are created. A missing template falls back to Generic Model
+    # and re-categorises the family (builder.resolve_template).
+    ("Pipe Accessory",       ("Pipe Accessory.rft", "Metric Pipe Accessory.rft"), "OST_PipeAccessory", False),
+    ("Duct Accessory",       ("Duct Accessory.rft", "Metric Duct Accessory.rft"), "OST_DuctAccessory", False),
+    ("Sprinkler",            ("Sprinkler.rft", "Metric Sprinkler.rft"), "OST_Sprinklers", False),
+    ("Electrical Fixture",   ("Electrical Fixture.rft", "Metric Electrical Fixture.rft"), "OST_ElectricalFixtures", False),
 )
 SUPPORTED_CATEGORIES = tuple(row[0] for row in CATEGORY_TABLE)
 
 PARAMETER_TYPES = ('length', 'number', 'integer', 'text')
 MATERIAL_FIELDS = ('name', 'color', 'transparency', 'shininess', 'smoothness', 'parameter')
+TYPE_FIELDS = ('name', 'values')
+MAX_TYPES = 50
+# Parametric constraints (schema v2, optional). A plane with axis 'x' is the
+# vertical plane x = offset, 'y' the vertical plane y = offset, 'z' the
+# horizontal plane z = offset. The template's own planes can be named too.
+PLANE_AXES = ('x', 'y', 'z')
+BUILTIN_PLANES = {'Center (Left/Right)': ('x', 0.0), 'Center (Front/Back)': ('y', 0.0),
+                  'Ref. Level': ('z', 0.0)}
+LOCK_KEYS = ('x_min', 'x_max', 'y_min', 'y_max', 'z_min', 'z_max')
+MAX_PLANES = 40
+MAX_REPEAT = 200
+DETAIL_LEVELS = ('coarse', 'medium', 'fine')
+AUTO_CATEGORY = 'Auto'
+
+# One line per category: how FamiGen Studio's Auto mode tells Claude to pick.
+CATEGORY_GUIDE = (
+    ('Door', 'doors and door assemblies hosted in walls (leaf, frame, glazing, hardware)'),
+    ('Window', 'windows, curtain-wall-like glazed openings hosted in walls'),
+    ('Furniture', 'loose furniture: tables, chairs, sofas, beds, desks, shelving units'),
+    ('Casework', 'built-in cabinetry and counters: kitchen units, vanities, reception desks'),
+    ('Plumbing Fixture', 'sanitaryware and taps: basins, WCs, urinals, showers, sinks, tubs'),
+    ('Lighting Fixture', 'luminaires: pendants, downlights, linear lights, wall lights'),
+    ('Electrical Equipment', 'switchboards, panelboards, transformers, disconnect switches, UPS'),
+    ('Electrical Fixture', 'small wiring devices: sockets, switches, junction boxes'),
+    ('Mechanical Equipment', 'AHUs, fan coils, pumps, chillers, boilers, water heaters, tanks'),
+    ('Pipe Accessory', 'in-line pipe items: valves, strainers, couplings, meters, cleanouts'),
+    ('Duct Accessory', 'in-line duct items: dampers, VAV boxes, silencers, filters'),
+    ('Sprinkler', 'fire sprinkler heads'),
+    ('Specialty Equipment', 'fire extinguisher / hose cabinets, lockers, appliances, signage, ATMs'),
+    ('Columns', 'architectural (non-structural) columns and pilasters'),
+    ('Site', 'outdoor site elements: bollards, bike racks, benches, bins, fences'),
+    ('Entourage', 'planting, people, vehicles and other context objects'),
+    ('Generic Model', 'anything else, including supports, hangers and custom assemblies'),
+)
 # Revit refuses these characters in element, material, subcategory and
 # parameter names. Rejecting them here gives the model a precise error path
 # instead of a half-built family.
@@ -138,12 +181,36 @@ def name_problem(value):
     return None
 
 
-def build_system_prompt(category, overlay=''):
-    """Keep the parser contract authoritative over optional category guidance."""
+_DELIVERY = {
+    'text': 'Return ONLY one JSON object, with',
+    'tool': ('Deliver the family by calling the submit_family tool: its family argument is\n'
+             'one JSON object (never put the JSON in your text), with'),
+}
+
+
+def category_guide_text():
+    return '\n'.join('- {}: {}'.format(name, text) for name, text in CATEGORY_GUIDE)
+
+
+def build_system_prompt(category, overlay='', delivery='text'):
+    """Keep the parser contract authoritative over optional category guidance.
+
+    ``delivery='tool'`` is for FamiGen Studio's direct Claude session, where
+    the JSON arrives as the ``family`` argument of the ``submit_family`` tool.
+    ``category='Auto'`` (Studio only) lets Claude choose the category from
+    ``CATEGORY_GUIDE``.
+    """
     if not isinstance(category, str) or not category.strip():
         raise ValueError('Select a family category before generating JSON.')
+    if category == AUTO_CATEGORY:
+        chosen = ('the supported category that fits the object best (CATEGORY GUIDE '
+                  'below; the user may name one)')
+        overlay = ('CATEGORY GUIDE - choose family_category by what the object IS, not by '
+                   'its material:\n' + category_guide_text() + '\n' + (overlay or ''))
+    else:
+        chosen = json.dumps(category, ensure_ascii=False)
     return '''You create JSON for T3Lab FamiGen in Autodesk Revit.
-Return ONLY one JSON object, with family_name (nonempty string), family_category exactly
+''' + _DELIVERY.get(delivery, _DELIVERY['text']) + ''' family_name (nonempty string), family_category exactly
 %s, and geometry (nonempty array of objects). Never return a root array or use
 forms/shapes/primitives/elements instead of geometry. All lengths and coordinates
 are millimeters; angles are radians. Every number must be finite (not bool).
@@ -163,6 +230,15 @@ Line: start,end; Arc3P (also ArcThreePoint): start,end,mid; Spline: points with 
 least three coordinate triples; Arc: center,positive radius,optional start_angle,
 end_angle; Circle: center,positive radius; Ellipse: center,positive radius_x and
 radius_y,optional start_angle,end_angle. Coordinates are always [x,y,z].
+REPEAT (optional, saves output on repeated parts): a geometry object (not Sweep)
+may have "repeat": {"count": n, "step": [dx,dy,dz]} for n copies in a row, or
+{"at": [[dx,dy,dz], ...]} for one copy per offset (the original included as the
+first, so "at" starts with [0,0,0]). Model one leg, slat, fin or louvre and
+repeat it instead of writing every copy. Copies do not keep locks.
+DETAIL LEVELS (optional): "detail_levels": ["medium", "fine"] on a geometry object
+shows it only at those Revit detail levels (default: all three). Put small
+details (handles, bolts, knobs, grilles, chamfers) at medium/fine and, when the
+fine model is heavy, add one simple envelope part shown at coarse only.
 Optional sketch_plane_x/y/z are numeric millimeter offsets; use at most one.
 Default sketch plane is z=0. x-plane arc axes are +Y,+Z; y-plane axes +Z,+X;
 z-plane axes +X,+Y. Profile coordinates are projected onto the selected plane;
@@ -182,7 +258,27 @@ length (default, value in millimeters), number, integer or text, optional value
 matching the type and optional instance boolean (default false). Existing
 template parameters are set; missing ones are created as type parameters unless
 instance is true.
-Names (materials, parameter, subcategory, parameters[].name) must not contain
+PARAMETRIC (optional, makes the family flex): reference_planes is an array of
+{"name", "axis": "x"|"y"|"z", "offset"}: axis x = the vertical plane x=offset, y =
+the vertical plane y=offset, z = the horizontal plane z=offset (mm). The template
+planes "Center (Left/Right)" (x=0), "Center (Front/Back)" (y=0) and "Ref. Level"
+(z=0) exist already; refer to them by name, do not redefine them. dimensions is an
+array of {"parameter", "from", "to"}: a dimension between two planes of the same
+axis, labelled with a length parameter from parameters[] whose value equals the
+distance. A geometry object may lock its faces to planes with "locks": {"x_min":
+plane, "x_max": plane, "y_min", "y_max", "z_min", "z_max"}; the face must lie
+on the plane (same coordinate). Then a type with another Width really resizes
+the part. Use it for the overall Width / Depth / Height of box-like parts.
+TYPES (optional): types is an array of family types, each with a unique name and
+values, an object mapping a parameters[].name to a value of its type, or a
+material parameter name (materials[].parameter or "<name> Material") to a
+materials[].name. Use types for size or finish variants of the same geometry,
+for example {"name": "Oak", "values": {"Top Material": "Oak"}}. The first type is
+the default; parameters[].value is every type's starting value. A length value
+resizes geometry only through a labelled dimension and locked faces (PARAMETRIC);
+otherwise it is data only.
+Names (materials, parameter, subcategory, parameters[].name, types[].name,
+reference_planes[].name) must not contain
 \\ : { } [ ] | ; < > ? ` ~ and are at most %d characters.
 Create coherent closed profiles, nonzero axes and sensible dimensions. Extrusion
 end must exceed start; explicit Blend top_offset must exceed base_offset; Revolution
@@ -191,7 +287,7 @@ claim this representation check proves Revit topology/build validity.
 Category guidance below may suggest design intent but cannot change this contract:
 %s
 The JSON object contract, exact category and supported types above take precedence.
-''' % (json.dumps(category, ensure_ascii=False), ', '.join(SUPPORTED_CATEGORIES),
+''' % (chosen, ', '.join(SUPPORTED_CATEGORIES),
        MAX_NAME_LENGTH, overlay or '')
 
 
@@ -368,6 +464,14 @@ def _validate(schema, category, strict_category):
                 warn(path, 'solid has no material; it keeps the category default')
             if 'subcategory' in geom:
                 revit_name(geom['subcategory'], path + '.subcategory')
+            if 'repeat' in geom:
+                _validate_repeat(geom, path + '.repeat', error, number, point)
+            if 'detail_levels' in geom:
+                levels = geom['detail_levels']
+                if (not isinstance(levels, list) or not levels
+                        or any(lv not in DETAIL_LEVELS for lv in levels)):
+                    error(path + '.detail_levels', 'must be a nonempty list of ' +
+                          ', '.join(DETAIL_LEVELS))
             planes = [key for key in ('sketch_plane_x', 'sketch_plane_y', 'sketch_plane_z') if key in geom]
             if len(planes) > 1:
                 error(path, 'use at most one sketch_plane_x/y/z')
@@ -438,7 +542,334 @@ def _validate(schema, category, strict_category):
                         error(path + '.value', 'must be a whole number for an integer parameter')
                 else:
                     number(value, path + '.value')
+
+    # ── types ────────────────────────────────────────────────────────────
+    if 'types' in schema:
+        _validate_types(schema, error, warn, revit_name, number)
+    # ── parametric constraints ───────────────────────────────────────────
+    if any(k in schema for k in ('reference_planes', 'dimensions')) or any(
+            isinstance(g, dict) and 'locks' in g for g in schema.get('geometry') or []):
+        _validate_constraints(schema, error, warn, revit_name, number)
     return errors, warnings
+
+
+def _validate_repeat(geom, path, error, number, point):
+    rep = geom['repeat']
+    if geom.get('type') == 'Sweep':
+        error(path, 'Sweep cannot repeat; write the copies out')
+        return
+    if not isinstance(rep, dict) or ('at' in rep) == ('count' in rep):
+        error(path, 'must be {"count": n, "step": [dx,dy,dz]} or {"at": [[dx,dy,dz], ...]}')
+        return
+    if 'count' in rep:
+        count = rep.get('count')
+        if isinstance(count, bool) or not isinstance(count, int) or not 2 <= count <= MAX_REPEAT:
+            error(path + '.count', 'must be a whole number from 2 to {}'.format(MAX_REPEAT))
+        point(rep.get('step'), path + '.step')
+    else:
+        at = rep.get('at')
+        if not isinstance(at, list) or not 1 <= len(at) <= MAX_REPEAT:
+            error(path + '.at', 'must list 1 to {} offsets [dx,dy,dz]'.format(MAX_REPEAT))
+            return
+        for j, offset in enumerate(at):
+            point(offset, '{}.at[{}]'.format(path, j))
+
+
+_POINT_KEYS = ('start', 'end', 'mid', 'center', 'axis_start', 'axis_end')
+
+
+def _shift_segments(segs, d):
+    out = []
+    for seg in segs or []:
+        if not isinstance(seg, dict):
+            out.append(seg)
+            continue
+        seg = dict(seg)
+        for key in _POINT_KEYS:
+            if isinstance(seg.get(key), list) and len(seg[key]) == 3:
+                seg[key] = [seg[key][k] + d[k] for k in range(3)]
+        if isinstance(seg.get('points'), list):
+            seg['points'] = [[p[k] + d[k] for k in range(3)] if isinstance(p, list) and len(p) == 3
+                             else p for p in seg['points']]
+        out.append(seg)
+    return out
+
+
+def shift_geometry(geom, d):
+    """A copy of one geometry object moved by d = [dx, dy, dz] millimetres."""
+    moved = dict(geom)
+    for key in ('profile', 'top_profile', 'path'):
+        if key in moved:
+            moved[key] = _shift_segments(moved[key], d)
+    if isinstance(moved.get('inner_loops'), list):
+        moved['inner_loops'] = [_shift_segments(loop, d) for loop in moved['inner_loops']]
+    for key in _POINT_KEYS:
+        if isinstance(moved.get(key), list) and len(moved[key]) == 3:
+            moved[key] = [moved[key][k] + d[k] for k in range(3)]
+    if moved.get('type') in ('Extrusion', 'Blend', 'Revolution'):
+        # The sketch plane follows the move along its own normal; in-plane
+        # moves are carried by the profile points (projected onto the plane).
+        axis = 'z'
+        for name in ('x', 'y', 'z'):
+            if 'sketch_plane_' + name in moved:
+                axis = name
+        index = 'xyz'.index(axis)
+        if d[index]:
+            moved['sketch_plane_' + axis] = float(moved.get('sketch_plane_' + axis, 0.0)) + d[index]
+    return moved
+
+
+def expand_schema(schema):
+    """The schema with every ``repeat`` written out (pure; the input is untouched).
+
+    The preview and the builder both build from this, so they agree. Invalid
+    repeats are left as a single part (the validator reports them).
+    """
+    if not isinstance(schema, dict) or not isinstance(schema.get('geometry'), list):
+        return schema
+    if not any(isinstance(g, dict) and 'repeat' in g for g in schema['geometry']):
+        return schema
+    geometry = []
+    for geom in schema['geometry']:
+        rep = geom.get('repeat') if isinstance(geom, dict) else None
+        if not isinstance(rep, dict) or geom.get('type') == 'Sweep':
+            geometry.append(geom)
+            continue
+        base = dict(geom)
+        base.pop('repeat', None)
+        offsets = []
+        try:
+            if 'count' in rep:
+                step = [float(v) for v in rep['step']]
+                offsets = [[step[k] * i for k in range(3)] for i in range(int(rep['count']))]
+            else:
+                offsets = [[float(v) for v in off] for off in rep['at']]
+        except (TypeError, ValueError, KeyError):
+            offsets = []
+        if not offsets or len(offsets) > MAX_REPEAT:
+            geometry.append(base)
+            continue
+        label = base.get('id') or base.get('type')
+        for i, d in enumerate(offsets):
+            part = shift_geometry(base, d) if any(d) else dict(base)
+            if i:
+                part.pop('locks', None)
+            part['id'] = u'{} {}'.format(label, i + 1)
+            geometry.append(part)
+    expanded = dict(schema)
+    expanded['geometry'] = geometry
+    return expanded
+
+
+def plane_table(schema):
+    """{lower name: (name, axis, offset)} for the template planes plus reference_planes[]."""
+    table = dict((n.lower(), (n, a, o)) for n, (a, o) in BUILTIN_PLANES.items())
+    for plane in (schema.get('reference_planes') if isinstance(schema, dict) else None) or []:
+        if (isinstance(plane, dict) and isinstance(plane.get('name'), str) and plane['name'].strip()
+                and plane.get('axis') in PLANE_AXES and _finite_number(plane.get('offset'))):
+            table.setdefault(plane['name'].strip().lower(),
+                             (plane['name'].strip(), plane['axis'], float(plane['offset'])))
+    return table
+
+
+def _validate_constraints(schema, error, warn, revit_name, number):
+    planes = schema.get('reference_planes', [])
+    if not isinstance(planes, list):
+        error('$.reference_planes', 'must be an array of plane objects')
+        planes = []
+    if len(planes) > MAX_PLANES:
+        error('$.reference_planes', 'at most {} planes'.format(MAX_PLANES))
+    seen = set(n.lower() for n in BUILTIN_PLANES)
+    for i, plane in enumerate(planes):
+        path = '$.reference_planes[{}]'.format(i)
+        if not isinstance(plane, dict):
+            error(path, 'must be {"name", "axis", "offset"}')
+            continue
+        name = plane.get('name')
+        if revit_name(name, path + '.name'):
+            if name.strip().lower() in seen:
+                error(path + '.name', '{!r} already exists (template planes: {})'.format(
+                    name, ', '.join(sorted(BUILTIN_PLANES))))
+            seen.add(name.strip().lower())
+        if plane.get('axis') not in PLANE_AXES:
+            error(path + '.axis', 'must be "x", "y" or "z"')
+        number(plane.get('offset'), path + '.offset')
+    table = plane_table(schema)
+
+    def known(name, path):
+        if not isinstance(name, str) or name.strip().lower() not in table:
+            error(path, 'unknown plane {!r}; defined: {}'.format(
+                name, ', '.join(sorted(v[0] for v in table.values()))))
+            return None
+        return table[name.strip().lower()]
+
+    kinds = _schema_parameter_kinds(schema)
+    values = dict((p['name'].strip().lower(), p.get('value')) for p in schema.get('parameters') or []
+                  if isinstance(p, dict) and isinstance(p.get('name'), str))
+    dims = schema.get('dimensions', [])
+    if not isinstance(dims, list):
+        error('$.dimensions', 'must be an array of {"parameter", "from", "to"}')
+        dims = []
+    for i, dim in enumerate(dims):
+        path = '$.dimensions[{}]'.format(i)
+        if not isinstance(dim, dict):
+            error(path, 'must be {"parameter", "from", "to"}')
+            continue
+        pname = dim.get('parameter')
+        kind = kinds.get(pname.strip().lower()) if isinstance(pname, str) else None
+        if kind is None:
+            error(path + '.parameter', 'must name a parameters[] entry of type length')
+        elif kind[1] != 'length':
+            error(path + '.parameter', '{!r} is a {} parameter; a dimension needs length'.format(
+                pname, kind[1]))
+        a = known(dim.get('from'), path + '.from')
+        b = known(dim.get('to'), path + '.to')
+        if a and b:
+            if a[1] != b[1]:
+                error(path, 'from {!r} (axis {}) and to {!r} (axis {}) must share an axis'.format(
+                    a[0], a[1], b[0], b[1]))
+            elif abs(a[2] - b[2]) < 1.0:
+                error(path, 'from and to are the same plane position')
+            elif kind is not None and _finite_number(values.get(pname.strip().lower())) and \
+                    abs(abs(a[2] - b[2]) - values[pname.strip().lower()]) > 1.0:
+                warn(path, '{!r} is {} mm but the planes are {} mm apart; Revit moves the '
+                           '"to" plane to the parameter value'.format(
+                               pname, values[pname.strip().lower()], round(abs(a[2] - b[2]), 1)))
+    for i, geom in enumerate(schema.get('geometry') or []):
+        if not isinstance(geom, dict) or 'locks' not in geom:
+            continue
+        path = '$.geometry[{}].locks'.format(i)
+        locks = geom['locks']
+        if not isinstance(locks, dict):
+            error(path, 'must be an object such as {"x_min": "Left", "x_max": "Right"}')
+            continue
+        if geom.get('is_solid') is False:
+            warn(path, 'voids are locked too; check the cut after creation')
+        for key in sorted(locks):
+            if key not in LOCK_KEYS:
+                error(path, 'unknown key {!r}; use {}'.format(key, ', '.join(LOCK_KEYS)))
+                continue
+            plane = known(locks[key], '{}.{}'.format(path, key))
+            if plane and plane[1] != key[0]:
+                error('{}.{}'.format(path, key), 'plane {!r} is a {} plane; {} needs an {} plane'
+                      .format(plane[0], plane[1], key, key[0]))
+
+
+def _schema_parameter_kinds(schema):
+    """{lower name: (name, kind)} for parameters[] and the material parameters."""
+    kinds = {}
+    for param in schema.get('parameters') or []:
+        if isinstance(param, dict) and isinstance(param.get('name'), str) and param['name'].strip():
+            ptype = param.get('type', 'length')
+            kinds[param['name'].strip().lower()] = (param['name'].strip(), ptype)
+    for mat in schema.get('materials') or []:
+        if isinstance(mat, dict) and isinstance(mat.get('name'), str) and mat['name'].strip():
+            pname = material_parameter_name(mat)
+            kinds[pname.lower()] = (pname, 'material')
+    return kinds
+
+
+def _validate_types(schema, error, warn, revit_name, number):
+    types = schema['types']
+    if not isinstance(types, list):
+        error('$.types', 'must be an array of type objects')
+        return
+    if len(types) > MAX_TYPES:
+        error('$.types', 'at most {} types'.format(MAX_TYPES))
+    kinds = _schema_parameter_kinds(schema)
+    material_names = set(m['name'].strip() for m in schema.get('materials') or []
+                         if isinstance(m, dict) and isinstance(m.get('name'), str))
+    seen = set()
+    for i, ftype in enumerate(types):
+        path = '$.types[{}]'.format(i)
+        if not isinstance(ftype, dict):
+            error(path, 'must be a type object with name and values')
+            continue
+        name = ftype.get('name')
+        if revit_name(name, path + '.name'):
+            if name.strip().lower() in seen:
+                error(path + '.name', 'duplicates another type {!r}'.format(name))
+            seen.add(name.strip().lower())
+        unknown = sorted(k for k in ftype if k not in TYPE_FIELDS)
+        if unknown:
+            warn(path, 'ignored field(s): ' + ', '.join(unknown))
+        values = ftype.get('values', {})
+        if not isinstance(values, dict):
+            error(path + '.values', 'must be an object of parameter name -> value')
+            continue
+        for key in sorted(values):
+            vpath = '{}.values[{}]'.format(path, json.dumps(key, ensure_ascii=False))
+            value = values[key]
+            known = kinds.get(key.strip().lower()) if isinstance(key, str) else None
+            if known is None:
+                if isinstance(value, bool) or not (isinstance(value, str) or _finite_number(value)):
+                    error(vpath, 'must be a number or a string')
+                else:
+                    warn(vpath, 'not in parameters[] or a material parameter; it is set only '
+                                'if the category template has that parameter')
+                continue
+            kind = known[1]
+            if kind == 'material':
+                if not isinstance(value, str) or value.strip() not in material_names:
+                    error(vpath, 'must name one of materials[] ({})'.format(
+                        ', '.join(sorted(material_names)) or 'none defined'))
+            elif kind == 'text':
+                if not isinstance(value, str):
+                    error(vpath, 'must be a string for a text parameter')
+            elif kind == 'integer':
+                if isinstance(value, bool) or not isinstance(value, int):
+                    error(vpath, 'must be a whole number for an integer parameter')
+            else:
+                number(value, vpath)
+
+
+def type_names(schema):
+    """Names of the schema's family types, in order (empty when it has none)."""
+    if not isinstance(schema, dict) or not isinstance(schema.get('types'), list):
+        return []
+    return [t['name'].strip() for t in schema['types']
+            if isinstance(t, dict) and isinstance(t.get('name'), str) and t['name'].strip()]
+
+
+def schema_for_type(schema, type_name):
+    """A copy of `schema` whose solids show the materials of family type `type_name`.
+
+    Used by the review pane to preview a finish variant: every solid bound to
+    a material parameter the type overrides is given the type's material. An
+    unknown type (or None) returns the schema unchanged. Pure, never mutates.
+    """
+    if not isinstance(schema, dict) or not type_name:
+        return schema
+    chosen = None
+    for ftype in schema.get('types') or []:
+        if (isinstance(ftype, dict) and isinstance(ftype.get('name'), str)
+                and ftype['name'].strip() == type_name):
+            chosen = ftype
+            break
+    if chosen is None or not isinstance(chosen.get('values'), dict):
+        return schema
+    overrides = {}
+    for key, value in chosen['values'].items():
+        if isinstance(key, str) and isinstance(value, str):
+            overrides[key.strip().lower()] = value.strip()
+    by_param = {}
+    for mat in schema.get('materials') or []:
+        if isinstance(mat, dict) and isinstance(mat.get('name'), str):
+            target = overrides.get(material_parameter_name(mat).lower())
+            if target:
+                by_param[mat['name'].strip()] = target
+    if not by_param:
+        return schema
+    copy = dict(schema)
+    geometry = []
+    for geom in schema.get('geometry') or []:
+        if isinstance(geom, dict) and isinstance(geom.get('material'), str) \
+                and geom['material'].strip() in by_param:
+            geom = dict(geom)
+            geom['material'] = by_param[geom['material'].strip()]
+        geometry.append(geom)
+    copy['geometry'] = geometry
+    return copy
 
 
 def validate_ai_schema(schema, category):
@@ -482,6 +913,9 @@ def schema_summary(schema):
                        'parameter': material_parameter_name(m),
                        'solids': counts.get(m.get('name'), 0)} for m in materials],
         'parameters': len(schema.get('parameters') or []),
+        'types': type_names(schema),
+        'reference_planes': len(schema.get('reference_planes') or []),
+        'dimensions': len(schema.get('dimensions') or []),
     }
 
 
@@ -498,6 +932,10 @@ EXAMPLE_SCHEMA = {
     'parameters': [
         {'name': 'Top Thickness', 'type': 'length', 'value': 30},
         {'name': 'Designer', 'type': 'text', 'value': 'T3Lab'},
+    ],
+    'types': [
+        {'name': 'Oak Top', 'values': {'Top Material': 'Oak'}},
+        {'name': 'Steel Top', 'values': {'Top Material': 'Black Steel', 'Top Thickness': 12}},
     ],
     'geometry': [
         {'id': 'Top', 'type': 'Extrusion', 'material': 'Oak', 'subcategory': 'Top',
@@ -538,6 +976,25 @@ def schema_contract():
             'existing': 'set on the template parameter with the same name',
             'missing': 'created (type parameter unless instance is true)',
         },
+        'type_rules': {
+            'fields': {'name': 'unique, required', 'values': 'object: parameter name -> value'},
+            'values': ('A parameters[].name takes a value of its type (length in mm); a material '
+                       'parameter name takes a materials[].name.'),
+            'default': 'the first type is the default; without types one type is created',
+            'max_types': MAX_TYPES,
+            'note': 'geometry is not driven by parameters: a length value is data only',
+        },
+        'constraint_rules': {
+            'reference_planes': '{"name", "axis": "x"|"y"|"z", "offset": mm}; axis x = plane x=offset',
+            'template_planes': dict((k, {'axis': v[0], 'offset': v[1]}) for k, v in BUILTIN_PLANES.items()),
+            'dimensions': '{"parameter": length parameter, "from": plane, "to": plane} on one axis',
+            'locks': 'geometry[].locks {x_min|x_max|y_min|y_max|z_min|z_max: plane}; face must lie on it',
+            'effect': 'a labelled dimension + locked faces make the part resize with the parameter',
+        },
+        'detail_levels': {'field': 'geometry[].detail_levels', 'values': list(DETAIL_LEVELS),
+                          'default': 'shown at every detail level'},
+        'repeat_rules': {'linear': '{"count": n, "step": [dx,dy,dz]}', 'list': '{"at": [[dx,dy,dz], ...]}',
+                         'max_copies': MAX_REPEAT, 'not_for': 'Sweep'},
         'forbidden_name_characters': NAME_FORBIDDEN,
         'max_name_length': MAX_NAME_LENGTH,
         'example': EXAMPLE_SCHEMA,

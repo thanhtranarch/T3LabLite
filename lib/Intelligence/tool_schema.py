@@ -350,6 +350,10 @@ READ_ONLY_TOOL_NAMES = frozenset([
     # model is untouched until famigen_create_family (not listed: it saves an
     # .rfa and can load it into the project).
     "famigen_get_schema", "famigen_propose_family",
+    # FamiGen Studio link (FamilyGen/studio_link.py): read the Studio, check a
+    # family, store an edited proposal - never the model.
+    "famigen_get_studio_state", "famigen_validate_family", "famigen_patch_family",
+    "famigen_list_templates",
     # Data hub snapshot (core/hub_snapshot.py): writes a file, never the model.
     "hub_publish",
 ])

@@ -2,7 +2,11 @@
 # -*- coding: utf-8 -*-
 __title__  = "FamiGen"
 __author__ = "Tran Tien Thanh"
-__doc__    = "FamiGen — Create Revit families from CAD blocks, JSON schema, or presets."
+__doc__    = ("FamiGen Studio — chat with Claude to create Revit families, review them in 3D "
+              "(pyRevit 7.0+). Shift+Click: classic window (From CAD, JSON).")
+# FamiGen Studio stays open next to Revit (modeless) when the engine persists;
+# without it the Studio runs modally (FamilyGen.studio_host.open_studio).
+__persistentengine__ = True
 
 import os, sys
 # ─── CPython 3 & lib bootstrap ────────────────────────────────────────────────
@@ -44,13 +48,47 @@ except Exception:
     pass
 
 from GUI.FamiGenDialog import show_family_creator
-from Snippets._host import resolve_doc
+from Snippets._host import resolve_doc, injected_uiapp
+
+
+def _shift_click():
+    try:
+        from pyrevit import EXEC_PARAMS
+        return bool(EXEC_PARAMS.config_mode)
+    except Exception:
+        return False
+
+
+def _persistent_engine():
+    try:
+        from GUI.ManaSelectDialog import detect_persistent_engine
+        return detect_persistent_engine()
+    except Exception:
+        return False
+
+
+def _studio_unavailable(message):
+    """Say why the Studio cannot open; offer the classic window. True = open classic."""
+    from Autodesk.Revit.UI import TaskDialog, TaskDialogCommandLinkId, TaskDialogResult
+    dlg = TaskDialog("FamiGen Studio")
+    dlg.MainInstruction = "FamiGen Studio cannot open"
+    dlg.MainContent = message
+    dlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink1, "Open classic FamiGen",
+                       "From CAD blocks, or paste a family JSON")
+    dlg.AddCommandLink(TaskDialogCommandLinkId.CommandLink2, "Close")
+    return dlg.Show() == TaskDialogResult.CommandLink1
+
 
 if __name__ == '__main__':
     doc, err = resolve_doc()
     if not doc:
         from pyrevit import forms
         forms.alert(err or "No active document found in Revit.", title="FamiGen")
-    else:
+    elif _shift_click():
         show_family_creator(doc, doc.Application)
+    else:
+        from FamilyGen import studio_host
+        state, message = studio_host.open_studio(doc, injected_uiapp(), _persistent_engine())
+        if state == 'unsupported' and _studio_unavailable(message):
+            show_family_creator(doc, doc.Application)
 

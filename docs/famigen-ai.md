@@ -1,5 +1,11 @@
 # FamiGen: AI-modelled families with materials, reviewed before creation
 
+> **FamiGen Studio** (pyRevit 7.0+, the ribbon button's default since 2026-11) is the
+> chat + 3D web UI on top of this contract: direct Claude, AI apps over MCP, templates,
+> types, reference planes, detail levels. See [famigen-studio-spec.md](famigen-studio-spec.md).
+> This page describes the shared JSON contract, the builder and the classic window
+> (Shift+Click the ribbon button).
+
 FamiGen's **AI / JSON** panel turns a description (or a proposal from an external
 AI over MCP) into a family JSON, shows it as a **3D preview with its materials**,
 and only after the user is satisfied builds and saves a complete `.rfa` from the
@@ -66,15 +72,22 @@ Contract source: `T3Lab.extension/lib/Intelligence/family_schema.py`
 
 | Part | Rules |
 |------|-------|
-| `family_category` | One of the 13 template categories (Generic Model, Door, Window, Furniture, Plumbing Fixture, Electrical Equipment, Mechanical Equipment, Specialty Equipment, Casework, Columns, Lighting Fixture, Site, Entourage). Anything else is an error that lists them — no silent fallback. |
+| `family_category` | One of the 17 template categories (Generic Model, Door, Window, Furniture, Plumbing Fixture, Electrical Equipment, Mechanical Equipment, Specialty Equipment, Casework, Columns, Lighting Fixture, Site, Entourage, Pipe Accessory, Duct Accessory, Sprinkler, Electrical Fixture). Anything else is an error that lists them — no silent fallback. |
+| `types[]` | `{"name", "values": {parameter: value, material parameter: material}}`; first type = default. |
+| `Tube` (form) | `{"points": [[x,y,z], …], "radius", "smooth"?, "closed"?}` — one continuous curved rod / rail / pipe / tube slide; written out as overlapping Cylinders (ball joints only at sharp turns). |
+| continuity | Warning "Not connected: '…'" for parts that do not reach the base through touching parts; the Studio's Claude gets one round to fix them. |
+| `geometry[].repeat` | `{"count", "step": [dx,dy,dz]}` or `{"at": [[dx,dy,dz], …]}` — copies written out before preview and build (not Sweep). |
+| `geometry[].detail_levels` | Subset of `coarse` / `medium` / `fine` (default all). |
+| `reference_planes[]`, `dimensions[]`, `geometry[].locks` | Planes `{"name","axis","offset"}`, length dimensions `{"parameter","from","to"}`, face locks `{x_min…z_max: plane}` — the family flexes per type. Details: [famigen-studio-spec.md §5](famigen-studio-spec.md#5-schema-v2-additions-all-optional-v1v2-files-stay-valid). |
 | `materials[]` | Unique `name`; `color` `"#RRGGBB"` or `[r,g,b]` 0–255; optional `transparency` 0–100, `shininess` 0–128, `smoothness` 0–100, `parameter` (default `"<name> Material"`). |
 | `geometry[].material` | Must name a `materials[]` entry; ignored (warning) on voids. A solid without one keeps the category default (warning). |
 | `geometry[].subcategory` | Optional; created under the family category and assigned to the part. |
 | `parameters[]` | `name`, optional `type` `length` (mm, default) / `number` / `integer` / `text`, `value` matching it, `instance` (default false). Existing template parameters are set; missing ones are created. |
 | names | No `\ : { } [ ] \| ; < > ? `` ` `` ~`, at most 60 characters. |
 
-Geometry forms and curve segments are unchanged: Extrusion, Blend, Revolution,
-Sweep, Cylinder; Line, Arc3P/ArcThreePoint, Spline, Arc, Circle, Ellipse;
+Geometry forms: Extrusion, Blend, Revolution, Sweep (optionally `profile_local`), SweptBlend,
+Cylinder, Tube (FamiGen-only, expanded before building), and Void Forms (`is_solid: false` on any of
+them); see [famigen-studio-spec.md §5.2](famigen-studio-spec.md). Curve segments: Line, Arc3P/ArcThreePoint, Spline, Arc, Circle, Ellipse;
 millimeters and radians.
 
 ## What the builder creates
@@ -101,9 +114,15 @@ and the MCP server — one Transaction per family, rolled back on error:
 |------|-----------------|----------|
 | `famigen_get_schema` | read, no document needed | `{category?, include_guidance?}` → `schema_version`, units, `supported_categories`, forms, segments, `material_rules`, `parameter_rules`, `example`, `workflow`; with `category` also `system_prompt` (with `include_guidance`, the long category design guide). |
 | `famigen_propose_family` | Revit UI thread; **model unchanged** | `{schema, note?, open_window?=true}` → invalid: `{success:false, errors[], warnings[], summary, window:"not_opened"}`; valid: `{success:true, proposal_id, warnings[], summary, size_mm, window:"opened"\|"updated"\|"failed"\|"not_opened", next}`. Opens or reuses a **modeless** FamiGen window on the review pane and returns at once. |
+| `famigen_get_studio_state` | read, no document needed | `{include_family?}` → `{studio_open, category, family, proposal_id, selected_part, summary, messages[]}` (messages typed in Studio for the AI app; marked read). |
+| `famigen_validate_family` | read, no document needed | `{schema}` → `{valid, errors[], warnings[], summary, size_mm}`; nothing stored or shown. |
+| `famigen_patch_family` | no document needed; stores a proposal | `{proposal_id?, set?, parts?, note?}` — edit by part id / top-level fields on a proposal or the family in Studio → `{success, proposal_id, changes[], warnings[]}`. |
+| `famigen_list_templates` | read | `{query?, limit?}` → `{templates[{title, category, brief}], total}`. |
 | `famigen_create_family` | Revit UI thread; writes `.rfa`, may load | `{proposal_id? \| schema?, output_folder?, load_into_project?=false}` → `{success, saved_path, category, template, built, total, skipped[], warnings[], materials_created[], materials_reused[], material_parameters[], parameters_created[], parameters_set[], subcategories[], loaded_into_project, summary}`; errors `{success:false, error}`. Default folder `Documents\T3Lab\FamiGen`. |
 
 Proposals are stored in `%APPDATA%\T3LabAI\famigen_proposals` (last 50).
+When FamiGen Studio is open, `famigen_propose_family` answers `window: "studio"` and
+Studio shows the proposal itself (no classic window).
 Typical flow for an external AI: `famigen_get_schema` → model → `famigen_propose_family`
 (repeat until no errors) → user reviews → user presses Create Family, or the AI
 calls `famigen_create_family(proposal_id)` after the user approves.
@@ -116,6 +135,8 @@ call times out after 120 s) until that window is closed.
 ## Development checks
 
 ```bash
+python3 lite_guard/test_famigen_claude.py   # Claude session, types (Lite)
+python3 lite_guard/test_famigen_studio.py   # Studio protocol, page, MCP link (Lite)
 python3 dev/test_family_schema.py        # contract v1 + v2
 python3 dev/test_famigen_ai_workflow.py  # dialog callbacks: AI, create, proposal
 python3 dev/test_famigen_preview.py      # tessellation + proposal store

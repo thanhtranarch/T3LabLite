@@ -10,7 +10,8 @@
 # and the Assistant window split tests (lite_guard/test_assistant_structure.py)
 # and the shared project memory tests (lite_guard/test_memory_hub.py)
 # and the instant small-talk tests (lite_guard/test_assistant_smalltalk.py)
-# and the usage tracking privacy tests (lite_guard/test_tracking_privacy.py).
+# and the usage tracking privacy tests (lite_guard/test_tracking_privacy.py)
+# and the FamiGen Studio tests (lite_guard/test_famigen_claude.py, test_famigen_studio.py).
 name: Lite guard
 
 on:
@@ -37,6 +38,10 @@ jobs:
         run: python3 lite_guard/test_whats_new.py
       - name: Test the MCP server, bridge and security policy
         run: python3 lite_guard/test_mcp_server.py
+      - name: Test FamiGen's direct Claude session and family types
+        run: python3 lite_guard/test_famigen_claude.py
+      - name: Test FamiGen Studio (protocol, page, MCP link, schema extras)
+        run: python3 lite_guard/test_famigen_studio.py
       - name: Test the LLM providers (Gemini, Custom, OpenAI)
         run: python3 lite_guard/test_llm_providers.py
       - name: Test remote MCP servers in the Assistant

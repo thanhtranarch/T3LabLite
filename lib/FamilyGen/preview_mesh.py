@@ -16,6 +16,9 @@ Revit will be asked to build:
 * Revolution turns the profile about the projected axis (right-hand rule);
 * Sweep profiles are used as drawn and carried along the path - an
   approximation (parallel transport, no mitre scaling at sharp corners);
+* Sweep with ``profile_local`` and SweptBlend carry a local cross-section
+  (u sideways, v up - ``FamilyGen.form_frames``) along the path; a SweptBlend
+  morphs its start section into its end section;
 * Cylinder is a ring between ``start`` and ``end``.
 
 It is a preview, not a validator: what Revit rejects (self-intersecting
@@ -589,6 +592,63 @@ def _sweep(mesh, geom, plane):
     mesh.add_cap(sections[-1], tris)
 
 
+def _resample_loop3(loop, count):
+    """`count` 3D points evenly spaced by length along a closed loop."""
+    pts = list(loop)
+    if pts[0] != pts[-1]:
+        pts.append(pts[0])
+    lengths = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        lengths.append(lengths[-1] + _length(_sub(b, a)))
+    total = lengths[-1] or 1.0
+    out, j = [], 0
+    for i in range(count):
+        target = total * i / count
+        while j < len(lengths) - 2 and lengths[j + 1] < target:
+            j += 1
+        span = (lengths[j + 1] - lengths[j]) or 1.0
+        t = (target - lengths[j]) / span
+        out.append(_add(pts[j], _mul(_sub(pts[j + 1], pts[j]), t)))
+    return out
+
+
+def _local_sweep(mesh, geom, plane, top_key=None):
+    """Sweep with profile_local / SweptBlend: local sections carried along the path.
+
+    Same frame rule as the builder (FamilyGen.form_frames): u = Z x t, v = t x u.
+    A SweptBlend morphs `profile` into `top_profile` along the path.
+    """
+    from FamilyGen.form_frames import frame
+    path = sample_loop(geom.get('path', []), plane, closed=False)
+    if len(path) < 2:
+        raise ValueError('the path needs two points')
+    bottom = sample_loop(geom.get('profile', []), None)
+    top = sample_loop(geom.get(top_key) or geom.get('profile', []), None) if top_key else bottom
+    if len(bottom) < 3 or len(top) < 3:
+        raise ValueError('the profile needs a closed outline')
+    count = 64
+    bottom, top = _resample_loop3(bottom, count), _resample_loop3(top, count)
+    shift = min(range(count), key=lambda k: _length(_sub(top[k], bottom[0])))
+    top = top[shift:] + top[:shift]
+    sections = []
+    last = len(path) - 1
+    for i, station in enumerate(path):
+        tangent = _unit(_sub(path[min(i + 1, last)], path[max(i - 1, 0)]))
+        u, v = frame(tangent)
+        w = i / float(last)
+        ring = []
+        for b, t in zip(bottom, top):
+            a_ = b[0] + (t[0] - b[0]) * w
+            b_ = b[1] + (t[1] - b[1]) * w
+            ring.append(_add(station, _add(_mul(tuple(u), a_), _mul(tuple(v), b_))))
+        sections.append(ring)
+    for i in range(last):
+        mesh.add_strip(sections[i], sections[i + 1], closed=True)
+    for ring, uv_loop, flip in ((sections[0], bottom, True), (sections[-1], top, False)):
+        _, tris = triangulate([(p[0], p[1]) for p in uv_loop])
+        mesh.add_cap(ring, tris, flip=flip)
+
+
 def _cylinder(mesh, geom):
     s = _point(geom['start'])
     e = _point(geom['end'])
@@ -608,7 +668,13 @@ def _cylinder(mesh, geom):
 
 
 def build_preview(schema):
-    """PreviewModel for a schema dict; never raises for bad parts, warns instead."""
+    """PreviewModel for a schema dict; never raises for bad parts, warns instead.
+
+    ``repeat`` is written out first (``expand_schema``), the same way the
+    builder does it, so mesh indexes refer to the EXPANDED geometry list.
+    """
+    from Intelligence.family_schema import expand_schema
+    schema = expand_schema(schema)
     model = PreviewModel()
     geometry = schema.get('geometry') if isinstance(schema, dict) else None
     if not isinstance(geometry, list):
@@ -641,8 +707,12 @@ def build_preview(schema):
                 _blend(mesh, geom, plane)
             elif kind == 'Revolution':
                 _revolution(mesh, geom, plane)
+            elif kind == 'Sweep' and geom.get('profile_local'):
+                _local_sweep(mesh, geom, plane)
             elif kind == 'Sweep':
                 _sweep(mesh, geom, plane)
+            elif kind == 'SweptBlend':
+                _local_sweep(mesh, geom, plane, top_key='top_profile')
             elif kind == 'Cylinder':
                 _cylinder(mesh, geom)
             else:
@@ -660,11 +730,65 @@ def build_preview(schema):
     if pts:
         model.bbox_min = tuple(min(p[i] for p in pts) for i in range(3))
         model.bbox_max = tuple(max(p[i] for p in pts) for i in range(3))
+    model.warnings.extend(continuity_issues(model))
     voids = sum(1 for m in model.meshes if not m.is_solid)
     if voids:
         model.warnings.append('{} void form(s) shown translucent; Revit cuts them '
                               'from the solids they touch.'.format(voids))
     return model
+
+
+# ── continuity ───────────────────────────────────────────────────────────────
+
+CONTACT_MM = 5.0      # parts closer than this count as touching
+MAX_REPORTED = 8
+
+
+def _bbox(mesh):
+    xs = [p[0] for p in mesh.positions]
+    ys = [p[1] for p in mesh.positions]
+    zs = [p[2] for p in mesh.positions]
+    return (min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs))
+
+
+def _touch(a, b, tol):
+    return all(a[0][k] - tol <= b[1][k] and b[0][k] - tol <= a[1][k] for k in range(3))
+
+
+def continuity_issues(model, tol=CONTACT_MM):
+    """Solids that do not connect, through touching parts, to the base.
+
+    The base is every solid that reaches the lowest point of the model (the
+    floor, or the bottom of a hung fixture's lowest part). Bounding boxes, so
+    it finds parts left floating, not every hairline gap; a diagonal member
+    always counts as touching what its box overlaps.
+    """
+    solids = [m for m in model.meshes if m.is_solid and m.positions]
+    if len(solids) < 2:
+        return []
+    boxes = [_bbox(m) for m in solids]
+    floor = min(b[0][2] for b in boxes)
+    reached = set(i for i, b in enumerate(boxes) if b[0][2] <= floor + tol)
+    todo = list(reached)
+    while todo:
+        i = todo.pop()
+        for j, b in enumerate(boxes):
+            if j not in reached and _touch(boxes[i], b, tol):
+                reached.add(j)
+                todo.append(j)
+    loose = [solids[i] for i in range(len(solids)) if i not in reached]
+    if not loose:
+        return []
+    names = []
+    for mesh in loose:
+        name = mesh.label.rsplit(' ', 1)[0] if mesh.label.rsplit(' ', 1)[-1].isdigit() else mesh.label
+        if name not in names:
+            names.append(name)
+    shown = u', '.join(u"'{}'".format(n) for n in names[:MAX_REPORTED])
+    more = u' and {} more'.format(len(names) - MAX_REPORTED) if len(names) > MAX_REPORTED else u''
+    return [u'Not connected: {}{} - {} part(s) float without touching anything that reaches '
+            u'the base. Make every joint overlap 1-5 mm (legs into the floor and into what '
+            u'they carry, rails into posts).'.format(shown, more, len(loose))]
 
 
 # ── camera ───────────────────────────────────────────────────────────────────

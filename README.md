@@ -108,7 +108,14 @@ Family manager. Batch Operations lists families, system types, model groups or a
 Transfer families and selected types between open project documents or loaded links with category filtering, conflict resolution (overwrite, rename, skip), and single-transaction undo.
 
 #### FamiGen
-Create Revit families from external data: from CAD (scan imported DWG blocks and export each unique block as an `.rfa`), from a JSON schema (fully parametric families), or in batch from built-in presets. Can draft the schema with your configured AI provider.
+**FamiGen Studio** (needs pyRevit 7.0 or later; 7.1+ for the chat): describe a family in a chat — or attach, paste or drop a photo, drawing or PDF cut sheet — and Claude builds it. Review it in 3D like in Revit (Coarse / Medium / Fine, Wireframe / Hidden Line / Shaded / Consistent Colors / Realistic, 3D / Front / Right / Plan) with its parts, materials, family types and the sizes that resize it, then **Create Family** saves the `.rfa` (optionally loads it).
+- **Auto-detect** picks the family category (17, including pipe and duct accessories, sprinklers and electrical fixtures) and reads FamiGen's design spec for it; you can also pin one.
+- **Compare with my reference**: Claude checks a render of its model against your picture once and fixes what differs.
+- **Templates** (40 ready briefs: doors, valves, AHUs, sinks, lights …) and **My families** (history).
+- **AI apps over MCP**: while Claude Desktop, Claude Code or ChatGPT (Codex) work with FamiGen, Studio switches to them by itself — your messages go to the app and its families appear in Studio, with no API tokens used. New MCP tools: `famigen_get_studio_state`, `famigen_validate_family`, `famigen_patch_family` (edit only what changes), `famigen_list_templates`.
+- Uses your Claude API key from **LLMs Setting**; hover the AI badge for the tokens and cost of the conversation.
+
+**Shift+Click** opens the classic window: from CAD (scan imported DWG blocks and export each unique block as an `.rfa`), from a JSON schema, or in batch from built-in presets. Spec: [docs/famigen-studio-spec.md](docs/famigen-studio-spec.md).
 
 ---
 

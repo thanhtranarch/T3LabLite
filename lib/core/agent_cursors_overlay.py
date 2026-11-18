@@ -15,6 +15,7 @@ from core.agent_cursors import (
     OPTION_GROUPS, OPTION_LABELS, REPLAY_SIZE, SPEEDS, STATES, SUMMARY_S, TAG_MAX, action_style,
     agent_style, ago_text, classify_action, cluster_stops, compact_line, count_items,
     describe_call, footer_text, front_hides, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
+    on_model,
     offscreen_markers, options, place_tags, plan_progress, scan_points, set_enabled,
     set_hud_offset, set_option, set_speed, short_text, should_collapse, speed, speed_factor,
     status_text, tour_schedule, union_box)
@@ -1429,6 +1430,8 @@ class _Overlay(object):
     def _show_hud(self, rect):
         scale = self._dpi()
         self._view_dip = (rect[0] / scale, rect[1] / scale, rect[2] / scale, rect[3] / scale)
+        if self._canvas_px is None or not self.win.IsVisible:
+            self._canvas_px = tuple(rect)   # bar only: the view the bar sits in
         if not self.hud.IsVisible and (self._front_ok or self._asks):
             self.hud.Show()
         self._refresh_hud()             # places it too (_place_hud)
@@ -1442,11 +1445,17 @@ class _Overlay(object):
         it ends, the cursor goes to the first. None: the cursor stays where
         it last worked."""
         self._end_summary()
+        if task_text:
+            caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
+        if not self._model():
+            self._working[agent] = (time.time(), caption)
+            self._bar_only()
+            self._last = time.time()
+            self._show_hud(rect)
+            return
         if canvas or not self.win.IsVisible or self._origin == (0.0, 0.0):
             self._place(canvas or rect)
         cur = self._cursor(agent, action)
-        if task_text:
-            caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
         self._working[agent] = (time.time(), caption)
         self._cursor_state(cur, 'working', caption)
         cur['group'].BeginAnimation(_opacity_property(), None)
@@ -1471,12 +1480,11 @@ class _Overlay(object):
         cur = self._cursors.get(agent)
         if on:
             self._waiting[agent] = caption
-            if cur is None:
-                if not self.win.IsVisible:
-                    return          # nothing on screen yet: no view to draw in
+            if cur is None and self.win.IsVisible and self._model():
                 cur = self._cursor(agent, classify_action(tool_name))
                 cur['group'].Opacity = 1.0
-            self._cursor_state(cur, 'waiting')
+            if cur is not None:
+                self._cursor_state(cur, 'waiting')
         else:
             self._waiting.pop(agent, None)
             if cur is not None:
@@ -1510,7 +1518,10 @@ class _Overlay(object):
         """A call waits for the user's OK: a card with Allow / Deny on the bar
         and the cursor pulsing, instead of a modal Revit dialog."""
         self._end_summary()
-        self._place(rect)
+        if self._model():
+            self._place(rect)
+        else:
+            self._bar_only()
         self._asks.append({'rid': rid, 'agent': agent, 'tool': tool_name, 'caption': caption,
                            'main': main, 'content': content, 'expanded': expanded,
                            'always_text': always_text})
@@ -1639,25 +1650,54 @@ class _Overlay(object):
         self._touched = touched or self._touched
         if goal and agent not in self._goals:
             self._goals[agent] = goal
-        self._place(snap['rect'])
-        f = speed_factor()
-        reduce = self._reduce()
-
         label, _glyph, acolor = action_style(action)
         caption = describe_call(tool_name, args, n_targets, failed)
         detail = tool_name
         if task_text:           # the plan's task leads; what the call did goes underneath
             detail = u'{} · {}'.format(caption, tool_name)
             caption = (u'Failed: ' if failed else u'') + task_text
-        cur = self._cursor(agent, action)
         self._working.pop(agent, None)
         self._waiting.pop(agent, None)
-        self._clear_focus(agent)
-        self._cursor_state(cur, 'failed' if failed else 'idle', caption)
-
         for vid, name, is_new in followed:
             if vid not in [v[0] for v in self._views]:
                 self._views.append((vid, name))
+        if self._model():
+            self._draw_step(agent, action, failed, snap, followed, n_targets, changes,
+                            clashes, created, fresh, caption, label, acolor)
+        else:
+            self._bar_only()            # the default: the bar, nothing on the model
+        self._log_step(agent, action, tool_name, failed, caption, detail, changes, clashes,
+                       record)
+        self._show_hud(snap['active']['rect'])
+
+    def _bar_only(self):
+        """Bar only (On model off): the bar may show, the canvas never does;
+        a cursor left from before the switch goes."""
+        self._wanted = True
+        if self._cursors or self.canvas.Children.Count:
+            for cur in self._cursors.values():
+                cur['group'].BeginAnimation(_opacity_property(), None)
+            self.canvas.Children.Clear()
+            self._cursors = {}
+            self._focus = {}
+        if self.win.IsVisible:
+            self.win.Hide()
+
+    def _model(self):
+        try:
+            return on_model()
+        except Exception:
+            return False
+
+    def _draw_step(self, agent, action, failed, snap, followed, n_targets, changes,
+                   clashes, created, fresh, caption, label, acolor):
+        """The step on the model (On model): cursor tour, boxes, effects."""
+        self._place(snap['rect'])
+        f = speed_factor()
+        reduce = self._reduce()
+        cur = self._cursor(agent, action)
+        self._clear_focus(agent)
+        self._cursor_state(cur, 'failed' if failed else 'idle', caption)
         if followed:
             first = followed[0]
             self._flash_view(snap['active'], '{} · {}'.format(
@@ -1731,6 +1771,9 @@ class _Overlay(object):
         cur['group'].BeginAnimation(_opacity_property(), None)
         cur['group'].Opacity = 1.0
 
+    def _log_step(self, agent, action, tool_name, failed, caption, detail, changes, clashes,
+                  record):
+        """The step on the bar: feed row, counts, changed values."""
         self._feed.insert(0, {'agent': agent, 'action': action, 'caption': caption,
                               'tool': detail, 'failed': failed, 't': time.time()})
         self._last_changes = [text for _i, text in changes]
@@ -1748,7 +1791,6 @@ class _Overlay(object):
             self._failed += 1 if failed else 0
             self._note = ''
         self._last = time.time()
-        self._show_hud(snap['active']['rect'])
 
     # ── chips, conflicts, off-screen arrows ──────────────────────────────────
 
@@ -1951,7 +1993,10 @@ class _Overlay(object):
         try:
             front, minimized, rect = _front_info(self.host.revit_hwnd if self.host else None)
             self._front_ok = ok = not front_hides(front, minimized, rect, self._canvas_px)
+            model = self._model()
             for window in (self.win, self.hud):
+                if window is self.win and not model:
+                    continue                # bar only: the canvas stays hidden
                 if window is self.hud and self._asks:
                     if not window.IsVisible:
                         window.Visibility = _visibility('Visible')

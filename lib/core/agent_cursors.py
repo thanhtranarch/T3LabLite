@@ -54,9 +54,13 @@ MAX_CAPTURE = 60            # added / modified ids kept per call (DocumentChange
 FRESH_HOLD_S = 7.0          # created / changed elements stay highlighted this long
 SCAN_RADIUS = 70.0          # px round the cursor a call with no element scans
 
-# name -> (mcp_paths.json key, default). The HUD toggles them live. All on by
-# default (owner, 2026-11-17); a saved choice wins.
+# name -> (mcp_paths.json key, default). The HUD toggles them live; a saved
+# choice wins. 'model' is the master switch, OFF by default (owner,
+# 2026-11-18): only the bar shows; no cursor, boxes or effects on the views,
+# and Follow / Zoom / Select / Tile / Glow do nothing. Turned on, the others
+# apply as saved (all on by default, owner 2026-11-17).
 OPTIONS = (
+    ('model', 'agent_cursors_on_model', False),
     ('follow', 'agent_cursors_follow_views', True),
     ('zoom', 'agent_cursors_zoom', True),
     ('select', 'agent_cursors_select', True),
@@ -69,7 +73,9 @@ OPTIONS = (
 SPEED_KEY = 'agent_cursors_speed'
 SPEEDS = (('calm', 1.6), ('normal', 1.0), ('fast', 0.55))
 OPTION_LABELS = {
-    'follow': ('Follow', 'Open and switch to the views the agent works in'),
+    'model': ('On model', 'Draw the cursor, element boxes and effects on the views and let the '
+                          'options below act. Off: the bar only, nothing on the model'),
+    'follow':('Follow', 'Open and switch to the views the agent works in'),
     'zoom': ('Zoom', 'Zoom the view to targets that are off screen'),
     'select': ('Select', "Select the agent's targets (replaces your selection)"),
     'tile': ('Tile', 'Tile the open views when the agent opens another one'),
@@ -141,9 +147,9 @@ PROS = (
     "When the agents go idle: a summary, Select touched and Replay.",
 )
 CONS = (
-    "Each tool call does a little extra work (bounding boxes of up to {} elements, twice when the call names its elements).".format(MAX_TARGETS),
+    "By default only the bar shows. Turn on \"On model\" for the cursor, boxes and the options below; then each tool call does a little extra work (bounding boxes of up to {} elements, twice when the call names its elements).".format(MAX_TARGETS),
     "Follow switches the active view, so a later tool that works on 'the active view' works on the view the agent opened.",
-    "Zoom and Select change your camera and selection while an agent works (both on by default).",
+    "Zoom and Select change your camera and selection while an agent works (with On model).",
     "Boxes are a snapshot: pan or zoom while an agent works and they sit off until its next call; Replay uses the old positions.",
     "Glow (on by default) is experimental: it draws inside Revit's 3D views and is not tested on every Revit version.",
     "The overlay shows up in screenshots and recordings.",
@@ -205,6 +211,21 @@ def options():
     """{name: bool} for every OPTIONS entry."""
     data = _settings()
     return dict((name, bool(data.get(key, default))) for name, key, default in OPTIONS)
+
+
+def effective(opts):
+    """What actually acts: with 'model' off (the default) only 'keep' stays,
+    every option that draws on or moves the model is off."""
+    opts = dict(opts)
+    if not opts.get('model'):
+        for name in opts:
+            if name not in ('model', 'keep'):
+                opts[name] = False
+    return opts
+
+
+def on_model():
+    return bool(options().get('model'))
 
 
 def set_option(name, value):
@@ -941,6 +962,7 @@ HUD_PALETTES = {
 
 # Options drawer (⚙): group -> option names, in OPTIONS terms.
 OPTION_GROUPS = (
+    ('Show', ('model',)),
     ('View', ('follow', 'zoom', 'tile')),
     ('Selection', ('select',)),
     ('Motion', ('reduce', 'glow')),
@@ -1581,11 +1603,13 @@ def before(app, task):
             doc, geos, active = views
             if active is not None:
                 # Elements the call names: framed while it runs, cursor on them.
+                # Bar only (the default): no boxes to measure.
                 boxes = []
-                if ids and action in ('delete', 'modify'):
+                model = on_model()
+                if model and ids and action in ('delete', 'modify'):
                     task._cursor_pre = _pre_snapshot(app, ids, views)
                     boxes = task._cursor_pre[geos[active]['id']]['boxes']
-                elif ids:
+                elif model and ids:
                     boxes = _boxes(doc, geos[active], ids)
                 shown = [geos[i]['rect'] for i in visible_views([g['rect'] for g in geos], active)]
                 agent = _agent_of(task)
@@ -1636,7 +1660,7 @@ def notify(app, task):
         action = classify_action(tool, args, result)
         ids = [] if failed else extract_ids(args, result)
         agent = _agent_of(task)
-        opts = options()
+        opts = effective(options())     # bar only: nothing below touches the model
         uidoc = app.ActiveUIDocument
         # What Revit says the call added / modified (code returns no ids).
         call, _session['call'] = _session.get('call'), None
@@ -1691,7 +1715,8 @@ def notify(app, task):
         def finish():
             if not is_enabled():
                 return
-            snap = _snapshot(app, ids, pre)
+            # Bar only: the views place the bar; no element boxes to measure.
+            snap = _snapshot(app, ids if opts['model'] else [], pre)
             if snap is None:
                 return
             if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'

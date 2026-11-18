@@ -403,7 +403,8 @@ def test_visible_work():
           and 'def _accent(self, cur, action):' in osrc)
     check('tags laid out after every move',
           osrc.count('self._layout_tags(agent)') >= 3 and 'place_tags(items, self._bounds())' in osrc)
-    show = osrc.split('    def show(self, agent,', 1)[1].split('\n    def ', 1)[0]
+    # The drawing part of show() (On model) lives in _draw_step.
+    show = osrc.split('    def _draw_step(self, agent,', 1)[1].split('\n    def ', 1)[0]
     check('show(): scan near the cursor, label + build trail for fresh elements',
           "scan_points((cur['x'], cur['y'])" in show and 'review_points' not in osrc
           and 'self._draw_label(' in show and 'self._build_trail(' in show
@@ -436,9 +437,14 @@ def test_setting():
                     if l[:1] != '#')
         used = set(c.upper() for c in _re.findall(r'\\u(E[0-9A-Fa-f]{3})', osrc))
         check('every bar glyph is in Segoe MDL2', used <= known, sorted(used - known))
-    check('options default: every bar option on (owner, 2026-11-17)',
-          opts == {'follow': True, 'zoom': True, 'select': True, 'tile': True,
+    check('options default: bar only (owner, 2026-11-18), the rest on for On model',
+          opts == {'model': False, 'follow': True, 'zoom': True, 'select': True, 'tile': True,
                    'reduce': True, 'glow': True, 'keep': True}, opts)
+    eff = AC.effective(opts)
+    check('bar only: nothing touches the model, Keep bar stays',
+          eff['keep'] and not any(eff[n] for n in ('follow', 'zoom', 'select', 'tile', 'glow')))
+    check('On model: the saved options act',
+          AC.effective(dict(opts, model=True)) == dict(opts, model=True))
     src = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
     tick = src.split('    def _on_tick(self, sender, e):', 1)[1].split('    def ', 1)[0]
     check('keep bar: never auto-hidden after the summary',
@@ -482,7 +488,8 @@ def test_setting():
     AC.set_option('tile', True)
     check('option saved', AC.options()['tile'] is True)
     AC.set_option('tile', False)
-    check('options text', AC.options_text().startswith('Follow on'), AC.options_text())
+    check('options text', AC.options_text().startswith('On model off · Follow on'),
+          AC.options_text())
     text = AC.pros_cons_text()
     check('notice lists benefits and drawbacks',
           'Benefits' in text and 'Drawbacks' in text
@@ -811,6 +818,40 @@ def test_stability():
           and '_process_in_front' not in osrc)
 
 
+def test_bar_only():
+    print('[bar only by default: no cursor, boxes or effects on the model]')
+    acsrc = open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
+    notify = acsrc.split('def notify(app, task):', 1)[1].split('\ndef ', 1)[0]
+    check('notify: options pass through effective()', 'opts = effective(options())' in notify
+          and "_snapshot(app, ids if opts['model'] else [], pre)" in notify)
+    before = acsrc.split('def before(app, task):', 1)[1].split('\ndef ', 1)[0]
+    check('before: no boxes measured without On model',
+          'model and ids and action in' in before and 'elif model and ids:' in before)
+    osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
+
+    def body(name):
+        return osrc.split('    def {}('.format(name), 1)[1].split('\n    def ', 1)[0]
+    show = body('show')
+    check('show: draws on the model only with On model, the bar always',
+          'if self._model():\n            self._draw_step(' in show and 'self._bar_only()' in show
+          and 'self._log_step(' in show and 'self._show_hud(' in show
+          and 'self._cursor(' not in show and 'self._place(' not in show)
+    working = body('working')
+    check('working: bar only returns before any cursor',
+          working.index('if not self._model():') < working.index('self._cursor(')
+          and working.index('if not self._model():') < working.index('self._place('))
+    check('ask: no canvas without On model', 'if self._model():\n            self._place(rect)'
+          in body('ask'))
+    check('waiting: no cursor made without On model',
+          'self.win.IsVisible and self._model()' in body('waiting'))
+    check('bar only: canvas hidden, front tick never brings it back',
+          'self.win.Hide()' in body('_bar_only')
+          and 'if window is self.win and not model:' in body('_on_front_tick'))
+    groups = dict(AC.OPTION_GROUPS)
+    check('options drawer: On model first', AC.OPTION_GROUPS[0] == ('Show', ('model',))
+          and 'model' in AC.OPTION_LABELS and groups)
+
+
 if __name__ == '__main__':
     try:
         test_extract_ids()
@@ -831,6 +872,7 @@ if __name__ == '__main__':
         test_settings_dialog()
         test_hud_redesign()
         test_stability()
+        test_bar_only()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

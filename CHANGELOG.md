@@ -24,6 +24,44 @@ Releasing a new version:
 
 ### Fixed
 - **Agent Cursors — Claude shown as "Local Agent Mod…", Antigravity as "AI app":** Claude Desktop's agent mode is now recognised as Claude. Antigravity sends no name of its own, so at Revit start T3Lab adds the app's name to the connection it wrote earlier in each AI app's settings (Antigravity, ChatGPT / Codex, Claude Desktop); nothing else in those files changes and a backup is kept. Restart the AI app once afterwards.
+## [2.6.1] - 2026-11-18
+
+BatchOut no longer fails with "Duplicate type name within an assembly", and the error dialog now tells you when Revit needs a restart.
+
+### Fixed
+
+- **BatchOut — "Duplicate type name within an assembly":** BatchOut's Revit
+  event handler now gets a new .NET type name each time it loads, so BatchOut
+  no longer fails when its code is loaded a second time in the same Revit
+  session.
+- When Python in a Revit session was reloaded (pyRevit > Reload, an extension
+  switched off and on, or an update without a restart), the error dialog now
+  says to restart Revit instead of "Try again". This covers "Duplicate type
+  name within an assembly" and "cannot import name 'revit' from 'pyrevit'".
+
+## [2.6.0] - 2026-11-18
+
+Agent Cursors now show only the bar by default, stay on screen beside your AI app, and slow Revit down less.
+
+### Changed
+
+- Agent Cursors show only the bar by default: the agent, its goal and tasks,
+  the current step and the last steps. No cursor, boxes or effects on the
+  model, and no view switching, zooming, selecting, tiling or Glow. Turn on
+  **On model** (options on the bar, or Settings > Agent Cursors) to get them
+  back.
+
+### Fixed
+
+- Agent Cursors stay on screen while you work in the AI app next to Revit.
+  They hide only when Revit is minimized or another window covers its views,
+  and no longer flash up on every step.
+- Boxes and the cursor land on the right element after Follow opens a view or
+  Tile rearranges the views: Agent Cursors wait for Revit to finish the layout,
+  and drop boxes drawn for the old layout.
+- The cursor no longer jumps ahead mid-glide when the views change.
+- Faster steps with Glow on: the view is redrawn only when the outlined
+  elements change, not on every call.
 
 ## [2.5.1] - 2026-11-17
 

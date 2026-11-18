@@ -22,6 +22,7 @@ add-in to compile.
 | R5 | Complex families: repeated members, detail levels, voids | `repeat`, `detail_levels` |
 | R6 | Families that flex: reference planes, labelled dimensions, face locks | `reference_planes`, `dimensions`, `locks` |
 | R7 | Family types: size / finish variants | `types[]` |
+| R11 | Models read as ONE built object: continuous curves, no floating parts | `Tube`, `continuity_issues`, polish round |
 | R8 | Revit-like review: Coarse / Medium / Fine, Wireframe / Hidden Line / Shaded / Consistent Colors / Realistic, 3D / Front / Right / Plan | `studio.js` |
 | R9 | Same look as every T3 tool: T3 title bar, footer bar, window border | `studio.css` (T3 tokens) |
 | R10 | Never change the model before the user presses Create Family | controller + builder |
@@ -114,6 +115,7 @@ a modal dialog) and builds directly.
 | Field | Shape | Builder |
 |---|---|---|
 | `types[]` | `{"name", "values": {param: value, material param: material}}` | first = current type renamed, others `NewType` |
+| `Tube` (form) | `{"points": [[x,y,z], …], "radius", "smooth"?, "closed"?}` | written out as spline segments (Cylinders lengthened by r·tan(turn/2) so bends close) + a ball only at turns > 35° |
 | `geometry[].repeat` | `{"count", "step":[dx,dy,dz]}` or `{"at":[[dx,dy,dz],…]}` (not Sweep, ≤ 200) | written out by `expand_schema` before building (preview does the same) |
 | `geometry[].detail_levels` | `["coarse","medium","fine"]` subset | `FamilyElementVisibility` |
 | `reference_planes[]` | `{"name", "axis": x/y/z, "offset" mm}` | `NewReferencePlane` (plan / front elevation) |
@@ -124,6 +126,22 @@ a modal dialog) and builds directly.
 Template planes usable by name: `Center (Left/Right)`, `Center (Front/Back)`,
 `Ref. Level`. Constraint failures are warnings, never a failed build. The
 preview warns before Revit when a locked face does not lie on its plane.
+
+### 5.1 Continuity (why models no longer look "in pieces")
+
+| Cause of a disjointed model | Rule / mechanism |
+|---|---|
+| Curved members drawn as chained straight Cylinders | `Tube`: one centre line, spline-smoothed, joints closed |
+| Parts placed with approximate coordinates, leaving gaps | Contract CONTINUITY rules: child starts at the parent's face coordinate; 1–5 mm overlap |
+| Parts floating (no support) | `preview_mesh.continuity_issues`: parts not linked through touching boxes to the lowest part → "Not connected: 'Lamp' …" warning |
+| Claude never told | `claude_designer`: a valid family with loose parts gets ONE polish round (non-error tool_result naming them) before the user sees it |
+| Faceted look of round parts | Studio shades Cylinder / Revolution / Sweep smoothly, prismatic parts keep crisp edges |
+| Missing category know-how | Every category spec ends with "JOINTS & SMOOTH FORMS" (category-specific joint recipes) |
+
+The check uses bounding boxes (5 mm contact tolerance): it catches floating
+parts, not every hairline gap, and a diagonal member counts as touching what
+its box overlaps. It runs in every preview, `famigen_validate_family` and
+`famigen_propose_family` warnings.
 
 ## 6. Page ↔ Python messages
 

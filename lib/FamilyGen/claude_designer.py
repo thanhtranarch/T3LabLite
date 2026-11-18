@@ -51,6 +51,7 @@ DEFAULT_MAX_TOKENS = 32000
 DEFAULT_EFFORT = 'high'
 EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 MAX_REPAIRS = 2
+MAX_POLISH = 1          # extra round when a valid family still has loose parts
 
 # Attachments Claude can read: images (vision) and PDFs (document blocks).
 IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -177,6 +178,16 @@ class Outcome(object):
                 'warnings': self.warnings, 'message': self.message, 'repairs': self.repairs}
 
 
+def continuity_problems(family):
+    """Loose-part findings for a valid family ([] when it reads as one object)."""
+    try:
+        from FamilyGen.preview_mesh import build_preview
+        model = build_preview(family)
+    except Exception:
+        return []
+    return [w for w in model.warnings if w.startswith(u'Not connected')]
+
+
 def load_attachment(path):
     """Read a reference file into an attachment record, or raise ValueError."""
     if not path or not os.path.isfile(path):
@@ -286,6 +297,7 @@ class ClaudeFamilySession(object):
         self.messages = []           # append-only transcript
         self._pending_results = []   # tool_result blocks owed to the next user message
         self._repairs = 0
+        self._polish_left = MAX_POLISH
         self._dropped = set()        # optional features the API refused
         self._feature_retries = 0
         self.last_schema = None      # last family that passed validation
@@ -341,6 +353,7 @@ class ClaudeFamilySession(object):
         content.append({'type': 'text', 'text': text})
         self.messages.append({'role': 'user', 'content': content})
         self._repairs = 0
+        self._polish_left = MAX_POLISH
         self._feature_retries = 0
         self.turns += 1
         return self.build_request()
@@ -370,6 +383,7 @@ class ClaudeFamilySession(object):
             u'tool.').format(views)})
         self.messages.append({'role': 'user', 'content': content})
         self._repairs = 0
+        self._polish_left = MAX_POLISH
         self._feature_retries = 0
         return self.build_request()
 
@@ -529,6 +543,18 @@ class ClaudeFamilySession(object):
             errors = validate_ai_schema(family, self.category)
         if not errors:
             _, warnings = validate_family_schema(family, None if self.auto else self.category)
+            loose = continuity_problems(family)
+            if loose and self._polish_left > 0:
+                # Valid, but parts float: one polish round before the user sees it.
+                self._polish_left -= 1
+                self._owe(call, u'Valid, but not yet one built object:\n- {}\nMove or extend those '
+                                u'parts so every joint overlaps 1-5 mm and the chain reaches the base, '
+                                u'then call submit_family again with the complete family.'.format(
+                                    u'\n- '.join(loose)), False)
+                self._flush_pending_as_user()
+                return Outcome('continue', request=self.build_request(), errors=loose,
+                               repairs=self._repairs)
+            warnings = list(warnings) + loose
             if self.auto:
                 self.detected_category = family.get('family_category')
             self.last_schema = family

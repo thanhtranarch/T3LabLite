@@ -23,3 +23,23 @@ reference gives one — list every such choice in `assumptions`.
   corten #8B4A2B.
 # DETAIL LEVELS
 - coarse: envelope. fine: fixings, slats, chamfers.
+
+
+# JOINTS & SMOOTH FORMS (FamiGen checks these: loose parts are sent back to you)
+- Build from the base up and give every part a parent it overlaps by 1-5 mm on all
+  three axes; the chain must reach the lowest part. Floating parts are reported as
+  "Not connected" and returned for one more round.
+- Take a child's start coordinate from its parent's face (top z, side x/y) - do not
+  type an approximate number.
+- Curved rods, rails, handles, pipes, cables and tube slides: one `Tube` through the
+  bend points (it adds smooth spline segments with ball joints). Never several
+  Cylinders meeting at an angle.
+- Turned, domed or round-ended parts: `Revolution` with Arc3P / Spline profile edges.
+- Visible top edges of thick slabs and worktops: chamfer or round them (Blend, or Arc
+  corners in plan) when the reference shows it.
+- Hoops, rails, frames and benches' armrests are Tubes; posts run from z = 0 (or the
+  footing) into what they carry; slats rest on the frames.
+- Play equipment: platforms rest on posts; railings stand on the platform edge and
+  their top rail is one closed Tube or Revolution ring; slides and tube slides are
+  Tubes from the platform edge down to the ground; stairs climb from the ground
+  to the platform with each step touching the next.

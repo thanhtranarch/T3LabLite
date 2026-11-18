@@ -74,6 +74,8 @@ Contract source: `T3Lab.extension/lib/Intelligence/family_schema.py`
 |------|-------|
 | `family_category` | One of the 17 template categories (Generic Model, Door, Window, Furniture, Plumbing Fixture, Electrical Equipment, Mechanical Equipment, Specialty Equipment, Casework, Columns, Lighting Fixture, Site, Entourage, Pipe Accessory, Duct Accessory, Sprinkler, Electrical Fixture). Anything else is an error that lists them — no silent fallback. |
 | `types[]` | `{"name", "values": {parameter: value, material parameter: material}}`; first type = default. |
+| `Tube` (form) | `{"points": [[x,y,z], …], "radius", "smooth"?, "closed"?}` — one continuous curved rod / rail / pipe / tube slide; written out as overlapping Cylinders (ball joints only at sharp turns). |
+| continuity | Warning "Not connected: '…'" for parts that do not reach the base through touching parts; the Studio's Claude gets one round to fix them. |
 | `geometry[].repeat` | `{"count", "step": [dx,dy,dz]}` or `{"at": [[dx,dy,dz], …]}` — copies written out before preview and build (not Sweep). |
 | `geometry[].detail_levels` | Subset of `coarse` / `medium` / `fine` (default all). |
 | `reference_planes[]`, `dimensions[]`, `geometry[].locks` | Planes `{"name","axis","offset"}`, length dimensions `{"parameter","from","to"}`, face locks `{x_min…z_max: plane}` — the family flexes per type. Details: [famigen-studio-spec.md §5](famigen-studio-spec.md#5-schema-v2-additions-all-optional-v1v2-files-stay-valid). |
@@ -83,8 +85,8 @@ Contract source: `T3Lab.extension/lib/Intelligence/family_schema.py`
 | `parameters[]` | `name`, optional `type` `length` (mm, default) / `number` / `integer` / `text`, `value` matching it, `instance` (default false). Existing template parameters are set; missing ones are created. |
 | names | No `\ : { } [ ] \| ; < > ? `` ` `` ~`, at most 60 characters. |
 
-Geometry forms and curve segments are unchanged: Extrusion, Blend, Revolution,
-Sweep, Cylinder; Line, Arc3P/ArcThreePoint, Spline, Arc, Circle, Ellipse;
+Geometry forms: Extrusion, Blend, Revolution, Sweep, Cylinder, Tube (FamiGen-only, expanded
+before building); curve segments: Line, Arc3P/ArcThreePoint, Spline, Arc, Circle, Ellipse;
 millimeters and radians.
 
 ## What the builder creates

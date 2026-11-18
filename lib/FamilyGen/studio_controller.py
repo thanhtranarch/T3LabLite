@@ -573,7 +573,9 @@ class StudioController(object):
             return                                   # stale (cancelled / reset)
         outcome = session.handle_http(status, raw)
         if outcome.kind == 'continue':
-            if outcome.errors:
+            if outcome.errors and outcome.errors[0].startswith(u'Not connected'):
+                text = u'Claude is joining loose parts so the model reads as one piece…'
+            elif outcome.errors:
                 text = u'Claude is fixing {} problem(s) FamiGen found (round {})…'.format(
                     len(outcome.errors), outcome.repairs)
             else:

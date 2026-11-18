@@ -25,7 +25,11 @@ import re
 
 SCHEMA_VERSION = 2
 
-FORM_TYPES = ('Extrusion', 'Blend', 'Revolution', 'Sweep', 'Cylinder')
+FORM_TYPES = ('Extrusion', 'Blend', 'Revolution', 'Sweep', 'Cylinder', 'Tube')
+# Tube is FamiGen-only: written out as Cylinders + joint spheres before preview and
+# build (expand_schema), so the builder never sees it.
+MAX_TUBE_POINTS = 120
+TUBE_SUBDIVISIONS = 6
 SEGMENT_TYPES = ('Line', 'Arc3P', 'ArcThreePoint', 'Spline', 'Arc', 'Circle', 'Ellipse')
 
 # (category, template file names tried in order, BuiltInCategory member name,
@@ -223,8 +227,14 @@ Blend: profile and top_profile segments; optional base_offset/top_offset numbers
 Revolution: profile segments, axis_start/axis_end coordinate triples; optional
 start_angle/end_angle (defaults 0 and 6.283185307).
 Sweep: path segments and profile segments. Path is open; profile is closed.
-Cylinder: start/end coordinate triples and positive radius. Use Cylinder for rods
-in any direction; do not guess a sketch plane for them.
+Cylinder: start/end coordinate triples and positive radius. Use Cylinder for straight
+rods in any direction; do not guess a sketch plane for them.
+Tube: "points" (2+ [x,y,z] the centre line passes through), positive "radius",
+optional "smooth" (default true: a spline through the points) and "closed" (a loop).
+Use Tube for every CURVED or 3D rod, pipe, rail, handle, cable, frame or tube slide
+(helix, S-bend, arch): FamiGen turns it into short overlapping cylinders (ball joints
+only at sharp corners), so it reads as one continuous piece. Never chain separate
+Cylinders for a bend.
 Profiles and paths are nonempty arrays of segment objects. Supported segments:
 Line: start,end; Arc3P (also ArcThreePoint): start,end,mid; Spline: points with at
 least three coordinate triples; Arc: center,positive radius,optional start_angle,
@@ -280,6 +290,19 @@ otherwise it is data only.
 Names (materials, parameter, subcategory, parameters[].name, types[].name,
 reference_planes[].name) must not contain
 \\ : { } [ ] | ; < > ? ` ~ and are at most %d characters.
+CONTINUITY (the model must read as one built object, not loose pieces):
+- Every solid touches or overlaps another solid by 1-5 mm, and the chain of contacts
+  reaches the base (the lowest part). Legs end ON the floor and INTO the part they carry;
+  posts run from the ground to the underside of what they support; rails meet posts.
+- Share coordinates: a part that sits on another starts at exactly that part's top z;
+  a part fixed to a face starts at that face's coordinate. Derive positions from the
+  same numbers instead of retyping approximate ones.
+- Curves: Arc3P / Arc / Spline in profiles, Tube for curved rods, Revolution for turned
+  or domed parts; never approximate a curve with a few straight pieces.
+- Soften what is soft or worn: round ends with a Tube or a Revolution cap, chamfer
+  visible top edges with a Blend, round plan corners with Arc segments.
+- Repeated members (pickets, slats, legs) come from one part plus repeat, at even
+  spacing, ending exactly at the members they join.
 Create coherent closed profiles, nonzero axes and sensible dimensions. Extrusion
 end must exceed start; explicit Blend top_offset must exceed base_offset; Revolution
 end_angle must exceed start_angle. Line/Arc3P start and end must differ. Do not
@@ -477,6 +500,18 @@ def _validate(schema, category, strict_category):
                 error(path, 'use at most one sketch_plane_x/y/z')
             for field in planes + [key for key in ('base_offset', 'top_offset', 'start_angle', 'end_angle') if key in geom]:
                 number(geom[field], path + '.' + field)
+            if kind == 'Tube':
+                pts = geom.get('points')
+                if not isinstance(pts, list) or not 2 <= len(pts) <= MAX_TUBE_POINTS:
+                    error(path + '.points', 'must list 2 to {} points [x,y,z]'.format(MAX_TUBE_POINTS))
+                else:
+                    for j, pt in enumerate(pts):
+                        point(pt, '{}.points[{}]'.format(path, j))
+                number(geom.get('radius'), path + '.radius', positive=True)
+                for flag in ('smooth', 'closed'):
+                    if flag in geom and not isinstance(geom[flag], bool):
+                        error(path + '.' + flag, 'must be true or false')
+                continue
             if kind != 'Cylinder':
                 segments(geom.get('profile'), path + '.profile')
             if kind == 'Extrusion':
@@ -606,6 +641,9 @@ def shift_geometry(geom, d):
     for key in _POINT_KEYS:
         if isinstance(moved.get(key), list) and len(moved[key]) == 3:
             moved[key] = [moved[key][k] + d[k] for k in range(3)]
+    if moved.get('type') == 'Tube' and isinstance(moved.get('points'), list):
+        moved['points'] = [[p[k] + d[k] for k in range(3)] if isinstance(p, list) and len(p) == 3
+                           else p for p in moved['points']]
     if moved.get('type') in ('Extrusion', 'Blend', 'Revolution'):
         # The sketch plane follows the move along its own normal; in-plane
         # moves are carried by the profile points (projected onto the plane).
@@ -619,6 +657,103 @@ def shift_geometry(geom, d):
     return moved
 
 
+def _catmull(points, closed, steps):
+    pts = [tuple(float(c) for c in p) for p in points]
+    n = len(pts)
+    if n < 3 or steps < 2:
+        return pts + ([pts[0]] if closed else [])
+    out = []
+    spans = n if closed else n - 1
+    for i in range(spans):
+        p0 = pts[(i - 1) % n] if closed else pts[max(i - 1, 0)]
+        p1, p2 = pts[i % n], pts[(i + 1) % n]
+        p3 = pts[(i + 2) % n] if closed else pts[min(i + 2, n - 1)]
+        for k in range(steps):
+            t = k / float(steps)
+            t2, t3 = t * t, t * t * t
+            out.append(tuple(0.5 * ((2 * p1[c]) + (-p0[c] + p2[c]) * t
+                                    + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * t2
+                                    + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * t3)
+                             for c in range(3)))
+    out.append(pts[0] if closed else pts[-1])
+    return out
+
+
+def _ball(center, radius, base):
+    """A sphere as a Revolution: half disc revolved about its vertical edge."""
+    cx, cy, cz = center
+    ball = dict(base)
+    ball.update({'type': 'Revolution', 'sketch_plane_y': cy,
+                 'profile': [{'type': 'Arc3P', 'start': [cx, cy, cz - radius],
+                              'end': [cx, cy, cz + radius], 'mid': [cx + radius, cy, cz]},
+                             {'type': 'Line', 'start': [cx, cy, cz + radius],
+                              'end': [cx, cy, cz - radius]}],
+                 'axis_start': [cx, cy, cz - radius], 'axis_end': [cx, cy, cz + radius]})
+    return ball
+
+
+SHARP_TURN = math.radians(35.0)     # ball joint only where the centre line turns harder
+
+
+def _turn_angle(a, b, c):
+    u = [b[k] - a[k] for k in range(3)]
+    v = [c[k] - b[k] for k in range(3)]
+    lu = math.sqrt(sum(x * x for x in u))
+    lv = math.sqrt(sum(x * x for x in v))
+    if lu < 1e-9 or lv < 1e-9:
+        return 0.0
+    cos = max(-1.0, min(1.0, sum(u[k] * v[k] for k in range(3)) / (lu * lv)))
+    return math.acos(cos)
+
+
+def expand_tube(geom):
+    """One Tube -> Cylinders along its (spline) centre line, joints closed.
+
+    Each segment is lengthened at a bend by r * tan(turn / 2), which closes the
+    outside of the joint, so a smooth tube needs no extra forms. Only a sharp
+    turn (> 35 deg) also gets a ball, which keeps the family light in Revit.
+    """
+    radius = float(geom['radius'])
+    closed = bool(geom.get('closed', False))
+    smooth = geom.get('smooth', True) is not False
+    line = _catmull(geom['points'], closed, TUBE_SUBDIVISIONS if smooth else 1)
+    clean = [line[0]]
+    for p in line[1:]:
+        if sum((p[c] - clean[-1][c]) ** 2 for c in range(3)) > 1e-6:
+            clean.append(p)
+    n = len(clean)
+    if n < 2:
+        raise ValueError('Tube needs two different points')
+    turns = [0.0] * n
+    for i in range(1, n - 1):
+        turns[i] = _turn_angle(clean[i - 1], clean[i], clean[i + 1])
+    if closed and n > 3:
+        turns[0] = turns[-1] = _turn_angle(clean[-2], clean[0], clean[1])
+    base = dict((k, v) for k, v in geom.items()
+                if k not in ('type', 'points', 'radius', 'smooth', 'closed', 'id', 'locks', 'repeat'))
+    label = geom.get('id') or 'Tube'
+    parts = []
+    for i in range(n - 1):
+        a, b = clean[i], clean[i + 1]
+        d = [b[k] - a[k] for k in range(3)]
+        length = math.sqrt(sum(x * x for x in d))
+        unit = [x / length for x in d]
+        grow_a = min(radius * math.tan(min(turns[i], SHARP_TURN) / 2.0), 0.45 * length)
+        grow_b = min(radius * math.tan(min(turns[i + 1], SHARP_TURN) / 2.0), 0.45 * length)
+        seg = dict(base)
+        seg.update({'id': u'{} {}'.format(label, i + 1), 'type': 'Cylinder',
+                    'start': [round(a[k] - unit[k] * grow_a, 2) for k in range(3)],
+                    'end': [round(b[k] + unit[k] * grow_b, 2) for k in range(3)],
+                    'radius': radius})
+        parts.append(seg)
+    sharp = [i for i in range(n) if turns[i] > SHARP_TURN and (closed or 0 < i < n - 1)]
+    for j, i in enumerate(sharp):
+        ball = _ball([round(c, 2) for c in clean[i]], radius, base)
+        ball['id'] = u'{} joint {}'.format(label, j + 1)
+        parts.append(ball)
+    return parts
+
+
 def expand_schema(schema):
     """The schema with every ``repeat`` written out (pure; the input is untouched).
 
@@ -627,7 +762,8 @@ def expand_schema(schema):
     """
     if not isinstance(schema, dict) or not isinstance(schema.get('geometry'), list):
         return schema
-    if not any(isinstance(g, dict) and 'repeat' in g for g in schema['geometry']):
+    if not any(isinstance(g, dict) and ('repeat' in g or g.get('type') == 'Tube')
+               for g in schema['geometry']):
         return schema
     geometry = []
     for geom in schema['geometry']:
@@ -656,8 +792,17 @@ def expand_schema(schema):
                 part.pop('locks', None)
             part['id'] = u'{} {}'.format(label, i + 1)
             geometry.append(part)
+    tubed = []
+    for geom in geometry:
+        if isinstance(geom, dict) and geom.get('type') == 'Tube':
+            try:
+                tubed.extend(expand_tube(geom))
+            except (KeyError, TypeError, ValueError, IndexError):
+                tubed.append(geom)           # the validator reports it
+        else:
+            tubed.append(geom)
     expanded = dict(schema)
-    expanded['geometry'] = geometry
+    expanded['geometry'] = tubed
     return expanded
 
 

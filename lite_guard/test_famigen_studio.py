@@ -484,5 +484,74 @@ class McpModeTests(unittest.TestCase):
             self.assertIn("'{}'".format(category), enum)
 
 
+class ContinuityTests(unittest.TestCase):
+    """Tube (smooth curved members) and the loose-part check (docs §5, §9)."""
+
+    def hoop(self, **kw):
+        g = {'id': 'Hoop', 'type': 'Tube', 'material': 'Oak', 'radius': 24,
+             'points': [[0, 0, 0], [0, 0, 700], [300, 0, 900], [600, 0, 700], [600, 0, 0]]}
+        g.update(kw)
+        s = copy.deepcopy(GOOD)
+        s['geometry'] = [g]
+        return s
+
+    def test_tube_is_valid_and_expands_to_overlapping_cylinders(self):
+        s = self.hoop()
+        self.assertEqual(fs.validate_family_schema(s)[0], [])
+        parts = fs.expand_schema(s)['geometry']
+        cyls = [p for p in parts if p['type'] == 'Cylinder']
+        self.assertEqual(len(cyls), 4 * fs.TUBE_SUBDIVISIONS)        # 4 spans, spline
+        self.assertTrue(all(p['material'] == 'Oak' and p['radius'] == 24 for p in cyls))
+        self.assertEqual(cyls[0]['start'], [0.0, 0.0, 0.0])           # the line starts on the floor
+        # consecutive segments overlap (each grows past the shared point)
+        a_end, b_start = cyls[3]['end'], cyls[4]['start']
+        self.assertNotEqual(a_end, b_start)
+
+    def test_sharp_corner_gets_a_ball_smooth_bend_does_not(self):
+        sharp = fs.expand_schema(self.hoop(smooth=False, points=[[0, 0, 0], [0, 0, 700], [600, 0, 700]]))
+        self.assertEqual([p['id'] for p in sharp['geometry'] if 'joint' in p['id']], ['Hoop joint 1'])
+        smooth = fs.expand_schema(self.hoop())
+        self.assertEqual([p for p in smooth['geometry'] if 'joint' in p['id']], [])
+
+    def test_tube_rules(self):
+        bad = self.hoop(points=[[0, 0, 0]], radius=0, smooth='yes')
+        text = '\n'.join(fs.validate_family_schema(bad)[0])
+        self.assertIn('points', text)
+        self.assertIn('radius', text)
+        self.assertIn('true or false', text)
+
+    def test_repeat_moves_tube_points(self):
+        s = self.hoop(repeat={'count': 2, 'step': [1000, 0, 0]})
+        cyl = [p for p in fs.expand_schema(s)['geometry'] if p['id'] == 'Hoop 2 1'][0]
+        self.assertEqual(cyl['start'][0], 1000.0)
+
+    def test_floating_part_is_reported_by_name(self):
+        from FamilyGen.preview_mesh import build_preview
+        s = copy.deepcopy(GOOD)
+        self.assertFalse([w for w in build_preview(s).warnings if w.startswith('Not connected')])
+        s['geometry'].append({'id': 'Lamp', 'type': 'Cylinder', 'material': 'Oak',
+                              'start': [0, 0, 900], 'end': [0, 0, 1000], 'radius': 50})
+        loose = [w for w in build_preview(s).warnings if w.startswith('Not connected')]
+        self.assertEqual(len(loose), 1)
+        self.assertIn("'Lamp'", loose[0])
+
+    def test_polish_round_sends_loose_parts_back_once(self):
+        from FamilyGen import claude_designer as designer
+        loose = copy.deepcopy(GOOD)
+        loose['geometry'].append({'id': 'Lamp', 'type': 'Cylinder', 'material': 'Oak',
+                                  'start': [0, 0, 900], 'end': [0, 0, 1000], 'radius': 50})
+        session = designer.ClaudeFamilySession('Furniture', 'claude-opus-5-5')
+        session.begin_turn('Side table')
+        first = session.handle_http(200, submit(loose, 'a'))
+        self.assertEqual(first.kind, 'continue')
+        result = first.request['messages'][-1]['content'][0]
+        self.assertEqual(result['tool_use_id'], 'a')
+        self.assertNotIn('is_error', result)
+        self.assertIn("'Lamp'", result['content'])
+        second = session.handle_http(200, submit(loose, 'c'))      # still loose: shown, not looped
+        self.assertEqual(second.kind, 'schema')
+        self.assertTrue(any('Not connected' in w for w in second.warnings))
+
+
 if __name__ == '__main__':
     unittest.main()

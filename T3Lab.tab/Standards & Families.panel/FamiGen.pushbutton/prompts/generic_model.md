@@ -258,3 +258,19 @@ sharp-cornered box is a **fidelity bug** even though it builds without errors.
   ]
 }
 ```
+
+
+# JOINTS & SMOOTH FORMS (FamiGen checks these: loose parts are sent back to you)
+- Build from the base up and give every part a parent it overlaps by 1-5 mm on all
+  three axes; the chain must reach the lowest part. Floating parts are reported as
+  "Not connected" and returned for one more round.
+- Take a child's start coordinate from its parent's face (top z, side x/y) - do not
+  type an approximate number.
+- Curved rods, rails, handles, pipes, cables and tube slides: one `Tube` through the
+  bend points (it adds smooth spline segments with ball joints). Never several
+  Cylinders meeting at an angle.
+- Turned, domed or round-ended parts: `Revolution` with Arc3P / Spline profile edges.
+- Visible top edges of thick slabs and worktops: chamfer or round them (Blend, or Arc
+  corners in plan) when the reference shows it.
+- Brackets and fixings overlap both parts they join; signage plates sit flush on
+  posts; bent bars and frames are Tubes.

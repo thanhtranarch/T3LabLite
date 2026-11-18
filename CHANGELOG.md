@@ -29,6 +29,10 @@ Releasing a new version:
   labelled dimensions and locked faces, repeated parts and detail levels;
   four new categories (Pipe Accessory, Duct Accessory, Sprinkler, Electrical
   Fixture) and a design spec for every category.
+- **FamiGen — models in one piece:** a new `Tube` form for curved rods, rails,
+  handles and tube slides (smooth, no kinks), a check that names parts left
+  floating (Claude fixes them once before you see the model), joint rules in
+  every category spec, and smooth shading for round parts in Studio.
 - **FamiGen — AI apps over MCP:** while Claude Desktop / Code or ChatGPT work
   with FamiGen, Studio switches to them by itself. New MCP tools
   `famigen_get_studio_state`, `famigen_validate_family`,

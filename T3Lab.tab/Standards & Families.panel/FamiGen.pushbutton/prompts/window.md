@@ -33,3 +33,19 @@ reference gives one — list every such choice in `assumptions`.
 # PITFALLS
 - Model the frame in the wall thickness band (Y between the wall faces); a frame centred on
   Y = 0 is usual. Glass inside sash/frame, never overlapping it.
+
+
+# JOINTS & SMOOTH FORMS (FamiGen checks these: loose parts are sent back to you)
+- Build from the base up and give every part a parent it overlaps by 1-5 mm on all
+  three axes; the chain must reach the lowest part. Floating parts are reported as
+  "Not connected" and returned for one more round.
+- Take a child's start coordinate from its parent's face (top z, side x/y) - do not
+  type an approximate number.
+- Curved rods, rails, handles, pipes, cables and tube slides: one `Tube` through the
+  bend points (it adds smooth spline segments with ball joints). Never several
+  Cylinders meeting at an angle.
+- Turned, domed or round-ended parts: `Revolution` with Arc3P / Spline profile edges.
+- Visible top edges of thick slabs and worktops: chamfer or round them (Blend, or Arc
+  corners in plan) when the reference shows it.
+- Frame members share corners; sashes sit inside the frame touching it; glass sits
+  inside the sash; the sill touches the frame bottom.

@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-18
+
+Agent Cursors now show only the bar by default, stay on screen beside your AI app, and slow Revit down less.
+
 ### Changed
 
 - Agent Cursors show only the bar by default: the agent, its goal and tasks,

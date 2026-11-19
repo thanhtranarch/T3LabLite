@@ -19,17 +19,19 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.6.3] - 2026-11-19
+
+Fixes every tool failing with "Duplicate type name within an assembly" or "cannot import name 'revit' from 'pyrevit'".
+
 ### Fixed
 
 - **Every tool failed with "Duplicate type name within an assembly" or "cannot
   import name 'revit' from 'pyrevit'", even after restarting Revit:** usage
-  tracking loaded a pyRevit module in the background at the start of every
-  click, which pyRevit 6.5 and 7.0 only allow on Revit's own thread. It failed
-  half way, and the tool you clicked could then not load that module either.
-  Tracking no longer loads anything from pyRevit in the background, and T3Lab
-  now loads that module itself, on Revit's thread, before the tool starts.
-  This only affected people who had allowed usage tracking, and is the likely
-  reason tools were slow to open.
+  tracking loaded a pyRevit module in the background on every click, which
+  pyRevit 6.5 and 7.0 only allow on Revit's own thread, and the tool you
+  clicked could then not load it either. T3Lab now loads that module itself,
+  on Revit's thread, before the tool starts. Only people who had allowed usage
+  tracking were affected; it is the likely reason tools were slow to open.
 - **The error dialog blamed pyRevit > Reload and asked for a Revit restart:**
   neither was the cause. It now says to run the tool again and shows the first,
   real error in the details and in `%APPDATA%\T3LabAI\errors.log`.

@@ -752,6 +752,18 @@ def test_settings_dialog():
     check("the bar's own groups, in its order, each with the same options (owner, 2026-11-19)",
           [(g, groups.get(g)) for g, _n in AC.OPTION_GROUPS]
           == [(g, list(names)) for g, names in AC.OPTION_GROUPS], groups)
+    root = ET.fromstring(xaml.encode('utf-8'))
+    parent = dict((child, node) for node in root.iter() for child in node)
+    named = dict((node.get(xname), node) for node in root.iter() if node.get(xname))
+
+    def left(value):            # WPF thickness: "16", "12,8" or "0,4,0,16"
+        return float((value or '0').split(',')[0])
+    check('checkboxes line up: the on/off box sits where the option boxes do (owner, 2026-11-19)',
+          left(parent[named['chk_enabled']].get('Margin')) == left(named['options_body'].get('Padding'))
+          and all(left(named['opt_' + n].get('Margin')) == 0 for n in boxes),
+          (parent[named['chk_enabled']].get('Margin'), named['options_body'].get('Padding')))
+    check('the folded card starts on the same line',
+          left(named['details_header'][0].get('Margin')) == left(named['details_body'].get('Padding')))
     check('each checkbox is called what its switch is called on the bar',
           [(n, boxes.get(n, ('', ''))[0]) for n, _k, _d in AC.OPTIONS]
           == [(n, AC.OPTION_LABELS[n][0]) for n, _k, _d in AC.OPTIONS], boxes)

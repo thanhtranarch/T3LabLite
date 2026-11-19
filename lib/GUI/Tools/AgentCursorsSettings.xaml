@@ -1787,9 +1787,10 @@
                     <Border x:Name="card_options" BorderBrush="{StaticResource T3.Ink}" BorderThickness="1"
                             CornerRadius="4" Margin="0,0,0,8">
                         <StackPanel>
-                            <!-- Header row -->
+                            <!-- Header row. 16 left, like the body's padding: the on/off box sits
+                                 on the same line as the option boxes below (owner, 2026-11-19). -->
                             <Border Background="{StaticResource T3.SurfaceSunken}" CornerRadius="4,4,0,0">
-                                <Grid Margin="12,8">
+                                <Grid Margin="16,8">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
@@ -1892,7 +1893,7 @@
                             <Border x:Name="details_header" Background="{StaticResource T3.SurfaceSunken}"
                                     CornerRadius="4" Cursor="Hand" MouseLeftButtonUp="details_header_clicked"
                                     ToolTip="Show or hide what Agent Cursors gives and what it costs">
-                                <Grid Margin="12,8">
+                                <Grid Margin="16,8">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>

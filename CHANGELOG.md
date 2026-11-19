@@ -19,6 +19,13 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+
+- **T3Lab Assistant — "Mana Select" could not be opened by name (since 2.6.2):**
+  the FamiGen button borrowed a helper from Mana Select, so the Assistant
+  listed FamiGen under Mana Select's names as well and, with two matches,
+  opened neither. FamiGen now has its own helper.
+
 ## [2.6.3] - 2026-11-19
 
 Fixes every tool failing with "Duplicate type name within an assembly" or "cannot import name 'revit' from 'pyrevit'".

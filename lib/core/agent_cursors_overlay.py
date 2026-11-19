@@ -169,6 +169,7 @@ class _Overlay(object):
         self._summary = None        # time the idle summary card appeared
         self._touched = 0
         self._marks = []            # off-screen arrows of the last call
+        self._fx = {}               # Effects switches of the call being drawn (_effects)
         self._cursors = {}          # agent -> dict(group, tx, ...): one cursor per agent
         self._counts = {}           # agent -> {action: n}
         self._views = []            # [(view id, name)] the agents worked in
@@ -1529,11 +1530,12 @@ class _Overlay(object):
             Canvas.SetLeft(handle, hx - 2)
             Canvas.SetTop(handle, hy - 2)
             group.Children.Add(handle)
-        badge = self._pill(self._glyph_label(glyph, size, '#FFFFFF'), color, radius=2)
-        badge.Padding = Thickness(4, 1, 4, 1)
-        Canvas.SetLeft(badge, max(x0, (x0 + x1) / 2.0 - 60))
-        Canvas.SetTop(badge, y1 + 4)
-        group.Children.Add(badge)
+        if self._fx.get('labels', True):
+            badge = self._pill(self._glyph_label(glyph, size, '#FFFFFF'), color, radius=2)
+            badge.Padding = Thickness(4, 1, 4, 1)
+            Canvas.SetLeft(badge, max(x0, (x0 + x1) / 2.0 - 60))
+            Canvas.SetTop(badge, y1 + 4)
+            group.Children.Add(badge)
         self.canvas.Children.Insert(0, group)    # under the cursors
         hold = int((FRESH_HOLD_S if fresh else BOX_HOLD_S) * 1000 * speed_factor())
         fx = None if self._reduce() else ('create' if fresh and action == 'code' else action)
@@ -1735,7 +1737,7 @@ class _Overlay(object):
                 self._draw_focus(agent, b, acolor)
             point = ((boxes[0][0] + boxes[0][2]) / 2.0, (boxes[0][1] + boxes[0][3]) / 2.0)
             reduce = self._reduce()
-            if not reduce:
+            if not reduce and self._effects()['trail']:
                 self._trail(cur['x'], cur['y'], point[0], point[1], acolor)
             self._tour(cur, tour_schedule([point], 1 if reduce else int(hop_ms(1) * speed_factor()), 0))
         self._layout_tags(agent)
@@ -1898,6 +1900,17 @@ class _Overlay(object):
             except Exception:
                 pass
 
+    def _effects(self):
+        """The Effects switches for the call being drawn, read once per call:
+        {'trail', 'ripple', 'labels'} (agent_cursors.OPTIONS; on when unreadable).
+        Glow is the main thread's (agent_cursors_glow)."""
+        try:
+            opts = options()
+        except Exception:
+            opts = {}
+        self._fx = dict((name, bool(opts.get(name, True))) for name in ('trail', 'ripple', 'labels'))
+        return self._fx
+
     def _reduce(self):
         """Animation is Off (agent_cursors.motion_off)."""
         try:
@@ -1969,6 +1982,7 @@ class _Overlay(object):
         self._place(snap['rect'])
         f = speed_factor()
         reduce = self._reduce()
+        fx = self._effects()
         cur = self._cursor(agent, action)
         self._clear_focus(agent)
         self._cursor_state(cur, 'failed' if failed else 'idle', caption)
@@ -2017,7 +2031,7 @@ class _Overlay(object):
                 self._draw_box(b[0], b[1], b[2], b[3], item.get('label') or item['size'],
                                action, arrive,
                                fresh=item.get('fresh') or item.get('id') in fresh_ids)
-                if item.get('id') in change_by_id:
+                if fx['labels'] and item.get('id') in change_by_id:
                     self._draw_chip(b[0], b[3] + 24, change_by_id[item['id']], acolor, arrive)
                 if item.get('id') in clash_ids:
                     self._flash_clash(b, arrive)
@@ -2030,14 +2044,15 @@ class _Overlay(object):
         if created and fresh_boxes and not failed:
             # What the call made or changed, named once above it; it stays.
             hold = int(FRESH_HOLD_S * 1000 * f)
-            self._draw_label(union_box(fresh_boxes), created, action, sched[-1][2], hold)
-            if not reduce and len(fresh_boxes) > 1 and len(stops) == len(boxes) > 1:
+            if fx['labels']:
+                self._draw_label(union_box(fresh_boxes), created, action, sched[-1][2], hold)
+            if not reduce and fx['trail'] and len(fresh_boxes) > 1 and len(stops) == len(boxes) > 1:
                 self._build_trail(sched, acolor, hold)
-        if not reduce:
+        if not reduce and fx['trail']:
             self._trail(cur['x'], cur['y'], points[0][0], points[0][1], acolor)
         self._tour(cur, sched, shake=failed and not reduce)
         self._layout_tags(agent)
-        if not reduce:
+        if not reduce and fx['ripple']:
             ring = '#DC2626' if failed else acolor
             for x, y, arrive, _leave in sched:
                 self._ripple(x, y, ring, arrive)

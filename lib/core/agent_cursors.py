@@ -69,6 +69,9 @@ OPTIONS = (
     ('select', 'agent_cursors_select', True),
     ('tile', 'agent_cursors_tile_views', True),
     ('glow', 'agent_cursors_glow', True),
+    ('trail', 'agent_cursors_trail', True),
+    ('ripple', 'agent_cursors_ripple', True),
+    ('labels', 'agent_cursors_labels', True),
     ('keep', 'agent_cursors_keep_bar', True),
 )
 # Animation (mcp_paths.json agent_cursors_speed): name -> time factor. 'off' =
@@ -89,6 +92,12 @@ OPTION_LABELS = {
     'tile': ('Tile', 'Tile the open views when the agent opens another one'),
     'glow': ('Glow', 'Experimental: outline touched elements inside the Revit view '
                      '(DirectContext3D). Turn off if Revit misbehaves.'),
+    'trail': ('Trail', 'Draw the path the cursor takes to its next target, and join the '
+                       'elements a call created'),
+    'ripple': ('Ripple', 'A ring where the cursor lands on a target, and the click of '
+                         'the pointer'),
+    'labels': ('Labels', 'Name each target (category and size), say what a call created '
+                         'and show the values it changed'),
     'keep': ('Keep bar', 'Keep the bar (folded) on screen between calls instead of '
                          'fading out (the x on the bar turns Agent Cursors off)'),
 }
@@ -982,7 +991,7 @@ OPTION_GROUPS = (
     ('Show', ('model',)),
     ('View', ('follow', 'zoom', 'tile')),
     ('Selection', ('select',)),
-    ('Effects', ('glow',)),
+    ('Effects', ('glow', 'trail', 'ripple', 'labels')),
     ('Bar', ('keep',)),
 )
 

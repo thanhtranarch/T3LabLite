@@ -67,7 +67,7 @@
             <span class="spacer"></span>
             <select id="sel-mode" class="compact mode" title="Fast answers quickly; Best and Deep think longer for better geometry (more tokens)"></select>
             <button class="btn danger sm hidden" id="btn-stop" title="Stop waiting for Claude">Stop</button>
-            <button class="btn primary send" id="btn-send" title="Send (Ctrl+Enter)" aria-label="Send"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5L8 3l4.5 4.5"/></svg></button>
+            <button class="btn primary" id="btn-send" title="Send (Ctrl+Enter)">Send</button>
           </div>
         </div>
         <div class="composer-foot">
@@ -85,28 +85,28 @@
       </div>
     </section>
 
-    <!-- ═══ Center: 3D review (full-bleed viewport, floating controls) ═══ -->
+    <!-- ═══ Center: 3D review. Revit layout: view tools docked on top, the View Control
+         Bar (detail level · visual style · size) docked at the bottom. ═══ -->
     <section class="pane stage" aria-label="3D review">
+      <div class="pane-head toolbar">
+        <div class="seg" role="group" aria-label="View">
+          <button class="seg-btn active" data-view="iso" title="3D view">3D</button>
+          <button class="seg-btn" data-view="front" title="Front elevation (looking +Y)">Front</button>
+          <button class="seg-btn" data-view="right" title="Right elevation (looking −X)">Right</button>
+          <button class="seg-btn" data-view="top" title="Plan (Ref. Level)">Plan</button>
+          <button class="seg-btn hidden" data-view="ref" id="view-ref" title="Same camera as your reference picture (from Claude's analysis)">Ref</button>
+        </div>
+        <button class="icon-btn" id="btn-fit" title="Zoom to fit (double-click the view)" aria-label="Zoom to fit"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
+        <span class="spacer"></span>
+        <label class="field inline hidden" id="type-field">
+          <span class="field-label">Type</span>
+          <select id="sel-type" class="compact" title="Family type: preview its materials"></select>
+        </label>
+        <label class="toggle" title="Show Void Forms (they cut the solids they overlap in Revit)"><input type="checkbox" id="chk-voids"> Voids</label>
+        <label class="toggle" title="Reference planes and the sizes that resize the model"><input type="checkbox" id="chk-planes" checked> Planes</label>
+        <label class="toggle" title="Bounding box with the overall sizes"><input type="checkbox" id="chk-dims" checked> Size</label>
+      </div>
       <div class="viewport" id="viewport">
-        <div class="float tl">
-          <div class="seg" role="group" aria-label="View">
-            <button class="seg-btn active" data-view="iso" title="3D view">3D</button>
-            <button class="seg-btn" data-view="front" title="Front elevation (looking +Y)">Front</button>
-            <button class="seg-btn" data-view="right" title="Right elevation (looking −X)">Right</button>
-            <button class="seg-btn" data-view="top" title="Plan (Ref. Level)">Plan</button>
-            <button class="seg-btn hidden" data-view="ref" id="view-ref" title="Same camera as your reference picture (from Claude's analysis)">Ref</button>
-          </div>
-          <button class="icon-btn" id="btn-fit" title="Zoom to fit (double-click the view)" aria-label="Zoom to fit"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
-        </div>
-        <div class="float tr">
-          <label class="field inline hidden" id="type-field">
-            <span class="field-label">Type</span>
-            <select id="sel-type" class="compact" title="Family type: preview its materials"></select>
-          </label>
-          <label class="chip-toggle" title="Show Void Forms (they cut the solids they overlap in Revit)"><input type="checkbox" id="chk-voids"><span>Voids</span></label>
-          <label class="chip-toggle" title="Reference planes and the sizes that resize the model"><input type="checkbox" id="chk-planes" checked><span>Planes</span></label>
-          <label class="chip-toggle" title="Bounding box with the overall sizes"><input type="checkbox" id="chk-dims" checked><span>Size</span></label>
-        </div>
         <div class="viewport-empty" id="viewport-empty">
           <div class="hero">No model yet</div>
           Describe it in the chat or pick a template: the model appears here.
@@ -116,22 +116,22 @@
           <div class="busy-bar"><div class="busy-fill"></div></div>
           <div class="busy-text" id="busy-text">Working…</div>
         </div>
-        <!-- Revit-like view control bar -->
-        <div class="float bl viewbar">
-          <span class="seg" role="group" aria-label="Detail level" title="Detail level: parts with detail_levels show only at those levels">
-            <button class="seg-btn" data-detail="coarse">Coarse</button>
-            <button class="seg-btn" data-detail="medium">Medium</button>
-            <button class="seg-btn active" data-detail="fine">Fine</button>
-          </span>
-          <select id="sel-style" class="compact" title="Visual style, as in Revit">
-            <option value="wireframe">Wireframe</option>
-            <option value="hidden">Hidden Line</option>
-            <option value="shaded" selected>Shaded</option>
-            <option value="consistent">Consistent Colors</option>
-            <option value="realistic">Realistic</option>
-          </select>
-        </div>
-        <div class="float br size-badge hidden" id="size-badge" title="Drag: orbit · Right-drag or Shift: pan · Wheel: zoom · Click: select a part"></div>
+      </div>
+      <div class="viewbar" title="Drag: orbit · Right-drag or Shift: pan · Wheel: zoom · Click: select a part">
+        <span class="seg" role="group" aria-label="Detail level" title="Detail level: parts with detail_levels show only at those levels">
+          <button class="seg-btn" data-detail="coarse">Coarse</button>
+          <button class="seg-btn" data-detail="medium">Medium</button>
+          <button class="seg-btn active" data-detail="fine">Fine</button>
+        </span>
+        <select id="sel-style" class="compact" title="Visual style, as in Revit">
+          <option value="wireframe">Wireframe</option>
+          <option value="hidden">Hidden Line</option>
+          <option value="shaded" selected>Shaded</option>
+          <option value="consistent">Consistent Colors</option>
+          <option value="realistic">Realistic</option>
+        </select>
+        <span class="spacer"></span>
+        <span class="size-text hidden" id="size-badge"></span>
       </div>
     </section>
 
@@ -145,11 +145,17 @@
         <button class="tab" data-tab="issues" role="tab" title="What FamiGen found while checking the model">Checks <span class="count hidden" id="issue-count"></span></button>
       </div>
       <div class="tab-body">
+        <!-- Revit Properties palette (grouped name / value grid) above a Project
+             Browser-style tree of the parts, grouped by subcategory. -->
         <div class="tab-panel active" id="tab-parts">
-          <div class="summary" id="summary"></div>
-          <ul class="list" id="parts-list"><li class="note-row">No parts yet. Describe a family in the chat.</li></ul>
+          <div class="props" id="summary"></div>
+          <div class="grid-head"><span>Part</span><span>Form</span><span>Material</span></div>
+          <div class="tree" id="parts-list"><div class="empty-row">No parts yet. Describe a family in the chat.</div></div>
         </div>
-        <div class="tab-panel" id="tab-materials"><ul class="list" id="materials-list"></ul></div>
+        <div class="tab-panel" id="tab-materials">
+          <div class="grid-head mats"><span>Material</span><span>Parameter</span><span class="num">Parts</span></div>
+          <div class="tree" id="materials-list"></div>
+        </div>
         <div class="tab-panel" id="tab-types">
           <div class="table-wrap"><table class="table" id="types-table"></table></div>
           <p class="note">Bold values differ from the default. A length resizes the model only
@@ -157,11 +163,11 @@
              change the finish.</p>
         </div>
         <div class="tab-panel" id="tab-planes">
-          <ul class="list" id="planes-list"></ul>
+          <div class="tree" id="planes-list"></div>
           <p class="note">Reference planes, labelled dimensions and face locks make the family
              flex: ask Claude "make it parametric: Width, Depth, Height".</p>
         </div>
-        <div class="tab-panel" id="tab-issues"><ul class="issues" id="issues"></ul></div>
+        <div class="tab-panel" id="tab-issues"><div class="tree" id="issues"></div></div>
       </div>
     </section>
   </main>
@@ -172,6 +178,7 @@
   <footer class="bar">
     <span class="copyright">© Copyright by T3Lab</span>
     <span class="divider"></span>
+    <span class="dot" id="status-dot" data-tone="info"></span>
     <span class="status" id="status" data-tone="info">Ready</span>
     <span class="divider"></span>
     <span class="count-text" id="part-count">0 items</span>
@@ -206,7 +213,7 @@
         <span class="spacer"></span>
         <button class="btn ghost sm" data-close="modal-history" aria-label="Close">✕</button>
       </div>
-      <div class="modal-body"><ul class="list" id="hist-list"></ul></div>
+      <div class="modal-body"><div class="tree" id="hist-list"></div></div>
     </div>
   </div>
 </div>

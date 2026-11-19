@@ -682,5 +682,47 @@ class ReferenceAnalysisTests(unittest.TestCase):
         self.assertEqual(request['camera']['elevation_deg'], 31.0)
 
 
+class T3StyleTests(unittest.TestCase):
+    """studio.css stays inside the T3 design system (docs/ui-governance/08-design-system-authority.md)."""
+
+    TOKENS = {'#18181B', '#FFFFFF', '#27272A', '#52525B', '#71717A', '#9A9AA2', '#DCDCE0', '#A1A1AA',
+              '#F4F4F6', '#E4E4E7', '#FAFAFB', '#F1F1F4', '#EAF8F0', '#22A85C', '#157038', '#FFF6E6',
+              '#F5CE5A', '#8A6308', '#FDECEC', '#F87171', '#D23B3B', '#F6D5D5', '#ECECEF', '#C2410C',
+              '#F59E0B', '#2563EB', '#D97706', '#059669', '#DC2626', '#7C3AED', '#0891B2', '#C026D3',
+              '#65A30D', '#C7C7CE', '#000000'}       # palette + Plot.* + Plot.Off + Primary hover
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(STUDIO, 'studio.css'), encoding='utf-8') as handle:
+            cls.css = re.sub(r'/\*.*?\*/', '', handle.read(), flags=re.S)       # rules, not comments
+
+    def test_only_t3_colours_and_light_only(self):
+        used = {h.upper() for h in re.findall(r'#[0-9A-Fa-f]{6}\b', self.css)}
+        self.assertEqual(sorted(used - self.TOKENS), [])
+        self.assertNotIn('prefers-color-scheme', self.css)
+
+    def test_type_scale(self):
+        sizes = set(re.findall(r'font-size:\s*([0-9.]+)px', self.css)) | \
+            set(re.findall(r'--fs-[a-z]+:\s*([0-9.]+)px', self.css))
+        self.assertLessEqual(sizes, {'19', '15', '13', '11.5', '11', '12.5'})
+        self.assertLessEqual(set(re.findall(r'font-weight:\s*(\d+)', self.css)), {'400', '600'})
+
+    def test_spacing_in_steps_of_four(self):
+        bad = []
+        for prop, value in re.findall(r'(?<![-\w])(padding|margin|gap|top|left|right|bottom|inset)'
+                                      r'(?:-(?:top|left|right|bottom))?:\s*([^;]+);', self.css):
+            bad += ['{}:{}'.format(prop, n) for n in re.findall(r'(-?\d+(?:\.\d+)?)px', value)
+                    if float(n) % 4]
+        self.assertEqual(bad, [])
+
+    def test_no_effects_and_t3_radii(self):
+        for effect in ('box-shadow', 'transition', 'gradient', 'filter:'):
+            self.assertNotIn(effect, self.css)
+        radii = set(re.findall(r'border-radius:\s*([^;]+);', self.css))
+        self.assertLessEqual(radii, {'var(--r-window)', 'var(--r-control)', 'var(--r-pill)', '18px', '50%'})
+        self.assertIn('--h-row: 26px', self.css)
+        self.assertIn('outline: 1px solid var(--ink)', self.css)
+
+
 if __name__ == '__main__':
     unittest.main()

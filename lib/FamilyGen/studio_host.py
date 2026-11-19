@@ -314,6 +314,30 @@ def _set_revit_enabled(uiapp, enabled):
         pass
 
 
+def detect_persistent_engine():
+    """True when this command runs on a persistent engine; a modeless Studio
+    needs one, otherwise pyRevit drops the interpreter when the script ends.
+
+    Its own copy on purpose. The button's script used to import the one in
+    GUI.ManaSelectDialog, and Services/tool_discovery reads every
+    `from GUI.<X>Dialog import` in a script as "this button opens X": FamiGen
+    picked up Mana Select's keywords and the Assistant could no longer tell
+    "Mana Select" from FamiGen (2026-11-19).
+    """
+    try:
+        from pyrevit import EXEC_PARAMS
+        try:
+            return bool(EXEC_PARAMS.needs_persistent_engine)
+        except Exception:
+            pass
+        cfg_json = EXEC_PARAMS.script_runtime.ScriptRuntimeConfigs.EngineConfigs
+        if cfg_json:
+            return bool(json.loads(cfg_json).get('persistent', False))
+    except Exception:
+        pass
+    return False
+
+
 def _pyrevit_output():
     """pyRevit's real output window - never `script.get_output()` here.
 

@@ -973,5 +973,27 @@ class OutputWindowTests(unittest.TestCase):
         self.assertNotIn('get_output()\n', helper.split('"""')[-1])
 
 
+class RibbonButtonTests(unittest.TestCase):
+    """What the Assistant learns about the FamiGen button from its script."""
+
+    def test_the_button_is_known_by_its_own_names_only(self):
+        # Services/tool_discovery turns every `from GUI.<X>Dialog import` in a
+        # script into keywords for that button. FamiGen borrowed a helper from
+        # GUI.ManaSelectDialog and "Mana Select" then matched two tools, so the
+        # Assistant opened neither.
+        from Services import tool_discovery as discovery
+        script = os.path.join(os.path.dirname(LIB), 'T3Lab.tab',
+                              'Standards & Families.panel', 'FamiGen.pushbutton', 'script.py')
+        if not os.path.isfile(script):          # t3lab_dev: one T3Lab_Dev.tab
+            sys.path.insert(0, os.path.join(REPO, 'dev'))
+            import tabdir
+            script = tabdir.bundle_path('FamiGen.pushbutton', 'script.py')
+        title, _doc, xamls = discovery._read_meta(script)
+        self.assertEqual(title, 'FamiGen')
+        self.assertEqual(xamls, ['FamiGen'])
+        keywords = discovery._gen_keywords(title, 'FamiGen.pushbutton', xamls)
+        self.assertEqual(sorted(keywords), ['fami', 'famigen', 'gen'])
+
+
 if __name__ == '__main__':
     unittest.main()

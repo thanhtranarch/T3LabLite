@@ -40,14 +40,12 @@ class T3Dialog(_WPFWindow):
 
     def __init__(self, message, title="Notification", details=None,
                  mode="info", ok_text="OK", cancel_text="Cancel", danger=False, owner=None,
-                 default_text=u"", options=None, subtitle=None, sections=None,
-                 sections_title="Details"):
+                 default_text=u"", options=None):
         _WPFWindow.__init__(self, _XAML)
         self.result = False
         self.value = None
         self.option_values = {}
         self._option_boxes = []
-        self._option_sync = None
         self._mode = mode
         self._danger = danger
 
@@ -61,8 +59,6 @@ class T3Dialog(_WPFWindow):
         # Wire Title and Texts
         if hasattr(self, 'dlg_title') and self.dlg_title:
             self.dlg_title.Text = title
-        if subtitle and getattr(self, 'dlg_subtitle', None) is not None:
-            self.dlg_subtitle.Text = subtitle
         if hasattr(self, 'txt_message') and self.txt_message:
             self.txt_message.Text = message
         if hasattr(self, 'txt_details') and self.txt_details:
@@ -86,13 +82,6 @@ class T3Dialog(_WPFWindow):
 
         if options:
             self._add_options(options)
-            if sections and self._add_sections(sections_title, sections):
-                self.txt_details.Visibility = _Visibility.Collapsed
-            self._fit_height()
-            try:
-                self.Loaded += self._on_layout_changed      # measured again once it is real
-            except Exception:
-                pass
 
         # Wire Events
         if hasattr(self, 'btn_ok') and self.btn_ok:
@@ -149,137 +138,31 @@ class T3Dialog(_WPFWindow):
             if bg_brush:
                 self.icon_bg.Background = bg_brush
 
-    def _style(self, key):
-        try:
-            return self.FindResource(key)
-        except Exception:
-            return None
-
-    def _text(self, text, style_key, wrap=True):
-        from System.Windows import TextWrapping
-        from System.Windows.Controls import TextBlock
-        block = TextBlock()
-        style = self._style(style_key)
-        if style is not None:
-            block.Style = style
-        block.Text = text or u""
-        if wrap:
-            block.TextWrapping = TextWrapping.Wrap
-        return block
-
     def _add_options(self, options):
-        """One row per (key, label, description, checked[, requires]) in
-        pnl_options: a T3.CheckBox and, beside it, what the option does (it
-        used to hide in a tooltip). `requires` = key of the option that must
-        be ticked for this one to act (chains are followed): the row greys
-        out with that box and keeps its own tick."""
+        """One T3.CheckBox per (key, label, tooltip, checked) in pnl_options."""
         panel = getattr(self, 'pnl_options', None)
         if panel is None:
             return
-        from System.Windows import Thickness, GridLength, VerticalAlignment
-        from System.Windows.Controls import CheckBox, Grid, RowDefinition
-        style = self._style('T3.CheckBox')
-        rows = {}
-        for index, option in enumerate(options):
-            key, label, note, checked = option[:4]
-            row = RowDefinition()
-            row.Height = GridLength.Auto
-            panel.RowDefinitions.Add(row)
+        from System.Windows import Thickness
+        from System.Windows.Controls import CheckBox
+        try:
+            style = self.FindResource('T3.CheckBox')
+        except Exception:
+            style = None
+        for key, label, tip, checked in options:
             box = CheckBox()
             if style is not None:
                 box.Style = style
             box.Content = label
+            box.ToolTip = tip
             box.IsChecked = bool(checked)
             box.Margin = Thickness(0, 0, 16, 8)
-            box.VerticalAlignment = VerticalAlignment.Center
-            Grid.SetRow(box, index)
             panel.Children.Add(box)
-            text = self._text(note, 'T3.Caption')
-            text.Margin = Thickness(0, 0, 0, 8)
-            Grid.SetRow(text, index)
-            Grid.SetColumn(text, 1)
-            panel.Children.Add(text)
             self._option_boxes.append((key, box))
-            rows[key] = (box, text, option[4] if len(option) > 4 else None)
         panel.Visibility = _Visibility.Visible
-        self.Width = max(self.Width, 560)
-
-        def live(key, depth=0):
-            # Ticked all the way up: an option under "On model" is off when
-            # the on/off switch above that is unticked.
-            requires = rows[key][2]
-            if requires not in rows or depth > len(rows):
-                return True
-            return bool(rows[requires][0].IsChecked) and live(requires, depth + 1)
-
-        def sync(sender=None, e=None):
-            for key, (box, text, requires) in rows.items():
-                if requires in rows:
-                    on = live(key)
-                    box.IsEnabled = on
-                    text.Opacity = 1.0 if on else 0.5
-        masters = set(requires for _b, _t, requires in rows.values() if requires in rows)
-        if masters:
-            self._option_sync = sync        # pythonnet: the delegate must outlive this call
-            for key in masters:
-                rows[key][0].Click += sync
-            sync()
-
-    def _add_sections(self, title, sections):
-        """Long reading under the options, folded: [(heading, [line][, glyph])].
-        Each line is a bullet with a hanging indent (glyph = a T3 icon,
-        default a check). False when the XAML has no place for it."""
-        expander = getattr(self, 'exp_details', None)
-        panel = getattr(self, 'pnl_sections', None)
-        if expander is None or panel is None:
-            return False
-        from System.Windows import Thickness, GridLength, GridUnitType, VerticalAlignment
-        from System.Windows.Controls import Grid, ColumnDefinition
-        for section in sections:
-            heading, lines = section[0], section[1]
-            glyph = section[2] if len(section) > 2 else u"\uE73E"
-            head = self._text(heading.upper(), 'T3.Label', wrap=False)
-            head.Margin = Thickness(0, 8, 0, 4)
-            panel.Children.Add(head)
-            for line in lines:
-                row = Grid()
-                for width in (GridLength.Auto, GridLength(1, GridUnitType.Star)):
-                    column = ColumnDefinition()
-                    column.Width = width
-                    row.ColumnDefinitions.Add(column)
-                icon = self._text(glyph, 'T3.Icon.Muted', wrap=False)
-                icon.Margin = Thickness(0, 4, 8, 0)
-                icon.VerticalAlignment = VerticalAlignment.Top
-                row.Children.Add(icon)
-                text = self._text(line, 'T3.Body.Secondary')
-                Grid.SetColumn(text, 1)
-                row.Children.Add(text)
-                row.Margin = Thickness(0, 0, 0, 4)
-                panel.Children.Add(row)
-        expander.Header = title
-        expander.Visibility = _Visibility.Visible
-        try:
-            expander.Expanded += self._on_layout_changed
-            expander.Collapsed += self._on_layout_changed
-        except Exception:
-            pass
-        return True
-
-    def _on_layout_changed(self, sender, e):
-        self._fit_height()
-
-    def _fit_height(self):
-        """As tall as the content needs, title bar and footer (48 + 48)
-        included. The options dialog had a fixed 440: a scroll box when the
-        text was long, a gap when it was short."""
-        body = getattr(self, 'pnl_body', None)
-        try:
-            from System.Windows import Size
-            body.Measure(Size(max(float(self.Width) - 74.0, 100.0), float('inf')))
-            need = float(body.DesiredSize.Height) + 98.0
-            self.Height = min(max(need, float(self.MinHeight)), 680.0)
-        except Exception:
-            self.Height = max(self.Height, 440)
+        # Room for the checkboxes; the details still scroll below them.
+        self.Width = max(self.Width, 520)
+        self.Height = max(self.Height, 440)
 
     def _on_ok(self, sender, e):
         self.result = True
@@ -369,19 +252,13 @@ def confirm(message, title="Confirm Action", ok_text="Proceed", cancel_text="Can
 
 
 def confirm_options(message, options, title="Confirm Action", ok_text="OK",
-                    cancel_text="Cancel", details=None, owner=None, subtitle=None,
-                    sections=None, sections_title="Details"):
-    """Confirm with checkboxes, one row each with what it does.
-    `options` = [(key, label, description, checked[, requires])], requires =
-    key of the option this one depends on. `sections` = [(heading, [line]
-    [, glyph])]: long reading, folded under `sections_title`; it replaces
-    `details`, which stays the plain text of the TaskDialog fallback.
+                    cancel_text="Cancel", details=None, owner=None):
+    """Confirm with checkboxes. `options` = [(key, label, tooltip, checked)].
     Returns {key: bool} on OK, None on Cancel. Without the WPF dialog it
     falls back to a Yes/No TaskDialog and returns the given defaults."""
     try:
         dlg = T3Dialog(message, title=title, details=details, mode=T3Dialog.MODE_CONFIRM,
-                       ok_text=ok_text, cancel_text=cancel_text, owner=owner, options=options,
-                       subtitle=subtitle, sections=sections, sections_title=sections_title)
+                       ok_text=ok_text, cancel_text=cancel_text, owner=owner, options=options)
         dlg.ShowDialog()
         return dlg.option_values if dlg.result else None
     except Exception as exc:

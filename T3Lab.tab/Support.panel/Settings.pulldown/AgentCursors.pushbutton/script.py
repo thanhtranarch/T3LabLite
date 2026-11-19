@@ -28,35 +28,39 @@ from GUI.T3Dialog import confirm_options, show_info, show_error
 
 
 def _option_rows(on):
-    """Rows for the dialog: the on/off switch (when on) + every bar option
-    with what it does. A row greys out while what it hangs under is unticked:
-    everything under the switch, the options that draw on the model under
-    "On model" (agent_cursors.effective)."""
+    """Checkboxes for the fallback dialog: the on/off switch (when on) + every bar option."""
     current = agent_cursors.options()
     rows = []
     if on:
         rows.append(('enabled', 'Show agent cursors', 'Untick to turn the cursors off', True))
     for name, _key, _default in agent_cursors.OPTIONS:
         label, tip = agent_cursors.OPTION_LABELS[name][:2]
-        rows.append((name, label, tip, current.get(name, True),
-                     'enabled' if name in ('model', 'keep') else 'model'))
+        rows.append((name, label, tip, current.get(name, True)))
     return rows
+
+
+def _ask(on):
+    """{'enabled': bool, option: bool, ...} or None on Cancel. The settings
+    window (GUI/AgentCursorsDialog.py); if it cannot be built, the plain
+    checkbox dialog, which says why, so the setting is never out of reach."""
+    try:
+        from GUI.AgentCursorsDialog import ask
+        return ask(on, agent_cursors.options(), agent_cursors.pros_cons_sections())
+    except Exception as ex:
+        why = '(settings window unavailable: {})'.format(ex)
+    if on:
+        message = 'Agent cursors are on. Pick the options, or untick "Show agent cursors" to turn them off.'
+    else:
+        message = ('Show a live cursor for each AI agent (Claude, GPT, Gemini…) '
+                   'working in Revit through MCP?')
+    return confirm_options(message, _option_rows(on), title='Agent Cursors',
+                           ok_text='Save' if on else 'Turn On', cancel_text='Cancel',
+                           details=agent_cursors.pros_cons_text() + '\n\n' + why)
 
 
 def main():
     on = agent_cursors.is_enabled()
-    if on:
-        message = 'Agent cursors are on. Pick the options, or untick "Show agent cursors" to turn them off.'
-        ok_text = 'Save'
-    else:
-        message = ('Show a live cursor for each AI agent (Claude, GPT, Gemini…) '
-                   'working in Revit through MCP?')
-        ok_text = 'Turn On'
-    values = confirm_options(message, _option_rows(on), title='Agent Cursors', ok_text=ok_text,
-                             cancel_text='Cancel', details=agent_cursors.pros_cons_text(),
-                             subtitle='Live cursors for the AI agents working in Revit',
-                             sections=agent_cursors.pros_cons_sections(),
-                             sections_title='Benefits and drawbacks')
+    values = _ask(on)
     if values is None:
         return
     enable = values.pop('enabled', True)

@@ -35,10 +35,11 @@ Releasing a new version:
   front of the app's name.
 - **Agent Cursors — Replay** now fills its block step by step and shows which
   step it replays.
-- **Settings > Agent Cursors dialog:** every option says what it does next to
-  its checkbox, options that need "On model" grey out while it is unticked,
-  and the benefits and drawbacks sit in a folded section instead of a long
-  scrolling text. Not tried in Revit yet.
+- **Settings > Agent Cursors window, redrawn like BatchOut's Format page:** one
+  card with the on/off checkbox in its header and the options in two columns
+  below it, each named in plain words. Unticking "On model" greys out what
+  draws on the views. The benefits and drawbacks are a second, folded card
+  instead of a long scrolling text. Not tried in Revit yet.
 
 ### Fixed
 

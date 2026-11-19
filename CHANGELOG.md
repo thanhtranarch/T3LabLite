@@ -19,6 +19,27 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-11-19
+
+### Added
+
+- **FamiGen Studio — try sizes before Revit:** type a value in the Types tab
+  and the 3D model resizes the way Revit will flex it (labelled dimensions,
+  locked faces).
+- **FamiGen Studio — the right parameters for each category:** the Sizes tab
+  grades the family against its category's standard sizes, type or instance,
+  and the shared parameters in your Revit shared parameter file. **Apply
+  standards** fixes type / instance and makes them shared, without the AI;
+  **Make it parametric** asks Claude for the missing sizes. Offices can set
+  their own list in `%APPDATA%\T3LabAI\famigen_profiles.json`.
+- **FamiGen Studio — your AI app listens:** in Auto, an AI app connected over
+  MCP answers first, then your Claude API key. Click **Copy listen command**
+  and paste it once in the app: every Studio message is picked up by itself,
+  no more "continue in FamiGen".
+- **FamiGen Studio — progress you can follow:** the chat column is a timeline
+  of what the AI does, step by step, on a glass panel.
+- **FamiGen Studio — templates for every category** (56 in all).
+
 ### Changed
 
 - **Agent Cursors — the bar shows each step in its action's colour:** the step
@@ -48,6 +69,10 @@ Releasing a new version:
 
 ### Fixed
 
+- **FamiGen Studio showed no models, no templates, and locked Send after the
+  first reply:** the window's first message was lost while the page loaded.
+- **FamiGen Studio:** one window border instead of two; Enter sends
+  (Shift+Enter for a new line); Front / Right / Plan are flat drawings.
 - **Agent Cursors — the bar could stay on "Working" for ever:** when a call
   ended with no view to show it in (the last document closed, a view window
   too small) or its drawing failed, the bar never learned that the call was

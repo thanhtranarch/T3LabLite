@@ -174,6 +174,37 @@ def add_family_parameter(family_manager, name, group, spec, is_instance=False):
     return family_manager.AddParameter(name, group_id, spec_id, bool(is_instance))
 
 
+def add_shared_family_parameter(family_manager, definition, group, is_instance=False):
+    """Add a shared parameter (an ExternalDefinition) to a family, version-safe.
+
+    Same overload story as add_family_parameter: the ForgeTypeId group exists on
+    every supported release; BuiltInParameterGroup only in the fallback."""
+    from Autodesk.Revit import DB as _DB
+    try:
+        group_id = getattr(_DB.GroupTypeId, _FAMILY_PARAM_GROUPS[group][0])
+    except AttributeError:
+        legacy_group = getattr(getattr(_DB, 'BuiltInParameterGroup'), _FAMILY_PARAM_GROUPS[group][1])
+        return family_manager.AddParameter(definition, legacy_group, bool(is_instance))
+    return family_manager.AddParameter(definition, group_id, bool(is_instance))
+
+
+def shared_definitions(app):
+    """{guid lower: ExternalDefinition} and {name lower: ExternalDefinition} of the
+    shared parameter file Revit uses; two empty dicts when none is set or it fails."""
+    by_guid, by_name = {}, {}
+    try:
+        spfile = app.OpenSharedParameterFile()
+    except Exception:
+        spfile = None
+    if spfile is None:
+        return by_guid, by_name
+    for group in spfile.Groups:
+        for definition in group.Definitions:
+            by_guid[u'{}'.format(definition.GUID).lower()] = definition
+            by_name.setdefault(definition.Name.strip().lower(), definition)
+    return by_guid, by_name
+
+
 def _type_id_stem(forge_type_id):
     """'autodesk.spec.aec:length-2.0.0' -> 'autodesk.spec.aec:length'."""
     try:

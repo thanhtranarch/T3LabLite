@@ -711,8 +711,13 @@ def test_settings_window():
     lite = dict(options, model=False, glow=True)        # T3LabLite: OPTIONS has 'model'
     SD, win = settings_window(lite, enabled=True)
     check('already on: the button says Save', win.btn_ok.Content == 'Save')
-    check('"On model" row shown when the option exists',
-          repr(win.row_model.Visibility) == 'Visibility.Visible')
+    check('"On model" row shown when the option exists, the window taller by that row',
+          repr(win.row_model.Visibility) == 'Visibility.Visible'
+          and win.Height == SD.HEIGHT + SD.MODEL_ROW)
+    win.details_header_clicked(None, None)
+    win.details_header_clicked(None, None)
+    check('folding the details card again gives that height back',
+          win.Height == SD.HEIGHT + SD.MODEL_ROW)
     check('"On model" off: what draws on the views greys out, Keep bar stays',
           [n for n in sorted(win._boxes) if win._boxes[n].IsEnabled]
           == ['keep', 'model'], dict((n, b.IsEnabled) for n, b in win._boxes.items()))

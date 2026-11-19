@@ -26,12 +26,31 @@ def _service():
     return TelemetryService
 
 
-def _send_session_row():
-    _service().record_tool_usage(
+def _send_session_row(revit_handle=None):
+    service = _service()
+    if not service.is_enabled():
+        return
+    service.note_revit_context(revit_handle)    # startup / Idling: Revit's thread
+    service.record_tool_usage(
         tool_name='session_start',
         tool_type='startup',
         purpose='Khởi động phiên làm việc Revit / pyRevit'
     )
+
+
+def note_revit_context(uiapp=None):
+    """Remember the Revit version and document title for the rows sent later.
+
+    For code that is on Revit's own thread and holds the live UIApplication
+    (the MCP ExternalEvent handler): rows are built on other threads, which may
+    not touch the Revit API. Never raises, does nothing without consent.
+    """
+    try:
+        service = _service()
+        if service.is_enabled():
+            service.note_revit_context(uiapp)
+    except Exception:
+        pass
 
 
 def track_session_start(revit_handle=None):
@@ -45,10 +64,11 @@ def track_session_start(revit_handle=None):
         from tracking import consent
         answer = consent.current_answer()
         if answer is None:
-            consent.ask_when_idle(revit_handle, on_allow=_send_session_row)
+            consent.ask_when_idle(
+                revit_handle, on_allow=lambda: _send_session_row(revit_handle))
             return
         if answer:
-            _send_session_row()
+            _send_session_row(revit_handle)
     except Exception:
         pass
 
@@ -114,7 +134,13 @@ def track_ribbon_click():
         if not tool_name:
             tool_name = os.path.basename(os.path.dirname(caller_file))
 
-        _service().record_tool_usage(
+        service = _service()
+        if not service.is_enabled():
+            return
+        # init_cpython_paths() runs at the top of a ribbon command, so this is
+        # Revit's own thread: the only place the Revit side of a row is read.
+        service.note_revit_context()
+        service.record_tool_usage(
             tool_name=tool_name,
             tool_type='ribbon',
             panel=panel_name,

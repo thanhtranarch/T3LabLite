@@ -22,6 +22,10 @@ Click kế tiếp dùng lại engine đó (`RecoveredFromCache`), không bao gi�
 `set_PythonDLL`. Mất gì? Không: pythonnet 3 vốn không finalize interpreter khi
 Shutdown, nên `sys.modules` vẫn sống qua Reload như cũ.
 
+Chỉ áp cho pyRevit trước 7.0. Từ 7.0, pyRevit tự giữ interpreter sống qua
+Reload nên không vá gì; nếu bản T3Lab cũ đã lỡ vá (văn bản hàm ở 7.0 / 7.1 vẫn
+y hệt 6.5.5) thì `ensure()` gỡ ra ('removed'). Xem FIXED_IN.
+
 Patch được áp bằng thay thế CHÍNH XÁC văn bản hàm gốc của pyRevit 6.5.5. Bản
 pyRevit khác (hàm đã đổi) -> không đụng gì, báo 'unsupported'. Idempotent nhờ
 marker; lưu bản gốc cạnh file (`.t3lab-backup`); `restore()` gỡ patch.
@@ -110,6 +114,46 @@ ALREADY = "already"
 UNSUPPORTED = "unsupported"
 READONLY = "readonly"
 ERROR = "error"
+NOT_NEEDED = "not needed"       # pyRevit 7.0+: nothing to patch
+REMOVED = "removed"             # pyRevit 7.0+: an earlier T3Lab's patch was undone
+
+# pyRevit 7.0 fixed this itself: CPythonEngine.Shutdown no longer calls
+# PythonEngine.Shutdown ("interpreter left up for the lifetime of the Revit
+# process" - read in the v7.0.0, v7.0.1 and v7.1.0 sources, 2026-11-19), and
+# its ScriptEngineManager now tracks engines per session load. Yet
+# `_clear_running_engines` is still letter for letter the 6.5.5 function in all
+# three, so matching the text alone patched pyRevit 7 as well - editing an
+# install that does not need it and holding engines its manager means to drop.
+# The version decides now; the text match only confirms the function is known.
+FIXED_IN = (7, 0)
+
+
+def pyrevit_version(path=None):
+    """(major, minor) of the pyRevit clone that owns `path`, or None.
+
+    `path` is that clone's sessionmgr.py; the version file sits two folders up
+    (pyrevitlib/pyrevit/version, e.g. "6.5.5.26237+2044").
+    """
+    path = path or sessionmgr_path()
+    if not path:
+        return None
+    try:
+        package = os.path.dirname(os.path.dirname(os.path.abspath(path)))
+        with io.open(os.path.join(package, "version"), "r", encoding="utf-8-sig") as fh:
+            parts = fh.read().strip().split(u".")
+        return int(parts[0]), int(parts[1])
+    except Exception:
+        return None
+
+
+def needs_patch(path=None):
+    """False only when the clone is known to be pyRevit 7.0 or later.
+
+    An unreadable version keeps the old behaviour (patch when the text
+    matches): missing the patch on 6.5 breaks every tool after a Reload.
+    """
+    version = pyrevit_version(path)
+    return version is None or version < FIXED_IN
 
 
 def sessionmgr_paths():
@@ -168,13 +212,19 @@ def status(path=None):
         return ERROR
     if MARKER in text:
         return ALREADY
+    if not needs_patch(path):
+        return NOT_NEEDED
     if ORIGINAL in text:
         return MISSING
     return UNSUPPORTED
 
 
 def ensure(path=None):
-    """Apply the patch when needed. Returns (status, detail); never raises."""
+    """Apply the patch when needed. Returns (status, detail); never raises.
+
+    On pyRevit 7.0 and later nothing is applied, and a patch an earlier T3Lab
+    put there is taken out again (REMOVED), leaving pyRevit as it shipped.
+    """
     path = path or sessionmgr_path()
     if not path:
         return ERROR, u"pyRevit's sessionmgr.py was not found"
@@ -182,6 +232,13 @@ def ensure(path=None):
         text, newline = _read(path)
     except Exception as exc:
         return ERROR, u"cannot read %s: %s" % (path, exc)
+
+    if not needs_patch(path):
+        if MARKER not in text:
+            return NOT_NEEDED, (u"pyRevit %d.%d keeps CPython running across a "
+                                u"reload by itself" % pyrevit_version(path))
+        state, detail = restore(path)
+        return (REMOVED, path) if state == APPLIED else (state, detail)
 
     if MARKER in text:
         return ALREADY, path

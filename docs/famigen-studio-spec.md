@@ -22,9 +22,10 @@ add-in to compile.
 | R5 | Complex families: repeated members, detail levels, voids | `repeat`, `detail_levels` |
 | R6 | Families that flex: reference planes, labelled dimensions, face locks | `reference_planes`, `dimensions`, `locks` |
 | R7 | Family types: size / finish variants | `types[]` |
-| R11 | Models read as ONE built object: continuous curves, no floating parts | `Tube`, `continuity_issues`, polish round |
+| R11 | Models read as ONE built object: continuous curves, no floating parts | `Tube`, `spatial_check`, polish round |
+| R12 | Models make sense in space: the AI states the concept, each part's role, what is hollow and how parts join; FamiGen checks it | `concept`, `role`, `wall`, `joints`, `spatial_check` (§5.3) |
 | R8 | Revit-like review: Coarse / Medium / Fine, Wireframe / Hidden Line / Shaded / Consistent Colors / Realistic, 3D / Front / Right / Plan | `studio.js` |
-| R9 | Same look as every T3 tool: T3 title bar, footer bar, window border | `studio.css` (T3 tokens) |
+| R9 | Same look as every T3 tool: ONE T3 title bar (pyRevit's own is hidden, or the page hides its own), footer bar, window border | `studio.css` (T3 tokens), `studio_host._go_frameless` |
 | R10 | Never change the model before the user presses Create Family | controller + builder |
 
 Non-goals (1.0): MEP connectors, nested families, formulas, arrays driven by a
@@ -160,8 +161,8 @@ FORMS block tells Claude which tool fits which shape; Studio hides voids unless
 |---|---|
 | Curved members drawn as chained straight Cylinders | `Tube`: one centre line, spline-smoothed, joints closed |
 | Parts placed with approximate coordinates, leaving gaps | Contract CONTINUITY rules: child starts at the parent's face coordinate; 1–5 mm overlap |
-| Parts floating (no support) | `preview_mesh.continuity_issues`: parts not linked through touching boxes to the lowest part → "Not connected: 'Lamp' …" warning |
-| Claude never told | `claude_designer`: a valid family with loose parts gets ONE polish round (non-error tool_result naming them) before the user sees it |
+| Parts floating (no support) | `spatial_check`: parts whose SURFACES do not touch anything that reaches the lowest part → "Not connected: 'Lamp' …" warning (§5.3; bounding boxes are no longer enough) |
+| Claude never told | `claude_designer`: a valid family with spatial findings gets up to `MAX_POLISH` (2) polish rounds (non-error tool_result naming them) before the user sees it |
 | Faceted look of round parts | Studio shades Cylinder / Revolution / Sweep smoothly, prismatic parts keep crisp edges |
 | Missing category know-how | Every category spec ends with "JOINTS & SMOOTH FORMS" (category-specific joint recipes) |
 
@@ -169,6 +170,42 @@ The check uses bounding boxes (5 mm contact tolerance): it catches floating
 parts, not every hairline gap, and a diagonal member counts as touching what
 its box overlaps. It runs in every preview, `famigen_validate_family` and
 `famigen_propose_family` warnings.
+
+### 5.3 Meaning: concept, roles, solid or hollow, joints, space
+
+A model can be valid JSON, touch everywhere, and still be nonsense: a tube slide that
+starts in mid-air beside its platform, a stair that ends under a floor, a basin modelled
+as a block. The schema therefore carries what the family MEANS, and
+`FamilyGen/spatial_check.py` checks the geometry against it.
+
+| Field | What it says | Checked |
+|---|---|---|
+| `concept` `{what, use, placement}` | What the object is, who or what uses it and by which route, where it stands or hangs. Required from an AI (`meaning_errors`); optional in hand-written JSON. | Presence only. It is the first thing the model writes, so the geometry is derived from it. |
+| `geometry[].role` | `support`, `surface`, `enclosure`, `container`, `conduit`, `access`, `guard`, `fixing`, `control`, `decor` | `container` / `conduit` must be hollow → **Hollow**. `access` needs a joint at each end → **Access**. |
+| `wall` on `Cylinder` / `Tube` | Hollow pipe: inner radius = radius − wall. Preview shows the bore; the builder makes an extrusion with an inner loop (axis-aligned) or revolves the wall section (diagonal). Joint balls of a hollow Tube are shells. | `wall` < `radius`. |
+| `joints[]` `{a, b, at}` | Part `a` meets part `b` (or `"ground"`) at point `at`. | Both parts within 25 mm of `at` (a point inside a part counts) → **Joint**, with the distance missed. |
+
+Findings (`spatial_check.PREFIXES`), all added to the preview warnings, so the Issues tab,
+the Claude polish round and `famigen_validate_family` show the same list:
+
+| Finding | Rule |
+|---|---|
+| **Not connected** | Solids must reach the base through parts that really touch: vertex-to-surface distance ≤ max(10 mm, 0.2 % of the model), then parts set INTO another solid (glass in a wall), then faces that cross without a vertex near (a plank across joists). |
+| **Joint** | A declared joint where one part is not at the point; or names a part that does not exist. |
+| **Hollow** | A `container` / `conduit` that is a plain solid: no `wall`, no `inner_loops`, no void overlapping it, and (Revolution) a profile that stays on the axis. |
+| **Access** | An `access` part named in fewer than two joints. |
+| **Crossing** | Something inside the bore of a `conduit` or a conduit centre line inside a solid (pipe ends excepted); something in the 150–1400 mm above an `access` surface. Skipped for jointed pairs, for `fixing` / `control` / `guard` parts, and where a void opens the way. |
+
+Prompt: `build_system_prompt` blocks MEANING, SOLID OR HOLLOW, JOINTS, SPACE; the session
+workflow adds THINK IN THIS ORDER (concept → levels and footprints → roles → joints →
+geometry); `record_analysis` gains `concept`, `levels`, `connections`, `hollow`; every
+category spec ends with "MEANING, SOLID / HOLLOW, JOINTS" (what is hollow in THAT category,
+which joints to declare).
+
+Limits: mesh based (48-gon circles, sampled splines); inside tests exist for Extrusion,
+Cylinder and full Revolution only; the Studio preview does not cut voids, the check does
+account for them. It finds what is wrong in the model; it does not prove Revit can build it.
+Cost: about 1.5 s for a 360-part / 90 000-triangle model, cached per geometry.
 
 ## 6. Page ↔ Python messages
 

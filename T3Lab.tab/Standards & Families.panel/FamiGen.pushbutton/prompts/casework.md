@@ -327,3 +327,10 @@ If the object matches none of these, fall back to METHOD step 1 and decompose it
 - Carcass panels butt edge to edge (shared coordinates); doors sit 2 mm proud of the
   carcass front and 3 mm apart; handles overlap the door face 2 mm; plinth set back
   under the carcass and touching it.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a cabinet, counter or shelving unit fixed to a floor or wall - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Carcass = enclosure built from PANELS (sides 18, top, bottom, back 6-9), never one filled block; the inside is used. Doors and drawer fronts are surfaces in front of the carcass with a 2-3 mm gap; shelves are surfaces between the sides. Worktop = surface overhanging the front 20-30. Plinth / legs = support. Sink cut-outs and open niches are voids.
+- Joints to declare: shelf to both sides; door to the carcass at its hinge side; worktop to the carcass top; plinth or each leg to the carcass bottom and to "ground"; handle (control) to its door.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

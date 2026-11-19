@@ -43,3 +43,10 @@ reference gives one — list every such choice in `assumptions`.
   their top rail is one closed Tube or Revolution ring; slides and tube slides are
   Tubes from the platform edge down to the ground; stairs climb from the ground
   to the platform with each step touching the next.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a bench, bollard, bin, bike rack, shelter, play equipment or planter outdoors - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Posts, legs, frames = support, down to "ground". Decks, seats, steps = surface. Stairs, ladders, ramps, slides, bridges = access: fix the levels first, start each at the edge of its upper level, land it on the lower one. Rails, fences = guard, open where an access part arrives. Bins and planters = container (HOLLOW, open top). Tube slides, tunnels, pipes = conduit with "wall".
+- Joints to declare: every post to "ground" and to what it carries; each end of every stair, ramp, slide and bridge; rails to their posts. Walk the route in concept.use: nothing in the way, a metre of free space where a slide or stair lands.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

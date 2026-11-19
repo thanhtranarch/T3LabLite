@@ -838,6 +838,12 @@ class JsonFamilyBuilder(object):
             r = geom_data.get("radius")
             if not (s and e and r is not None):
                 return [], "Cylinder needs 'start', 'end', 'radius'"
+            try:
+                wall = float(geom_data.get("wall") or 0.0)
+            except (TypeError, ValueError):
+                wall = 0.0
+            if not 0.0 < wall < r:
+                wall = 0.0
             dx = abs(e[0] - s[0]); dy = abs(e[1] - s[1]); dz = abs(e[2] - s[2])
             tol = 1.0   # mm - treat as axis-aligned within 1 mm
             kind = None
@@ -854,6 +860,11 @@ class JsonFamilyBuilder(object):
                 circ = self._json_curve({"type": "Circle", "center": s, "radius": r}, cyl_plane)
                 prof = CurveArrArray()
                 prof.Append(self._curve_arr([circ]))
+                if wall:
+                    # Hollow pipe: the bore is a second loop in the same sketch.
+                    bore = self._json_curve({"type": "Circle", "center": s, "radius": r - wall},
+                                            cyl_plane)
+                    prof.Append(self._curve_arr([bore]))
                 length = {'x': e[0], 'y': e[1], 'z': e[2]}[kind] * SCL - val
                 ext = doc.FamilyCreate.NewExtrusion(is_solid, prof, cyl_sp, abs(length))
                 if length >= 0:
@@ -876,11 +887,15 @@ class JsonFamilyBuilder(object):
             out = axis_dir.CrossProduct(normal).Normalize()
             o0 = p0 + out.Multiply(rr)
             o1 = p1 + out.Multiply(rr)
+            # Solid rod: the section reaches the axis. Hollow pipe: the section
+            # is the wall only, from the bore radius to the outside.
+            i0 = p0 + out.Multiply((r - wall) * SCL) if wall else p0
+            i1 = p1 + out.Multiply((r - wall) * SCL) if wall else p1
             rect = CurveArray()
-            rect.Append(Line.CreateBound(p0, p1))
-            rect.Append(Line.CreateBound(p1, o1))
+            rect.Append(Line.CreateBound(i0, i1))
+            rect.Append(Line.CreateBound(i1, o1))
             rect.Append(Line.CreateBound(o1, o0))
-            rect.Append(Line.CreateBound(o0, p0))
+            rect.Append(Line.CreateBound(o0, i0))
             prof = CurveArrArray()
             prof.Append(rect)
             cyl_sp = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(normal, p0))

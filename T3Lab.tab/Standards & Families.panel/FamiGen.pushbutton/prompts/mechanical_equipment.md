@@ -323,3 +323,10 @@ If the object matches none of these, fall back to METHOD step 1 and decompose it
   corners in plan) when the reference shows it.
 - Casing panels share edges; base frame under the casing touching it; pipe stubs
   and flanges overlap the casing 5 mm; pipework bends are Tubes.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: an AHU, fan coil, pump, chiller, boiler or tank - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Casing = enclosure (one solid is acceptable at coarse detail; show access doors and louvres at medium / fine). Every pipe and duct connection is a conduit stub: Cylinder with "wall" (pipe) or Extrusion with inner_loops (duct), 50-150 long, open at the free end. Tanks and drip trays = container. Base frame, feet, vibration mounts = support.
+- Joints to declare: each connection stub to the casing; base frame to the casing and to "ground"; motor to its bracket. Keep the service clearance in front of access doors empty.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

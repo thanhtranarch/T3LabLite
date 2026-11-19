@@ -54,29 +54,46 @@ _MAX_DISPATCHER_LOGS = 20
 _NEXT_STEP = ("Try again. If it happens again, save your work, restart Revit "
               "(not pyRevit > Reload) and send the log file below to T3Lab.")
 
-# The Python modules were loaded a second time in this Revit session (after a
-# pyRevit Reload, an extension switched off and on, or an update applied
-# without a restart), but the .NET types from the first load cannot be
-# unloaded. Every class that implements a .NET interface under a fixed name,
-# pyRevit's own pyrevit.revit.events included, then fails with "Duplicate type
-# name within an assembly". `from pyrevit import revit` fails with it, so
-# other tools show "cannot import name 'revit' from 'pyrevit'". Trying again
-# never helps: only a Revit restart does.
-_RESTART_MARKERS = ("Duplicate type name within an assembly",
-                    "cannot import name 'revit' from 'pyrevit'")
-_RESTART_STEP = ("Python in this Revit session was reloaded (pyRevit > Reload, an "
-                 "extension switched off and on, or an update without a restart), "
-                 "and T3Lab and pyRevit tools cannot load again until Revit restarts. "
-                 "Save your work, close Revit and open it again. Avoid "
-                 "pyRevit > Reload; restart Revit after an update instead.")
+# Both mean the same thing: pyrevit.revit failed to load earlier in this very
+# click, and the tool then imported it again (lib/_cpython_bootstrap.py has the
+# full account, verified in the pyRevit 6.5.5 source). The first, real error is
+# the one that matters, so it is added to the details when the bootstrap has it.
+# Until 2.6.2 this text blamed pyRevit > Reload and told people to restart
+# Revit; neither was the cause and a restart never cured it.
+_FAILED_IMPORT_MARKERS = ("Duplicate type name within an assembly",
+                          "cannot import name 'revit' from 'pyrevit'")
+_FAILED_IMPORT_STEP = ("A pyRevit module failed to load earlier in this click, so "
+                       "this tool could not load it either. Run the tool again. If "
+                       "it keeps happening, send the log file below to T3Lab.")
 
 
 def next_step(details):
     """What to tell the user to do, from the full error text."""
     text = u'{}'.format(details or '')
-    if any(marker in text for marker in _RESTART_MARKERS):
-        return _RESTART_STEP
+    if any(marker in text for marker in _FAILED_IMPORT_MARKERS):
+        return _FAILED_IMPORT_STEP
     return _NEXT_STEP
+
+
+def first_failure(details):
+    """The error behind a failed-import report, or '' when there is none.
+
+    load_pyrevit_revit() imports pyrevit.revit once, at the start of the tool,
+    and keeps the traceback when that fails. Without it the dialog and the log
+    would only ever show the follow-up error, which says nothing about why.
+    """
+    text = u'{}'.format(details or '')
+    if not any(marker in text for marker in _FAILED_IMPORT_MARKERS):
+        return u''
+    try:
+        boot = sys.modules.get('_cpython_bootstrap')
+        first = boot.ENGINE_DIAGNOSIS.get('pyrevit_revit_error') or u''
+    except Exception:
+        return u''
+    first = u'{}'.format(first).strip()
+    if not first or first in text:
+        return u''
+    return u'First failure (the cause):\n' + first
 
 
 def log_path():
@@ -171,6 +188,9 @@ def _show_error(message, title, details, owner=None):
 def report_exception(tool, context, exc, owner=None, show=True):
     """Log a failure and tell the user what failed, where, and what to do next."""
     details = format_exception(exc)
+    cause = first_failure(details)
+    if cause:
+        details = details.rstrip() + u'\n\n' + cause
     path = log_exception(tool, context, details)
     if show:
         message = u'{} hit an error while {}.\n\n{}'.format(tool, context, _one_line(exc))

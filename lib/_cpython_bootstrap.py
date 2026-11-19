@@ -61,8 +61,8 @@ ENGINE_DIAGNOSIS = {
     'engines_found': [],
     'engines_used': [],
     'stdlib_missing': [],
-    'pyrevit_revit': 'not checked',     # set by heal_pyrevit_imports()
-    'clr_types': 'not checked',         # set by free_clr_type_names()
+    'pyrevit_revit': 'not checked',     # set by load_pyrevit_revit()
+    'pyrevit_revit_error': '',          # its traceback, when that import failed
     'status': 'not attempted',
 }
 
@@ -224,48 +224,6 @@ def verify_stdlib():
     return missing
 
 
-def heal_pyrevit_imports():
-    """Make `from pyrevit import revit` findable again when only the import
-    caches lost it.
-
-    "cannot import name 'revit' from 'pyrevit' (...pyrevit\\__init__.py)"
-    means Python could not FIND pyrevit/revit/ — not that its code failed.
-    The persistent CPython engine keeps sys.path_importer_cache and each
-    folder's cached file list for the whole Revit session (and across a
-    pyRevit Reload, see pyrevit_patches.py), so one bad lookup used to break
-    every tool until Revit restarted. When the package is on disk but cannot
-    be found, the caches are dropped; Python rebuilds them on the next import.
-
-    Returns 'loaded', 'ok', 'healed', 'missing' (not on disk: pyRevit itself
-    needs a repair), 'unresolved' (on disk, still not importable) or
-    'skipped'.
-    """
-    status = 'skipped'
-    if 'pyrevit.revit' in sys.modules:
-        status = 'loaded'
-    else:
-        pkg_dirs = list(getattr(sys.modules.get('pyrevit'), '__path__', None) or [])
-        if pkg_dirs:
-            try:
-                import importlib
-                import importlib.util
-                if importlib.util.find_spec('pyrevit.revit') is not None:
-                    status = 'ok'
-                elif not any(os.path.isfile(os.path.join(d, 'revit', '__init__.py'))
-                             for d in pkg_dirs):
-                    status = 'missing'
-                else:
-                    importlib.invalidate_caches()
-                    for d in pkg_dirs:
-                        sys.path_importer_cache.pop(d, None)
-                    found = importlib.util.find_spec('pyrevit.revit') is not None
-                    status = 'healed' if found else 'unresolved'
-            except Exception:
-                status = 'skipped'
-    ENGINE_DIAGNOSIS['pyrevit_revit'] = status
-    return status
-
-
 def describe_environment():
     """Human-readable bootstrap report — English, safe to show in a dialog."""
     d = ENGINE_DIAGNOSIS
@@ -282,20 +240,19 @@ def describe_environment():
         lines.append('  MISSING stdlib   : %s' % ', '.join(missing))
         lines.append('  Fix: install or repair the pyRevit CPython engine, then '
                      'pyRevit > Reload. See INSTALL.md.')
-    revit_pkg = d.get('pyrevit_revit')
-    if revit_pkg == 'missing':
-        lines.append('  BROKEN pyRevit   : pyrevitlib\\pyrevit\\revit is missing - '
-                     'repair or reinstall pyRevit.')
-    elif revit_pkg == 'unresolved':
-        lines.append('  BROKEN pyRevit   : pyrevit.revit is on disk but cannot be '
-                     'imported - restart Revit.')
-    clr_types = d.get('clr_types') or ''
-    if clr_types.startswith(('freed', 'failed')):
-        lines.append('  CPython restarted: %s' % clr_types)
-        lines.append('  Cause: pyRevit > Reload, an extension switched off and on, '
-                     'or an update applied while Revit was open. Restart Revit '
-                     'after an update instead of reloading.')
+    if pyrevit_revit_failed():
+        lines.append('  pyrevit.revit    : %s' % d.get('pyrevit_revit'))
+        lines.append('  This is the first, real failure. Tools that import '
+                     'pyrevit.revit after it report "Duplicate type name within '
+                     'an assembly" for the rest of that click (pyRevit 6.5).')
+        for line in (d.get('pyrevit_revit_error') or '').rstrip().splitlines():
+            lines.append('    ' + line)
     return '\n'.join(lines)
+
+
+def pyrevit_revit_failed():
+    """True when the one import of pyrevit.revit on Revit's thread failed."""
+    return (ENGINE_DIAGNOSIS.get('pyrevit_revit') or '').startswith('failed')
 
 
 _BOOTSTRAP_LOG_MAX_BYTES = 256 * 1024     # then rotated to bootstrap.log.1
@@ -312,9 +269,7 @@ def _log_diagnosis():
     already written in this session) is skipped; past the size cap the log
     is rotated to bootstrap.log.1.
     """
-    if not (ENGINE_DIAGNOSIS.get('stdlib_missing')
-            or ENGINE_DIAGNOSIS.get('pyrevit_revit') in ('missing', 'unresolved')
-            or (ENGINE_DIAGNOSIS.get('clr_types') or '').startswith(('freed', 'failed'))):
+    if not (ENGINE_DIAGNOSIS.get('stdlib_missing') or pyrevit_revit_failed()):
         return
     report = describe_environment()
     if report in _LOGGED_REPORTS:
@@ -395,174 +350,146 @@ def _timing(event):
         pass
 
 
-# ─── "Duplicate type name within an assembly" ────────────────────────────────
-# Every Python class that inherits a .NET type (IExternalEventHandler,
-# ISelectionFilter, IFailuresPreprocessor, ...) becomes a real .NET type, which
-# pythonnet emits into a dynamic assembly called "Python.Runtime.Dynamic".
-# pythonnet 3.0.3 keeps the builders for it in two static dictionaries filled by
-# `GetModuleBuilder` and created in the STATIC CONSTRUCTOR of
-# Python.Runtime.ClassDerivedObject (verified against pythonnet v3.0.3,
-# src/runtime/Types/ClassDerived.cs: `assemblyBuilders`, `moduleBuilders`,
-# emptied only by `Reset()`). A static constructor runs once per .NET AppDomain,
-# i.e. once per Revit session, and nothing empties those dictionaries when the
-# Python runtime shuts down.
+# ─── pyrevit.revit is loaded once, on Revit's own thread ─────────────────────
+# "TypeError: Duplicate type name within an assembly" and "ImportError: cannot
+# import name 'revit' from 'pyrevit'" are ONE failure seen from two sides: the
+# first import of pyrevit.revit in an execution died half way, and the tool
+# then imported it again.
 #
-# So when CPython restarts inside one Revit session - pyRevit > Reload, an
-# extension switched off and on, an update applied while Revit was open -
-# sys.modules starts empty while the dynamic assembly still holds every type
-# from before. The first class re-created under a fixed name then dies, and
-# pyRevit's own `pyrevit.revit.events.FuncAsEventHandler` is the first one in
-# the way: `from pyrevit import revit / script / forms` fails for EVERY tool,
-# T3Lab's and pyRevit's alike, with "TypeError: Duplicate type name within an
-# assembly" (or "cannot import name 'revit' from 'pyrevit'"). Until now only a
-# Revit restart cleared it (GUI/ErrorGuard.py says so).
+# Verified 2026-11-19 in the sources of pyRevit 6.5.5 and of its pythonnet
+# (pyrevitlabs/pythonnet @ f591d92):
+#   - pyrevit/revit/events.py declares `class FuncAsEventHandler(
+#     UI.IExternalEventHandler)` with `__namespace__ = EXEC_PARAMS.exec_id`, so
+#     pythonnet emits the .NET type "<exec id>.FuncAsEventHandler". The exec id
+#     is new for every script run (ScriptRuntime.ExecId) and constant within one.
+#   - A few lines later, still at import, it calls `UI.ExternalEvent.Create()`,
+#     which Revit allows only on its own thread and inside an API context.
+#   - pythonnet refuses to emit a type name twice (ClassDerived.cs,
+#     moduleBuilder.DefineType); its builders are reset when the runtime
+#     initializes, never in between.
+# So an import that starts on a background thread, or outside an API context
+# (a button of a modeless window), creates the type, fails at
+# ExternalEvent.Create and leaves no module behind. The next import in the same
+# execution runs events.py again: "Duplicate type name". A thread that was
+# waiting for the failed import is handed its dead module: "cannot import name
+# 'revit'".
 #
-# Emptying the two dictionaries hands pythonnet a fresh dynamic assembly: the
-# names are free again, and the types emitted before stay valid - they are real
-# .NET types and nothing is unloaded. Done once per runtime, before the first
-# `import pyrevit...`, and only while the old types are provably unreachable
-# (sys.modules no longer holds the module that defined them).
-_DERIVED_CLASS = 'Python.Runtime.ClassDerivedObject'
-_BUILDER_FIELDS = ('assemblyBuilders', 'moduleBuilders')
-# Loaded, these hold the .NET types a restart would try to emit a second time.
-_PYREVIT_CLR_MODULES = ('pyrevit.revit.events', 'pyrevit.revit', 'pyrevit.forms')
-# How the leftovers read from Python. The second one is the same failure seen
-# one import later: pyrevit.revit died on the first, so `pyrevit` never got the
-# attribute. GUI/ErrorGuard.py shows the user the same two.
-STALE_TYPE_MARKERS = ('Duplicate type name within an assembly',
-                      "cannot import name 'revit' from 'pyrevit'")
+# It has nothing to do with pyRevit > Reload or with restarting Revit - the
+# explanation this file and GUI/ErrorGuard.py carried until 2.6.2 - which is
+# why neither ever cured it. lib/tracking did exactly this on every click from
+# 2026-10-08: its worker thread imported pyrevit.revit before the tool did.
+#
+# pyRevit 7.1 names the type per module execution and no longer calls
+# ExternalEvent.Create at import, so the half-way failure is gone there. The
+# rule below holds for every version all the same, because Revit API modules
+# must not be loaded for the first time off Revit's thread:
+#
+#   pyrevit.revit is imported HERE, when the tool starts - on Revit's thread,
+#   inside its API context, before any thread exists and before any window can
+#   stay open. Every later import, from any thread, finds it in sys.modules
+#   and runs nothing.
+#
+# How the failure reads from Python. GUI/ErrorGuard.py shows the user the same.
+FAILED_IMPORT_MARKERS = ('Duplicate type name within an assembly',
+                         "cannot import name 'revit' from 'pyrevit'")
 
-CLR_TYPE_RESET_STATUS = 'not checked'
-_CLR_TYPES_CHECKED = False
+_PYREVIT_REVIT_TRIED = False    # one attempt per runtime; see load_pyrevit_revit
 
 
-def stale_clr_types(exc):
-    """True when this failure is a .NET type a past CPython runtime left here."""
+def failed_pyrevit_import(exc):
+    """True when `exc` is the second import of a pyrevit.revit that failed."""
     try:
         text = u'{}'.format(exc)
     except Exception:
         return False
-    return any(marker in text for marker in STALE_TYPE_MARKERS)
+    return any(marker in text for marker in FAILED_IMPORT_MARKERS)
 
 
-def _clr_derived_class():
-    """Python.Runtime.ClassDerivedObject - internal, so found by reflection."""
-    from System import AppDomain
-    for asm in AppDomain.CurrentDomain.GetAssemblies():
+def _on_revit_thread():
+    """Revit's UI thread is the one the interpreter started on."""
+    import threading
+    return threading.current_thread() is threading.main_thread()
+
+
+def _injected_revit():
+    """pyRevit's `__revit__`, without importing pyrevit: 6.5 puts it in the
+    interpreter's builtins, 7.1 also in the running script's globals."""
+    for module_name in ('builtins', '__main__'):
         try:
-            found = asm.GetType(_DERIVED_CLASS)
+            uiapp = getattr(__import__(module_name), '__revit__', None)
         except Exception:
-            continue
-        if found is not None:
-            return found
+            uiapp = None
+        if uiapp is not None:
+            return uiapp
+    try:
+        frame = sys._getframe(1)
+    except Exception:
+        frame = None
+    while frame is not None:
+        uiapp = frame.f_globals.get('__revit__')
+        if uiapp is not None:
+            return uiapp
+        frame = frame.f_back
     return None
 
 
-def _emitted_clr_types():
-    """How many .NET types pythonnet emitted for Python subclasses this session.
+def _in_api_context():
+    """True while Revit runs an add-in command or event (pyRevit's own test:
+    HOST_APP.has_api_context). ExternalEvent.Create works nowhere else."""
+    try:
+        uiapp = _injected_revit()
+        return uiapp is not None and getattr(uiapp, 'ActiveAddInId', None) is not None
+    except Exception:
+        return False
 
-    None means "do not touch": a pythonnet build whose fields are not the ones
-    this patch was written against.
+
+def _import_pyrevit_revit():
+    import pyrevit.revit        # noqa: F401  (loaded for sys.modules)
+
+
+def load_pyrevit_revit(importer=None, on_revit_thread=None, in_api_context=None,
+                       modules=None):
+    """Import pyrevit.revit on Revit's thread before anything else can.
+
+    Called by init_cpython_paths() at the start of every tool. Tried once per
+    runtime: on pyRevit 6.5 a failed import takes the type name with it for
+    the rest of the execution, so a second try here could only hide the real
+    error behind "Duplicate type name". That real error is kept in
+    ENGINE_DIAGNOSIS['pyrevit_revit_error'] for the error dialog and the log.
+    Never raises; returns the status, also in ENGINE_DIAGNOSIS['pyrevit_revit'].
     """
-    from System.Reflection import BindingFlags
-    owner = _clr_derived_class()
-    if owner is None:
-        return None
-    field = owner.GetField(
-        'moduleBuilders',
-        BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static)
-    if field is None:
-        return None
-    builders = field.GetValue(None)
-    if builders is None:
-        return 0
-    count = 0
-    for entry in builders:
-        try:
-            count += entry.Value.GetTypes().Length
-        except Exception:
-            count += 1          # a type still under construction holds its name
-    return count
-
-
-def _reset_clr_type_builders():
-    """Give pythonnet a new dynamic assembly. Returns how it was done, or ''."""
-    from System import Activator, Array, Object
-    from System.Reflection import BindingFlags
-    flags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static
-    owner = _clr_derived_class()
-    if owner is None:
-        return ''
-    reset = owner.GetMethod('Reset', flags)
-    if reset is not None:
-        try:
-            reset.Invoke(None, Array[Object]([]))
-        except Exception:
-            reset.Invoke(None, None)
-        return 'Reset()'
-    done = []
-    for name in _BUILDER_FIELDS:
-        field = owner.GetField(name, flags)
-        if field is None:
-            continue
-        field.SetValue(None, Activator.CreateInstance(field.FieldType))
-        done.append(name)
-    return ', '.join(done)
-
-
-def free_clr_type_names(modules=None, emitted=None, reset=None, once=True):
-    """Clear the .NET types a previous CPython runtime left in this session.
-
-    Called at the top of init_cpython_paths(), so it runs before any tool
-    imports pyrevit, and at most once per Python runtime (a restarted runtime
-    has a fresh module, so the flag starts over with it - exactly when the work
-    is needed). Never raises; returns the status, also in CLR_TYPE_RESET_STATUS.
-    """
-    global _CLR_TYPES_CHECKED
+    global _PYREVIT_REVIT_TRIED
 
     def _done(status):
-        global CLR_TYPE_RESET_STATUS
-        CLR_TYPE_RESET_STATUS = status
-        ENGINE_DIAGNOSIS['clr_types'] = status
+        ENGINE_DIAGNOSIS['pyrevit_revit'] = status
         return status
 
-    if sys.version_info[0] < 3:
-        return _done('skipped: IronPython')
-    if once:
-        if _CLR_TYPES_CHECKED:
-            return CLR_TYPE_RESET_STATUS
-        _CLR_TYPES_CHECKED = True
+    if sys.platform == 'cli':
+        return _done('skipped: IronPython')     # a new engine each run; no pythonnet
     loaded = sys.modules if modules is None else modules
-    still_loaded = [m for m in _PYREVIT_CLR_MODULES if m in loaded]
-    if still_loaded:
-        # Same runtime as the types: importing them again is a no-op, and the
-        # live objects behind them must keep the .NET types they were built on.
-        return _done('clean: %s loaded' % still_loaded[0])
+    if 'pyrevit.revit' in loaded:
+        return _done('loaded')
+    if _PYREVIT_REVIT_TRIED:
+        return ENGINE_DIAGNOSIS.get('pyrevit_revit') or _done('skipped')
     try:
-        count = (emitted or _emitted_clr_types)()
+        if not (on_revit_thread or _on_revit_thread)():
+            return _done("skipped: not on Revit's thread")
+        if not (in_api_context or _in_api_context)():
+            return _done('skipped: no Revit API context')
     except Exception as exc:
         return _done('skipped: %s: %s' % (type(exc).__name__, exc))
-    if count is None:
-        return _done('skipped: pythonnet builders not found')
-    if not count:
-        return _done('clean: no .NET types emitted yet')
+    _PYREVIT_REVIT_TRIED = True
     try:
-        how = (reset or _reset_clr_type_builders)()
-    except Exception as exc:
+        (importer or _import_pyrevit_revit)()
+    except BaseException as exc:
+        import traceback
+        ENGINE_DIAGNOSIS['pyrevit_revit_error'] = traceback.format_exc()
         return _done('failed: %s: %s' % (type(exc).__name__, exc))
-    if not how:
-        return _done('failed: pythonnet builders not found')
-    # The runtime restarted in this Revit session (pyRevit Reload, an extension
-    # switched off and on, an update while Revit was open).
-    return _done('freed %d stale .NET type name(s) via %s' % (count, how))
+    return _done('ok')
 
 
 def _patch_pyrevit_forms():
-    """Point pyrevit.forms at T3WPFWindow — pyRevit's own raises under CPython.
-
-    Raises what the pyrevit import raises: init_cpython_paths() reads it to
-    tell a restarted runtime from an ordinary failure.
-    """
+    """Point pyrevit.forms at T3WPFWindow — pyRevit's own raises under CPython."""
     reload_changed_modules()
     from GUI.WPF_Base import T3WPFWindow
     import pyrevit.forms as _pyrevit_forms
@@ -585,12 +512,6 @@ def init_cpython_paths():
     """Ensure pyRevit CPython standard library and C extensions are in sys.path and DLL path."""
     sys.dont_write_bytecode = True
     _timing('run_started')      # opt-in open timing log (lib/open_timing.py)
-    # Before ANY pyrevit import below (and before the tool's own): a restarted
-    # CPython runtime would otherwise fail on pyrevit's FuncAsEventHandler.
-    try:
-        free_clr_type_names()
-    except Exception:
-        pass
     engine_dirs = []
     candidates = []
     running = sys.version_info[:2]
@@ -653,27 +574,11 @@ def init_cpython_paths():
 
     verify_stdlib()
 
-    # Pick up edited base modules, and monkeypatch forms.WPFWindow.
-    #
-    # This is the first `import pyrevit...` of the click, so it is also where a
-    # CPython runtime that restarted in this Revit session shows itself: free
-    # the .NET type names it left behind and try once more. Without that, the
-    # tool's own `from pyrevit import script` a few lines later dies with
-    # "Duplicate type name within an assembly" and the tool is dead until Revit
-    # restarts.
-    for _attempt in (1, 2):
-        try:
-            _patch_pyrevit_forms()
-            break
-        except Exception as exc:
-            if _attempt == 2 or not stale_clr_types(exc):
-                break
-            free_clr_type_names(modules={}, once=False)
-
-    # pyrevit is imported by now (block above): recover a pyrevit.revit that
-    # only the import caches lost, then log whatever is still broken.
-    heal_pyrevit_imports()
-    _log_diagnosis()
+    # Pick up edited base modules, and monkeypatch forms.WPFWindow
+    try:
+        _patch_pyrevit_forms()
+    except Exception:
+        pass
 
     # Scripts call init_cpython_paths() directly, so install the CPython API
     # shims here too rather than only at module import.
@@ -683,6 +588,12 @@ def init_cpython_paths():
             _installer()
         except Exception:
             pass
+
+    # After the shims (pyRevit still imports `imp` in places), before the
+    # tracking thread below starts and before the tool opens any window:
+    # pyrevit.revit must first be imported on Revit's own thread.
+    load_pyrevit_revit()
+    _log_diagnosis()
 
     # Usage tracking (Lite only, code in lib/tracking/). Every T3Lab.tab
     # script.py calls init_cpython_paths(), so this is the one place that

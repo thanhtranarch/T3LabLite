@@ -72,8 +72,10 @@ jobs:
         run: python3 lite_guard/test_cursor_consent.py
       - name: Test the opt-in tool open timing log
         run: python3 lite_guard/test_open_timing.py
-      - name: Test the "Duplicate type name" self-heal after a CPython restart
-        run: python3 lite_guard/test_clr_type_reset.py
+      - name: Test pyrevit.revit is first imported on Revit's thread (no thread imports it)
+        run: python3 -W ignore lite_guard/test_pyrevit_revit_thread.py
+      - name: Test the pyRevit reload patch is for pyRevit before 7.0 only
+        run: python3 lite_guard/test_pyrevit_patch_versions.py
       - name: Test the Assistant user name (own file, asked once, no built-in name)
         run: python3 lite_guard/test_lite_user.py
       - name: Test the data hub (snapshot, store, t3lab_hub)

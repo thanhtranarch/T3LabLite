@@ -36,13 +36,15 @@ class GuardedScriptTests(unittest.TestCase):
                 top = src[:src.index('def _main():')]
                 self.assertNotIn('from {} import'.format(module), top)
 
-    def test_pyrevit_import_error_says_restart_revit(self):
+    def test_pyrevit_import_error_says_run_the_tool_again(self):
+        # A restart never cured it: pyrevit.revit had failed to load earlier in
+        # the same click (lite_guard/test_pyrevit_revit_thread.py).
         from GUI import ErrorGuard
         step = ErrorGuard.next_step(
             "ImportError: cannot import name 'revit' from 'pyrevit' "
             "(C:\\pyRevit-Master\\pyrevitlib\\pyrevit\\__init__.py)")
-        self.assertIn('restart', step.lower())
-        self.assertIn('Revit', step)
+        self.assertIn('Run the tool again', step)
+        self.assertNotIn('restart', step.lower())
 
 
 if __name__ == '__main__':

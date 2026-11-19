@@ -21,14 +21,28 @@ Releasing a new version:
 
 ### Fixed
 
-- **"Duplicate type name within an assembly" — every tool dead until Revit
-  restarted:** after a pyRevit Reload, an extension switched off and on, or an
-  update applied while Revit was open, Python restarts inside the same Revit
-  session but the .NET types it created before are still there. The first tool
-  to load pyRevit then died on pyRevit's own event handler, and from that point
-  every T3Lab and pyRevit tool failed (and was slow to even fail). T3Lab now
-  clears those leftover types at the start of the first tool, so the session
-  keeps working without a Revit restart.
+- **Every tool failed with "Duplicate type name within an assembly" or "cannot
+  import name 'revit' from 'pyrevit'", even after restarting Revit:** usage
+  tracking loaded a pyRevit module in the background at the start of every
+  click, which pyRevit 6.5 and 7.0 only allow on Revit's own thread. It failed
+  half way, and the tool you clicked could then not load that module either.
+  Tracking no longer loads anything from pyRevit in the background, and T3Lab
+  now loads that module itself, on Revit's thread, before the tool starts.
+  This only affected people who had allowed usage tracking, and is the likely
+  reason tools were slow to open.
+- **The error dialog blamed pyRevit > Reload and asked for a Revit restart:**
+  neither was the cause. It now says to run the tool again and shows the first,
+  real error in the details and in `%APPDATA%\T3LabAI\errors.log`.
+- **pyRevit 7.0 and later — T3Lab edited pyRevit when it did not need to:**
+  T3Lab patches pyRevit 6.5 so that Reload does not break its tools. pyRevit 7
+  fixed that itself, but T3Lab patched it anyway. It now leaves pyRevit 7
+  alone and takes its earlier patch out again.
+- **FamiGen Studio (pyRevit 7) — the Studio window could fail to appear:** it
+  was handed the silent stand-in T3Lab uses for the pyRevit output window in
+  its other tools, which accepts every command and shows nothing. The Studio
+  now always gets the real window.
+- **Weekly update:** its "update ready" message is now prepared on Revit's
+  own thread, so it cannot fail the way the first item did.
 
 ## [2.6.2] - 2026-11-19
 

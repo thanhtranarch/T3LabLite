@@ -19,63 +19,38 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.6.2] - 2026-11-19
+
+FamiGen Studio: chat with Claude to create Revit families and review them in 3D (needs pyRevit 7.0+).
+
 ### Added
 
 - **FamiGen Studio (needs pyRevit 7.0+; the chat needs 7.1+):** the FamiGen
-  button now opens a chat-and-3D window. Describe a family or drop a photo /
-  PDF cut sheet; Claude builds it, you review it (detail levels, visual styles,
-  types, sizes), then Create Family. Shift+Click opens the classic window.
+  button opens a chat-and-3D window. Describe a family or drop a photo / PDF;
+  Claude builds it, you review it, then Create Family. Shift+Click opens the
+  classic window.
 - **FamiGen — families that resize and vary:** family types, reference planes,
-  labelled dimensions and locked faces, repeated parts and detail levels;
-  four new categories (Pipe Accessory, Duct Accessory, Sprinkler, Electrical
-  Fixture) and a design spec for every category.
-- **FamiGen — closer to your picture:** Claude first writes down what it sees
-  (camera, scale, every part with size and colour), then models it; the
-  check compares a render from the picture's own camera, up to twice. Pipes
-  and taps get real elbows (`bend_radius`) instead of kinks. New **Ref** view.
-- **FamiGen — every Revit form:** Swept Blend is new, Sweep profiles can be
-  drawn as the cross-section seen along the path, voids cut the solids they
-  overlap, and Claude is told which form fits which shape (not only
-  Extrusion). Studio has a **Voids** switch.
-- **FamiGen — models in one piece:** a new `Tube` form for curved rods, rails,
-  handles and tube slides (smooth, no kinks), a check that names parts left
-  floating (Claude fixes them once before you see the model), joint rules in
-  every category spec, and smooth shading for round parts in Studio.
-- **FamiGen — AI apps over MCP:** while Claude Desktop / Code or ChatGPT work
-  with FamiGen, Studio switches to them by itself. New MCP tools
-  `famigen_get_studio_state`, `famigen_validate_family`,
-  `famigen_patch_family` and `famigen_list_templates`.
-
-### Added
-
-- **FamiGen — models that make sense in space:** every AI family now states its
-  concept (what it is, how it is used, where it stands), each part's role, and
-  the joints between parts. FamiGen checks the geometry against that and sends
-  problems back to the AI: parts that do not really touch, joints that miss,
-  stairs / slides / bridges that do not land at both ends, and anything
-  blocking a route or the inside of a pipe.
-- **FamiGen — hollow parts:** pipes, tube slides and tunnels are hollow
-  (`"wall"` on Cylinder / Tube); basins, bowls and bins modelled as a solid
-  block are reported. Each of the 17 category guides says what is hollow in
-  that category and which joints to declare.
+  labelled dimensions, locked faces, repeated parts and detail levels. Four
+  new categories: Pipe Accessory, Duct Accessory, Sprinkler, Electrical Fixture.
+- **FamiGen — closer to your picture:** Claude writes down what it sees, models
+  it, then compares a render from the picture's own camera. New **Ref** view.
+- **FamiGen — every Revit form:** Extrusion, Blend, Revolve, Sweep, Swept Blend
+  and voids, plus a `Tube` form for curved rods and pipes with real elbows.
+- **FamiGen — models that make sense:** FamiGen checks that parts really touch,
+  joints meet, stairs and slides land at both ends, routes stay clear, and
+  pipes and basins are hollow. Claude fixes what it finds before you see it.
+- **FamiGen — AI apps over MCP:** Claude Desktop / Code and ChatGPT can work
+  with FamiGen; Studio switches to them by itself.
 
 ### Changed
 
-- **FamiGen Studio — one title bar:** the window now shows only the T3 title
-  bar (drag it to move, double-click to maximize). If pyRevit's own title bar
-  cannot be hidden, the Studio hides its own instead.
-- **FamiGen Studio follows the T3 design system:** T3 colours, type sizes,
-  4 px spacing, 26 px rows and flat controls (no shadows or animation). The
-  right panel now reads like Revit: a Properties panel with collapsible groups
-  (Identity Data, Geometry, Dimensions) and a parts tree grouped by
-  subcategory, with repeated parts folded into one row ("Post ×8"). View
-  controls sit in a docked toolbar above the 3D view instead of floating on it.
+- **FamiGen Studio look:** T3 design system, one T3 title bar, and a
+  Revit-style Properties panel and parts tree.
 
 ### Fixed
 
 - **FamiGen (classic window) — the Family JSON box was one line high:** it now
   fills its panel.
-
 - **MCP Control — "module 'core.paths' has no attribute 'atomic_write'":**
   after an update installed while Revit was open, MCP Control kept an old copy
   of the settings code in memory and could not configure Claude Desktop,

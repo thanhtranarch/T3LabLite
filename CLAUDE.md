@@ -46,6 +46,7 @@ python lite_guard/test_mcp_cad_clients.py
 python lite_guard/test_addin_installer.py
 python lite_guard/test_routes_guard.py
 python lite_guard/test_agent_cursors.py
+python lite_guard/test_agent_cursors_overlay.py
 python lite_guard/test_cursor_consent.py
 python lite_guard/test_open_timing.py
 python lite_guard/test_lite_user.py

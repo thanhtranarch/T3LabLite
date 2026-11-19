@@ -2497,15 +2497,20 @@ class T3LabAIServer(object):
                                 'up to timeout_s for the next message the user types in Studio '
                                 'and returns it with the family on screen. These requests are '
                                 'about that family, never about past chats. Answer with '
-                                'famigen_patch_family or famigen_propose_family, then call this '
-                                'tool again to keep listening; stop when Studio is closed or the '
-                                'user says stop.'),
+                                'famigen_patch_family or famigen_propose_family, or in words '
+                                'with reply, then call this tool again to keep listening; stop '
+                                'when Studio is closed or the user says stop.'),
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
                         'timeout_s': {
                             'type': 'integer',
                             'description': 'Seconds to wait for a message (1-55, default 45).',
+                        },
+                        'reply': {
+                            'type': 'string',
+                            'description': ('Your answer in words, shown in the Studio chat '
+                                            'before waiting (a question, an explanation).'),
                         },
                     },
                     'required': [],
@@ -4284,6 +4289,9 @@ class T3LabAIServer(object):
             except (TypeError, ValueError):
                 timeout = 45.0
             timeout = max(1.0, min(timeout, studio_link.WAIT_MAX))
+            reply = arguments.get('reply')
+            if isinstance(reply, str) and reply.strip():
+                studio_link.post_reply(reply.strip()[:4000], agent)
             studio_link.note_listening(agent)
             messages = studio_link.wait_unread(timeout)
             studio_link.note_listening(agent)

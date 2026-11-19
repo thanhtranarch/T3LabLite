@@ -61,7 +61,7 @@ def _shift_click():
 
 def _persistent_engine():
     try:
-        from GUI.ManaSelectDialog import detect_persistent_engine
+        from FamilyGen.studio_host import detect_persistent_engine
         return detect_persistent_engine()
     except Exception:
         return False

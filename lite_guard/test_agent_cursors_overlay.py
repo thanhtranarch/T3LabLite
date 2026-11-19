@@ -654,7 +654,8 @@ def settings_window(options, enabled=False):
                  'pnl_drawbacks', 'details_body', 'details_arrow', 'opt_model', 'opt_follow',
                  'opt_zoom', 'opt_tile', 'opt_select', 'opt_glow', 'opt_keep'):
         setattr(win, name, Fake())
-    win.Height = SD.HEIGHT
+    from System.Windows import WindowState
+    win.Height, win.WindowState = SD.HEIGHT, WindowState.Normal
     win.Close = lambda: None
     win.FindResource = lambda key: key
     win.chk_enabled.IsChecked = True
@@ -707,6 +708,12 @@ def test_settings_window():
     check('clicked again: folded, arrow down, window back',
           repr(win.details_body.Visibility) == 'Visibility.Collapsed'
           and win.details_arrow.Text == '\uE70D' and win.Height == SD.HEIGHT)
+
+    from System.Windows import WindowState
+    win.WindowState = WindowState.Maximized
+    win.details_header_clicked(None, None)
+    check('maximized: the card opens, the height it restores to is left alone',
+          repr(win.details_body.Visibility) == 'Visibility.Visible' and win.Height == SD.HEIGHT)
 
     lite = dict(options, model=False, glow=True)        # T3LabLite: OPTIONS has 'model'
     SD, win = settings_window(lite, enabled=True)

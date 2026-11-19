@@ -121,12 +121,14 @@ class AgentCursorsSettingsWindow(_Window):
         self._sync()
 
     def details_header_clicked(self, sender, e):
-        """Fold / unfold the benefits card; the window grows with it."""
-        from System.Windows import Visibility
+        """Fold / unfold the benefits card; the window grows with it (not
+        while it is maximized: Height is then the size it restores to)."""
+        from System.Windows import Visibility, WindowState
         opening = self.details_body.Visibility != Visibility.Visible
         self.details_body.Visibility = self._visibility(opening)
         self.details_arrow.Text = _UP if opening else _DOWN
-        self.Height = max(HEIGHT_OPEN, self._height) if opening else self._height
+        if self.WindowState == WindowState.Normal:
+            self.Height = max(HEIGHT_OPEN, self._height) if opening else self._height
 
     def ok_clicked(self, sender, e):
         self.result = self.values()

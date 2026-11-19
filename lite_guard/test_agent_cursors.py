@@ -678,13 +678,28 @@ def test_settings_dialog():
     check('and says what it does: the same text as on the bar (tooltip; "On model" spells it out)',
           all(boxes[n][1] == AC.OPTION_LABELS[n][1] if n != 'model'
               else AC.OPTION_LABELS[n][1] in body for n, _k, _d in AC.OPTIONS))
-    check('title bar and footer kept: logo, title, X with Esc, copyright, Cancel + primary',
-          'Style="{StaticResource T3.TitleBar}"' in body and 'x:Name="logo_image"' in body
-          and 'Click="close_button_clicked" IsCancel="True"' in body
-          and body.count('Style="{StaticResource T3.Copyright}"') == 1
+    def title_bar(text):
+        bar = text.split('<Border Grid.Row="0" Style="{StaticResource T3.TitleBar}">', 1)[1]
+        bar = bar.split('<!-- ══════════════════ ROW 1', 1)[0]
+        return re.sub(r'<TextBlock Text="[^"]*" (Style="\{StaticResource T3\.(Title|Subtitle)\}")',
+                      r'<TextBlock Text="…" \1', ' '.join(bar.split()))
+    batchout = open(os.path.join(LIB, 'GUI', 'Tools', 'ExportManager.xaml'), encoding='utf-8').read()
+    check("title bar = BatchOut's, letter for letter but for its two texts (owner, 2026-11-19)",
+          title_bar(xaml) == title_bar(batchout) and title_bar(xaml).count('Text="…"') == 2)
+    check('so: logo, minimize / maximize / close (X = Esc), the title area drags the window',
+          all(t in body for t in ('x:Name="logo_image"', 'Click="minimize_button_clicked"',
+                                  'Click="maximize_button_clicked"', 'Click="close_button_clicked"'))
+          and re.search(r'x:Name="btn_close"[^>]*IsCancel="True"', body) is not None
+          and 'ResizeMode="CanResize"' in xaml and 'ShowInTaskbar="True"' in xaml)
+    check('footer kept: copyright, Cancel + one primary with Enter',
+          body.count('Style="{StaticResource T3.Copyright}"') == 1
           and 'Style="{StaticResource T3.FooterBar}"' in body
           and body.index('x:Name="btn_cancel"') < body.index('x:Name="btn_ok"')
           and body.count('T3.Button.Primary') == 1 and 'IsDefault="True" Click="ok_clicked"' in body)
+    dsrc0 = open(os.path.join(LIB, 'GUI', 'WPF_Base.py'), encoding='utf-8').read()
+    check('the three window buttons are handled by the base window',
+          all('def {}(self, sender=None, e=None):'.format(h) in dsrc0 for h in (
+              'minimize_button_clicked', 'maximize_button_clicked', 'close_button_clicked')))
     check('BatchOut card: sunken header with the checkbox, two columns and a rule between',
           'x:Name="chk_enabled"' in body and body.count('{StaticResource T3.SurfaceSunken}') == 2
           and body.count('<ColumnDefinition Width="32"/>') == 2

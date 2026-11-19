@@ -19,8 +19,12 @@ def report_lines(report, limit=12):
                      .format(len(mats), len(report.get('materials_created', [])),
                              len(report.get('material_parameters', []))))
     if report.get('parameters_created') or report.get('parameters_set'):
-        lines.append("Parameters: {} created, {} set.".format(
-            len(report.get('parameters_created', [])), len(report.get('parameters_set', []))))
+        shared = report.get('shared_parameters') or []
+        lines.append("Parameters: {} created ({} shared), {} set.".format(
+            len(report.get('parameters_created', [])), len(shared),
+            len(report.get('parameters_set', []))) if shared else
+            "Parameters: {} created, {} set.".format(
+                len(report.get('parameters_created', [])), len(report.get('parameters_set', []))))
     if report.get('subcategories'):
         lines.append("Subcategories: {}.".format(', '.join(report['subcategories'])))
     if report.get('reference_planes') or report.get('dimensions') or report.get('locks'):

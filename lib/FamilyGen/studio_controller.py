@@ -28,6 +28,7 @@ import time
 from FamilyGen import claude_designer as cd
 from FamilyGen import flex
 from FamilyGen import param_profiles
+from FamilyGen import shared_params
 from FamilyGen import guidance
 from FamilyGen import preview_mesh
 from FamilyGen import studio_link
@@ -38,7 +39,7 @@ from Intelligence.family_schema import (
     type_names, validate_family_schema,
 )
 
-STUDIO_VERSION = '1.0'
+STUDIO_VERSION = '1.1'
 MIN_PYREVIT = (7, 0)
 MESSAGING_PYREVIT = (7, 1)
 PREVIEW_DECIMALS = 1
@@ -70,6 +71,7 @@ def type_table(schema):
         if isinstance(param, dict) and isinstance(param.get('name'), str):
             rows.append({'name': param['name'], 'kind': param.get('type', 'length'),
                          'instance': bool(param.get('instance', False)),
+                         'shared': bool(param.get('shared', False)),
                          'default': param.get('value')})
     for mat in schema.get('materials') or []:
         if isinstance(mat, dict) and isinstance(mat.get('name'), str):
@@ -195,7 +197,7 @@ def constraint_overlay(schema, expanded, model):
     return planes, dims, warnings
 
 
-def preview_payload(json_text, type_name=None):
+def preview_payload(json_text, type_name=None, shared_defs=None):
     """Validate + tessellate the editor JSON into what the 3D page draws.
 
     ``type_name``: the family type shown; its length values flex the preview
@@ -281,7 +283,7 @@ def preview_payload(json_text, type_name=None):
         'materials': materials, 'summary': schema_summary(schema),
         'table': type_table(schema), 'type_materials': type_material_map(schema),
         'preview_type': type_name or u'', 'flexed': sorted(moved),
-        'param_fit': param_profiles.evaluate(schema),
+        'param_fit': param_profiles.evaluate(schema, shared_defs),
     })
     return payload
 
@@ -321,6 +323,8 @@ class StudioController(object):
         self._steps = {}
         self._progress_text = PROGRESS_IDLE
         self.preview_type = None        # family type shown (and flexed) in the 3D view
+        # Revit's shared parameter file (path read by the host in API context), as text.
+        self.shared = shared_params.Cache(getattr(revit, 'shared_parameter_file', u'') or None)
         self._mcp_waiting = []          # inbox ids sent over MCP and not read yet
         self._mcp_texts = {}            # inbox id -> text, for "Use built-in Claude"
         self._creating = False          # Revit is building: Stop cannot interrupt it
@@ -447,6 +451,7 @@ class StudioController(object):
             'into_family': bool(getattr(self.revit, 'into_family', False)),
             'limits': {'attachments': cd.MAX_ATTACHMENTS},
             'progress': self._progress_payload(),
+            'shared_file': self._shared_info(),
         })
 
     def _remember(self, key, value):
@@ -826,7 +831,7 @@ class StudioController(object):
 
     # ── JSON editor + preview ────────────────────────────────────────────
     def _preview(self, text):
-        payload = preview_payload(text, self.preview_type)
+        payload = preview_payload(text, self.preview_type, self._shared_defs())
         payload['type'] = 'preview'
         self.post(payload)
         self._publish_state()
@@ -891,7 +896,7 @@ class StudioController(object):
                                   self._steps.get('compare') == 'done')
         self.post({'type': 'schema', 'json': text, 'source': 'edit',
                    'proposal_id': self._proposal_id})
-        payload = preview_payload(text, self.preview_type)
+        payload = preview_payload(text, self.preview_type, self._shared_defs())
         payload['type'] = 'preview'
         self.post(payload)
         self._publish_state()
@@ -904,6 +909,42 @@ class StudioController(object):
             self._status(u'{} = {} saved, but it drives no labelled dimension, so the model does '
                          u'not change. Ask Claude to make it parametric.'.format(param['name'], shown),
                          'warning')
+
+    def _shared_defs(self):
+        """Definitions of Revit's shared parameter file, or None when Revit has none set."""
+        return self.shared.definitions() if self.shared.path else None
+
+    def _shared_info(self):
+        path = self.shared.path or u''
+        return {'path': path, 'name': os.path.basename(path) if path else u'',
+                'count': len(self.shared.definitions()) if path else 0}
+
+    def _on_apply_standards(self, message):
+        """Profile scopes (type / instance) and shared parameters, without the AI."""
+        if self.busy:
+            self._status(u'Wait until the current step finishes.', 'warning')
+            return
+        try:
+            schema = json.loads(self.current_json)
+        except (TypeError, ValueError):
+            self._status(u'Describe a family first.', 'warning')
+            return
+        schema, changes = param_profiles.apply_standards(schema, self._shared_defs())
+        if not changes:
+            self._status(u'Parameters already follow the {} standard{}.'.format(
+                schema.get('family_category') or u'category',
+                u'' if self.shared.path else u' (no shared parameter file is set in Revit)'),
+                'success')
+            return
+        text = json.dumps(schema, indent=2, ensure_ascii=False)
+        self.current_json = text
+        self.post({'type': 'schema', 'json': text, 'source': 'edit',
+                   'proposal_id': self._proposal_id})
+        self._preview(text)
+        self.post({'type': 'chat', 'role': 'system',
+                   'text': u'Applied the parameter standard: {}.'.format(u'; '.join(changes))})
+        self._status(u'{} parameter change(s): review them in Types, then Create Family.'.format(
+            len(changes)), 'success')
 
     def _on_make_parametric(self, message):
         """Ask the AI for the category's missing sizes (Sizes tab > Parameter fit)."""

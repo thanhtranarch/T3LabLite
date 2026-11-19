@@ -7,6 +7,7 @@ The user can edit the brief (sizes, finishes, types) before sending. Sizes are
 typical catalogue values in millimetres; manufacturer names are examples of
 the product class only.
 """
+from FamilyGen.param_profiles import template_note
 
 # (group, title, category, brief)
 _ROWS = (
@@ -132,7 +133,59 @@ _ROWS = (
     ('Site & entourage', 'Planter box', 'Entourage',
      'Square planter 800 × 800 × 600 mm, 30 mm corten steel, with a Ø1200 mm shrub crown '
      'above.'),
+    # Added 2026-11-19 so every category has at least three. Appended, not inserted:
+    # template ids are positions.
+    ('Architecture', 'Sliding barn door', 'Door',
+     'Single sliding barn door 1000 × 2200 mm, 40 mm vertical-plank oak leaf, black steel '
+     'top track 2100 mm long with two hangers, black bar handle 400 mm.'),
+    ('Architecture', 'Steel fire door', 'Door',
+     'Single steel fire door 1000 × 2100 mm, 50 mm leaf, 100 mm pressed steel frame, '
+     'vision panel 300 × 600 mm, push bar 900 mm, grey finish.'),
+    ('Architecture', 'Fixed picture window', 'Window',
+     'Fixed picture window 1800 W × 1200 H mm, 70 mm aluminium frame, one clear pane, '
+     '200 mm deep reveal, black frame.'),
+    ('Architecture', 'Awning window', 'Window',
+     'Top-hung awning window 900 W × 600 H mm, 60 mm uPVC frame, clear glazing, white frame, '
+     'cockspur handle at the bottom.'),
+    ('Architecture', 'Square concrete column', 'Columns',
+     'Square concrete column 500 × 500 mm, 3200 mm high, 25 mm chamfered edges. '
+     'Types: 400, 500 and 600 mm.'),
+    ('Architecture', 'Steel tube column', 'Columns',
+     'Steel column Ø273 mm tube, 3600 mm high, 450 × 450 × 25 mm base plate with four '
+     'Ø24 mm bolt holes, 350 × 350 × 20 mm cap plate, grey paint.'),
+    ('Furniture & casework', 'Three-seat sofa', 'Furniture',
+     'Three-seat sofa 2100 W × 900 D × 790 H mm, seat height 430 mm, rolled arms 200 mm wide, '
+     'three seat and three back cushions in grey fabric, four walnut legs 120 mm high.'),
+    ('MEP: Fire protection', 'Upright sprinkler head', 'Sprinkler',
+     'Upright fire sprinkler head, 15 mm thread, 60 mm high, Ø50 mm deflector on top, red '
+     'frangible bulb, brass body.'),
+    ('MEP: Fire protection', 'Sidewall sprinkler head', 'Sprinkler',
+     'Horizontal sidewall sprinkler head, 15 mm thread, 75 mm long, half-round deflector '
+     '60 × 30 mm, red frangible bulb, white body, Ø80 mm escutcheon.'),
+    ('MEP: HVAC', 'Volume control damper', 'Duct Accessory',
+     'Rectangular opposed-blade volume control damper 500 × 300 mm, 200 mm long galvanised '
+     'casing, 30 mm flanges, quadrant handle 120 mm on the side.'),
+    ('MEP: Fire protection', 'Fire alarm panel', 'Specialty Equipment',
+     'Wall-mounted fire alarm control panel 450 W × 120 D × 550 H mm, red steel enclosure, '
+     'display window 200 × 80 mm on the front.'),
+    ('MEP: Electrical', 'Light switch', 'Electrical Fixture',
+     'Two-gang light switch 86 × 86 × 35 mm, white plastic plate, two rocker keys.'),
+    ('MEP: Piping & supports', 'Equipment concrete plinth', 'Generic Model',
+     'Concrete housekeeping pad 1500 × 1000 × 150 mm with 25 mm chamfered top edges, '
+     'grey concrete.'),
+    ('Architecture', 'Floor access hatch', 'Generic Model',
+     'Floor access hatch 600 × 600 mm, 50 mm aluminium frame, 6 mm checker-plate lid, '
+     'recessed lifting handle, 80 mm deep.'),
+    ('Site & entourage', 'Potted tree', 'Entourage',
+     'Potted tree: Ø600 mm round grey planter 700 mm high, Ø80 mm trunk 1200 mm, '
+     'Ø1500 mm leaf crown.'),
+    ('Site & entourage', 'Patio umbrella', 'Entourage',
+     'Patio umbrella Ø2700 mm canopy, white fabric, Ø40 mm aluminium pole 2400 mm high, '
+     '500 × 500 × 80 mm granite base.'),
 )
+
+# Every brief ends with its category's standard sizes (FamilyGen/param_profiles.py), so the
+# family resizes in the Studio (FamilyGen/flex.py) and in Revit the same way.
 
 
 def templates():
@@ -140,7 +193,7 @@ def templates():
     out = []
     for index, (group, title, category, brief) in enumerate(_ROWS):
         out.append({'id': 't{:02d}'.format(index + 1), 'group': group, 'title': title,
-                    'category': category, 'prompt': brief})
+                    'category': category, 'prompt': brief + template_note(category)})
     return out
 
 

@@ -148,6 +148,22 @@ def take_unread(root=None, mark_read=True):
     return unread
 
 
+def read_ids(ids, root=None):
+    """The ids among ``ids`` the AI app has read (gone from the inbox counts as read)."""
+    items = _read('inbox.json', root)
+    known = dict((i.get('id'), bool(i.get('read'))) for i in items or [] if isinstance(i, dict))
+    return set(i for i in ids if known.get(i, True))
+
+
+def last_activity(root=None):
+    """{'client', 'tool', 'time'} of the AI app's last famigen_* call, or None."""
+    data = _read('mcp_activity.json', root)
+    if not isinstance(data, dict):
+        return None
+    return {'client': friendly_client(data.get('client')), 'tool': data.get('tool') or u'',
+            'time': float(data.get('time') or 0)}
+
+
 def unread_count(root=None):
     items = _read('inbox.json', root)
     return sum(1 for i in items or [] if isinstance(i, dict) and not i.get('read'))

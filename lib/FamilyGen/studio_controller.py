@@ -26,6 +26,8 @@ import re
 import time
 
 from FamilyGen import claude_designer as cd
+from FamilyGen import flex
+from FamilyGen import param_profiles
 from FamilyGen import guidance
 from FamilyGen import preview_mesh
 from FamilyGen import studio_link
@@ -43,6 +45,12 @@ PREVIEW_DECIMALS = 1
 MAX_JSON_CHARS = 2000000
 THUMB_MAX_BYTES = 2 * 1024 * 1024
 MAX_CHECKS = cd.MAX_CHECKS   # render-vs-reference rounds per user message
+# The progress strip above the panes, in order. States: todo · active · done ·
+# wait (Claude asked a question) · warn (problems left) · error · skip.
+PROGRESS_STEPS = (('brief', 'Brief'), ('draft', 'Claude drafts'), ('check', 'FamiGen checks'),
+                  ('review', '3D review'), ('compare', 'Reference check'),
+                  ('create', 'Create family'))
+PROGRESS_IDLE = u'Describe a family or pick a template to start.'
 
 def type_table(schema):
     """Parameters × types grid for the Studio's Parameters tab (pure)."""
@@ -186,8 +194,11 @@ def constraint_overlay(schema, expanded, model):
     return planes, dims, warnings
 
 
-def preview_payload(json_text):
-    """Validate + tessellate the editor JSON into what the 3D page draws."""
+def preview_payload(json_text, type_name=None):
+    """Validate + tessellate the editor JSON into what the 3D page draws.
+
+    ``type_name``: the family type shown; its length values flex the preview
+    through the labelled dimensions (FamilyGen/flex.py), as Revit would."""
     payload = {'ok': False, 'parse_error': None, 'errors': [], 'warnings': [], 'parts': [],
                'planes': [], 'dimensions': [],
                'materials': [], 'summary': {}, 'size_mm': [0, 0, 0], 'bbox': None,
@@ -214,6 +225,14 @@ def preview_payload(json_text):
         warnings = list(warnings) + [u'Preview failed: {}'.format(ex)]
     expanded = expand_schema(schema)
     geometry = expanded.get('geometry') or []
+    values = flex.parameter_values(schema, type_name)
+    moved = {}
+    if model is not None:
+        try:
+            moved = flex.flex_model(model, expanded, schema, values)
+        except Exception as ex:      # a flex bug must not hide the model
+            warnings = list(warnings) + [u'Resizing the preview failed: {}'.format(ex)]
+            moved = {}
     parts = []
     if model is not None:
         warnings = list(warnings) + list(model.warnings)
@@ -250,7 +269,8 @@ def preview_payload(json_text):
                               'transparency': mat.get('transparency') or 0,
                               'parameter': material_parameter_name(mat),
                               'parts': counts.get(mat['name'], 0)})
-    planes, dims, lock_warnings = constraint_overlay(schema, expanded, model)
+    planes, dims, lock_warnings = constraint_overlay(
+        flex.flexed_schema_planes(schema, values) if moved else schema, expanded, model)
     warnings = list(warnings) + lock_warnings
     payload.update({
         'issues': {'errors': [friendly_issue(schema, e) for e in errors],
@@ -259,6 +279,8 @@ def preview_payload(json_text):
         'ok': not errors, 'errors': errors, 'warnings': warnings, 'parts': parts,
         'materials': materials, 'summary': schema_summary(schema),
         'table': type_table(schema), 'type_materials': type_material_map(schema),
+        'preview_type': type_name or u'', 'flexed': sorted(moved),
+        'param_fit': param_profiles.evaluate(schema),
     })
     return payload
 
@@ -294,6 +316,12 @@ class StudioController(object):
         self._last_beat = 0.0
         self._selected_part = None
         self._proposal_id = None
+        self._steps = {}
+        self._progress_text = PROGRESS_IDLE
+        self.preview_type = None        # family type shown (and flexed) in the 3D view
+        self._mcp_waiting = []          # inbox ids sent over MCP and not read yet
+        self._mcp_working = False       # the AI app read a message, no family back yet
+        self._mcp_seen_call = 0.0
         try:
             self._seen = set(store.ids()) if store is not None else set()
         except Exception:
@@ -321,6 +349,50 @@ class StudioController(object):
     def _set_busy(self, on, text=u''):
         self.busy = bool(on)
         self.post({'type': 'busy', 'on': self.busy, 'text': text})
+
+    # ── progress strip ───────────────────────────────────────────────────
+    def _progress_payload(self):
+        return {'type': 'progress', 'text': self._progress_text,
+                'steps': [{'id': sid, 'label': label, 'state': self._steps.get(sid, 'todo')}
+                          for sid, label in PROGRESS_STEPS]}
+
+    def _progress(self, step, state='active', text=u'', skip=(), done=()):
+        """Move the strip to ``step``; open steps before it are done, later ones reopen.
+
+        ``step`` None resets the strip. ``skip`` / ``done`` set other steps outright
+        (the reference check runs after the 3D review, or not at all)."""
+        ids = [sid for sid, _ in PROGRESS_STEPS]
+        if step is None:
+            self._steps = {}
+        else:
+            at = ids.index(step)
+            for i, sid in enumerate(ids):
+                cur = self._steps.get(sid, 'todo')
+                if i < at and cur in ('todo', 'active', 'wait'):
+                    self._steps[sid] = 'done'
+                elif i > at and cur in ('active', 'wait', 'error'):
+                    self._steps[sid] = 'todo'
+            self._steps[step] = state
+        for sid in skip:
+            self._steps[sid] = 'skip'
+        for sid in done:
+            self._steps[sid] = 'done'
+        self._progress_text = text or (PROGRESS_IDLE if step is None else u'')
+        self.post(self._progress_payload())
+
+    def _progress_fail(self, text):
+        """Mark the running step failed (Claude error, Stop, Revit refused)."""
+        ids = [sid for sid, _ in PROGRESS_STEPS]
+        running = [sid for sid in ids if self._steps.get(sid) in ('active', 'wait')]
+        if running:
+            self._progress(running[-1], 'error', text)
+
+    def _progress_review(self, text, compared=False, problems=False):
+        """A family is on screen: everything before the 3D review is done."""
+        if problems:
+            self._steps['check'] = 'warn'
+        self._progress('review', 'active', text,
+                       skip=() if compared else ('compare',), done=('compare',) if compared else ())
 
     # ── lifecycle ────────────────────────────────────────────────────────
     def _claude_state(self):
@@ -367,6 +439,7 @@ class StudioController(object):
             'template_groups': family_templates.groups(),
             'into_family': bool(getattr(self.revit, 'into_family', False)),
             'limits': {'attachments': cd.MAX_ATTACHMENTS},
+            'progress': self._progress_payload(),
         })
 
     def _remember(self, key, value):
@@ -416,6 +489,7 @@ class StudioController(object):
         self.attachments = []
         self._post_attachments()
         self.post({'type': 'chat_reset'})
+        self._progress(None)
         if note:
             self.post({'type': 'chat', 'role': 'system', 'text': note})
 
@@ -515,6 +589,8 @@ class StudioController(object):
                    'thumbs': [t for t in (self._thumb(a) for a in attachments) if t]})
         self._checks_left = MAX_CHECKS
         self._set_busy(True, u'Claude is designing the family…')
+        self._progress(None)
+        self._progress('draft', 'active', u'Claude is designing the family…')
         self._send(body)
 
     def _send_to_app(self, text, message):
@@ -542,12 +618,20 @@ class StudioController(object):
         self.attachments = []
         self._post_attachments()
         self._publish_state()
-        studio_link.post_message(text, files)
+        item = studio_link.post_message(text, files)
         app = self.mcp_client or u'your AI app'
+        mcp_id = item.get('id') if isinstance(item, dict) else None
+        if mcp_id:
+            self._mcp_waiting.append(mcp_id)
         self.post({'type': 'chat', 'role': 'user', 'text': text,
-                   'files': [os.path.basename(f) for f in files], 'thumbs': thumbs})
-        self.post({'type': 'chat', 'role': 'system',
-                   'text': u'Sent to {}. In {}, say "continue in FamiGen".'.format(app, app)})
+                   'files': [os.path.basename(f) for f in files], 'thumbs': thumbs,
+                   'mcp_id': mcp_id, 'mcp_state': u'Sent to {} · not read yet'.format(app)})
+        if len(self._mcp_waiting) == 1:
+            self.post({'type': 'chat', 'role': 'system',
+                       'text': u'Sent over MCP. In {}, say "continue in FamiGen": the message '
+                               u'shows Read when {} picks it up.'.format(app, app)})
+        self._progress(None)
+        self._progress('draft', 'wait', u'Sent to {}: waiting for it to read the message…'.format(app))
 
     def _send(self, body):
         self._request_id += 1
@@ -569,6 +653,7 @@ class StudioController(object):
         # The unanswered user turn stays in the transcript; start clean so the
         # next message is not sent after a user turn with no reply.
         self.session = None
+        self._progress_fail(u'Stopped.')
         self.post({'type': 'chat', 'role': 'system',
                    'text': u'Stopped. The next message starts a new conversation.'})
 
@@ -587,14 +672,18 @@ class StudioController(object):
             else:
                 text = u'Claude is continuing…'
             self._set_busy(True, text)
+            if outcome.errors:
+                self._progress('check', 'active', text)
             self._send(outcome.request)
             return
         self._set_busy(False)
         self.post(dict({'type': 'usage'}, **self._usage(session)))
         if outcome.kind == 'error':
+            self._progress_fail(u'Claude did not finish: see the chat.')
             self.post({'type': 'chat', 'role': 'error', 'text': outcome.message})
             return
         if outcome.kind == 'reply':
+            self._progress('draft', 'wait', u'Claude asked a question: answer in the chat.')
             self.post({'type': 'chat', 'role': 'assistant', 'text': outcome.text})
             return
         # 'schema'
@@ -624,11 +713,14 @@ class StudioController(object):
         if session.auto and session.detected_category:
             self.post({'type': 'detected', 'category': session.detected_category})
         self._preview(text)
+        compared = self._checks_left < MAX_CHECKS
         if (not outcome.errors and self.check_refs and session.has_references
                 and self._checks_left > 0):
             self._checks_left -= 1
             self._snapshot_token += 1
             self._set_busy(True, u'Rendering the model to compare it with your reference…')
+            self._progress('compare', 'active',
+                           u'Rendering the model to compare it with your reference…')
             self.post({'type': 'snapshot_request', 'token': self._snapshot_token,
                        'views': ['ref', 'iso'] if self._ref_camera else ['iso', 'front'],
                        'camera': self._ref_camera})
@@ -636,8 +728,11 @@ class StudioController(object):
         if outcome.errors:
             self._status(u'Claude could not fix every problem; see Checks, then '
                          u'ask Claude again.', 'warning')
+            self._progress_review(u'{} problem(s) left: see Checks.'.format(len(outcome.errors)),
+                                  compared, problems=True)
         else:
             self._status(u'Review the model, then Create Family.', 'success')
+            self._progress_review(u'Review the model, then Create Family.', compared)
 
     def _on_snapshot(self, message):
         if message.get('token') != self._snapshot_token or self.session is None:
@@ -648,6 +743,7 @@ class StudioController(object):
             self._set_busy(False)
             self._status(u'The 3D view could not be captured; the reference check was skipped.',
                          'warning')
+            self._progress_review(u'Reference check skipped: review the model.')
             return
         views = [u'the reference camera' if v == 'ref' else v for v in message.get('views') or []]
         body = self.session.begin_check(images, views=u', '.join(views))
@@ -655,6 +751,7 @@ class StudioController(object):
                    'text': u'Claude is comparing the model with your reference…',
                    'thumbs': [u'data:image/png;base64,' + images[0]]})
         self._set_busy(True, u'Claude is comparing the model with your reference…')
+        self._progress('compare', 'active', u'Claude is comparing the model with your reference…')
         self._send(body)
 
     def _show_analysis(self, analysis):
@@ -701,10 +798,91 @@ class StudioController(object):
 
     # ── JSON editor + preview ────────────────────────────────────────────
     def _preview(self, text):
-        payload = preview_payload(text)
+        payload = preview_payload(text, self.preview_type)
         payload['type'] = 'preview'
         self.post(payload)
         self._publish_state()
+
+    def _on_set_type(self, message):
+        """The page shows another family type: flex the preview to its sizes."""
+        name = message.get('name') or None
+        if name != self.preview_type:
+            self.preview_type = name
+            if self.current_json:
+                self._preview(self.current_json)
+
+    def _on_set_param(self, message):
+        """Edit one length / number value in the Types grid and re-flex the preview.
+
+        ``type_name`` names the family type column; empty = the parameter's default
+        (a family without types). The schema keeps its geometry at the defaults:
+        Revit flexes it to each type's values, and the preview does the same."""
+        try:
+            schema = json.loads(self.current_json)
+        except (TypeError, ValueError):
+            self._status(u'Nothing to edit yet: describe a family first.', 'warning')
+            return
+        name = u'{}'.format(message.get('param') or u'').strip()
+        param = next((p for p in schema.get('parameters') or []
+                      if isinstance(p, dict) and u'{}'.format(p.get('name') or u'').strip().lower()
+                      == name.lower()), None)
+        if param is None:
+            self._status(u'"{}" is not a family parameter.'.format(name), 'warning')
+            return
+        kind = param.get('type', 'length')
+        try:
+            value = float(message.get('value'))
+        except (TypeError, ValueError):
+            self._status(u'{}: type a number.'.format(name), 'warning')
+            return
+        if kind == 'integer':
+            value = int(round(value))
+        if kind == 'length' and value <= 0:
+            self._status(u'{}: a length must be more than 0 mm.'.format(name), 'warning')
+            return
+        type_name = u'{}'.format(message.get('type_name') or u'').strip()
+        target = next((t for t in schema.get('types') or [] if isinstance(t, dict)
+                       and u'{}'.format(t.get('name') or u'').strip() == type_name), None)
+        if target is not None:
+            values = target.get('values') if isinstance(target.get('values'), dict) else {}
+            for key in [k for k in values if u'{}'.format(k).strip().lower() == name.lower()]:
+                del values[key]
+            values[param['name']] = value
+            target['values'] = values
+            self.preview_type = type_name
+        else:
+            param['value'] = value
+        text = json.dumps(schema, indent=2, ensure_ascii=False)
+        self.current_json = text
+        self.post({'type': 'schema', 'json': text, 'source': 'edit',
+                   'proposal_id': self._proposal_id})
+        payload = preview_payload(text, self.preview_type)
+        payload['type'] = 'preview'
+        self.post(payload)
+        self._publish_state()
+        driven = any(u'{}'.format(d.get('parameter') or u'').strip().lower() == name.lower()
+                     for d in schema.get('dimensions') or [] if isinstance(d, dict))
+        shown = u'{:,.0f} mm'.format(value) if kind == 'length' else u'{}'.format(value)
+        if driven:
+            self._status(u'{} = {}: the model resized.'.format(param['name'], shown), 'success')
+        else:
+            self._status(u'{} = {} saved, but it drives no labelled dimension, so the model does '
+                         u'not change. Ask Claude to make it parametric.'.format(param['name'], shown),
+                         'warning')
+
+    def _on_make_parametric(self, message):
+        """Ask the AI for the category's missing sizes (Sizes tab > Parameter fit)."""
+        try:
+            schema = json.loads(self.current_json)
+        except (TypeError, ValueError):
+            self._status(u'Describe a family first.', 'warning')
+            return
+        text = param_profiles.brief(schema) if isinstance(schema, dict) else u''
+        if not text:
+            self._status(u'Every standard size of this category already resizes the family.',
+                         'success')
+            return
+        self._on_send({'text': text, 'json': self.current_json})
 
     def _on_json_changed(self, message):
         self.current_json = message.get('json') or u''
@@ -727,6 +905,8 @@ class StudioController(object):
         self.current_json = text
         self.post({'type': 'schema', 'json': text, 'source': 'file'})
         self._preview(text)
+        self._progress_review(u'Opened {}: review it, then Create Family.'.format(
+            os.path.basename(path)))
         self._status(u'Opened {}.'.format(os.path.basename(path)), 'success')
 
     def _on_save_json(self, message):
@@ -781,9 +961,34 @@ class StudioController(object):
             text = u'Back to the built-in Claude: messages go straight to Claude.'
         self.post({'type': 'chat', 'role': 'system', 'text': text})
 
+    def _track_mcp(self):
+        """Message receipts and the AI app's last call, for MCP mode."""
+        app = self.mcp_client or u'your AI app'
+        if self._mcp_waiting:
+            try:
+                read = studio_link.read_ids(self._mcp_waiting)
+            except Exception:
+                read = set()
+            for mcp_id in [i for i in self._mcp_waiting if i in read]:
+                self._mcp_waiting.remove(mcp_id)
+                self.post({'type': 'mcp_status', 'id': mcp_id, 'state': 'read',
+                           'text': u'Read by {}'.format(app)})
+                self._mcp_working = True
+                self._progress('draft', 'active', u'{} read your message and is working…'.format(app))
+        try:
+            call = studio_link.last_activity()
+        except Exception:
+            call = None
+        if call and call['time'] > self._mcp_seen_call:
+            first = not self._mcp_seen_call
+            self._mcp_seen_call = call['time']
+            if self._mcp_working and not first and call['tool']:
+                self._progress('draft', 'active', u'{} called {}…'.format(call['client'], call['tool']))
+
     def tick(self, now=None):
         """Called about once a second by the host: heartbeat, AI app, new proposals."""
         now = time.time() if now is None else now
+        self._track_mcp()
         if now - self._last_beat >= 2.0:
             self._last_beat = now
             try:
@@ -816,6 +1021,11 @@ class StudioController(object):
             self._proposal_id = proposal_id
             self.post({'type': 'schema', 'json': text, 'source': 'mcp', 'proposal_id': proposal_id})
             self._preview(text)
+            self._mcp_working = False
+            self.post({'type': 'mcp_status', 'id': None, 'state': 'answered',
+                       'text': u'Answered by {}'.format(self.mcp_client or u'the AI app')})
+            self._progress_review(u'New family from {}: review it, then Create Family.'.format(
+                self.mcp_client or u'the AI app'))
             self.post({'type': 'chat', 'role': 'assistant',
                        'text': record.get('note') or u'Here is the family.',
                        'meta': u'from {} over MCP'.format(self.mcp_client or u'an AI app')})
@@ -877,6 +1087,7 @@ class StudioController(object):
         self.post({'type': 'schema', 'json': text, 'source': 'history',
                    'proposal_id': message.get('id')})
         self._preview(text)
+        self._progress_review(u'Opened from My families: review it, then Create Family.')
         self.post({'type': 'chat', 'role': 'system',
                    'text': u'Opened "{}" from My families. Ask Claude for changes, or Create '
                            u'Family.'.format(schema.get('family_name') or message.get('id'))})
@@ -920,10 +1131,14 @@ class StudioController(object):
             self.post({'type': 'folder', 'path': folder})
         load = bool(message.get('load', self.prefs.get('load', False)))
         self._set_busy(True, u'Revit is building "{}"…'.format(schema.get('family_name')))
+        self._progress('create', 'active', u'Revit is building "{}"…'.format(schema.get('family_name')),
+                       skip=() if self._steps.get('compare') == 'done' else ('compare',))
 
         def _done(report, error):
             self._set_busy(False)
             if error:
+                self._progress('create', 'error', u'"{}" was not created: see the chat.'.format(
+                    schema.get('family_name')))
                 self.post({'type': 'chat', 'role': 'error', 'text': error})
                 self._status(u'"{}" was not created.'.format(schema.get('family_name')), 'danger')
                 return
@@ -933,5 +1148,7 @@ class StudioController(object):
                        'lines': lines,
                        'problems': bool(report.get('skipped') or report.get('warnings'))})
             self._status(lines[0] + (u' ' + lines[1] if len(lines) > 1 else u''), 'success')
+            self._progress('create', 'warn' if report.get('skipped') or report.get('warnings')
+                           else 'done', lines[0])
 
         self.revit.create_family(schema, folder, load, _done)

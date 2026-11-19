@@ -39,7 +39,7 @@ import json
 import os
 
 from Intelligence.family_schema import (
-    AUTO_CATEGORY, SUPPORTED_CATEGORIES, build_system_prompt, schema_summary,
+    AUTO_CATEGORY, SUPPORTED_CATEGORIES, build_system_prompt, meaning_errors, schema_summary,
     validate_ai_schema, validate_family_schema,
 )
 
@@ -51,7 +51,7 @@ DEFAULT_MAX_TOKENS = 32000
 DEFAULT_EFFORT = 'high'
 EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 MAX_REPAIRS = 2
-MAX_POLISH = 1          # extra round when a valid family still has loose parts
+MAX_POLISH = 2          # extra rounds when a valid family does not yet work in space
 
 # Attachments Claude can read: images (vision) and PDFs (document blocks).
 IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -115,8 +115,9 @@ ANALYSIS_TOOL = {
     'name': 'record_analysis',
     'description': (
         'With reference images or drawings attached: record what you see BEFORE modelling - '
-        'the camera of the picture, the overall size, and every component with its form, '
-        'size, position and colour. FamiGen shows it to the user and renders your model '
+        'the camera of the picture, the overall size, what the object is and how it is used, '
+        'its levels, how the parts connect, which parts are hollow, and every component with '
+        'its form, size, position and colour. FamiGen shows it to the user and renders your model '
         'from the same camera to compare. Call it once per reference, then submit_family.'),
     'input_schema': {
         'type': 'object',
@@ -149,6 +150,19 @@ ANALYSIS_TOOL = {
                     'color': {'type': 'string'}, 'count': {'type': 'integer'}},
                     'required': ['name', 'form']},
             },
+            'concept': {'type': 'string',
+                        'description': 'What the object is, who or what uses it and the route taken '
+                                       'through it, where it stands or hangs.'},
+            'levels': {'type': 'array', 'items': {'type': 'string'},
+                       'description': 'Every level something stands on, with its height: '
+                                      '"ground 0", "seat 450", "deck 2350".'},
+            'connections': {'type': 'array', 'items': {'type': 'string'},
+                            'description': 'How the parts connect, one per line: "stair: lower deck '
+                                           'north edge -> porch front edge", "spout -> basin". These '
+                                           'become joints in the family.'},
+            'hollow': {'type': 'array', 'items': {'type': 'string'},
+                       'description': 'Parts that are hollow in reality (pipes, tubes, basins, bowls, '
+                                      'housings) and their wall thickness.'},
             'notes': {'type': 'string'},
         },
         'required': ['camera', 'overall_size_mm', 'components'],
@@ -177,9 +191,23 @@ WORKING WITH THE USER (FamiGen Studio, direct Claude session):
   merge parts that share a material and would never be scheduled separately.
 - Keep summary to one or two sentences. Plain language, no JSON terms.
 
+THINK IN THIS ORDER (every family, with or without a reference):
+1. Concept: what is it, who or what uses it and by which route, where does it stand
+   or hang. Write it in "concept".
+2. Levels and footprints: the heights things stand on, and the plan area of each main
+   element. Unrelated elements do not share a footprint.
+3. Parts and roles: what each part does (support, surface, enclosure, container,
+   conduit, access, guard, fixing, control, decor) - and from that, solid or hollow.
+4. Joints: where each part meets its neighbour, as one shared coordinate. Write the
+   important ones in "joints"; FamiGen checks them.
+5. Only then the geometry, derived from those levels and joint points.
+If submit_family comes back with Not connected / Joint / Hollow / Access / Crossing
+findings, the geometry disagrees with your own concept: correct the geometry.
+
 REFERENCE ANALYSIS (when images, drawings or cut sheets are attached):
 - First call record_analysis: the camera of the picture, the scale basis, the overall
-  size and EVERY component (form, size, position, colour, count). Count repeated
+  size, the concept, the levels, how the parts connect, which parts are hollow, and
+  EVERY component (form, size, position, colour, count). Count repeated
   members (pickets, slats, legs) instead of guessing. Then build exactly that list.
 - Measure in proportions: pick the most reliable known size (a door, a seat height, a
   stated dimension), convert every other length by its ratio to it in the picture,
@@ -234,13 +262,16 @@ class Outcome(object):
 
 
 def continuity_problems(family):
-    """Loose-part findings for a valid family ([] when it reads as one object)."""
+    """Spatial findings for a valid family: loose parts, missed joints, solid lumps
+    that should be hollow, access parts without landings, blocked routes ([] when
+    the family reads as one working object). See FamilyGen.spatial_check."""
     try:
         from FamilyGen.preview_mesh import build_preview
         model = build_preview(family)
     except Exception:
         return []
-    return [w for w in model.warnings if w.startswith(u'Not connected')]
+    from FamilyGen.spatial_check import PREFIXES
+    return [w for w in model.warnings if w.startswith(PREFIXES)]
 
 
 def load_attachment(path):
@@ -606,6 +637,7 @@ class ClaudeFamilySession(object):
             errors = [u'$: family must be a JSON object']
         elif self.auto:
             errors, _ = validate_family_schema(family)
+            errors = list(errors) + meaning_errors(family)
         else:
             errors = validate_ai_schema(family, self.category)
         if not errors:
@@ -614,10 +646,12 @@ class ClaudeFamilySession(object):
             if loose and self._polish_left > 0:
                 # Valid, but parts float: one polish round before the user sees it.
                 self._polish_left -= 1
-                self._owe(call, u'Valid, but not yet one built object:\n- {}\nMove or extend those '
-                                u'parts so every joint overlaps 1-5 mm and the chain reaches the base, '
-                                u'then call submit_family again with the complete family.'.format(
-                                    u'\n- '.join(loose)), False)
+                self._owe(call, u'Valid, but it does not yet work as one built object:\n- {}\n'
+                                u'Re-read your concept (what it is, the route of use) and fix the '
+                                u'geometry, not the claims: move or extend parts so real joints overlap '
+                                u'1-5 mm, land each access part on both levels, keep routes and bores '
+                                u'clear, make containers and conduits hollow. Then call submit_family '
+                                u'again with the complete family.'.format(u'\n- '.join(loose)), False)
                 self._flush_pending_as_user()
                 return Outcome('continue', request=self.build_request(), errors=loose,
                                repairs=self._repairs)

@@ -274,3 +274,10 @@ sharp-cornered box is a **fidelity bug** even though it builds without errors.
   corners in plan) when the reference shows it.
 - Brackets and fixings overlap both parts they join; signage plates sit flush on
   posts; bent bars and frames are Tubes.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: whatever the user describes - name it precisely in concept.what - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Decide part by part: what carries (support), what is rested on (surface), what holds something (container, HOLLOW), what carries a flow (conduit, HOLLOW), what a person moves along (access).
+- Joints to declare: every support at both ends; every access part at both ends; every conduit end that feeds another part.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

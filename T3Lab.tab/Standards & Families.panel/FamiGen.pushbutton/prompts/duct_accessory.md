@@ -44,3 +44,10 @@ reference gives one — list every such choice in `assumptions`.
   corners in plan) when the reference shows it.
 - Casing, flanges and actuator box touch; blades span the full inside width and
   touch the casing sides.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: an in-line duct part: damper, silencer, grille box, access door - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: The body is a conduit: HOLLOW sheet-metal shell (wall 1-2 mm: Extrusion with inner_loops for rectangular, Cylinder / Tube with "wall" for round), open at both duct ends. Blades, baffles and actuators are inside or on the shell (control / fixing). Flanges are fixing rings around each open end.
+- Joints to declare: each flange to the body at its end; actuator to the body; blade shaft to both side walls. The air path between the two open ends stays clear except for blades / baffles that belong there (give them role control).
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

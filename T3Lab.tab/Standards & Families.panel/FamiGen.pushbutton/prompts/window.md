@@ -49,3 +49,10 @@ reference gives one — list every such choice in `assumptions`.
   corners in plan) when the reference shows it.
 - Frame members share corners; sashes sit inside the frame touching it; glass sits
   inside the sash; the sill touches the frame bottom.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a window: frame, sashes, glazing, in a wall opening - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Frame and sashes = enclosure built from four members each around a CLEAR opening (Extrusion with an inner loop, or four bars) - never a solid slab. Glass = thin surface (6-24) set 10-15 into the sash rebate. Sill = surface projecting 30-50. Handles = control, hinges = fixing.
+- Joints to declare: each sash to the frame; glass to its sash on all four sides (one joint is enough); sill to the frame; handle to the sash.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

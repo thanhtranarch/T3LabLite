@@ -49,3 +49,10 @@ reference gives one — list every such choice in `assumptions`.
   corners in plan) when the reference shows it.
 - Body, flanges and bonnet overlap along the pipe axis; handwheel rim is a closed
   Tube (points around the circle, closed: true) with spoke Cylinders into the hub.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: an in-line pipe part: valve, strainer, flow meter, flexible joint - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: The body is a conduit: HOLLOW with the pipe's bore open end to end (Cylinder / Tube with "wall", or a Revolution of the wall section about the pipe axis). Flanges = fixing rings at each end (Extrusion / Revolution with the bore as an inner loop). Bonnet, stem, handwheel or lever = control, on top of the body, never inside the bore.
+- Joints to declare: each flange to the body at its end; bonnet to the body; stem to bonnet and handwheel. The bore between the two ends must stay clear.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

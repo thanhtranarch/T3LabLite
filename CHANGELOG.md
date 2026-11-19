@@ -46,6 +46,31 @@ Releasing a new version:
   `famigen_get_studio_state`, `famigen_validate_family`,
   `famigen_patch_family` and `famigen_list_templates`.
 
+### Added
+
+- **FamiGen — models that make sense in space:** every AI family now states its
+  concept (what it is, how it is used, where it stands), each part's role, and
+  the joints between parts. FamiGen checks the geometry against that and sends
+  problems back to the AI: parts that do not really touch, joints that miss,
+  stairs / slides / bridges that do not land at both ends, and anything
+  blocking a route or the inside of a pipe.
+- **FamiGen — hollow parts:** pipes, tube slides and tunnels are hollow
+  (`"wall"` on Cylinder / Tube); basins, bowls and bins modelled as a solid
+  block are reported. Each of the 17 category guides says what is hollow in
+  that category and which joints to declare.
+
+### Changed
+
+- **FamiGen Studio — one title bar:** the window now shows only the T3 title
+  bar (drag it to move, double-click to maximize). If pyRevit's own title bar
+  cannot be hidden, the Studio hides its own instead.
+- **FamiGen Studio follows the T3 design system:** T3 colours, type sizes,
+  4 px spacing, 26 px rows and flat controls (no shadows or animation). The
+  right panel now reads like Revit: a Properties panel with collapsible groups
+  (Identity Data, Geometry, Dimensions) and a parts tree grouped by
+  subcategory, with repeated parts folded into one row ("Post ×8"). View
+  controls sit in a docked toolbar above the 3D view instead of floating on it.
+
 ### Fixed
 
 - **FamiGen (classic window) — the Family JSON box was one line high:** it now

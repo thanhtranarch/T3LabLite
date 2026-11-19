@@ -50,3 +50,10 @@ reference gives one — list every such choice in `assumptions`.
   corners in plan) when the reference shows it.
 - Doors and plinths touch the enclosure; handles and glands overlap their faces;
   louvres are cut voids or thin parts touching the door.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a panel board, switchgear cabinet, transformer or UPS - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Cabinet = enclosure. A closed cabinet may be one solid at coarse detail, but show the door (surface, 2 mm gap), plinth (support) and vents; an open rack is built from posts and panels. Cable entries are voids or gland plates on the top or bottom.
+- Joints to declare: plinth or feet to "ground" (or wall bracket to the wall plane); door to the cabinet at its hinge side; handle to the door.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

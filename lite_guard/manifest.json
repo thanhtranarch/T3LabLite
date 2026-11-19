@@ -223,7 +223,8 @@
     "lib/FamilyGen/templates.py",
     "lib/FamilyGen/builder_report.py",
     "docs/famigen-studio-spec.md",
-    "lib/FamilyGen/form_frames.py"
+    "lib/FamilyGen/form_frames.py",
+    "lib/FamilyGen/spatial_check.py"
   ],
   "ignore_imports": [
     {

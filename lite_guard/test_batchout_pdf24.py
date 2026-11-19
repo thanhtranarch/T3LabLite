@@ -1,10 +1,14 @@
-"""BatchOut PDF engine "PDF24 printer" (Services/batchout_pdf24.py + its wiring)."""
+"""BatchOut PDF engine "PDF24 printer" (Services/batchout_pdf24.py, its wiring, the print loop)."""
+import ast
+import functools
 import os
 import re
 import sys
 import time
 import unittest
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(ROOT, 'lib')
@@ -219,6 +223,201 @@ class VirtualPrinterTests(unittest.TestCase):
         self.assertIn("'{}'.format(pm.IsVirtual) != 'None'", body)
         self.assertIn('self._pdf24_as_pdf(found, expected_file, gs)', body)
         self.assertIn('pm.PrintToFileName = print_file', src)
+
+
+DIALOG = os.path.join(LIB, 'GUI', 'BatchOutDialog.py')
+LOOP = ('_export_pdf_with_pdf24', '_pdf24_is_virtual', '_pdf24_as_pdf', '_pdf24_page_setup',
+        '_element_of', '_reserve_filename', '_note_failure', 'update_export_item_progress')
+
+
+def _assigns(node, prefix):
+    return isinstance(node, ast.Assign) and all(
+        isinstance(t, ast.Name) and t.id.startswith(prefix) for t in node.targets)
+
+
+def load_window():
+    """(window, scope): ExportManagerWindow cut down to the shipped PDF24 print
+    loop and the methods it reports through, on a bare object (no Revit, no WPF)."""
+    with open(DIALOG, encoding='utf-8') as f:
+        tree = ast.parse(f.read())
+    body = []
+    for node in tree.body:
+        if _assigns(node, 'QUEUE_'):
+            body.append(node)
+        elif isinstance(node, ast.ClassDef) and node.name == 'ExportManagerWindow':
+            node.bases = []
+            node.body = [n for n in node.body if _assigns(n, 'PDF24_')
+                         or (isinstance(n, ast.FunctionDef) and n.name in LOOP)]
+            body.append(node)
+    tree.body = body
+    scope = dict(os=os, time=time, logger=mock.Mock(), DB=mock.Mock(),
+                 Transaction=mock.Mock(), batchout_pdf24=pdf24)
+    exec(compile(tree, DIALOG, 'exec'), scope)
+    return scope['ExportManagerWindow'](), scope
+
+
+class Pdf24Printer(object):
+    """PrintManager double. SubmitPrint is PDF24 auto-saving the page where the
+    registry tells it to, or Revit printing to a file (virtual printer)."""
+
+    def __init__(self, registry):
+        self.registry = registry
+        self.PrinterName, self.PrintToFile, self.PrintToFileName = 'Office', False, None
+        self.IsVirtual = None
+        self.PrintSetup = mock.Mock()
+        self.silent = ()        # sheets PDF24 saves nothing for
+        self.own_name = ()      # sheets PDF24 saves under its own file name
+        self.printed = []
+
+    def SelectNewPrintDriver(self, name):
+        self.PrinterName = name
+
+    def Apply(self):
+        pass
+
+    def SubmitPrint(self, sheet):
+        number = sheet.SheetNumber
+        self.printed.append(number)
+        if number in self.silent:
+            return True
+        if self.PrintToFile:
+            path, data = self.PrintToFileName, b'%!PS-Adobe-3.0\n'
+        else:
+            auto = self.registry.hkcu()
+            name = auto['AutoSaveFilename'][0].replace('%%', '%')
+            if number in self.own_name:
+                name = '2026-11-19 10-00-00 ' + name
+            path, data = os.path.join(auto['AutoSaveDir'][0], name + '.pdf'), b'%PDF-1.7\n'
+        with open(path, 'wb') as f:
+            f.write(data)
+        return True
+
+
+class PrintLoopTests(unittest.TestCase):
+    """The shipped _export_pdf_with_pdf24 run with doubles; wait_for_pdf, sniff
+    and AutoSave are the real ones (fake clock, FakeRegistry). 2026-11-19: a lost
+    `found is None` guard failed every saved page and only source text was tested."""
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.folder = os.path.join(self.temp.name, 'out')
+        os.mkdir(self.folder)
+        self.user = {'Handler': ('assistant', pdf24.REG_SZ)}
+        self.registry = FakeRegistry(hkcu=self.user)
+        self.pm = Pdf24Printer(self.registry)
+        self.now, self.doctool, self.gs = 0.0, None, None
+        session = functools.partial(pdf24.AutoSave, self.registry, os.path.join(self.temp.name, 'state'))
+        wait = functools.partial(pdf24.wait_for_pdf, clock=lambda: self.now, sleep=self.sleep)
+        patcher = mock.patch.multiple(
+            pdf24, find_printer=lambda: 'PDF24', find_doctool=lambda: self.doctool,
+            find_ghostscript=lambda: self.gs, AutoSave=session, wait_for_pdf=wait)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self.window, self.scope = load_window()
+        w = self.window
+        w.doc = SimpleNamespace(PrintManager=self.pm)
+        w.combine_pdf = SimpleNamespace(IsChecked=False)
+        w.export_preview_list = mock.Mock()
+        w._flush_ui = w._update_progress = mock.Mock()
+        w._failed_items = []
+        w._overall_counter = 0
+        w.get_export_filename = lambda item: item.SheetNumber
+        w._pdf24_paper_for = lambda item: ('Use Sheet Size', 'Landscape')
+        for name in ('pdf_fit_to_page', 'pdf_hide_ref_planes', 'pdf_hide_scope_boxes',
+                     'pdf_hide_crop_boundaries', 'pdf_hide_unreferenced_tags', 'pdf_view_links_blue'):
+            setattr(w, name, SimpleNamespace(IsChecked=False))
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+    def export(self, *numbers):
+        """The loop's count for these sheets. Whatever happened, the user's PDF24
+        settings and printer are back and the print setup is rolled back."""
+        w = self.window
+        items = [SimpleNamespace(SheetNumber=n, CustomFilename='', Sheet=SimpleNamespace(SheetNumber=n))
+                 for n in numbers]
+        w.export_items = self.rows = [
+            SimpleNamespace(SheetNumber=n, Format='PDF', Progress=0, OutputFile='',
+                            Status=self.scope['QUEUE_QUEUED']) for n in numbers]
+        w._overall_total = len(numbers)
+        count = w._export_pdf_with_pdf24(items, self.folder)
+        self.assertEqual(self.registry.hkcu(), self.user)
+        self.assertEqual(self.pm.PrinterName, 'Office')
+        self.scope['DB'].TransactionGroup.return_value.RollBack.assert_called_once_with()
+        return count
+
+    def states(self):
+        return [(row.Progress, row.Status) for row in self.rows]
+
+    def reason(self, number):
+        return self.window._failure_reasons[(number, 'PDF')]
+
+    def pdf(self, number):
+        return os.path.join(self.folder, number + '.pdf')
+
+    def test_every_saved_page_is_exported(self):
+        self.assertEqual(self.export('A1', 'A2'), 2)
+        self.assertEqual(self.states(), [(100, self.scope['QUEUE_EXPORTED'])] * 2)
+        self.assertEqual(self.window._failed_items, [])
+        self.assertEqual(self.window._overall_counter, 2)
+        self.assertEqual([row.OutputFile for row in self.rows], [self.pdf('A1'), self.pdf('A2')])
+        self.assertEqual([pdf24.sniff(row.OutputFile) for row in self.rows], ['pdf', 'pdf'])
+
+    def test_stops_after_max_misses_when_pdf24_saves_nothing(self):
+        sheets = ('A1', 'A2', 'A3', 'A4')
+        limit = self.window.PDF24_MAX_MISSES
+        self.pm.silent = sheets
+        self.assertEqual(self.export(*sheets), 0)
+        self.assertEqual(self.pm.printed, list(sheets[:limit]))
+        for number in sheets[:limit]:
+            self.assertIn('PDF24 saved no file within', self.reason(number))
+        for number in sheets[limit:]:
+            self.assertIn('skipped: PDF24 saved nothing', self.reason(number))
+        self.assertEqual(self.states(), [(0, self.scope['QUEUE_FAILED'])] * 4)
+        self.assertEqual(os.listdir(self.folder), [])
+
+    def test_a_saved_page_resets_the_miss_count(self):
+        # Two misses, never two in a row: with PDF24_MAX_MISSES = 2 nothing is skipped.
+        self.pm.silent = ('A1', 'A3')
+        self.assertEqual(self.export('A1', 'A2', 'A3', 'A4'), 2)
+        self.assertEqual(self.pm.printed, ['A1', 'A2', 'A3', 'A4'])
+        failed, exported = (0, self.scope['QUEUE_FAILED']), (100, self.scope['QUEUE_EXPORTED'])
+        self.assertEqual(self.states(), [failed, exported, failed, exported])
+        self.assertIn('PDF24 saved no file within', self.reason('A3'))
+
+    def test_page_saved_under_pdf24_own_name_is_renamed(self):
+        self.pm.own_name = ('A1',)
+        self.assertEqual(self.export('A1'), 1)
+        self.assertEqual(os.listdir(self.folder), ['A1.pdf'])
+        self.assertEqual(self.states(), [(100, self.scope['QUEUE_EXPORTED'])])
+
+    def test_virtual_printer_postscript_goes_through_ghostscript(self):
+        self.pm.IsVirtual = 'AdobePDF'      # anything but VirtualPrinterType.None
+        self.gs = 'gswin64c.exe'
+
+        def ghostscript(cmd, **kwargs):
+            target = next(a for a in cmd if a.startswith('-sOutputFile=')).split('=', 1)[1]
+            with open(target, 'wb') as f:
+                f.write(b'%PDF-1.7\n')
+
+        with mock.patch('subprocess.call', side_effect=ghostscript) as call:
+            self.assertEqual(self.export('A1'), 1)
+        self.assertEqual(call.call_args[0][0][0], self.gs)
+        self.assertEqual(os.listdir(self.folder), ['A1.pdf'])      # the print file is gone
+        self.assertEqual(pdf24.sniff(self.pdf('A1')), 'pdf')
+        self.assertEqual(self.states(), [(100, self.scope['QUEUE_EXPORTED'])])
+
+    def test_combine_joins_every_printed_page(self):
+        self.window.combine_pdf.IsChecked = True
+        self.doctool = 'pdf24-DocTool.exe'
+        self.window._pdf24_join = mock.Mock(return_value=1)
+        self.assertEqual(self.export('A1', 'A2'), 1)
+        pages = self.window._pdf24_join.call_args[0][1]
+        self.assertEqual([(item.SheetNumber, os.path.basename(path)) for item, path in pages],
+                         [('A1', '0001.pdf'), ('A2', '0002.pdf')])
+        self.assertEqual(self.window._failed_items, [])
 
 
 class WiringTests(unittest.TestCase):

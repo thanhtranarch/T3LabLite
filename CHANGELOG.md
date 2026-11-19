@@ -25,6 +25,12 @@ Releasing a new version:
   the FamiGen button borrowed a helper from Mana Select, so the Assistant
   listed FamiGen under Mana Select's names as well and, with two matches,
   opened neither. FamiGen now has its own helper.
+- **BatchOut — PDF24 printer reported every sheet as failed (since 2.4.2):**
+  each page PDF24 had saved was marked "PDF24 saved no file", and after two
+  sheets the rest were skipped, although the PDF files were in the folder.
+  Saved pages now count as exported. When PDF24 really saves nothing, the run
+  stops after two sheets instead of waiting two minutes for every sheet.
+  Not tried in Revit with PDF24 Creator yet.
 
 ## [2.6.3] - 2026-11-19
 

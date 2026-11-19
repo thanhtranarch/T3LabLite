@@ -4962,12 +4962,12 @@ class ExportManagerWindow(T3WPFWindow):
                         expected_file, prev_mtime, started_at, self.PDF24_PAGE_TIMEOUT,
                         taken=[p for p in taken if p != expected_file.lower()]
                         + [page[1] for page in pages], extra=[prn] if prn else ())
-                    if found is not None:
-                        found = self._pdf24_as_pdf(found, expected_file, gs)
+                    if found is None:
                         misses += 1
                         self._note_failure(label, "PDF", "PDF24 saved no file within {:.0f} s"
                                            .format(self.PDF24_PAGE_TIMEOUT))
                         continue
+                    found = self._pdf24_as_pdf(found, expected_file, gs)
                     misses = 0
                     if found.lower() != expected_file.lower():
                         logger.warning("PDF24 saved '{}' as '{}'; renamed.".format(

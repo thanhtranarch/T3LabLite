@@ -659,9 +659,25 @@ def test_settings_dialog():
     check('every option has its checkbox (a new option fails here until it gets one)',
           set(n for n, _k, _d in AC.OPTIONS) <= set(names) and len(names) == len(set(names)),
           (sorted(names), [n for n, _k, _d in AC.OPTIONS]))
-    check('each checkbox carries what the option does as its tooltip',
-          all(AC.OPTION_LABELS[n][1].split(' (the x')[0].split('. Turn off')[0][:40]
-              in body for n, _k, _d in AC.OPTIONS))
+    import xml.etree.ElementTree as ET
+    ui, xname = '{http://schemas.microsoft.com/winfx/2006/xaml/presentation}', \
+        '{http://schemas.microsoft.com/winfx/2006/xaml}Name'
+    groups, boxes, group = {}, {}, None
+    for node in ET.fromstring(xaml.encode('utf-8')).iter():      # document order
+        if node.tag == ui + 'TextBlock' and node.get('FontSize') == '12.5':
+            group = node.get('Text')
+        elif node.tag == ui + 'CheckBox' and (node.get(xname) or '').startswith('opt_'):
+            groups.setdefault(group, []).append(node.get(xname)[4:])
+            boxes[node.get(xname)[4:]] = (node.get('Content'), node.get('ToolTip'))
+    check("the bar's own groups, in its order, each with the same options (owner, 2026-11-19)",
+          [(g, groups.get(g)) for g, _n in AC.OPTION_GROUPS]
+          == [(g, list(names)) for g, names in AC.OPTION_GROUPS], groups)
+    check('each checkbox is called what its switch is called on the bar',
+          [(n, boxes[n][0]) for n, _k, _d in AC.OPTIONS]
+          == [(n, AC.OPTION_LABELS[n][0]) for n, _k, _d in AC.OPTIONS], boxes)
+    check('and says what it does: the same text as on the bar (tooltip; "On model" spells it out)',
+          all(boxes[n][1] == AC.OPTION_LABELS[n][1] if n != 'model'
+              else AC.OPTION_LABELS[n][1] in body for n, _k, _d in AC.OPTIONS))
     check('title bar and footer kept: logo, title, X with Esc, copyright, Cancel + primary',
           'Style="{StaticResource T3.TitleBar}"' in body and 'x:Name="logo_image"' in body
           and 'Click="close_button_clicked" IsCancel="True"' in body
@@ -672,7 +688,8 @@ def test_settings_dialog():
     check('BatchOut card: sunken header with the checkbox, two columns and a rule between',
           'x:Name="chk_enabled"' in body and body.count('{StaticResource T3.SurfaceSunken}') == 2
           and body.count('<ColumnDefinition Width="32"/>') == 2
-          and body.count('Width="1" Background="{StaticResource T3.Border}"') == 2)
+          and len(re.findall(r'<Border [^>]*Width="1"\s+Background="\{StaticResource T3\.Border\}"',
+                             body)) == 2)
     check('benefits card is folded until its header is clicked',
           'MouseLeftButtonUp="details_header_clicked"' in body
           and re.search(r'x:Name="details_body"[^>]*Visibility="Collapsed"', body) is not None

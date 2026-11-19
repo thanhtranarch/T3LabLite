@@ -12,8 +12,8 @@
         Foreground="{DynamicResource T3.Text}"
         FontFamily="Segoe UI"
         FontSize="13"
-        ResizeMode="NoResize"
-        ShowInTaskbar="False"
+        ResizeMode="CanResize"
+        ShowInTaskbar="True"
         SnapsToDevicePixels="True"
         UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display">
@@ -1731,6 +1731,8 @@
             </Grid.RowDefinitions>
 
             <!-- ══════════════════ ROW 0: TITLE BAR ══════════════════ -->
+            <!-- BatchOut's title bar (ExportManager.xaml), letter for letter but for its two texts
+                 (owner, 2026-11-19); dev/test_agent_cursors.py compares the two. -->
             <Border Grid.Row="0" Style="{StaticResource T3.TitleBar}">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -1738,8 +1740,8 @@
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
-                                shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <!-- Title & Subtitle -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,0">
                         <Image x:Name="logo_image" Height="28" Margin="0,0,12,0"
                                VerticalAlignment="Center"
                                RenderOptions.BitmapScalingMode="HighQuality"/>
@@ -1749,10 +1751,20 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                    <!-- Window Control Buttons -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0"
                                 shell:WindowChrome.IsHitTestVisibleInChrome="True">
-                        <Button x:Name="btn_close" Style="{StaticResource T3.WinClose}" ToolTip="Close"
-                                Click="close_button_clicked" IsCancel="True">
+
+                        <Button x:Name="btn_minimize" Style="{StaticResource T3.WinCtrl}"
+                                Click="minimize_button_clicked" ToolTip="Minimize">
+                            <TextBlock Text="&#xE921;" Style="{StaticResource T3.Icon}"/>
+                        </Button>
+                        <Button x:Name="btn_maximize" Style="{StaticResource T3.WinCtrl}"
+                                Click="maximize_button_clicked" ToolTip="Maximize">
+                            <TextBlock Text="&#xE922;" Style="{StaticResource T3.Icon}"/>
+                        </Button>
+                        <Button x:Name="btn_close" Style="{StaticResource T3.WinClose}" IsCancel="True"
+                                Click="close_button_clicked" ToolTip="Close">
                             <TextBlock Text="&#xE8BB;" Style="{StaticResource T3.Icon}"/>
                         </Button>
                     </StackPanel>

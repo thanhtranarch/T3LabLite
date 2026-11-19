@@ -49,6 +49,7 @@ python lite_guard/test_agent_cursors.py
 python lite_guard/test_cursor_consent.py
 python lite_guard/test_open_timing.py
 python lite_guard/test_lite_user.py
+python lite_guard/test_clr_type_reset.py
 python lite_guard/test_data_hub.py
 python lite_guard/test_bridge_deploy.py
 python dev/test_icons_t3space.py
@@ -89,6 +90,7 @@ python dev/test_icons_t3space.py
 7. **Engine Hot-Reload & Modeless ExternalEvent:**
    - **On Revit 2025+ a pyRevit Reload is what CAUSES `This property must be set before runtime is initialized`** (verified 2026-09-29 from the journal + pyRevit 6.5.5 IL): Reload (also toggling an extension) shuts the CPython engine down, pythonnet 3.0.3 cannot restart after Shutdown on .NET 8+, and `CPythonEngine.Start` then sets `Runtime.PythonDLL` on a half-initialized runtime. Only a Revit restart recovers. Prefer restarting Revit over Reload; `T3Lab.extension/startup.py` detects the stuck state on reload and says so. The fix, `T3Lab.extension/lib/pyrevit_patches.py`, keeps the CPython engine cached across reloads; `startup.py` scans and applies it automatically whenever it is missing (owner's explicit request, 2026-09-29): running clone only, exact pyRevit 6.5.5 match only, backup `sessionmgr.py.t3lab-backup`, one notification when applied. Per-machine opt-out: env `T3LAB_NO_PYREVIT_PATCH=1` or file `%APPDATA%\T3LabAI\pyrevit_patch.disabled`; undo with `pyrevit_patches.py restore`.
    - For modeless windows, set `__persistentengine__ = True` and use `detect_persistent_engine()` to gracefully fall back to modal execution if the persistent engine has not yet been activated by a reload.
+   - **"Duplicate type name within an assembly" / "cannot import name 'revit' from 'pyrevit'":** when CPython restarts inside one Revit session, `sys.modules` starts empty but pythonnet's dynamic assembly still holds every .NET type emitted for a Python subclass — the builders live in static fields of `Python.Runtime.ClassDerivedObject`, created in its static constructor (once per AppDomain) and never cleared on shutdown (pythonnet 3.0.3, `src/runtime/Types/ClassDerived.cs`). The first fixed-name class re-created dies, pyRevit's own `pyrevit.revit.events.FuncAsEventHandler` first, so every tool fails. `_cpython_bootstrap.free_clr_type_names()` empties those two dictionaries before the first `import pyrevit...` of each click (and retries once if that import still fails), which hands pythonnet a fresh dynamic assembly; the types emitted earlier stay valid. Test: `python lite_guard/test_clr_type_reset.py`.
 
 8. **CPython background threads freeze while Revit is idle:**
    - pyRevit 6.5.5 calls `PythonEngine.Initialize()` without `BeginAllowThreads()` (verified 2026-10-04 in the pyRevit + pythonnet source), so Revit's main thread holds the GIL whenever no CPython code runs. A CPython thread only gets the GIL while a `#! python3` tool is executing — pythonnet drops it during each .NET call, e.g. a modal `ShowDialog`. Releasing it ourselves is not an option: pyRevit's `CPythonEngine.Start` touches Python objects outside `Py.GIL()`.

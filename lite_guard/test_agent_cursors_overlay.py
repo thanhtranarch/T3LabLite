@@ -9,8 +9,8 @@ only show as "the bar did not update" in Revit. Here core/agent_cursors_overlay
 runs against a stand-in `System.Windows` that records the tree it builds:
 bands (one colour block per agent, replay fill, sweep), feed, counts, legend,
 the cursor tag and what moves on a redraw are read back from that tree. The
-Settings dialog's option rows (GUI/T3Dialog.py) are built the same way. The
-tests run with "On model" on, except test_bar_only (Lite's default).
+Settings window's logic (GUI/AgentCursorsDialog.py) runs on stand-in controls.
+The tests run with "On model" on, except test_bar_only (Lite's default).
 The stand-in accepts any member name, so real WPF names, layout and pixels
 are NOT checked: NEEDS VERIFICATION in Revit.
 """
@@ -646,96 +646,89 @@ def test_bar_only():
         AC.set_option('model', True)
 
 
-def test_settings_dialog_rows():
-    print('[settings dialog: a row per option with what it does, folded reading, fitted height]')
-    import GUI.T3Dialog as TD
-    dlg = TD.T3Dialog.__new__(TD.T3Dialog)      # the window itself needs WPF: NEEDS VERIFICATION
-    dlg._option_boxes, dlg._option_sync = [], None
-    dlg.pnl_options, dlg.pnl_sections, dlg.exp_details, dlg.pnl_body = Fake(), Fake(), Fake(), Fake()
-    dlg.Width, dlg.Height, dlg.MinHeight = 440, 240, 220
-    del CALLS[:]
-    dlg._add_options([('enabled', 'Show agent cursors', 'Untick to turn the cursors off', True),
-                      ('follow', 'Follow', 'Open the views the agent works in', True, 'enabled'),
-                      ('glow', 'Glow', 'Outline touched elements', False, 'enabled')])
-    panel = dlg.pnl_options
-    boxes = [n for n in panel.Children._items if kind(n) == 'CheckBox']
-    notes = [n for n in panel.Children._items if kind(n) == 'TextBlock']
-    check('one grid row per option: a checkbox and its description',
-          len(panel.RowDefinitions._items) == 3 and [b.Content for b in boxes]
-          == ['Show agent cursors', 'Follow', 'Glow'] and [n.Text for n in notes]
-          == ['Untick to turn the cursors off', 'Open the views the agent works in',
-              'Outline touched elements'])
-    check('descriptions sit in the second column of their row',
-          all(('Grid.SetColumn', (n, 1)) in CALLS and ('Grid.SetRow', (n, k)) in CALLS
-              for k, n in enumerate(notes)))
-    check('ticks as given; what it does is on screen, not in a tooltip',
-          [b.IsChecked for b in boxes] == [True, True, False]
-          and not any('ToolTip' in b.__dict__ for b in boxes))
-    check('size M width, panel shown', dlg.Width == 560
-          and repr(panel.Visibility) == 'Visibility.Visible')
-    check('all on: every dependent row is live', [b.IsEnabled for b in boxes[1:]] == [True, True])
-    boxes[0].IsChecked = False
-    for handler in boxes[0].Click._handlers:
-        handler(boxes[0], None)
-    check('master unticked: its rows grey out',
-          [b.IsEnabled for b in boxes[1:]] == [False, False]
-          and [n.Opacity for n in notes[1:]] == [0.5, 0.5] and 'IsEnabled' not in boxes[0].__dict__)
-    dlg.Close = lambda: None
-    dlg._on_ok(None, None)
-    check('a greyed row keeps its own tick', dlg.option_values
-          == {'enabled': False, 'follow': True, 'glow': False}, dlg.option_values)
+def settings_window(options, enabled=False):
+    """The window class on stand-in controls (the XAML itself needs WPF)."""
+    import GUI.AgentCursorsDialog as SD
+    win = SD.AgentCursorsSettingsWindow.__new__(SD.AgentCursorsSettingsWindow)
+    for name in ('chk_enabled', 'btn_ok', 'row_model', 'card_options', 'pnl_benefits',
+                 'pnl_drawbacks', 'details_body', 'details_arrow', 'opt_model', 'opt_follow',
+                 'opt_zoom', 'opt_tile', 'opt_select', 'opt_glow', 'opt_keep'):
+        setattr(win, name, Fake())
+    win.Height = SD.HEIGHT
+    win.Close = lambda: None
+    win.FindResource = lambda key: key
+    win.chk_enabled.IsChecked = True
+    win._setup(enabled, options, AC.pros_cons_sections())
+    return SD, win
 
-    chain = TD.T3Dialog.__new__(TD.T3Dialog)    # Lite: on/off -> On model -> Follow
-    chain._option_boxes, chain._option_sync, chain.pnl_options = [], None, Fake()
-    chain.Width = 440
-    chain._add_options([('enabled', 'Show', '', True), ('model', 'On model', '', True, 'enabled'),
-                        ('follow', 'Follow', '', True, 'model'), ('keep', 'Keep bar', '', True,
-                                                                  'enabled')])
-    on_off, model, follow, keep = [n for n in chain.pnl_options.Children._items
-                                   if kind(n) == 'CheckBox']
-    model.IsChecked = False
-    for handler in model.Click._handlers:
-        handler(model, None)
-    check('a master in the middle: only what hangs under it greys out',
-          (model.IsEnabled, follow.IsEnabled, keep.IsEnabled) == (True, False, True))
-    model.IsChecked, on_off.IsChecked = True, False
-    for handler in on_off.Click._handlers:
-        handler(on_off, None)
-    check('the top switch off: the whole chain greys out, ticks kept',
-          (model.IsEnabled, follow.IsEnabled, keep.IsEnabled) == (False, False, False)
-          and follow.IsChecked is True)
 
-    plain = TD.T3Dialog.__new__(TD.T3Dialog)
-    plain._option_boxes, plain._option_sync, plain.pnl_options = [], None, Fake()
-    plain.Width = 440
-    plain._add_options([('a', 'A', 'first', True), ('b', 'B', 'second', False)])
-    check('no master: nothing is wired or greyed', plain._option_sync is None and not any(
-        'IsEnabled' in n.__dict__ for n in plain.pnl_options.Children._items))
+def test_settings_window():
+    print('[settings window: ticks in and out, what greys out, the folded card]')
+    options = dict((n, d) for n, _k, d in AC.OPTIONS if n != 'model')
+    options['glow'] = False
+    SD, win = settings_window(options)
+    check('opened to turn it on: ticked, button says Turn On',
+          win.chk_enabled.IsChecked is True and win.btn_ok.Content == 'Turn On')
+    check('each option ticked as saved',
+          [(n, win._boxes[n].IsChecked) for n in sorted(options)]
+          == [(n, options[n]) for n in sorted(options)])
+    check('no "On model" option here: its row stays hidden, every box is live',
+          'Visibility' not in win.row_model.__dict__ and 'model' not in win._boxes
+          and all(b.IsEnabled is True for b in win._boxes.values()))
+    check('the card of a ticked feature is inked, like a ticked format in BatchOut',
+          win.card_options.BorderBrush == 'T3.Ink')
+    shown = texts(win.pnl_benefits) + texts(win.pnl_drawbacks)
+    check('benefits left, drawbacks right: one bullet row per line',
+          [t for t in texts(win.pnl_benefits) if t in AC.PROS] == list(AC.PROS)
+          and [t for t in texts(win.pnl_drawbacks) if t in AC.CONS] == list(AC.CONS)
+          and shown.count('\uE73E') == len(AC.PROS) and shown.count('\uE7BA') == len(AC.CONS))
 
-    ok = dlg._add_sections('Benefits and drawbacks', AC.pros_cons_sections())
-    shown = texts(dlg.pnl_sections)
-    check('sections: headings, then every line as a bullet row',
-          ok is True and shown.count('BENEFITS') == 1 and shown.count('DRAWBACKS') == 1
-          and all(line in shown for line in AC.PROS + AC.CONS)
-          and shown.count('\uE73E') == len(AC.PROS) and shown.count('\uE7BA') == len(AC.CONS),
-          shown[:6])
-    check('folded under its title, refitted when opened or closed',
-          dlg.exp_details.Header == 'Benefits and drawbacks'
-          and repr(dlg.exp_details.Visibility) == 'Visibility.Visible'
-          and len(dlg.exp_details.Expanded._handlers) == 1
-          and len(dlg.exp_details.Collapsed._handlers) == 1)
-    for need, want in ((300.0, 398.0), (20.0, 220.0), (900.0, 680.0)):
-        dlg.pnl_body.DesiredSize = types.SimpleNamespace(Height=need)
-        dlg._fit_height()
-        check('height fits the content: {} -> {}'.format(need, want), dlg.Height == want, dlg.Height)
-    dlg.pnl_body = None
-    dlg.Height = 300
-    dlg._fit_height()
-    check('nothing to measure: the old fixed height', dlg.Height == 440)
-    old = TD.T3Dialog.__new__(TD.T3Dialog)
-    old.exp_details = old.pnl_sections = None
-    check('an XAML without the sections panel: the caller keeps the plain details',
-          old._add_sections('x', AC.pros_cons_sections()) is False)
+    win.opt_follow.IsChecked = False
+    win.ok_clicked(None, None)
+    want = dict(options, follow=False, enabled=True)
+    check('Turn On returns every option and the switch', win.result == want, win.result)
+
+    win.chk_enabled.IsChecked = False
+    win.enabled_clicked(None, None)
+    check('feature unticked: every option greys out and keeps its tick, the card loses its ink',
+          all(b.IsEnabled is False for b in win._boxes.values())
+          and win.opt_zoom.IsChecked is True and win.card_options.BorderBrush == 'T3.Border')
+    check('saving it unticked turns the feature off, options as they were',
+          win.values() == dict(want, enabled=False))
+    win.cancel_clicked(None, None)
+    check('Cancel returns nothing', win.result is None)
+
+    check('the details card starts folded', 'Visibility' not in win.details_body.__dict__)
+    win.details_header_clicked(None, None)
+    check('header clicked: card open, arrow up, window grows',
+          repr(win.details_body.Visibility) == 'Visibility.Visible'
+          and win.details_arrow.Text == '\uE70E' and win.Height == SD.HEIGHT_OPEN)
+    win.details_header_clicked(None, None)
+    check('clicked again: folded, arrow down, window back',
+          repr(win.details_body.Visibility) == 'Visibility.Collapsed'
+          and win.details_arrow.Text == '\uE70D' and win.Height == SD.HEIGHT)
+
+    lite = dict(options, model=False, glow=True)        # T3LabLite: OPTIONS has 'model'
+    SD, win = settings_window(lite, enabled=True)
+    check('already on: the button says Save', win.btn_ok.Content == 'Save')
+    check('"On model" row shown when the option exists',
+          repr(win.row_model.Visibility) == 'Visibility.Visible')
+    check('"On model" off: what draws on the views greys out, Keep bar stays',
+          [n for n in sorted(win._boxes) if win._boxes[n].IsEnabled]
+          == ['keep', 'model'], dict((n, b.IsEnabled) for n, b in win._boxes.items()))
+    win.opt_model.IsChecked = True
+    win.model_clicked(None, None)
+    check('"On model" ticked: every option is live',
+          all(b.IsEnabled is True for b in win._boxes.values()))
+    check('an option the XAML has no checkbox for is passed through untouched',
+          settings_window(dict(options, future=True))[1].values()['future'] is True)
+    try:
+        SD.ask(False, options)
+        built = True
+    except Exception:
+        built = False
+    check('no WPF: ask() raises, so the button falls back to the plain dialog',
+          built is False or SD._Window is not object)
 
 
 def test_ironpython_syntax():
@@ -788,7 +781,7 @@ if __name__ == '__main__':
         test_replay()
         test_counts_drawer_and_folded()
         test_bar_only()
-        test_settings_dialog_rows()
+        test_settings_window()
         test_ironpython_syntax()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)

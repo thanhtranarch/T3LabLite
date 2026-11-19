@@ -635,42 +635,63 @@ def test_agent_stamp():
 
 
 def test_settings_dialog():
-    print('[settings dialog: every option is a checkbox]')
-    import re as _re
+    print('[settings window: BatchOut-style cards, a checkbox per option]')
     btn = open(os.path.join(REPO, *BUTTON.split('/')), encoding='utf-8').read()
-    check('Agent Cursors uses confirm_options', 'confirm_options(' in btn and 'confirm(' not in btn.replace('confirm_options(', ''))
-    check('rows come from OPTIONS (new options appear by themselves)',
-          'for name, _key, _default in agent_cursors.OPTIONS' in btn and 'set_option(name, value)' in btn)
-    check('on: an untickable on/off switch', "('enabled', 'Show agent cursors'" in btn)
-    check('no motion row in the dialog: motion is not an option (owner, 2026-11-19)',
+    check('the button opens the settings window and saves what it returns',
+          'from GUI.AgentCursorsDialog import ask' in btn
+          and 'ask(on, agent_cursors.options(), agent_cursors.pros_cons_sections())' in btn
+          and 'agent_cursors.set_option(name, value)' in btn)
+    check('window cannot be built: the plain checkbox dialog, which says why',
+          'confirm_options(' in btn and "'(settings window unavailable: {})'.format(ex)" in btn
+          and 'for name, _key, _default in agent_cursors.OPTIONS' in btn
+          and "('enabled', 'Show agent cursors'" in btn)
+    check('no motion row: motion is not an option (owner, 2026-11-19)',
           'animate' not in btn.lower() and 'set_speed' not in btn and 'Less motion' not in btn)
-    check('rows grey out under the on/off switch, model options under "On model"',
-          "rows.append((name, label, tip, current.get(name, True)," in btn
-          and "'enabled' if name in ('model', 'keep') else 'model'))" in btn)
-    check('benefits and drawbacks go in as sections, the plain text stays for the fallback',
-          'sections=agent_cursors.pros_cons_sections()' in btn
-          and 'details=agent_cursors.pros_cons_text()' in btn and 'subtitle=' in btn)
     sections = AC.pros_cons_sections()
     check('sections: Benefits / Drawbacks, every line, a T3 glyph each',
           [(h, lines) for h, lines, _g in sections]
           == [('Benefits', list(AC.PROS)), ('Drawbacks', list(AC.CONS))]
           and [g for _h, _l, g in sections] == ['\uE73E', '\uE7BA'])
-    dsrc = open(os.path.join(LIB, 'GUI', 'T3Dialog.py'), encoding='utf-8').read()
-    check('T3Dialog builds T3.CheckBox rows', "self._style('T3.CheckBox')" in dsrc
-          and 'def confirm_options(' in dsrc and 'option_values' in dsrc)
-    check('T3 styles are looked up by their dotted names, guarded (new-tool rule 21)',
-          'return self.FindResource(key)' in dsrc
-          and all("'{}'".format(k) in dsrc for k in ('T3.Caption', 'T3.Label', 'T3.Icon.Muted',
-                                                     'T3.Body.Secondary')))
-    xaml = open(os.path.join(LIB, 'GUI', 'Tools', 'T3Dialog.xaml'), encoding='utf-8').read()
-    rows = _re.findall(r'Grid\.Row="(\d)"', xaml.split('txt_message', 1)[1].split('ROW 2: FOOTER', 1)[0])
-    check('message row 0, pnl_options row 1, details + folded sections row 2, input row 3',
-          '<Grid x:Name="pnl_options" Grid.Row="1"' in xaml and rows == ['0', '1', '2', '2', '3'],
-          rows)
-    check('XAML has what the options dialog fills: body to measure, subtitle, sections',
-          all('x:Name="{}"'.format(n) in xaml for n in ('pnl_body', 'dlg_subtitle', 'exp_details',
-                                                         'pnl_sections'))
-          and 'Style="{StaticResource T3.Expander}" Visibility="Collapsed"' in xaml)
+    xaml = open(os.path.join(LIB, 'GUI', 'Tools', 'AgentCursorsSettings.xaml'),
+                encoding='utf-8').read()
+    body = xaml.split('</Window.Resources>', 1)[1]
+    names = re.findall(r'x:Name="opt_(\w+)"', body)
+    check('every option has its checkbox (a new option fails here until it gets one)',
+          set(n for n, _k, _d in AC.OPTIONS) <= set(names) and len(names) == len(set(names)),
+          (sorted(names), [n for n, _k, _d in AC.OPTIONS]))
+    check('each checkbox carries what the option does as its tooltip',
+          all(AC.OPTION_LABELS[n][1].split(' (the x')[0].split('. Turn off')[0][:40]
+              in body for n, _k, _d in AC.OPTIONS))
+    check('title bar and footer kept: logo, title, X with Esc, copyright, Cancel + primary',
+          'Style="{StaticResource T3.TitleBar}"' in body and 'x:Name="logo_image"' in body
+          and 'Click="close_button_clicked" IsCancel="True"' in body
+          and body.count('Style="{StaticResource T3.Copyright}"') == 1
+          and 'Style="{StaticResource T3.FooterBar}"' in body
+          and body.index('x:Name="btn_cancel"') < body.index('x:Name="btn_ok"')
+          and body.count('T3.Button.Primary') == 1 and 'IsDefault="True" Click="ok_clicked"' in body)
+    check('BatchOut card: sunken header with the checkbox, two columns and a rule between',
+          'x:Name="chk_enabled"' in body and body.count('{StaticResource T3.SurfaceSunken}') == 2
+          and body.count('<ColumnDefinition Width="32"/>') == 2
+          and body.count('Width="1" Background="{StaticResource T3.Border}"') == 2)
+    check('benefits card is folded until its header is clicked',
+          'MouseLeftButtonUp="details_header_clicked"' in body
+          and re.search(r'x:Name="details_body"[^>]*Visibility="Collapsed"', body) is not None
+          and 'x:Name="pnl_benefits"' in body and 'x:Name="pnl_drawbacks"' in body)
+    check('"On model" row is there for T3LabLite and hidden until OPTIONS has it',
+          re.search(r'x:Name="row_model"[^>]*Visibility="Collapsed"', body) is not None
+          and 'x:Name="opt_model"' in body)
+    check('all user-facing text is ASCII English',
+          all(ord(c) < 128 for t in re.findall(r'(?:Text|Content|ToolTip)="([^"&]*)"', body)
+              for c in t))
+    dsrc = open(os.path.join(LIB, 'GUI', 'AgentCursorsDialog.py'), encoding='utf-8').read()
+    check('window class: one base, no settings I/O, T3 names looked up guarded',
+          'class AgentCursorsSettingsWindow(_Window):' in dsrc and 'from core' not in dsrc
+          and 'import agent_cursors' not in dsrc and 'set_option' not in dsrc
+          and "self.FindResource('T3.Ink' if on else 'T3.Border')" in dsrc)
+    tsrc = open(os.path.join(LIB, 'GUI', 'T3Dialog.py'), encoding='utf-8').read()
+    check('the shared T3Dialog is left as it was (plain checkbox rows)',
+          "FindResource('T3.CheckBox')" in tsrc and 'def confirm_options(' in tsrc
+          and 'sections' not in tsrc)
 
 
 def test_action_band():

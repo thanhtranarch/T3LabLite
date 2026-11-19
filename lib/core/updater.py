@@ -528,11 +528,29 @@ def run_auto_update(force=False):
         return 'failed', str(ex)
 
 
-def _notify_updated(new_version):
-    """Tell the user the files changed and the new code needs a reload."""
+def _load_toast():
+    """pyRevit's toast function, or None. Call it on Revit's own thread.
+
+    `pyrevit.forms` loads pyrevit.revit, whose import calls
+    UI.ExternalEvent.Create() - Revit refuses that off its own thread, so an
+    import that starts in the worker fails half way (lib/_cpython_bootstrap.py
+    has the full account). The worker gets the function, never the import.
+    """
     try:
         from pyrevit import forms
-        forms.toast(
+        return forms.toast
+    except Exception as ex:
+        log("update toast unavailable: {}".format(ex))
+        return None
+
+
+def _notify_updated(new_version, toast=None):
+    """Tell the user the files changed and the new code needs a reload."""
+    if toast is None:
+        log("update {} downloaded; no toast to show it".format(new_version))
+        return
+    try:
+        toast(
             "T3Lab Lite {} was downloaded. "
             "Restart Revit to use it.".format(new_version),
             title="T3Lab update ready",
@@ -541,12 +559,12 @@ def _notify_updated(new_version):
         log("could not show update toast: {}".format(ex))
 
 
-def _auto_worker(delay):
+def _auto_worker(delay, toast=None):
     if delay:
         time.sleep(delay)
     status, detail = run_auto_update()
     if status == 'updated':
-        _notify_updated(detail)
+        _notify_updated(detail, toast)
 
 
 def start_auto_update(delay=STARTUP_DELAY):
@@ -561,7 +579,9 @@ def start_auto_update(delay=STARTUP_DELAY):
     if not check_due():
         return False
 
-    worker = threading.Thread(target=_auto_worker, args=(delay,))
+    # Loaded here, on Revit's thread (startup.py), only when a check really
+    # runs - once a week - so ordinary starts do not pay for pyrevit.forms.
+    worker = threading.Thread(target=_auto_worker, args=(delay, _load_toast()))
     worker.daemon = True
     worker.start()
     return True

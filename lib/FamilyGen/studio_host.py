@@ -314,6 +314,22 @@ def _set_revit_enabled(uiapp, enabled):
         pass
 
 
+def _pyrevit_output():
+    """pyRevit's real output window - never `script.get_output()` here.
+
+    Under CPython the bootstrap swaps `get_output` in pyrevit.script and
+    pyrevit.output for a silent stand-in, because no other T3Lab tool uses the
+    output window (_cpython_bootstrap.install_script_shim). That stand-in
+    answers every attribute, `on_message` and `open_page` included, so the
+    Studio passed its own checks and then opened nothing: on pyRevit 7 it
+    could only ever work on the first CPython click of a Revit session, before
+    the swap. `PyRevitOutputWindow()` is what the unswapped `get_output()`
+    returns (pyRevit 6.5.5 and 7.1.0 sources).
+    """
+    from pyrevit import output as pyrevit_output
+    return pyrevit_output.PyRevitOutputWindow()
+
+
 def open_studio(doc, uiapp, persistent):
     """Open FamiGen Studio. Returns (state, message).
 
@@ -324,8 +340,7 @@ def open_studio(doc, uiapp, persistent):
     ok, message = requirement()
     if not ok:
         return 'unsupported', message
-    from pyrevit import script
-    output = script.get_output()
+    output = _pyrevit_output()
     if not hasattr(output, 'on_message') or not hasattr(output, 'post_message'):
         return 'unsupported', MESSAGING_MESSAGE.format(version_text(pyrevit_version()))
 

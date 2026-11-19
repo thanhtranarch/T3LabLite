@@ -181,6 +181,31 @@
       "file": "T3Lab.tab/Standards & Families.panel/FamiGen.pushbutton/script.py",
       "pattern": "studio_host\\.open_studio\\(",
       "why": "the FamiGen button opens FamiGen Studio (pyRevit 7+), Shift+Click the classic window"
+    },
+    {
+      "file": "lib/_cpython_bootstrap.py",
+      "pattern": "^def load_pyrevit_revit\\(",
+      "why": "pyrevit.revit must first be imported on Revit's own thread; a copy from dev brings back \"Duplicate type name within an assembly\" on every tool"
+    },
+    {
+      "file": "lib/_cpython_bootstrap.py",
+      "pattern": "^    load_pyrevit_revit\\(\\)",
+      "why": "init_cpython_paths() must load pyrevit.revit before track_ribbon_click() starts its thread"
+    },
+    {
+      "file": "lib/core/server.py",
+      "pattern": "^\\s+note_revit_context\\(app\\)",
+      "why": "the MCP ExternalEvent handler notes the Revit version and document for usage rows; the HTTP threads may not touch the Revit API"
+    },
+    {
+      "file": "lib/GUI/ErrorGuard.py",
+      "pattern": "^_FAILED_IMPORT_STEP = ",
+      "why": "the error dialog must not blame pyRevit > Reload or ask for a Revit restart for a failed pyrevit.revit import"
+    },
+    {
+      "file": "lib/pyrevit_patches.py",
+      "pattern": "^FIXED_IN = \\(7, 0\\)",
+      "why": "the reload patch is for pyRevit before 7.0 only; without the version gate it edits pyRevit 7 installs"
     }
   ],
   "lite_only": [

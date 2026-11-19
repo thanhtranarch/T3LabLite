@@ -951,5 +951,27 @@ class HostChromeTests(unittest.TestCase):
             self.assertIn(needle, host)
 
 
+class OutputWindowTests(unittest.TestCase):
+    """The Studio lives in pyRevit 7's output window, which every other T3Lab
+    tool has swapped for a silent stand-in under CPython."""
+
+    def test_the_stand_in_would_pass_every_check_and_show_nothing(self):
+        import _cpython_bootstrap as boot
+        fake = boot._NullOutput()
+        self.assertTrue(hasattr(fake, 'on_message'))
+        self.assertTrue(hasattr(fake, 'post_message'))
+        self.assertIsNone(fake.open_page('<html></html>'))
+
+    def test_the_studio_asks_pyrevit_for_the_real_window(self):
+        with open(os.path.join(LIB, 'FamilyGen', 'studio_host.py'), encoding='utf-8') as handle:
+            host = handle.read()
+        opener = host[host.index('def open_studio('):]
+        self.assertIn('output = _pyrevit_output()', opener)
+        self.assertNotIn('script.get_output()', opener)
+        helper = host[host.index('def _pyrevit_output('):host.index('def open_studio(')]
+        self.assertIn('pyrevit_output.PyRevitOutputWindow()', helper)
+        self.assertNotIn('get_output()\n', helper.split('"""')[-1])
+
+
 if __name__ == '__main__':
     unittest.main()

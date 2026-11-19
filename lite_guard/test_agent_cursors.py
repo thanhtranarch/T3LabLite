@@ -439,13 +439,17 @@ def test_setting():
         check('every bar glyph is in Segoe MDL2', used <= known, sorted(used - known))
     check('options default: bar only (owner, 2026-11-18), the rest on for On model',
           opts == {'model': False, 'follow': True, 'zoom': True, 'select': True, 'tile': True,
-                   'glow': True, 'keep': True}, opts)
+                   'glow': True, 'trail': True, 'ripple': True, 'labels': True, 'keep': True},
+          opts)
+    check('Effects: Glow and the three the overlay already drew, now one switch each',
+          dict(AC.OPTION_GROUPS)['Effects'] == ('glow', 'trail', 'ripple', 'labels'))
     check('Less motion is no option any more: Animation Off replaced it',
           'reduce' not in opts and 'reduce' not in AC.OPTION_LABELS
           and 'agent_cursors_reduce_motion' not in [k for _n, k, _d in AC.OPTIONS])
     eff = AC.effective(opts)
     check('bar only: nothing touches the model, Keep bar stays',
-          eff['keep'] and not any(eff[n] for n in ('follow', 'zoom', 'select', 'tile', 'glow')))
+          eff['keep'] and not any(eff[n] for n in ('follow', 'zoom', 'select', 'tile', 'glow',
+                                                   'trail', 'ripple', 'labels')))
     check('On model: the saved options act',
           AC.effective(dict(opts, model=True)) == dict(opts, model=True))
     src = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
@@ -673,10 +677,10 @@ def test_settings_dialog():
           [(g, groups.get(g)) for g, _n in AC.OPTION_GROUPS]
           == [(g, list(names)) for g, names in AC.OPTION_GROUPS], groups)
     check('each checkbox is called what its switch is called on the bar',
-          [(n, boxes[n][0]) for n, _k, _d in AC.OPTIONS]
+          [(n, boxes.get(n, ('', ''))[0]) for n, _k, _d in AC.OPTIONS]
           == [(n, AC.OPTION_LABELS[n][0]) for n, _k, _d in AC.OPTIONS], boxes)
     check('and says what it does: the same text as on the bar (tooltip; "On model" spells it out)',
-          all(boxes[n][1] == AC.OPTION_LABELS[n][1] if n != 'model'
+          all(boxes.get(n, ('', ''))[1] == AC.OPTION_LABELS[n][1] if n != 'model'
               else AC.OPTION_LABELS[n][1] in body for n, _k, _d in AC.OPTIONS))
     def title_bar(text):
         bar = text.split('<Border Grid.Row="0" Style="{StaticResource T3.TitleBar}">', 1)[1]

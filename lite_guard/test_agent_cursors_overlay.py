@@ -646,13 +646,70 @@ def test_bar_only():
         AC.set_option('model', True)
 
 
+def test_effect_switches():
+    print('[Effects: Trail, Ripple and Labels each switch their own drawing off]')
+    AC.set_speed('calm')
+    wall = (300.0, 200.0, 500.0, 300.0)
+
+    def draw(**switches):
+        for name in ('trail', 'ripple', 'labels'):
+            AC.set_option(name, switches.get(name, True))
+        ov = new_overlay()
+        ov.working('claude-desktop', 'create', 'Creating wall', 'create_wall', RECT, canvas=RECT,
+                   targets=[wall])
+        box = {'id': 1, 'box': wall, 'size': '1200 x 300', 'label': 'Walls \u00b7 1200 x 300'}
+        ov.show('claude-desktop', 'create', 'create_wall', False, snap([box]),
+                changes=[(1, 'Mark: A \u2192 B')], created='Walls \u00d71 created', fresh=[1])
+        top = ov.canvas.Children._items
+        cur = ov._cursors['claude-desktop']
+        groups = [n for n in top if kind(n) == 'Canvas' and n is not cur['group']]
+        return {'lines': [n for n in top if kind(n) == 'Line'],
+                'rings': [n for n in top if kind(n) == 'Ellipse'],
+                'chips': [n for n in top if kind(n) == 'Border'],
+                'badges': [c for g in groups for c in g.Children._items if kind(c) == 'Border'],
+                'frames': [c for g in groups for c in g.Children._items if kind(c) == 'Rectangle'],
+                'click': bool(moves(cur['press'], SCALE_X)), 'texts': [t for n in top for t in texts(n)]}
+    try:
+        on = draw()
+        check('all on: path to the target, click ring and squeeze, badge + created label + change',
+              on['lines'] and on['rings'] and on['click'] and len(on['badges']) == 1
+              and len(on['chips']) == 2 and 'Walls \u00d71 created' in on['texts']
+              and 'Mark: A \u2192 B' in on['texts'] and 'Walls \u00b7 1200 x 300' in on['texts'],
+              dict((k, len(v) if isinstance(v, list) else v) for k, v in on.items()))
+        off = draw(trail=False)
+        check('Trail off: no path, the rest stays',
+              not off['lines'] and off['rings'] and off['click'] and off['badges'] and off['chips'])
+        off = draw(ripple=False)
+        check('Ripple off: no ring and no click of the pointer, the rest stays',
+              not off['rings'] and not off['click'] and off['lines'] and off['badges'])
+        off = draw(labels=False)
+        check('Labels off: no badge, created label or changed value; the box itself stays',
+              not off['badges'] and not off['chips'] and off['frames'] and off['lines']
+              and off['rings'] and 'Walls \u00d71 created' not in off['texts'])
+        check('the bar still names the step and its change with Labels off',
+              ov_texts_have_change(), 'the change chip left the bar')
+    finally:
+        for name in ('trail', 'ripple', 'labels'):
+            AC.set_option(name, True)
+
+
+def ov_texts_have_change():
+    """Labels switches the model's labels only: the band keeps its change chips."""
+    AC.set_option('labels', False)
+    ov = new_overlay()
+    ov.working('claude-desktop', 'modify', 'Setting parameter', 'set_parameter', RECT, canvas=RECT)
+    finish(ov, 'claude-desktop', 'modify', 'set_parameter', changes=[(1, 'Mark: A \u2192 B')])
+    return 'Mark: A \u2192 B' in texts(bands(ov)[0])
+
+
 def settings_window(options, enabled=False):
     """The window class on stand-in controls (the XAML itself needs WPF)."""
     import GUI.AgentCursorsDialog as SD
     win = SD.AgentCursorsSettingsWindow.__new__(SD.AgentCursorsSettingsWindow)
     for name in ('chk_enabled', 'btn_ok', 'row_model', 'card_options', 'pnl_benefits',
                  'pnl_drawbacks', 'details_body', 'details_arrow', 'opt_model', 'opt_follow',
-                 'opt_zoom', 'opt_tile', 'opt_select', 'opt_glow', 'opt_keep'):
+                 'opt_zoom', 'opt_tile', 'opt_select', 'opt_glow', 'opt_trail', 'opt_ripple',
+                 'opt_labels', 'opt_keep'):
         setattr(win, name, Fake())
     from System.Windows import WindowState
     win.Height, win.WindowState = SD.HEIGHT, WindowState.Normal
@@ -793,6 +850,7 @@ if __name__ == '__main__':
         test_replay()
         test_counts_drawer_and_folded()
         test_bar_only()
+        test_effect_switches()
         test_settings_window()
         test_ironpython_syntax()
     finally:

@@ -33,6 +33,10 @@ Releasing a new version:
   option is gone: it was on for everyone, so the cursors never moved.
 - **Agent Cursors — the tag on the cursor shows the action as an icon** in
   front of the app's name.
+- **Agent Cursors — three more Effects switches:** Trail (the path the cursor
+  takes), Ripple (the ring where it clicks) and Labels (names, sizes and
+  changed values on the model) can each be turned off, on the bar and in
+  Settings. All three are on by default and need "On model".
 - **Agent Cursors — Replay** now fills its block step by step and shows which
   step it replays.
 - **Settings > Agent Cursors window, redrawn like BatchOut's Format page:** one

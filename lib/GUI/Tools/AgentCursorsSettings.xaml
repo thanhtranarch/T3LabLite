@@ -3,8 +3,8 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Agent Cursors"
-        Width="560" Height="480"
-        MinWidth="560" MinHeight="480"
+        Width="560" Height="510"
+        MinWidth="560" MinHeight="510"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -1831,13 +1831,9 @@
                                             <ColumnDefinition Width="32"/> <!-- Spacer -->
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
 
-                                        <!-- View -->
-                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,16">
+                                        <!-- Left Column: View, Selection (the bar's order, read down each column) -->
+                                        <StackPanel Grid.Column="0">
                                             <TextBlock Text="View" FontWeight="SemiBold" FontSize="12.5"
                                                        Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
                                             <CheckBox x:Name="opt_follow" Style="{StaticResource T3.CheckBox}"
@@ -1847,12 +1843,9 @@
                                                       Content="Zoom" Margin="0,4"
                                                       ToolTip="Zoom the view to targets that are off screen"/>
                                             <CheckBox x:Name="opt_tile" Style="{StaticResource T3.CheckBox}"
-                                                      Content="Tile" Margin="0,4"
+                                                      Content="Tile" Margin="0,4,0,16"
                                                       ToolTip="Tile the open views when the agent opens another one"/>
-                                        </StackPanel>
 
-                                        <!-- Selection -->
-                                        <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,16">
                                             <TextBlock Text="Selection" FontWeight="SemiBold" FontSize="12.5"
                                                        Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
                                             <CheckBox x:Name="opt_select" Style="{StaticResource T3.CheckBox}"
@@ -1860,27 +1853,33 @@
                                                       ToolTip="Select the agent's targets (replaces your selection)"/>
                                         </StackPanel>
 
-                                        <!-- Effects -->
-                                        <StackPanel Grid.Row="1" Grid.Column="0">
+                                        <!-- Vertical Separator -->
+                                        <Border Grid.Column="1" Width="1" Background="{StaticResource T3.Border}"
+                                                HorizontalAlignment="Center"/>
+
+                                        <!-- Right Column: Effects, Bar -->
+                                        <StackPanel Grid.Column="2">
                                             <TextBlock Text="Effects" FontWeight="SemiBold" FontSize="12.5"
                                                        Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
                                             <CheckBox x:Name="opt_glow" Style="{StaticResource T3.CheckBox}"
                                                       Content="Glow" Margin="0,4"
                                                       ToolTip="Experimental: outline touched elements inside the Revit view (DirectContext3D). Turn off if Revit misbehaves."/>
-                                        </StackPanel>
+                                            <CheckBox x:Name="opt_trail" Style="{StaticResource T3.CheckBox}"
+                                                      Content="Trail" Margin="0,4"
+                                                      ToolTip="Draw the path the cursor takes to its next target, and join the elements a call created"/>
+                                            <CheckBox x:Name="opt_ripple" Style="{StaticResource T3.CheckBox}"
+                                                      Content="Ripple" Margin="0,4"
+                                                      ToolTip="A ring where the cursor lands on a target, and the click of the pointer"/>
+                                            <CheckBox x:Name="opt_labels" Style="{StaticResource T3.CheckBox}"
+                                                      Content="Labels" Margin="0,4,0,16"
+                                                      ToolTip="Name each target (category and size), say what a call created and show the values it changed"/>
 
-                                        <!-- Bar -->
-                                        <StackPanel Grid.Row="1" Grid.Column="2">
                                             <TextBlock Text="Bar" FontWeight="SemiBold" FontSize="12.5"
                                                        Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
                                             <CheckBox x:Name="opt_keep" Style="{StaticResource T3.CheckBox}"
                                                       Content="Keep bar" Margin="0,4"
                                                       ToolTip="Keep the bar (folded) on screen between calls instead of fading out (the x on the bar turns Agent Cursors off)"/>
                                         </StackPanel>
-
-                                        <!-- Vertical Separator -->
-                                        <Border Grid.Row="0" Grid.Column="1" Grid.RowSpan="2" Width="1"
-                                                Background="{StaticResource T3.Border}" HorizontalAlignment="Center"/>
                                     </Grid>
                                 </StackPanel>
                             </Border>

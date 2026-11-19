@@ -58,3 +58,10 @@ reference gives one — list every such choice in `assumptions`.
 - Frame jambs run from the floor to the head and overlap the head 5 mm; the leaf
   keeps a 3 mm gap to the frame but its hinge knuckles overlap both; handles touch
   the leaf face.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a door: frame, leaf (or leaves), hardware, in a wall opening - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Frame = enclosure around a clear opening (jambs + head, no solid across the opening). Leaf = surface, solid, 40-45 thick, inside the frame with 3 mm gaps. Glazing = a void in the leaf plus a thin glass panel set into it. Handles = control, hinges = fixing.
+- Joints to declare: leaf to the frame at the hinge jamb; each hinge to leaf and frame; handle to the leaf; frame feet to "ground". The clear opening (width x 2100) must stay empty: nothing crosses it.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

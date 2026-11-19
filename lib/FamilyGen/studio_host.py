@@ -137,6 +137,7 @@ class _RevitAdapter(object):
         self.output = output
         self.modal = modal
         self.into_family = bool(getattr(doc, 'IsFamilyDocument', False)) and modal
+        self.frameless = False      # set by open_studio once pyRevit's own title bar is hidden
         self._handler = None
         self._event = None
         if not modal:
@@ -202,7 +203,9 @@ class _RevitAdapter(object):
         win = self._window()
         if win is None:
             return
-        if action == 'minimize':
+        if action == 'drag':
+            _drag_window(win)
+        elif action == 'minimize':
             win.WindowState = WindowState.Minimized
         elif win.WindowState == WindowState.Maximized:
             win.WindowState = WindowState.Normal
@@ -242,6 +245,55 @@ class _RevitAdapter(object):
         else:
             self._handler.action = _work
             self._event.Raise()
+
+
+# ── window chrome ────────────────────────────────────────────────────────────
+# pyRevit's output window is a MahApps MetroWindow with its own dark title bar
+# (verified in pyRevit's ScriptConsole.cs). The Studio page draws the T3 title
+# bar, so the host hides pyRevit's; when that is not possible the page hides
+# its own instead (init.frameless = False) - never two title bars.
+
+def _go_frameless(win):
+    """Hide the output window's own title bar and buttons. True when it worked."""
+    if win is None:
+        return False
+    try:
+        win.UseNoneWindowStyle = True        # MetroWindow: no title bar, no window buttons
+        win.ShowTitleBar = False
+    except Exception:
+        return False
+    for name in ('ShowCloseButton', 'ShowMinButton', 'ShowMaxRestoreButton'):
+        try:
+            setattr(win, name, False)
+        except Exception:
+            pass
+    try:
+        from System.Windows import Visibility
+        for name in ('LeftWindowCommands', 'RightWindowCommands'):
+            commands = getattr(win, name, None)
+            if commands is not None:
+                commands.Visibility = Visibility.Collapsed
+    except Exception:
+        pass
+    return True
+
+
+def _drag_window(win):
+    """Start a native window move (the page's title bar was pressed).
+
+    The press happened inside WebView2, so WPF's DragMove refuses it; handing
+    the window a caption click is the usual way to move a frameless WebView2
+    window."""
+    try:
+        import ctypes
+        from System.Windows.Interop import WindowInteropHelper
+        hwnd = WindowInteropHelper(win).Handle.ToInt64()
+        user32 = ctypes.windll.user32
+        user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+        user32.ReleaseCapture()
+        user32.SendMessageW(ctypes.c_void_p(hwnd), 0x00A1, 2, 0)     # WM_NCLBUTTONDOWN, HTCAPTION
+    except Exception:
+        pass
 
 
 # ── open ─────────────────────────────────────────────────────────────────────
@@ -292,12 +344,16 @@ def open_studio(doc, uiapp, persistent):
 
     modal = not persistent
     revit = _RevitAdapter(doc, doc.Application, output, modal)
+    prefs = _Prefs()
+    # "frameless": false in famigen_studio.json keeps pyRevit's own title bar.
+    if prefs.get('frameless', True) is not False:
+        revit.frameless = _go_frameless(revit._window())
     from FamilyGen.net_http import DotNetPoster
     from FamilyGen.proposals import ProposalStore
     poster = DotNetPoster()
     controller = sc.StudioController(
         post=lambda msg: output.post_message(msg), http=poster, revit=revit,
-        claude=_ClaudeAdapter(), prefs=_Prefs(), store=ProposalStore(),
+        claude=_ClaudeAdapter(), prefs=prefs, store=ProposalStore(),
         pyrevit_version=version_text(pyrevit_version()))
 
     def _on_message(message):

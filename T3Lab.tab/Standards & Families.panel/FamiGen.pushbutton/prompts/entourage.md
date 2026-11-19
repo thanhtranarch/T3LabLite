@@ -35,3 +35,10 @@ reference gives one — list every such choice in `assumptions`.
   corners in plan) when the reference shows it.
 - Trunk into crown; people's limbs into the torso; car wheels touch the ground and
   the body.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a person, plant, vehicle or prop that gives scale - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Trunks, stems, limbs = support (solid Tubes / Blends). Crowns and bodies = decor (solid Revolutions / Blends). Pots and planters = container: HOLLOW with an open top, soil as a separate solid inside, 30-50 below the rim.
+- Joints to declare: trunk to "ground" or to the soil; crown to the trunk; each branch to the trunk at its base.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

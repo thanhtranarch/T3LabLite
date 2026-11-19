@@ -433,3 +433,10 @@ Build the swing arm from **axis-aligned `Cylinder` segments** (a vertical rise â
   corners in plan) when the reference shows it.
 - Pendant: canopy at the top, cable as a Tube from canopy to shade (it hangs - the
   base is the shade), shade as a Revolution; arms of wall lights are Tubes.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a luminaire: pendant, downlight, wall light, floor lamp, linear light - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Shade / reflector / housing = enclosure that is OPEN where the light leaves: a Revolution of the thin wall section (2-3 mm), never a solid cone. Diffuser = thin surface closing the opening. Lamp / LED board = decor inside. Canopy, stem, cable (Tube) = support; a cable is solid, a stem tube may have "wall".
+- Joints to declare: canopy to the ceiling plane; cable or stem to canopy and to the housing; shade to the lamp holder; base to "ground" for a floor lamp.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

@@ -662,6 +662,16 @@ def _cylinder(mesh, geom):
         ring_s.append(_add(s, off))
         ring_e.append(_add(e, off))
     mesh.add_strip(ring_s, ring_e, closed=True)
+    wall = float(geom.get('wall') or 0.0)
+    if 0.0 < wall < r:
+        # Hollow pipe: the bore, and a ring (not a disc) at each end.
+        k = (r - wall) / r
+        bore_s = [_add(s, _mul(_sub(p, s), k)) for p in ring_s]
+        bore_e = [_add(e, _mul(_sub(p, e), k)) for p in ring_e]
+        mesh.add_strip(bore_e, bore_s, closed=True)
+        mesh.add_strip(bore_s, ring_s, closed=True)
+        mesh.add_strip(ring_e, bore_e, closed=True)
+        return
     fan = [(0, i + 1, (i + 1) % CIRCLE_SEGMENTS + 1) for i in range(CIRCLE_SEGMENTS)]
     mesh.add_cap([s] + ring_s, fan, flip=True)
     mesh.add_cap([e] + ring_e, fan)
@@ -674,6 +684,7 @@ def build_preview(schema):
     builder does it, so mesh indexes refer to the EXPANDED geometry list.
     """
     from Intelligence.family_schema import expand_schema
+    source = schema
     schema = expand_schema(schema)
     model = PreviewModel()
     geometry = schema.get('geometry') if isinstance(schema, dict) else None
@@ -730,65 +741,16 @@ def build_preview(schema):
     if pts:
         model.bbox_min = tuple(min(p[i] for p in pts) for i in range(3))
         model.bbox_max = tuple(max(p[i] for p in pts) for i in range(3))
-    model.warnings.extend(continuity_issues(model))
+    try:
+        from FamilyGen.spatial_check import spatial_issues
+        model.warnings.extend(spatial_issues(source, schema, model))
+    except Exception as ex:                      # a check must never hide the preview
+        model.warnings.append('Spatial check skipped ({})'.format(ex))
     voids = sum(1 for m in model.meshes if not m.is_solid)
     if voids:
         model.warnings.append('{} void form(s) shown translucent; Revit cuts them '
                               'from the solids they touch.'.format(voids))
     return model
-
-
-# ── continuity ───────────────────────────────────────────────────────────────
-
-CONTACT_MM = 5.0      # parts closer than this count as touching
-MAX_REPORTED = 8
-
-
-def _bbox(mesh):
-    xs = [p[0] for p in mesh.positions]
-    ys = [p[1] for p in mesh.positions]
-    zs = [p[2] for p in mesh.positions]
-    return (min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs))
-
-
-def _touch(a, b, tol):
-    return all(a[0][k] - tol <= b[1][k] and b[0][k] - tol <= a[1][k] for k in range(3))
-
-
-def continuity_issues(model, tol=CONTACT_MM):
-    """Solids that do not connect, through touching parts, to the base.
-
-    The base is every solid that reaches the lowest point of the model (the
-    floor, or the bottom of a hung fixture's lowest part). Bounding boxes, so
-    it finds parts left floating, not every hairline gap; a diagonal member
-    always counts as touching what its box overlaps.
-    """
-    solids = [m for m in model.meshes if m.is_solid and m.positions]
-    if len(solids) < 2:
-        return []
-    boxes = [_bbox(m) for m in solids]
-    floor = min(b[0][2] for b in boxes)
-    reached = set(i for i, b in enumerate(boxes) if b[0][2] <= floor + tol)
-    todo = list(reached)
-    while todo:
-        i = todo.pop()
-        for j, b in enumerate(boxes):
-            if j not in reached and _touch(boxes[i], b, tol):
-                reached.add(j)
-                todo.append(j)
-    loose = [solids[i] for i in range(len(solids)) if i not in reached]
-    if not loose:
-        return []
-    names = []
-    for mesh in loose:
-        name = mesh.label.rsplit(' ', 1)[0] if mesh.label.rsplit(' ', 1)[-1].isdigit() else mesh.label
-        if name not in names:
-            names.append(name)
-    shown = u', '.join(u"'{}'".format(n) for n in names[:MAX_REPORTED])
-    more = u' and {} more'.format(len(names) - MAX_REPORTED) if len(names) > MAX_REPORTED else u''
-    return [u'Not connected: {}{} - {} part(s) float without touching anything that reaches '
-            u'the base. Make every joint overlap 1-5 mm (legs into the floor and into what '
-            u'they carry, rails into posts).'.format(shown, more, len(loose))]
 
 
 # ── camera ───────────────────────────────────────────────────────────────────

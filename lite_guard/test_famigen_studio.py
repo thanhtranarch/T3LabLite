@@ -548,9 +548,11 @@ class ContinuityTests(unittest.TestCase):
         self.assertEqual(result['tool_use_id'], 'a')
         self.assertNotIn('is_error', result)
         self.assertIn("'Lamp'", result['content'])
-        second = session.handle_http(200, submit(loose, 'c'))      # still loose: shown, not looped
-        self.assertEqual(second.kind, 'schema')
-        self.assertTrue(any('Not connected' in w for w in second.warnings))
+        for call in ('c', 'd')[:designer.MAX_POLISH - 1]:
+            self.assertEqual(session.handle_http(200, submit(loose, call)).kind, 'continue')
+        last = session.handle_http(200, submit(loose, 'z'))        # still loose: shown, not looped
+        self.assertEqual(last.kind, 'schema')
+        self.assertTrue(any('Not connected' in w for w in last.warnings))
 
 
 class FormToolboxTests(unittest.TestCase):
@@ -562,6 +564,7 @@ class FormToolboxTests(unittest.TestCase):
     def family(self, *geometry):
         s = copy.deepcopy(GOOD)
         s['geometry'] = list(geometry)
+        s.pop('joints', None)                    # the example's joints name the example's parts
         return s
 
     def test_frame_rule(self):
@@ -722,6 +725,230 @@ class T3StyleTests(unittest.TestCase):
         self.assertLessEqual(radii, {'var(--r-window)', 'var(--r-control)', 'var(--r-pill)', '18px', '50%'})
         self.assertIn('--h-row: 26px', self.css)
         self.assertIn('outline: 1px solid var(--ink)', self.css)
+
+
+def _box(part_id, x0, y0, x1, y1, z0, z1, **extra):
+    pts = [[x0, y0, 0], [x1, y0, 0], [x1, y1, 0], [x0, y1, 0]]
+    geom = {'id': part_id, 'type': 'Extrusion', 'material': 'Oak',
+            'profile': [{'type': 'Line', 'start': a, 'end': b} for a, b in zip(pts, pts[1:] + pts[:1])],
+            'extrusion_start': z0, 'extrusion_end': z1}
+    geom.update(extra)
+    return geom
+
+
+def _rod(part_id, start, end, radius, **extra):
+    geom = {'id': part_id, 'type': 'Cylinder', 'material': 'Oak', 'start': start, 'end': end,
+            'radius': radius}
+    geom.update(extra)
+    return geom
+
+
+class MeaningTests(unittest.TestCase):
+    """Concept, roles, hollow parts, joints and the spatial check (docs §5.3)."""
+
+    def family(self, *geometry, **extra):
+        s = copy.deepcopy(GOOD)
+        s['geometry'] = list(geometry)
+        s.pop('joints', None)
+        s.update(extra)
+        return s
+
+    def found(self, family, prefix):
+        from FamilyGen.preview_mesh import build_preview
+        return [w for w in build_preview(family).warnings if w.startswith(prefix)]
+
+    # ── schema ───────────────────────────────────────────────────────────
+    def test_example_declares_its_meaning_and_passes_every_check(self):
+        from FamilyGen.spatial_check import PREFIXES
+        from FamilyGen.preview_mesh import build_preview
+        self.assertEqual(fs.validate_ai_schema(GOOD, 'Furniture'), [])
+        self.assertTrue(GOOD['concept']['what'] and GOOD['joints'])
+        self.assertEqual([w for w in build_preview(GOOD).warnings if w.startswith(PREFIXES)], [])
+
+    def test_ai_families_must_state_their_concept(self):
+        bare = copy.deepcopy(GOOD)
+        del bare['concept']
+        self.assertEqual(fs.validate_family_schema(bare)[0], [])            # hand-written JSON still loads
+        self.assertTrue(any('$.concept' in e for e in fs.validate_ai_schema(bare, 'Furniture')))
+        bad = dict(GOOD, concept={'use': 'x'})
+        self.assertTrue(any('$.concept.what' in e for e in fs.validate_family_schema(bad)[0]))
+
+    def test_role_wall_and_joint_rules(self):
+        top = _box('Top', -300, -300, 300, 300, 700, 730)
+        errors = fs.validate_family_schema(self.family(dict(top, role='shelf')))[0]
+        self.assertTrue(any('.role' in e for e in errors))
+        errors = fs.validate_family_schema(self.family(dict(top, wall=3)))[0]
+        self.assertTrue(any('.wall' in e and 'Cylinder and Tube' in e for e in errors))
+        pipe = _rod('Pipe', [0, 0, 0], [0, 0, 700], 50, wall=50)
+        self.assertTrue(any('thinner than the radius' in e for e in fs.validate_family_schema(self.family(pipe))[0]))
+        stale = self.family(top, joints=[{'a': 'Top', 'b': 'Gone', 'at': [0, 0, 700]}])
+        errors, warnings = fs.validate_family_schema(stale)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("'Gone'" in w for w in warnings))
+        self.assertTrue(any("'Gone'" in w for w in self.found(stale, 'Joint')))
+        same = self.family(top, joints=[{'a': 'Top', 'b': 'Top', 'at': [0, 0, 700]}])
+        self.assertTrue(any('two different parts' in e for e in fs.validate_family_schema(same)[0]))
+
+    def test_prompt_contract_and_category_guides_teach_the_meaning(self):
+        prompt = fs.build_system_prompt('Auto', delivery='tool')
+        for block in ('MEANING', 'SOLID OR HOLLOW', 'JOINTS', 'SPACE', '"concept" (required)', '"wall"'):
+            self.assertIn(block, prompt)
+        rules = fs.schema_contract()['meaning_rules']
+        self.assertEqual(rules['roles']['values'], list(fs.ROLES))
+        folder = os.path.join(REPO, 'T3Lab.tab', 'Standards & Families.panel', 'FamiGen.pushbutton', 'prompts')
+        for name in os.listdir(folder):
+            with open(os.path.join(folder, name), encoding='utf-8') as handle:
+                self.assertIn('## MEANING, SOLID / HOLLOW, JOINTS', handle.read(), name)
+        from FamilyGen import claude_designer as designer
+        self.assertIn('THINK IN THIS ORDER', designer._WORKFLOW)
+        self.assertIn('connections', designer.ANALYSIS_TOOL['input_schema']['properties'])
+
+    # ── hollow ───────────────────────────────────────────────────────────
+    def test_hollow_tube_keeps_its_bore_through_every_piece(self):
+        from FamilyGen.preview_mesh import build_preview
+        tube = {'id': 'Pipe', 'type': 'Tube', 'material': 'Oak', 'role': 'conduit', 'radius': 60, 'wall': 5,
+                'points': [[0, 0, 0], [0, 0, 600], [500, 0, 600]], 'smooth': False}
+        parts = fs.expand_schema(self.family(tube))['geometry']
+        self.assertTrue(all(p['wall'] == 5 for p in parts if p['type'] == 'Cylinder'))
+        ball = [p for p in parts if p['type'] == 'Revolution'][0]
+        self.assertEqual(len(ball['profile']), 4)                 # a shell: outer arc, inner arc, two lines
+        self.assertNotIn('wall', ball)
+        solid = build_preview(self.family(_rod('Rod', [0, 0, 0], [0, 0, 600], 60)))
+        hollow = build_preview(self.family(_rod('Rod', [0, 0, 0], [0, 0, 600], 60, wall=5)))
+        self.assertGreater(len(hollow.meshes[0].triangles), len(solid.meshes[0].triangles))
+        self.assertEqual(self.found(self.family(tube), 'Hollow'), [])
+
+    def test_containers_and_conduits_left_solid_are_reported(self):
+        base = _box('Base', -400, -400, 400, 400, 0, 20)
+        lump = _box('Basin', -300, -300, 300, 300, 20, 400, role='container')
+        self.assertTrue(any("'Basin'" in w for w in self.found(self.family(base, lump), 'Hollow')))
+        cavity = _box('Cavity', -280, -280, 280, 280, 60, 420, is_solid=False)
+        cavity.pop('material')
+        self.assertEqual(self.found(self.family(base, lump, cavity), 'Hollow'), [])
+        rod = _rod('Drain', [0, 0, 20], [0, 0, 300], 40, role='conduit')
+        self.assertTrue(any("'Drain'" in w for w in self.found(self.family(base, rod), 'Hollow')))
+        self.assertEqual(self.found(self.family(base, dict(rod, wall=3)), 'Hollow'), [])
+        bowl = {'id': 'Bowl', 'type': 'Revolution', 'material': 'Oak', 'role': 'container', 'sketch_plane_y': 0,
+                'axis_start': [0, 0, 0], 'axis_end': [0, 0, 100],
+                'profile': [{'type': 'Line', 'start': a, 'end': b} for a, b in zip(
+                    [[0, 0, 20], [300, 0, 20], [300, 0, 300], [280, 0, 300], [280, 0, 40], [0, 0, 40]],
+                    [[300, 0, 20], [300, 0, 300], [280, 0, 300], [280, 0, 40], [0, 0, 40], [0, 0, 20]])]}
+        self.assertEqual(self.found(self.family(base, bowl), 'Hollow'), [])
+
+    # ── space ────────────────────────────────────────────────────────────
+    def test_contact_is_surface_to_surface_not_bounding_boxes(self):
+        base = _box('Base', -500, -500, 500, 500, 0, 20)
+        post = _rod('Post', [-400, 0, 20], [-400, 0, 900], 30)
+        # A diagonal rail whose BOX overlaps the post, but which hangs 150 mm away from it.
+        rail = _rod('Rail', [-250, 0, 300], [400, 0, 900], 20)
+        self.assertTrue(any("'Rail'" in w for w in self.found(self.family(base, post, rail), 'Not connected')))
+        fixed = _rod('Rail', [-400, 0, 880], [400, 0, 880], 20)
+        self.assertEqual(self.found(self.family(base, post, fixed), 'Not connected'), [])
+
+    def test_a_part_set_into_another_is_connected(self):
+        wall = _box('Wall', -500, 0, 500, 200, 0, 2000)
+        glass = _box('Glass', -200, 90, 200, 110, 800, 1500)         # inside the wall, 90 mm from any face
+        self.assertEqual(self.found(self.family(wall, glass), 'Not connected'), [])
+        crossed = _box('Joist', -100, -600, 100, 600, 2000, 2100)    # lies across the top: no vertex near
+        self.assertEqual(self.found(self.family(wall, crossed), 'Not connected'), [])
+
+    def test_declared_joints_are_checked_against_the_geometry(self):
+        deck = _box('Deck', 0, 0, 2000, 2000, 1000, 1100, role='surface')
+        post = _rod('Post', [100, 100, 0], [100, 100, 1000], 60, role='support')
+        slide = _rod('Slide', [2600, 1000, 1100], [4200, 1000, 0], 250, role='access', wall=10)
+        missed = self.family(deck, post, slide, joints=[
+            {'a': 'Slide', 'b': 'Deck', 'at': [2000, 1000, 1100]},
+            {'a': 'Slide', 'b': 'ground', 'at': [4200, 1000, 0]}])
+        found = self.found(missed, 'Joint')
+        self.assertEqual(len(found), 1)
+        self.assertIn("'Slide' is", found[0])
+        self.assertIn("with 'Deck' at (2000, 1000, 1100)", found[0])
+        fixed = copy.deepcopy(missed)
+        fixed['geometry'][2]['start'] = [1990, 1000, 1340]
+        self.assertEqual(self.found(fixed, 'Joint'), [])
+        self.assertEqual(self.found(fixed, 'Access'), [])
+        unlanded = dict(fixed, joints=fixed['joints'][:1])
+        self.assertTrue(any("'Slide'" in w for w in self.found(unlanded, 'Access')))
+
+    def test_bores_and_headroom_must_stay_clear(self):
+        ground = _box('Ground', -3000, -3000, 3000, 3000, -100, 0)
+        tube = _rod('Tube', [-2000, 0, 400], [2000, 0, 400], 400, role='conduit', wall=10)
+        post = _rod('Post', [500, 0, 0], [500, 0, 1500], 60, role='support')
+        found = self.found(self.family(ground, tube, post), 'Crossing')
+        self.assertTrue(found and "'Post' is in the way of 'Tube'" in found[0])
+        beside = _rod('Post', [500, 700, 0], [500, 700, 1500], 60, role='support')
+        self.assertEqual(self.found(self.family(ground, tube, beside), 'Crossing'), [])
+        joined = self.family(ground, tube, post, joints=[{'a': 'Tube', 'b': 'Post', 'at': [500, 0, 400]}])
+        self.assertEqual(self.found(joined, 'Crossing'), [])
+        # A pipe through a wall: reported, unless a void opens the way.
+        wall = _box('Wall', -100, -1500, 100, 1500, 0, 2000)
+        self.assertTrue(self.found(self.family(ground, tube, wall), 'Crossing'))
+        hole = _rod('Opening', [-150, 0, 400], [150, 0, 400], 420, is_solid=False)
+        hole.pop('material')
+        self.assertEqual(self.found(self.family(ground, tube, wall, hole), 'Crossing'), [])
+        # A slab 600 above a stair tread leaves no room to walk.
+        tread = _box('Tread', 0, 0, 900, 300, 0, 40, role='access')
+        slab = _box('Slab', -200, -200, 1100, 500, 640, 760)
+        legs = _rod('Leg', [-150, -150, 0], [-150, -150, 640], 40)
+        found = self.found(self.family(ground, tread, slab, legs), 'Crossing')
+        self.assertTrue(found and "'Slab' is in the way of 'Tread'" in found[0])
+
+    def test_spatial_findings_go_back_to_claude(self):
+        from FamilyGen import claude_designer as designer
+        family = self.family(_box('Deck', 0, 0, 2000, 2000, 1000, 1100, role='surface'),
+                             _rod('Post', [100, 100, 0], [100, 100, 1000], 60, role='support'),
+                             _rod('Slide', [2600, 1000, 1100], [4200, 1000, 0], 250, role='access', wall=10),
+                             joints=[{'a': 'Slide', 'b': 'Deck', 'at': [2000, 1000, 1100]},
+                                     {'a': 'Slide', 'b': 'ground', 'at': [4200, 1000, 0]}])
+        session = designer.ClaudeFamilySession('Furniture', 'claude-opus-5-5')
+        session.begin_turn('Deck with a slide')
+        first = session.handle_http(200, submit(family, 'a'))
+        self.assertEqual(first.kind, 'continue')
+        text = first.request['messages'][-1]['content'][0]['content']
+        self.assertIn('Joint:', text)
+        self.assertIn('fix the geometry', text)
+
+    def test_summary_and_page_show_the_concept(self):
+        info = fs.schema_summary(GOOD)
+        self.assertEqual(info['concept']['what'], GOOD['concept']['what'])
+        self.assertEqual(info['joints'], 3)
+        with open(os.path.join(STUDIO, 'studio.js'), encoding='utf-8') as handle:
+            script = handle.read()
+        self.assertIn("'Concept'", script)
+        self.assertIn("'Joints checked'", script)
+
+
+class HostChromeTests(unittest.TestCase):
+    """One title bar: the host hides pyRevit's, or the page hides its own."""
+
+    def test_page_drops_its_title_bar_when_the_host_keeps_one(self):
+        with open(os.path.join(STUDIO, 'studio.js'), encoding='utf-8') as handle:
+            script = handle.read()
+        with open(os.path.join(STUDIO, 'studio.css'), encoding='utf-8') as handle:
+            css = handle.read()
+        self.assertIn("classList.toggle('host-chrome', m.frameless === false)", script)
+        self.assertIn('.host-chrome .winctrls', css)
+        self.assertIn("action: 'drag'", script)
+
+    def test_controller_reports_frameless_and_routes_drag(self):
+        revit = FakeRevit()
+        posted = []
+        controller = sc.StudioController(post=posted.append, http=FakeHttp(), revit=revit,
+                                         claude=FakeClaude(), prefs=Prefs(), store=None,
+                                         pyrevit_version='7.1.0')
+        revit.frameless = False
+        controller.handle({'type': 'ready'})
+        init = [m for m in posted if m.get('type') == 'init'][0]
+        self.assertIs(init['frameless'], False)
+        calls = []
+        revit.window_state = calls.append
+        controller.handle({'type': 'window', 'action': 'drag'})
+        self.assertEqual(calls, ['drag'])
+        with open(os.path.join(LIB, 'FamilyGen', 'studio_host.py'), encoding='utf-8') as handle:
+            host = handle.read()
+        for needle in ('def _go_frameless', 'UseNoneWindowStyle', 'def _drag_window',
+                       "prefs.get('frameless', True)"):
+            self.assertIn(needle, host)
 
 
 if __name__ == '__main__':

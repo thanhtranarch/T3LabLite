@@ -74,6 +74,16 @@ MAX_PLANES = 40
 MAX_REPEAT = 200
 DETAIL_LEVELS = ('coarse', 'medium', 'fine')
 AUTO_CATEGORY = 'Auto'
+# Meaning (docs/famigen-studio-spec.md section 5.3): what the family IS and what
+# each part DOES. FamilyGen.spatial_check verifies the geometry against it.
+CONCEPT_FIELDS = ('what', 'use', 'placement')
+MAX_CONCEPT_TEXT = 400
+ROLES = ('support', 'surface', 'enclosure', 'container', 'conduit', 'access', 'guard',
+         'fixing', 'control', 'decor')
+HOLLOW_ROLES = ('container', 'conduit')      # must be modelled hollow, never a solid lump
+JOINED_ROLES = ('access',)                   # need a declared joint at each end
+GROUND = 'ground'                            # joints[].b: the floor / host the family stands on
+MAX_JOINTS = 200
 
 # One line per category: how FamiGen Studio's Auto mode tells Claude to pick.
 CATEGORY_GUIDE = (
@@ -236,7 +246,8 @@ section) and "top_profile" (end section) are local cross-sections like a local S
 profile. Use it where a section changes along a curve: a chute that flattens, a
 tapering arm, a horn, a transition piece.
 Cylinder: start/end coordinate triples and positive radius. Use Cylinder for straight
-rods in any direction; do not guess a sketch plane for them.
+rods in any direction; do not guess a sketch plane for them. Optional "wall" (mm,
+less than radius) makes a Cylinder or Tube a HOLLOW pipe: inner radius = radius - wall.
 Tube: "points" (2+ [x,y,z] the centre line passes through), positive "radius",
 optional "smooth" (default true: a spline through the points) and "closed" (a loop).
 With "bend_radius" the tube runs STRAIGHT between the points and turns every corner
@@ -318,9 +329,57 @@ FORMS - use the whole Revit toolbox, not only Extrusion:
   tubes and basins out of the solids they overlap - prefer a void to fiddly inner loops
   when the cut is a different shape or depth.
 A family that a person would model with several form types should use them too.
+MEANING - decide what the object is and how it works BEFORE any geometry:
+"concept" (required): {"what": one sentence naming the object and its main parts,
+"use": who or what uses it and the route taken through it (a person walking, climbing,
+sitting, reaching; water, air or cable flowing), "placement": where it stands or hangs
+and what it connects to (floor, wall, ceiling, worktop, pipe, duct)}. Take sizes from
+the user of the object: seat 450, table 750, counter 900, handrail 900-1100, door 2100,
+stair riser 150-180, a child's reach 600-1200.
+Each geometry object should have "role", what the part DOES in the object:
+- support: legs, posts, frames, brackets. Solid. Stands on the ground or on a part and
+  ends in the part it carries.
+- surface: tops, decks, seats, shelves, treads, panels that people or things rest on.
+- enclosure: bodies, housings, cabinets, walls, roofs. Has an inside: show the opening
+  (a void or a gap) that gives access to it.
+- container: basins, bowls, tanks, pots, tubs, bins. HOLLOW with an open top.
+- conduit: pipes, ducts, hoses, spouts, gutters, tube slides. HOLLOW along its length;
+  each end joins a part or is an open port.
+- access: stairs, ladders, ramps, slides, bridges. Starts ON one level, lands ON another.
+- guard: handrails, balusters, fences, barriers. Follows the edge it protects, fixed to
+  posts or to that edge, with a gap where an access part arrives.
+- fixing: bolts, hinges, plates, clips.  control: handles, knobs, levers, taps, switches.
+- decor: plants, signs, ornaments and anything else.
+SOLID OR HOLLOW - model what the real thing is:
+- Solid: timber, posts, slabs, rods, boards, stone, cast parts.
+- Hollow: anything that holds or carries something. Pipe, duct, tube slide: Cylinder /
+  Tube with "wall" (steel sheet 2-3, pipe about 4 percent of the diameter and at least 2,
+  plastic tube slide 8-10). Basin, bowl, pot, tub: Revolution whose profile is the wall
+  section, or a solid cut by a void. Cabinet, box, housing: panels (sides, top, bottom,
+  back) or a body with a void, never one filled block when the inside is visible or used.
+- A part with role container or conduit that is a plain solid is reported.
+JOINTS - declare how the parts connect; FamiGen checks each one against the geometry:
+"joints": [{"a": part id, "b": part id or "ground", "at": [x, y, z]}]. At that point BOTH
+parts must really be there (within 25 mm). Write a joint for: each end of every access
+part (where it starts and where it lands); each end of a conduit that feeds or drains
+another part; each support under the part it carries (one joint for a repeated group);
+each guard to a post or edge it is fixed to. Compute "at" from the same numbers as the
+two parts - a joint that misses is returned for correction. Joints need part ids.
+SPACE - the object must work for whoever uses it:
+- Fix the levels first (ground 0, then each deck, shelf or seat height) and give each
+  main element its own footprint. Footprints of unrelated elements do not overlap.
+- An access part starts at the EDGE of its upper level, at that level's height, where
+  the guard has a gap at least as wide as the part. It lands on the ground or the lower
+  level with free space in front (about 1000 for a slide or a stair).
+- Routes and bores stay clear: no post, rail, wall, plant or other part inside a slide,
+  stair, doorway, opening or pipe; a route does not pass through another part.
+- Parts intersect only at real joints (rail into post, leg into top, pipe into body) and
+  only by a few mm, unless one passes through an opening made for it.
+- Walk the route of "use" from start to end before submitting: every step must be
+  reachable from the one before.
 CONTINUITY (the model must read as one built object, not loose pieces):
-- Every solid touches or overlaps another solid by 1-5 mm, and the chain of contacts
-  reaches the base (the lowest part). Legs end ON the floor and INTO the part they carry;
+- Every solid really touches or overlaps another solid by 1-5 mm (surface to surface,
+  not just nearby), and the chain of contacts reaches the base (the lowest part). Legs end ON the floor and INTO the part they carry;
   posts run from the ground to the underside of what they support; rails meet posts.
 - Share coordinates: a part that sits on another starts at exactly that part's top z;
   a part fixed to a face starts at that face's coordinate. Derive positions from the
@@ -515,6 +574,17 @@ def _validate(schema, category, strict_category):
                 warn(path, 'solid has no material; it keeps the category default')
             if 'subcategory' in geom:
                 revit_name(geom['subcategory'], path + '.subcategory')
+            if 'role' in geom and geom['role'] not in ROLES:
+                error(path + '.role', 'must be one of ' + ', '.join(ROLES))
+            if 'wall' in geom:
+                if kind not in ('Cylinder', 'Tube'):
+                    error(path + '.wall', 'is only for Cylinder and Tube (hollow pipe); use '
+                          'inner_loops or a void for other forms')
+                else:
+                    number(geom['wall'], path + '.wall', positive=True)
+                    if _finite_number(geom['wall']) and _finite_number(geom.get('radius')) \
+                            and geom['wall'] >= geom['radius']:
+                        error(path + '.wall', 'must be thinner than the radius')
             if 'repeat' in geom:
                 _validate_repeat(geom, path + '.repeat', error, number, point)
             if 'detail_levels' in geom:
@@ -620,6 +690,11 @@ def _validate(schema, category, strict_category):
                 else:
                     number(value, path + '.value')
 
+    # ── meaning: concept and joints ──────────────────────────────────────
+    if 'concept' in schema:
+        _validate_concept(schema['concept'], error)
+    if 'joints' in schema:
+        _validate_joints(schema, error, warn, point)
     # ── types ────────────────────────────────────────────────────────────
     if 'types' in schema:
         _validate_types(schema, error, warn, revit_name, number)
@@ -628,6 +703,48 @@ def _validate(schema, category, strict_category):
             isinstance(g, dict) and 'locks' in g for g in schema.get('geometry') or []):
         _validate_constraints(schema, error, warn, revit_name, number)
     return errors, warnings
+
+
+def _validate_concept(concept, error):
+    if not isinstance(concept, dict):
+        error('$.concept', 'must be an object with ' + ', '.join(CONCEPT_FIELDS))
+        return
+    for key in CONCEPT_FIELDS:
+        if key in concept and (not isinstance(concept[key], str) or not concept[key].strip()
+                               or len(concept[key]) > MAX_CONCEPT_TEXT):
+            error('$.concept.' + key, 'must be a short sentence (1-{} characters)'.format(
+                MAX_CONCEPT_TEXT))
+    if not isinstance(concept.get('what'), str):
+        error('$.concept.what', 'is required: one sentence naming the object')
+
+
+def part_ids(schema):
+    """The id of every geometry object that has one (as written, before repeat)."""
+    return [g['id'] for g in (schema.get('geometry') or [])
+            if isinstance(g, dict) and isinstance(g.get('id'), str) and g['id'].strip()]
+
+
+def _validate_joints(schema, error, warn, point):
+    joints = schema['joints']
+    if not isinstance(joints, list) or len(joints) > MAX_JOINTS:
+        error('$.joints', 'must be an array of at most {} joint objects'.format(MAX_JOINTS))
+        return
+    known = set(part_ids(schema))
+    for i, joint in enumerate(joints):
+        path = '$.joints[{}]'.format(i)
+        if not isinstance(joint, dict):
+            error(path, 'must be an object {"a": part id, "b": part id or "ground", "at": [x,y,z]}')
+            continue
+        for key in ('a', 'b'):
+            name = joint.get(key)
+            if not isinstance(name, str) or not name.strip():
+                error('{}.{}'.format(path, key), 'must be a geometry id')
+            elif name not in known and not (key == 'b' and name == GROUND):
+                warn('{}.{}'.format(path, key), 'no geometry has the id {!r}; the joint is '
+                     'not checked'.format(name))
+        if joint.get('a') == joint.get('b'):
+            error(path, 'a and b must be two different parts')
+        point(joint.get('at'), path + '.at')
 
 
 def _check_local_path(value, path, error, single):
@@ -747,6 +864,20 @@ def _ball(center, radius, base):
     return ball
 
 
+def _shell(center, radius, inner, ball):
+    """The joint ball of a hollow tube: a spherical shell, so the bore stays open."""
+    cx, cy, cz = center
+    ball = dict(ball)
+    ball['profile'] = [
+        {'type': 'Arc3P', 'start': [cx, cy, cz - radius], 'end': [cx, cy, cz + radius],
+         'mid': [cx + radius, cy, cz]},
+        {'type': 'Line', 'start': [cx, cy, cz + radius], 'end': [cx, cy, cz + inner]},
+        {'type': 'Arc3P', 'start': [cx, cy, cz + inner], 'end': [cx, cy, cz - inner],
+         'mid': [cx + inner, cy, cz]},
+        {'type': 'Line', 'start': [cx, cy, cz - inner], 'end': [cx, cy, cz - radius]}]
+    return ball
+
+
 SHARP_TURN = math.radians(35.0)     # ball joint only where the centre line turns harder
 
 
@@ -835,7 +966,7 @@ def expand_tube(geom):
         turns[0] = turns[-1] = _turn_angle(clean[-2], clean[0], clean[1])
     base = dict((k, v) for k, v in geom.items()
                 if k not in ('type', 'points', 'radius', 'smooth', 'closed', 'bend_radius', 'id', 'locks',
-                             'repeat'))
+                             'repeat'))          # role and wall carry over to every piece
     label = geom.get('id') or 'Tube'
     parts = []
     for i in range(n - 1):
@@ -854,6 +985,9 @@ def expand_tube(geom):
     sharp = [i for i in range(n) if turns[i] > SHARP_TURN and (closed or 0 < i < n - 1)]
     for j, i in enumerate(sharp):
         ball = _ball([round(c, 2) for c in clean[i]], radius, base)
+        ball.pop('wall', None)
+        if base.get('wall'):
+            ball = _shell([round(c, 2) for c in clean[i]], radius, radius - float(base['wall']), ball)
         ball['id'] = u'{} joint {}'.format(label, j + 1)
         parts.append(ball)
     return parts
@@ -1129,7 +1263,15 @@ def validate_ai_schema(schema, category):
     exactly, and it must be one FamiGen has a template for.
     """
     errors, _ = _validate(schema, category, strict_category=True)
-    return errors
+    return errors + meaning_errors(schema)
+
+
+def meaning_errors(schema):
+    """What an AI-written family must also say: its concept (FamiGen checks the rest)."""
+    if isinstance(schema, dict) and not isinstance(schema.get('concept'), dict):
+        return ['$.concept: required - {"what": ..., "use": ..., "placement": ...}; decide what '
+                'the object is and how it is used before the geometry']
+    return []
 
 
 def validate_family_schema(schema, category=None):
@@ -1166,6 +1308,10 @@ def schema_summary(schema):
         'types': type_names(schema),
         'reference_planes': len(schema.get('reference_planes') or []),
         'dimensions': len(schema.get('dimensions') or []),
+        'concept': dict((k, v) for k, v in (schema.get('concept') or {}).items()
+                        if k in CONCEPT_FIELDS and isinstance(v, str))
+        if isinstance(schema.get('concept'), dict) else {},
+        'joints': len(schema.get('joints') or []) if isinstance(schema.get('joints'), list) else 0,
     }
 
 
@@ -1173,6 +1319,9 @@ EXAMPLE_SCHEMA = {
     'schema_version': 2,
     'family_name': 'Side Table 500',
     'family_category': 'Furniture',
+    'concept': {'what': 'Round side table: an oak top on one steel column with a disc base',
+                'use': 'Stands beside a sofa; a person seated reaches the top at 550 mm',
+                'placement': 'Free-standing on the floor'},
     'materials': [
         {'name': 'Oak', 'color': '#B08050', 'transparency': 0, 'smoothness': 40,
          'parameter': 'Top Material'},
@@ -1188,14 +1337,21 @@ EXAMPLE_SCHEMA = {
         {'name': 'Steel Top', 'values': {'Top Material': 'Black Steel', 'Top Thickness': 12}},
     ],
     'geometry': [
-        {'id': 'Top', 'type': 'Extrusion', 'material': 'Oak', 'subcategory': 'Top',
+        {'id': 'Top', 'type': 'Extrusion', 'role': 'surface', 'material': 'Oak', 'subcategory': 'Top',
          'profile': [{'type': 'Circle', 'center': [0, 0, 0], 'radius': 250}],
          'extrusion_start': 520, 'extrusion_end': 550},
-        {'id': 'Leg', 'type': 'Cylinder', 'material': 'Black Steel', 'subcategory': 'Legs',
+        {'id': 'Leg', 'type': 'Cylinder', 'role': 'support', 'material': 'Black Steel',
+         'subcategory': 'Legs',
          'start': [0, 0, 0], 'end': [0, 0, 521], 'radius': 25},
-        {'id': 'Base', 'type': 'Extrusion', 'material': 'Black Steel', 'subcategory': 'Legs',
+        {'id': 'Base', 'type': 'Extrusion', 'role': 'support', 'material': 'Black Steel',
+         'subcategory': 'Legs',
          'profile': [{'type': 'Circle', 'center': [0, 0, 0], 'radius': 180}],
          'extrusion_start': 0, 'extrusion_end': 12},
+    ],
+    'joints': [
+        {'a': 'Leg', 'b': 'Top', 'at': [0, 0, 520]},
+        {'a': 'Leg', 'b': 'Base', 'at': [0, 0, 12]},
+        {'a': 'Base', 'b': 'ground', 'at': [0, 0, 0]},
     ],
 }
 
@@ -1213,7 +1369,8 @@ def schema_contract():
             'Revolution': 'turned / round about an axis: domes, bowls, knobs, balusters, rings',
             'Sweep': 'constant section along a path (profile_local: true): rails, mouldings, troughs',
             'SweptBlend': 'section changing along ONE Line/Arc3P path (local profiles): chutes, horns',
-            'Cylinder': 'straight rods and posts', 'Tube': 'curved / 3D rods, rails, tube slides',
+            'Cylinder': 'straight rods, posts and (with wall) pipes',
+            'Tube': 'curved / 3D rods, rails; with wall: pipes, tube slides',
             'Void': 'is_solid false on any form: openings, recesses, hollow tubes, basins',
         },
         'local_profile': 'u sideways (Z x tangent), v up; points [u, v, 0] in mm',
@@ -1251,6 +1408,19 @@ def schema_contract():
             'dimensions': '{"parameter": length parameter, "from": plane, "to": plane} on one axis',
             'locks': 'geometry[].locks {x_min|x_max|y_min|y_max|z_min|z_max: plane}; face must lie on it',
             'effect': 'a labelled dimension + locked faces make the part resize with the parameter',
+        },
+        'meaning_rules': {
+            'concept': ('{"what": the object and its main parts, "use": who or what uses it and the '
+                        'route through it, "placement": where it stands or hangs and what it '
+                        'connects to}; decide it before the geometry'),
+            'roles': {'field': 'geometry[].role', 'values': list(ROLES),
+                      'hollow': 'container and conduit must be hollow (wall, inner_loops or a void)',
+                      'access': 'stairs, ladders, ramps, slides, bridges: a joint at each end'},
+            'hollow': 'Cylinder / Tube "wall": mm thickness (inner radius = radius - wall)',
+            'joints': ('[{"a": part id, "b": part id or "ground", "at": [x,y,z]}]: both parts must '
+                       'be within 25 mm of the point; a joint that misses is reported'),
+            'checked': ('famigen_validate_family and the preview report: Not connected, Joint, '
+                        'Hollow, Access and Crossing findings'),
         },
         'detail_levels': {'field': 'geometry[].detail_levels', 'values': list(DETAIL_LEVELS),
                           'default': 'shown at every detail level'},

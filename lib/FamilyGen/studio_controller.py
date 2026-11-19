@@ -352,6 +352,8 @@ class StudioController(object):
             'type': 'init',
             'studio_version': STUDIO_VERSION,
             'pyrevit': self.pyrevit_version,
+            # False: the host kept its own title bar, so the page hides its own.
+            'frameless': bool(getattr(self.revit, 'frameless', True)),
             'categories': [AUTO_CATEGORY] + list(SUPPORTED_CATEGORIES),
             'check_refs': self.check_refs,
             'engine': self._engine_info(),
@@ -422,7 +424,7 @@ class StudioController(object):
 
     def _on_window(self, message):
         action = message.get('action')
-        if action in ('minimize', 'maximize'):
+        if action in ('minimize', 'maximize', 'drag'):
             try:
                 self.revit.window_state(action)
             except Exception:
@@ -667,6 +669,12 @@ class StudioController(object):
                 self._ref_camera = None
         size = analysis.get('overall_size_mm') or []
         lines = []
+        if isinstance(analysis.get('concept'), str) and analysis['concept'].strip():
+            lines.append(u'Concept: {}'.format(analysis['concept'].strip()))
+        for label, key in ((u'Levels', 'levels'), (u'Connects', 'connections'), (u'Hollow', 'hollow')):
+            items = [u'{}'.format(v) for v in (analysis.get(key) or []) if v][:12]
+            if items:
+                lines.append(u'{}: {}'.format(label, u'; '.join(items)))
         for comp in (analysis.get('components') or [])[:40]:
             if isinstance(comp, dict):
                 bits = [u'{}'.format(comp.get('name') or u'?')]

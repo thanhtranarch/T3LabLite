@@ -8,7 +8,7 @@ resizes. ``evaluate()`` grades a family against its category's profile:
 * ``driven``  - the parameter exists AND a labelled dimension on the right
   axis uses it: changing it resizes the family (in Revit and in the Studio);
 * ``present`` - the parameter exists but drives nothing yet;
-* ``missing`` - not in the family.
+* ``missing`` - not in the family (``unused`` for an optional size).
 
 Score = (2 × driven + present) / (2 × required), 0-100. ``brief()`` turns the
 gaps into one message for Claude, so "Make it parametric" asks for exactly the
@@ -124,7 +124,7 @@ def evaluate(schema):
         for name, axis, why in spec[group]:
             found = next((n for n in _names(name) if n in params), None)
             if found is None:
-                state = 'missing'
+                state = 'missing' if group == 'required' else 'unused'
             elif found in driven_axes and (axis is None or axis in driven_axes[found]):
                 state = 'driven'
             else:

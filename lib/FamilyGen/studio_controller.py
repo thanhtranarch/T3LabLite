@@ -313,6 +313,7 @@ class StudioController(object):
         self.current_json = u''
         self.engine_pref = prefs.get('engine', 'auto')      # auto | claude | mcp
         self.mcp_client = None
+        self.mcp_listening = None       # app waiting on famigen_wait_for_message
         self._last_beat = 0.0
         self._selected_part = None
         self._proposal_id = None
@@ -320,6 +321,9 @@ class StudioController(object):
         self._progress_text = PROGRESS_IDLE
         self.preview_type = None        # family type shown (and flexed) in the 3D view
         self._mcp_waiting = []          # inbox ids sent over MCP and not read yet
+        self._mcp_texts = {}            # inbox id -> text, for "Use built-in Claude"
+        self._creating = False          # Revit is building: Stop cannot interrupt it
+        self._has_key = None            # Claude API key seen at the last check
         self._mcp_working = False       # the AI app read a message, no family back yet
         self._mcp_seen_call = 0.0
         try:
@@ -341,14 +345,15 @@ class StudioController(object):
             handler(message)
         except Exception as ex:      # a bug must not leave the page busy forever
             self._set_busy(False)
+            self._progress_fail(u'Something went wrong: see the chat.')
             self.post({'type': 'error', 'text': u'{}: {}'.format(kind, ex)})
 
     def _status(self, text, tone='info'):
         self.post({'type': 'status', 'text': text, 'tone': tone})
 
-    def _set_busy(self, on, text=u''):
+    def _set_busy(self, on, text=u'', stoppable=True):
         self.busy = bool(on)
-        self.post({'type': 'busy', 'on': self.busy, 'text': text})
+        self.post({'type': 'busy', 'on': self.busy, 'text': text, 'stoppable': bool(stoppable)})
 
     # ── progress strip ───────────────────────────────────────────────────
     def _progress_payload(self):
@@ -391,7 +396,7 @@ class StudioController(object):
         """A family is on screen: everything before the 3D review is done."""
         if problems:
             self._steps['check'] = 'warn'
-        self._progress('review', 'active', text,
+        self._progress('review', 'wait', text,
                        skip=() if compared else ('compare',), done=('compare',) if compared else ())
 
     # ── lifecycle ────────────────────────────────────────────────────────
@@ -400,6 +405,7 @@ class StudioController(object):
             key = self.claude.api_key()
         except Exception:
             key = None
+        self._has_key = bool(key)
         if not key:
             return {'ready': False, 'models': [], 'model': None,
                     'reason': u'Add a Claude API key in Support > LLMs Setting, then reopen '
@@ -489,6 +495,9 @@ class StudioController(object):
         self.attachments = []
         self._post_attachments()
         self.post({'type': 'chat_reset'})
+        self._mcp_waiting = []
+        self._mcp_texts = {}
+        self._mcp_working = False
         self._progress(None)
         if note:
             self.post({'type': 'chat', 'role': 'system', 'text': note})
@@ -566,7 +575,7 @@ class StudioController(object):
         if not text:
             self._status(u'Describe the family, or the change you want.', 'warning')
             return
-        if self.engine() == 'mcp':
+        if self.engine() == 'mcp' and message.get('force') != 'claude':
             self._send_to_app(text, message)
             return
         state = self._claude_state()
@@ -584,7 +593,8 @@ class StudioController(object):
         body = self.session.begin_turn(text, current, attachments)
         self.attachments = []
         self._post_attachments()
-        self.post({'type': 'chat', 'role': 'user', 'text': text,
+        if message.get('echo', True):
+            self.post({'type': 'chat', 'role': 'user', 'text': message.get('display') or text,
                    'files': [a['name'] for a in attachments],
                    'thumbs': [t for t in (self._thumb(a) for a in attachments) if t]})
         self._checks_left = MAX_CHECKS
@@ -623,13 +633,19 @@ class StudioController(object):
         mcp_id = item.get('id') if isinstance(item, dict) else None
         if mcp_id:
             self._mcp_waiting.append(mcp_id)
-        self.post({'type': 'chat', 'role': 'user', 'text': text,
+            self._mcp_texts[mcp_id] = text
+        self.post({'type': 'chat', 'role': 'user', 'text': message.get('display') or text,
                    'files': [os.path.basename(f) for f in files], 'thumbs': thumbs,
                    'mcp_id': mcp_id, 'mcp_state': u'Sent to {} · not read yet'.format(app)})
-        if len(self._mcp_waiting) == 1:
-            self.post({'type': 'chat', 'role': 'system',
-                       'text': u'Sent over MCP. In {}, say "continue in FamiGen": the message '
-                               u'shows Read when {} picks it up.'.format(app, app)})
+        if not self.mcp_listening:
+            # Nobody is waiting on famigen_wait_for_message: the app needs the listen
+            # command once (a plain "continue" was read as "search past chats", 2026-11-19).
+            self.post({'type': 'chat', 'role': 'system', 'listen': True,
+                       'text': u'{} is not listening to FamiGen yet. Click "Copy listen command" '
+                               u'and paste it once in {}: from then on it picks up every message '
+                               u'here by itself{}.'.format(
+                                   app, app, u', or use the built-in Claude from the message'
+                                   if self._key_present() else u'')})
         self._progress(None)
         self._progress('draft', 'wait', u'Sent to {}: waiting for it to read the message…'.format(app))
 
@@ -643,6 +659,10 @@ class StudioController(object):
 
     def _on_cancel(self, message):
         if not self.busy:
+            return
+        if self._creating:
+            self._status(u'Revit is building the family and cannot be stopped; it finishes on '
+                         u'its own.', 'warning')
             return
         self._request_id += 1
         try:
@@ -817,6 +837,9 @@ class StudioController(object):
         ``type_name`` names the family type column; empty = the parameter's default
         (a family without types). The schema keeps its geometry at the defaults:
         Revit flexes it to each type's values, and the preview does the same."""
+        if self.busy:
+            self._status(u'Wait until the current step finishes, then change the value.', 'warning')
+            return
         try:
             schema = json.loads(self.current_json)
         except (TypeError, ValueError):
@@ -882,7 +905,10 @@ class StudioController(object):
             self._status(u'Every standard size of this category already resizes the family.',
                          'success')
             return
-        self._on_send({'text': text, 'json': self.current_json})
+        missing = [r['name'] for r in param_profiles.evaluate(schema)['rows']
+                   if r['required'] and r['state'] != 'driven']
+        self._on_send({'text': text, 'json': self.current_json,
+                       'display': u'Make it parametric: {}'.format(u', '.join(missing))})
 
     def _on_json_changed(self, message):
         self.current_json = message.get('json') or u''
@@ -932,14 +958,52 @@ class StudioController(object):
 
     # ── AI app over MCP (FamilyGen/studio_link.py) ───────────────────────
     def engine(self):
-        """'mcp' when an AI app drives FamiGen (auto) or the user chose it, else 'claude'."""
-        if self.engine_pref == 'mcp' or (self.engine_pref == 'auto' and self.mcp_client):
+        """Who answers: 'mcp' or 'claude'.
+
+        Auto puts MCP first (owner request, 2026-11-19): an AI app connected to the
+        T3Lab server, a message still with it, or no Claude API key -> MCP; only
+        then the built-in Claude with the LLMs Setting key."""
+        if self.engine_pref in ('mcp', 'claude'):
+            return self.engine_pref
+        if self.mcp_client or self._mcp_waiting or self._mcp_working:
             return 'mcp'
-        return 'claude'
+        return 'claude' if self._key_present() else 'mcp'
+
+    def _key_present(self):
+        if self._has_key is None:
+            try:
+                self._has_key = bool(self.claude.api_key())
+            except Exception:
+                self._has_key = False
+        return self._has_key
+
+    def _on_copy_listen(self, message):
+        """Copy the one-time listen command for the AI app."""
+        try:
+            self.revit.copy_text(studio_link.LISTEN_COMMAND)
+            self._status(u'Listen command copied: paste it once in your AI app.', 'success')
+        except Exception as ex:
+            self._status(u'Could not copy: {}'.format(ex), 'warning')
+
+    def _on_mcp_fallback(self, message):
+        """Take a message back from the AI app and send it to the built-in Claude."""
+        mcp_id = message.get('id')
+        text = self._mcp_texts.pop(mcp_id, None)
+        if not text or mcp_id not in self._mcp_waiting:
+            self._status(u'The AI app already read that message.', 'warning')
+            return
+        self._mcp_waiting.remove(mcp_id)
+        try:
+            studio_link.withdraw(mcp_id)
+        except Exception:
+            pass
+        self.post({'type': 'mcp_status', 'id': mcp_id, 'state': 'moved',
+                   'text': u'Sent to the built-in Claude instead'})
+        self._on_send({'text': text, 'json': self.current_json, 'echo': False, 'force': 'claude'})
 
     def _engine_info(self):
         return {'pref': self.engine_pref, 'effective': self.engine(),
-                'client': self.mcp_client or u''}
+                'client': self.mcp_client or u'', 'listening': bool(self.mcp_listening)}
 
     def _on_set_engine(self, message):
         if message.get('engine') in ('auto', 'claude', 'mcp'):
@@ -954,9 +1018,10 @@ class StudioController(object):
             return
         if self.engine() == 'mcp':
             app = self.mcp_client or u'your AI app'
-            text = (u'Connected to {} over MCP. Messages you send here go to {}; in {} say '
-                    u'"continue in FamiGen". Its families appear here automatically, and the '
-                    u'built-in Claude uses no tokens meanwhile.').format(app, app, app)
+            text = (u'{} over MCP answers here. {}Its families appear here automatically, and '
+                    u'the built-in Claude uses no tokens meanwhile.').format(
+                        app, u'It is listening: just type. ' if self.mcp_listening else
+                        u'Paste the listen command in it once ("Copy listen command"). ')
         else:
             text = u'Back to the built-in Claude: messages go straight to Claude.'
         self.post({'type': 'chat', 'role': 'system', 'text': text})
@@ -995,10 +1060,12 @@ class StudioController(object):
                 studio_link.beat({'category': self.category})
             except Exception:
                 pass
-        client = studio_link.active_client()
-        if client != self.mcp_client:
+        listening = studio_link.listener()
+        client = listening or studio_link.active_client()
+        if client != self.mcp_client or listening != self.mcp_listening:
             before = self.engine()
             self.mcp_client = client
+            self.mcp_listening = listening
             self._announce_engine(before)
         if self.store is None or self.busy:
             return
@@ -1022,6 +1089,8 @@ class StudioController(object):
             self.post({'type': 'schema', 'json': text, 'source': 'mcp', 'proposal_id': proposal_id})
             self._preview(text)
             self._mcp_working = False
+            self._mcp_waiting = []
+            self._mcp_texts = {}
             self.post({'type': 'mcp_status', 'id': None, 'state': 'answered',
                        'text': u'Answered by {}'.format(self.mcp_client or u'the AI app')})
             self._progress_review(u'New family from {}: review it, then Create Family.'.format(
@@ -1130,11 +1199,14 @@ class StudioController(object):
             self._remember('folder', folder)
             self.post({'type': 'folder', 'path': folder})
         load = bool(message.get('load', self.prefs.get('load', False)))
-        self._set_busy(True, u'Revit is building "{}"…'.format(schema.get('family_name')))
+        self._creating = True
+        self._set_busy(True, u'Revit is building "{}"…'.format(schema.get('family_name')),
+                       stoppable=False)
         self._progress('create', 'active', u'Revit is building "{}"…'.format(schema.get('family_name')),
                        skip=() if self._steps.get('compare') == 'done' else ('compare',))
 
         def _done(report, error):
+            self._creating = False
             self._set_busy(False)
             if error:
                 self._progress('create', 'error', u'"{}" was not created: see the chat.'.format(

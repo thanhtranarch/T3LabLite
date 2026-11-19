@@ -46,32 +46,9 @@ svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width:
 
 /* The 1 px BorderStrong frame (and Windows 11's rounded corners) belong to the host window
    (studio_host._t3_frame): an opaque WebView2 window cannot show a page's rounded border. */
-.app { display: grid; grid-template-rows: var(--h-bar) auto 1fr var(--h-bar); height: 100vh; min-height: 560px;
+.app { display: grid; grid-template-rows: var(--h-bar) 1fr var(--h-bar); height: 100vh; min-height: 560px;
        overflow: hidden; background: var(--surface); }
 
-/* ── progress strip: brief → Create family ───────────────── */
-.progress { position: relative; display: flex; align-items: center; gap: 16px; height: 40px; padding: 0 16px;
-            background: var(--surface); border-bottom: 1px solid var(--border); }
-.steps { display: flex; align-items: center; gap: 4px; margin: 0; padding: 0; list-style: none; min-width: 0; }
-.step { display: inline-flex; align-items: center; gap: 4px; color: var(--disabled); font-size: var(--fs-caption); white-space: nowrap; }
-.step + .step::before { content: ""; width: 24px; height: 1px; margin-right: 4px; background: var(--border); }
-.step-dot { width: 20px; height: 20px; display: inline-grid; place-items: center; border-radius: 50%; border: 1px solid var(--border);
-            background: var(--surface); font-size: var(--fs-label); font-weight: 600; color: var(--muted); }
-.step[data-state="active"] { color: var(--ink); font-weight: 600; }
-.step[data-state="active"] .step-dot { border-color: var(--progress); background: var(--progress); color: var(--surface); }
-.step[data-state="done"] { color: var(--text-2); }
-.step[data-state="done"] .step-dot { border-color: var(--ok-accent); background: var(--ok-fill); color: var(--ok-text); }
-.step[data-state="done"]::before, .step[data-state="active"]::before, .step[data-state="warn"]::before { background: var(--ok-accent); }
-.step[data-state="wait"] { color: var(--ink); }
-.step[data-state="wait"] .step-dot, .step[data-state="warn"] .step-dot { border-color: var(--warn-accent); background: var(--warn-fill); color: var(--warn-text); }
-.step[data-state="warn"] { color: var(--warn-text); }
-.step[data-state="error"] { color: var(--bad-text); }
-.step[data-state="error"] .step-dot { border-color: var(--bad-accent); background: var(--bad-fill); color: var(--bad-text); }
-.step[data-state="skip"] { color: var(--disabled); text-decoration: line-through; }
-.progress-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-caption); color: var(--text-2); text-align: right; }
-.progress-track { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: transparent; }
-.progress-fill { width: 0; height: 100%; background: var(--progress); }
-@media (max-width: 1180px) { .step-label { display: none; } .step[data-state="active"] .step-label { display: inline; } }
 
 /* ── title bar = T3.TitleBar ─────────────────────────────── */
 .titlebar { display: flex; align-items: center; padding: 0 8px 0 12px; background: var(--sunken); border-bottom: 1px solid var(--border); }
@@ -162,12 +139,12 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .dots { display: inline-flex; gap: 4px; }
 .dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--progress); }   /* running state = progress orange */
 
-.composer { padding: 8px; flex: none; border-top: 1px solid var(--border); }
+.composer { padding: 0 8px 8px; flex: none; }
 .composer-box { border: 1px solid var(--border); border-radius: var(--r-control); background: var(--surface); padding: 4px; }
 .composer-box:focus-within { border-color: var(--ink); }
-.composer textarea { display: block; width: 100%; resize: none; min-height: 36px; max-height: 160px; padding: 4px 8px; border: 0; outline: none; background: transparent; line-height: 1.35; }
+.composer textarea { display: block; width: 100%; resize: none; min-height: 28px; max-height: 120px; padding: 4px 8px; border: 0; outline: none; background: transparent; line-height: 1.35; }
 .composer-row { display: flex; align-items: center; gap: 4px; }
-.composer-foot { display: flex; align-items: center; gap: 8px; padding: 4px 4px 0; font-size: var(--fs-caption); }
+.composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 4px 0; font-size: var(--fs-caption); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
 .chips:empty { display: none; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: var(--h-row); padding: 0 4px; border-radius: var(--r-pill);
@@ -338,3 +315,60 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .msg .receipt::before { content: "● "; color: var(--disabled); }
 .msg .receipt[data-state="read"]::before { color: var(--warn-accent); }
 .msg .receipt[data-state="answered"]::before { color: var(--ok-accent); }
+
+/* ── chat column: stage card + timeline (progress renders as the AI works) ── */
+.progress-card { flex: none; margin: 8px 8px 0; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
+.stage-head { display: flex; align-items: center; gap: 8px; }
+.stage-num { font-family: var(--mono); font-size: var(--fs-label); color: var(--muted); }
+.stage-label { font-weight: 600; color: var(--ink); }
+.progress-card[data-state="active"] .stage-label { color: var(--progress); }
+.progress-card[data-state="error"] .stage-label { color: var(--bad-text); }
+.stage-text { font-size: var(--fs-caption); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steps { display: flex; align-items: center; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.step { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+.step[data-state="active"] { background: var(--progress); }
+.step[data-state="done"] { background: var(--ok-accent); }
+.step[data-state="wait"], .step[data-state="warn"] { background: var(--warn-accent); }
+.step[data-state="error"] { background: var(--bad-accent); }
+.step[data-state="skip"] { background: var(--rule); }
+.progress-track { height: 2px; border-radius: var(--r-pill); background: var(--progress-track); overflow: hidden; }
+.progress-fill { width: 0; height: 100%; background: var(--ok-accent); }
+.progress-card[data-state="active"] .progress-fill { background: var(--progress); }
+
+.timeline { margin: 8px; padding: 12px 12px 12px 36px; gap: 8px; }
+.timeline .msg { position: relative; align-self: stretch; max-width: none; text-align: left; }
+.timeline .msg::before { content: ""; position: absolute; left: -24px; top: 4px; width: 12px; height: 12px; border-radius: 50%;
+                         border: 2px solid var(--border-strong); background: var(--surface); }
+.timeline .msg::after { content: ""; position: absolute; left: -20px; top: 16px; bottom: -8px; width: 2px; background: var(--border); transform: translateX(1px); }
+.timeline .msg:last-child::after { display: none; }
+.timeline .msg.user::before { border-color: var(--ink); background: var(--ink); }
+.timeline .msg.assistant::before, .timeline .msg.created::before { border-color: var(--ok-accent); background: var(--ok-fill); }
+.timeline .msg.error::before { border-color: var(--bad-accent); background: var(--bad-fill); }
+.timeline .msg.system { align-self: stretch; text-align: left; }
+.timeline .msg.system .thumbs { justify-content: flex-start; }
+.timeline .msg.user .time { text-align: left; }
+.msg.progress-node { font-size: var(--fs-caption); color: var(--text-2); }
+.msg.progress-node .step-name { display: block; font-size: var(--fs-label); font-weight: 600; color: var(--muted); text-transform: uppercase; }
+.timeline .msg.progress-node[data-state="active"]::before { border-color: var(--progress); background: var(--progress); }
+.timeline .msg.progress-node[data-state="active"] .step-name { color: var(--progress); }
+.timeline .msg.progress-node[data-state="done"]::before { border-color: var(--ok-accent); background: var(--ok-accent); }
+.timeline .msg.progress-node[data-state="wait"]::before, .timeline .msg.progress-node[data-state="warn"]::before { border-color: var(--warn-accent); background: var(--warn-fill); }
+.timeline .msg.progress-node[data-state="error"]::before { border-color: var(--bad-accent); background: var(--bad-fill); }
+.timeline .msg.progress-node[data-state="error"] { color: var(--bad-text); }
+.msg.progress-node .dots { margin-left: 8px; }
+.timeline .empty { padding-left: 0; }
+
+/* ── LIQUID GLASS ── owner request 2026-11-19 (FamiGen Studio chat column only).
+   The one place where translucency, backdrop blur, a tinted backdrop and the glass
+   highlight are allowed; T3StyleTests strips this block before its effect checks
+   and keeps its selectors to .glass / .pane.chat. */
+.pane.chat { background: radial-gradient(120% 60% at 0% 0%, rgba(194, 65, 12, .10), rgba(194, 65, 12, 0) 60%),
+                         radial-gradient(120% 60% at 100% 100%, rgba(37, 99, 235, .10), rgba(37, 99, 235, 0) 60%), var(--sunken); }
+.pane.chat .glass { background: rgba(255, 255, 255, .58); border: 1px solid rgba(255, 255, 255, .8); border-radius: var(--r-window);
+                    backdrop-filter: blur(18px) saturate(1.6); -webkit-backdrop-filter: blur(18px) saturate(1.6);
+                    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -1px 0 rgba(24, 24, 27, .04), 0 8px 24px rgba(24, 24, 27, .08); }
+.pane.chat .composer-box.glass:focus-within { border-color: rgba(24, 24, 27, .55); }
+.pane.chat .pane-head { background: transparent; }
+/* END LIQUID GLASS */
+.msg .receipt .link { margin-left: 8px; font-size: var(--fs-label); }
+.row.fit[data-state="unused"] { color: var(--disabled); }

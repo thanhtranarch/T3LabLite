@@ -1802,6 +1802,13 @@ def before(app, task):
                     'working', agent, action, describe_call(tool, args, len(ids)), tool,
                     geos[active]['rect'], task_text=current_task(_plan_of(agent)),
                     targets=[b['box'] for b in boxes[:MAX_STOPS]], canvas=union_rect(shown))
+            elif _state.get('overlay') is not None:
+                # No view to draw in (no document, a view window too small):
+                # the bar, once it is up, still shows the call.
+                agent = _agent_of(task)
+                _state['overlay'].call(
+                    'working', agent, action, describe_call(tool, args, len(ids)), tool, None,
+                    task_text=current_task(_plan_of(agent)))
         except Exception:
             pass
         name, ok = _param_name(tool, args)
@@ -1825,8 +1832,27 @@ def _changes(app, task, ids):
     return out
 
 
+def _done(task, agent, action, tool, failed, args):
+    """End a call on the bar when notify() had nothing to draw or failed.
+    Only when the bar exists: a call never brings it up without a view."""
+    try:
+        ov = _state.get('overlay')
+        if ov is not None and ov.alive:
+            ov.call('done', agent, action, tool, failed, args=args,
+                    goal=_session['goals'].get(agent_key(agent) or 'mcp-client', ''),
+                    task_text=current_task(_plan_of(agent)))
+    except Exception:
+        pass
+
+
 def notify(app, task):
-    """One finished tool call. Never raises."""
+    """One finished tool call. Never raises. Whatever happens after before()
+    said Working, the bar is told the call is over: show(), or done() when
+    there is nothing to draw or this function failed half way (2026-11-19:
+    such a call left the bar on "Working" for ever). finish() takes that
+    over once it is handed the call, also when it runs later (_when_settled)."""
+    agent = action = tool = args = None
+    failed, started, handed = False, False, False
     try:
         _flush_pending()        # keep the steps in order
         if not is_enabled():
@@ -1845,6 +1871,7 @@ def notify(app, task):
         action = classify_action(tool, args, result)
         ids = [] if failed else extract_ids(args, result)
         agent = _agent_of(task)
+        started = True
         opts = effective(options())     # bar only: nothing below touches the model
         uidoc = app.ActiveUIDocument
         # What Revit says the call added / modified (code returns no ids).
@@ -1898,29 +1925,42 @@ def notify(app, task):
         task_text = current_task(_plan_of(agent))
 
         def finish():
-            if not is_enabled():
-                return
-            # Bar only: the views place the bar; no element boxes to measure.
-            snap = _snapshot(app, ids if opts['model'] else [], pre)
-            if snap is None:
-                return
-            if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
-                    and uidoc is not None and _zoom_to(uidoc, ids)):
-                snap = _snapshot(app, ids) or snap
-            _overlay(_hwnd(app)).call(
-                'show', agent, action, tool, failed, snap, followed, args=args,
-                n_targets=len(ids), changes=changes, clashes=clashes,
-                touched=touched, goal=goal, task_text=task_text,
-                created=label, fresh=fresh)
+            ended = False
+            try:
+                if not is_enabled():
+                    ended = True        # switched off meanwhile: the bar is gone
+                    return
+                # Bar only: the views place the bar; no element boxes to measure.
+                snap = _snapshot(app, ids if opts['model'] else [], pre)
+                if snap is None:
+                    return
+                if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
+                        and uidoc is not None and _zoom_to(uidoc, ids)):
+                    snap = _snapshot(app, ids) or snap
+                _overlay(_hwnd(app)).call(
+                    'show', agent, action, tool, failed, snap, followed, args=args,
+                    n_targets=len(ids), changes=changes, clashes=clashes,
+                    touched=touched, goal=goal, task_text=task_text,
+                    created=label, fresh=fresh)
+                ended = True
+            except Exception:
+                pass
+            finally:
+                if not ended:
+                    _done(task, agent, action, tool, failed, args)
 
         # Opening views and the posted Tile land AFTER this event returns:
         # measured now, every box and the cursor sat where the views used to
         # be. Measure once Revit has laid the views out.
+        handed = True
         if (followed or tiled) and _when_settled(app, finish):
             return
         finish()
     except Exception:
         pass
+    finally:
+        if started and not handed:
+            _done(task, agent, action, tool, failed, args)
 
 
 # ─── Deferred show: wait for Revit to finish laying views out ────────────────

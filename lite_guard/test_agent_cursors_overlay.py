@@ -443,7 +443,7 @@ def test_several_agents():
     for k, name in enumerate(('a-bot', 'b-bot', 'c-bot')):
         ov.working(name, 'modify', 'Moving {}'.format(k), 'move_elements', RECT, canvas=RECT)
     check('at most BAND_MAX bands, the rest is counted',
-          len(bands(ov)) == AC.BAND_MAX and '+2 more working' in texts(ov._full),
+          len(bands(ov)) == AC.BAND_MAX and '+2 more' in texts(ov._full),
           texts(ov._full))
 
     finish(ov, 'claude-desktop', 'read', 'list_views')
@@ -614,6 +614,68 @@ def test_counts_drawer_and_folded():
     ov.hide()
     check('hide(): nothing left over', ov._loops == [] and ov._acting == {} and ov._drawn == {}
           and ov._replay is None and ov._replay_step is None and ov.hud.IsVisible is False)
+
+
+def test_call_always_ends():
+    print('[flow: a call that started always ends on the bar]')
+    AC.set_speed('calm')
+    ov = new_overlay()
+    ov.working('claude-desktop', 'view', 'Closing document', 'close_document', RECT, canvas=RECT)
+    check('running: Working, with its block', ov._state() == 'working' and len(bands(ov)) == 1
+          and len(sweeps_of(bands(ov)[0])) == 1)
+    ov.done('claude-desktop', 'view', 'close_document', False)
+    band = bands(ov)[0]
+    check('done() with no view left: the step is on the bar, nothing keeps running',
+          ov._working == {} and ov._acting == {} and 'Closing document' in texts(band)
+          and sweeps_of(band) == [] and ov._actions == 1
+          and ov._counts == {'claude-desktop': {'view': 1}} and ov._history == [])
+    ov._feed[0]['t'] -= 60
+    check('so the bar goes idle and Replay is not refused', ov._state() == 'idle')
+    cur = ov._cursors['claude-desktop']
+    check('its cursor stops spinning', repr(cur['spin'].Visibility) == 'Visibility.Collapsed')
+
+    ov.working('codex', 'read', 'Listing open documents', 'list_open_documents', None)
+    check('working() with no view: the bar it already has says Working, no cursor is made',
+          ov._state() == 'working' and 'codex' not in ov._cursors
+          and 'Listing open documents' in texts(bands(ov)[0]))
+    ov.done('codex', 'read', 'list_open_documents', True)
+    check('and done() marks a failed call as failed',
+          ov._working == {} and ov._failed == 1 and '\uE711' in texts(bands(ov)[0]))
+
+    fresh = OV._Overlay(1)
+    fresh.working('codex', 'read', 'Listing open documents', 'list_open_documents', None)
+    fresh.done('codex', 'read', 'list_open_documents', False)
+    check('a bar that never had a view to sit in stays away',
+          fresh.hud.IsVisible is False and fresh._working == {} and fresh._actions == 1)
+
+    ov = new_overlay()
+    ov.working('claude-desktop', 'create', 'Creating wall', 'create_wall', RECT, canvas=RECT,
+               targets=[(300.0, 200.0, 500.0, 300.0)])
+    frames_before = len(ov._focus.get('claude-desktop', []))
+
+    def broken(*args, **kwargs):
+        raise RuntimeError('a WPF call failed')
+    ov._draw_step = broken
+    finish(ov, 'claude-desktop', 'create', 'create_wall')
+    check('drawing on the model fails: the bar still gets the step and stops saying Working',
+          frames_before == 1 and ov._working == {} and ov._focus == {} and ov._actions == 1
+          and 'Creating wall' in texts(bands(ov)[0]) and sweeps_of(bands(ov)[0]) == [])
+    ov._draw_working = broken
+    ov.working('claude-desktop', 'read', 'Listing views', 'list_views', RECT, canvas=RECT)
+    check('drawing the running call fails: the bar still says Working',
+          'Listing views' in texts(bands(ov)[0]) and len(sweeps_of(bands(ov)[0])) == 1)
+
+    AC.set_option('model', False)       # the default here: the bar only
+    try:
+        ov = new_overlay()
+        ov.working('codex', 'view', 'Closing document', 'close_document', RECT, canvas=RECT)
+        ov.done('codex', 'view', 'close_document', False)
+        check('bar only: done() ends the call, no cursor is made',
+              ov._working == {} and ov._cursors == {} and ov._actions == 1
+              and sweeps_of(bands(ov)[0]) == [] and ov.win.IsVisible is False)
+        ov.hide()
+    finally:
+        AC.set_option('model', True)
 
 
 def test_bar_only():
@@ -849,6 +911,7 @@ if __name__ == '__main__':
         test_waiting()
         test_replay()
         test_counts_drawer_and_folded()
+        test_call_always_ends()
         test_bar_only()
         test_effect_switches()
         test_settings_window()

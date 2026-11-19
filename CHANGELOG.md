@@ -24,9 +24,9 @@ Releasing a new version:
 - **Agent Cursors — the bar shows each step in its action's colour:** the step
   that runs now is a block in the colour of what the agent does (read, create,
   modify, delete, view, export, code) with its icon; a failed step is red, a
-  call waiting for your OK is amber. With several AI apps at work, each gets
-  its own block. The last steps carry a stripe in the same colours, and each
-  app's counts are also one small coloured bar.
+  call waiting for your OK is amber. The call that runs and each call that
+  waits get their own block. The last steps carry a stripe in the same
+  colours, and each app's counts are also one small coloured bar.
 - **Agent Cursors — more motion:** a new step slides in, its icon pops when
   the step changes, a failed step shakes, a running call sweeps across its
   block, and cursors fade in and out instead of jumping. The "Less motion"
@@ -48,6 +48,11 @@ Releasing a new version:
 
 ### Fixed
 
+- **Agent Cursors — the bar could stay on "Working" for ever:** when a call
+  ended with no view to show it in (the last document closed, a view window
+  too small) or its drawing failed, the bar never learned that the call was
+  over: it never went idle and Replay was refused. Every call now ends on
+  the bar, and a drawing error no longer loses the step.
 - **Agent Cursors — Replay filled the step list with copies** that all said
   "now" and pushed the real last steps out. A replay no longer adds to the
   list, and a new call from an AI app ends it.

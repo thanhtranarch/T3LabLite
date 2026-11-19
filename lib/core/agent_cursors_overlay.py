@@ -861,7 +861,7 @@ class _Overlay(object):
                 band.Margin = Thickness(0, 10, 0, 0)
             full.Children.Add(band)
         if more:
-            extra = self._text(u'+{} more working'.format(more), 11, bold=False,
+            extra = self._text(u'+{} more'.format(more), 11, bold=False,
                                color=self._c('muted'))
             extra.Margin = Thickness(BAND_STRIPE + 9, 3, 0, 0)
             full.Children.Add(extra)
@@ -1695,10 +1695,16 @@ class _Overlay(object):
         self._marks = []
 
     def _show_hud(self, rect):
-        scale = self._dpi()
-        self._view_dip = (rect[0] / scale, rect[1] / scale, rect[2] / scale, rect[3] / scale)
-        if self._canvas_px is None or not self.win.IsVisible:
-            self._canvas_px = tuple(rect)   # bar only: the view the bar sits in
+        """rect = the active view (screen px); None = a call with no view to
+        draw in: the bar stays where it last was, or stays away if it never
+        had a place."""
+        if rect is not None:
+            scale = self._dpi()
+            self._view_dip = (rect[0] / scale, rect[1] / scale, rect[2] / scale, rect[3] / scale)
+            if self._canvas_px is None or not self.win.IsVisible:
+                self._canvas_px = tuple(rect)   # bar only: the view the bar sits in
+        if self._view_dip is None:
+            return
         if not self.hud.IsVisible and (self._front_ok or self._asks):
             self.hud.Show()
         self._refresh_hud()             # places it too (_place_hud)
@@ -1710,23 +1716,29 @@ class _Overlay(object):
         plan, the cursor names the current task and the call goes underneath.
         targets = screen boxes of the elements the call names: framed until
         it ends, the cursor goes to the first. None: the cursor stays where
-        it last worked."""
+        it last worked. rect None = no view to draw in: the bar only."""
         self._end_summary()
         self._stop_replay()             # a live call wins over a replay
         if task_text:
             caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
+        self._working[agent] = (time.time(), caption)
+        self._acting[agent] = action
         if not self._model():
-            self._working[agent] = (time.time(), caption)
-            self._acting[agent] = action
-            self._bar_only()
-            self._last = time.time()
-            self._show_hud(rect)
-            return
+            self._bar_only()            # the default: the bar, nothing on the model
+        elif rect is not None:
+            try:
+                self._draw_working(agent, action, caption, rect, targets, canvas)
+            except Exception:
+                pass            # the drawing is decoration: the bar still says Working
+        self._last = time.time()
+        self._show_hud(rect)
+
+    def _draw_working(self, agent, action, caption, rect, targets, canvas):
+        """The running call on the model: its cursor, the frames round what it
+        names, the path to the first."""
         if canvas or not self.win.IsVisible or self._origin == (0.0, 0.0):
             self._place(canvas or rect)
         cur = self._cursor(agent, action)
-        self._working[agent] = (time.time(), caption)
-        self._acting[agent] = action
         self._cursor_state(cur, 'working', caption)
         self._wake(cur)
         self._clear_focus(agent)
@@ -1741,8 +1753,6 @@ class _Overlay(object):
                 self._trail(cur['x'], cur['y'], point[0], point[1], acolor)
             self._tour(cur, tour_schedule([point], 1 if reduce else int(hop_ms(1) * speed_factor()), 0))
         self._layout_tags(agent)
-        self._last = time.time()
-        self._show_hud(rect)
 
     def waiting(self, agent, tool_name, caption, on):
         """The call waits for the user's OK: an amber, pulsing pill."""
@@ -1937,11 +1947,7 @@ class _Overlay(object):
         if goal and agent not in self._goals:
             self._goals[agent] = goal
         label, _glyph, acolor = action_style(action)
-        caption = describe_call(tool_name, args, n_targets, failed)
-        detail = tool_name
-        if task_text:           # the plan's task leads; what the call did goes underneath
-            detail = u'{} · {}'.format(caption, tool_name)
-            caption = (u'Failed: ' if failed else u'') + task_text
+        caption, detail = self._step_text(tool_name, args, n_targets, failed, task_text)
         self._working.pop(agent, None)
         self._waiting.pop(agent, None)
         self._acting.pop(agent, None)
@@ -1949,13 +1955,49 @@ class _Overlay(object):
             if vid not in [v[0] for v in self._views]:
                 self._views.append((vid, name))
         if self._model():
-            self._draw_step(agent, action, failed, snap, followed, n_targets, changes,
-                            clashes, created, fresh, caption, label, acolor)
+            try:
+                self._draw_step(agent, action, failed, snap, followed, n_targets, changes,
+                                clashes, created, fresh, caption, label, acolor)
+            except Exception:
+                self._clear_focus(agent)    # decoration: the bar still gets the step
         else:
             self._bar_only()            # the default: the bar, nothing on the model
         self._log_step(agent, action, tool_name, failed, caption, detail, changes, clashes,
                        record)
         self._show_hud(snap['active']['rect'])
+
+    @staticmethod
+    def _step_text(tool_name, args, n_targets, failed, task_text='', document=''):
+        """(caption, detail) of a finished call: with a plan the task leads
+        and what the call did goes underneath."""
+        caption = describe_call(tool_name, args, n_targets, failed)
+        detail = tool_name
+        if task_text:
+            detail = u'{} · {}'.format(caption, tool_name)
+            caption = (u'Failed: ' if failed else u'') + task_text
+        if document:            # a file that is open but not on screen
+            caption = u'{} · in {}'.format(caption, document)
+        return caption, detail
+
+    def done(self, agent, action, tool_name, failed, args=None, n_targets=0, goal='',
+             task_text=''):
+        """A call ended with nothing to draw (no document or view left, or
+        notify() failed half way): the bar gets the step and stops saying
+        Working. Before 2026-11-19 such a call never ended on the bar."""
+        self._end_summary()
+        self._stop_replay()
+        if goal and agent not in self._goals:
+            self._goals[agent] = goal
+        caption, detail = self._step_text(tool_name, args, n_targets, failed, task_text)
+        self._working.pop(agent, None)
+        self._waiting.pop(agent, None)
+        self._acting.pop(agent, None)
+        self._clear_focus(agent)
+        cur = self._cursors.get(agent)
+        if cur is not None:
+            self._cursor_state(cur, 'failed' if failed else 'idle', caption)
+        self._log_step(agent, action, tool_name, failed, caption, detail, (), (), True)
+        self._show_hud(None)
 
     def _bar_only(self):
         """Bar only (On model off): the bar may show, the canvas never does;

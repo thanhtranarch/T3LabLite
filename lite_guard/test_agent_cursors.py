@@ -395,6 +395,74 @@ def test_visible_work():
     check('notify(): capture ends, created label + fresh ids go to show()',
           "call, _session['call'] = _session.get('call'), None" in notify
           and 'created=label, fresh=fresh' in notify)
+    check('notify(): a call that started always ends on the bar (show, else done)',
+          'finally:\n        if started and not handed:\n            _done(' in notify
+          and 'finally:\n                if not ended:\n                    _done(' in notify
+          and notify.index('started = True') < notify.index("call, _session['call']")
+          and notify.index("'show', agent") < notify.index('ended = True\n            except')
+          and notify.index('handed = True') < notify.index('_when_settled(app, finish)'))
+    check('before(): no view to draw in, the bar still says Working once it is up',
+          "elif _state.get('overlay') is not None:" in before
+          and "describe_call(tool, args, len(ids)), tool, None," in before)
+
+    class Host(object):
+        alive = True
+
+        def __init__(self):
+            self.calls = []
+
+        def call(self, name, *args, **kwargs):
+            if name != 'set_theme':     # notify() syncs the theme on every call
+                self.calls.append((name, args, kwargs))
+
+    class App(object):
+        ActiveUIDocument = None         # no document: nothing to snapshot
+
+    class Call(object):
+        tool_name, arguments, result, exception, audit = 'list_open_documents', {}, {}, None, None
+        agent = 'codex'
+    was_on, host = AC.is_enabled(), Host()
+    AC.set_enabled(True)
+    AC._state['overlay'] = host
+    try:
+        AC.before(App(), Call())
+        AC.notify(App(), Call())
+        names = [c[0] for c in host.calls]
+        check('no document: the bar is told the call started and ended',
+              names == ['working', 'done'] and host.calls[0][1][0] == 'codex'
+              and host.calls[0][1][4] is None and host.calls[1][1][:4]
+              == ('codex', 'read', 'list_open_documents', False), host.calls)
+        del host.calls[:]
+        bad = Call()
+        bad.result = {'error': 'boom'}
+        AC.notify(App(), bad)
+        check('a failed call ends as failed', host.calls and host.calls[0][0] == 'done'
+              and host.calls[0][1][3] is True, host.calls)
+        del host.calls[:]
+        real_options, AC.options = AC.options, lambda: 1 / 0
+        try:
+            AC.notify(App(), Call())
+        finally:
+            AC.options = real_options
+        check('notify() failing half way still ends the call',
+              [c[0] for c in host.calls] == ['done'], host.calls)
+        del host.calls[:]
+        real_snapshot, AC._snapshot = AC._snapshot, lambda *a, **k: 1 / 0
+        try:
+            AC.notify(App(), Call())
+        finally:
+            AC._snapshot = real_snapshot
+        check('the deferred half failing still ends the call, once',
+              [c[0] for c in host.calls] == ['done'], host.calls)
+        del host.calls[:]
+        held = Call()
+        held.result = {'error_code': 'paused', 'error': 'Paused'}
+        AC.notify(App(), held)
+        check('a call held by Pause is reported as held, not as done',
+              [c[0] for c in host.calls] == ['held'], host.calls)
+    finally:
+        AC._state['overlay'] = None
+        AC.set_enabled(was_on)
     check('plan / section views are boxed (IsPerspective is View3D only)',
           "getattr(view, 'IsPerspective', False)" in acsrc and 'view.IsPerspective' not in acsrc)
     osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
@@ -412,8 +480,16 @@ def test_visible_work():
     trail = show.split('self._draw_label(', 1)[1].split('self._tour(', 1)[0]
     check('Less motion: no build trail', 'if not reduce and' in trail)
     working = osrc.split('    def working(self, agent,', 1)[1].split('\n    def ', 1)[0]
-    check('working(): frames what the call names and goes there',
-          'self._draw_focus(agent, b, acolor)' in working and 'self._tour(cur,' in working)
+    check('working(): the bar says Working first, then the guarded drawing',
+          working.index('self._working[agent] = ') < working.index('self._draw_working(')
+          < working.index('self._show_hud(rect)') and 'elif rect is not None:' in working)
+    drawing = osrc.split('    def _draw_working(self, agent,', 1)[1].split('\n    def ', 1)[0]
+    check('_draw_working(): frames what the call names and goes there',
+          'self._draw_focus(agent, b, acolor)' in drawing and 'self._tour(cur,' in drawing)
+    shown = osrc.split('    def show(self, agent,', 1)[1].split('\n    def ', 1)[0]
+    check('show(): the drawing on the model is guarded, the bar always gets the step',
+          shown.index('self._working.pop(agent, None)') < shown.index('self._draw_step(')
+          < shown.index('self._log_step(') < shown.index('self._show_hud('))
     check('caption capped on the tag', 'short_text(text, TAG_MAX)' in osrc and AC.TAG_MAX <= 40)
 
 
@@ -1047,13 +1123,17 @@ def test_bar_only():
         return osrc.split('    def {}('.format(name), 1)[1].split('\n    def ', 1)[0]
     show = body('show')
     check('show: draws on the model only with On model, the bar always',
-          'if self._model():\n            self._draw_step(' in show and 'self._bar_only()' in show
+          'if self._model():\n            try:\n                self._draw_step(' in show
+          and 'self._bar_only()' in show
           and 'self._log_step(' in show and 'self._show_hud(' in show
           and 'self._cursor(' not in show and 'self._place(' not in show)
     working = body('working')
-    check('working: bar only returns before any cursor',
-          working.index('if not self._model():') < working.index('self._cursor(')
-          and working.index('if not self._model():') < working.index('self._place('))
+    check('working: no cursor or canvas without On model, the bar always',
+          'if not self._model():\n            self._bar_only()' in working
+          and 'elif rect is not None:\n            try:\n                self._draw_working(' in working
+          and 'self._cursor(' not in working and 'self._place(' not in working
+          and 'self._show_hud(rect)' in working
+          and 'self._cursor(' in body('_draw_working'))
     check('ask: no canvas without On model', 'if self._model():\n            self._place(rect)'
           in body('ask'))
     check('waiting: no cursor made without On model',

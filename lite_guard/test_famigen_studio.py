@@ -142,7 +142,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_no_key_explains_and_never_sends(self):
         http = FakeHttp()
-        ctl, posts = controller(http=http, claude=FakeClaude(key=None))
+        ctl, posts = controller(http=http, claude=FakeClaude(key=None), engine='claude')
         ctl.handle({'type': 'ready'})
         self.assertFalse(of_type(posts, 'init')[0]['claude']['ready'])
         ctl.handle({'type': 'send', 'text': 'A table'})
@@ -159,7 +159,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(of_type(posts, 'detected')[0]['category'], 'Furniture')
         self.assertEqual(json.loads(of_type(posts, 'schema')[0]['json'])['family_name'], 'Side Table 500')
         self.assertTrue(of_type(posts, 'preview')[0]['ok'])
-        self.assertEqual(posts[-1]['tone'], 'success')
+        self.assertEqual(of_type(posts, 'status')[-1]['tone'], 'success')
         self.assertFalse(ctl.busy)
         self.assertEqual(len(ctl.store.ids()), 1)               # kept in My families
 
@@ -438,7 +438,7 @@ class McpModeTests(unittest.TestCase):
         ctl.tick(now=101.0)
         self.assertEqual(ctl.engine(), 'mcp')
         self.assertEqual(of_type(posts, 'engine')[-1]['client'], 'Claude Code')
-        self.assertIn('continue in FamiGen', of_type(posts, 'chat')[-1]['text'])
+        self.assertIn('listen command', of_type(posts, 'chat')[-1]['text'])
         ctl.handle({'type': 'send', 'text': 'Make the legs thinner', 'json': json.dumps(GOOD)})
         self.assertEqual(http.bodies, [])                            # no API tokens used
         self.assertEqual(studio_link.take_unread()[0]['text'], 'Make the legs thinner')
@@ -697,7 +697,20 @@ class T3StyleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         with open(os.path.join(STUDIO, 'studio.css'), encoding='utf-8') as handle:
-            cls.css = re.sub(r'/\*.*?\*/', '', handle.read(), flags=re.S)       # rules, not comments
+            raw = handle.read()
+        # LIQUID GLASS: the owner's waiver (2026-11-19) for the chat column; checked on its own.
+        glass = re.search(r'/\* ── LIQUID GLASS ──.*?/\* END LIQUID GLASS \*/', raw, re.S)
+        cls.glass = re.sub(r'/\*.*?\*/', '', glass.group(0), flags=re.S) if glass else ''
+        raw = raw.replace(glass.group(0), '') if glass else raw
+        cls.css = re.sub(r'/\*.*?\*/', '', raw, flags=re.S)       # rules, not comments
+
+    def test_liquid_glass_stays_in_the_chat_column(self):
+        self.assertIn('backdrop-filter', self.glass)
+        selectors = re.findall(r'(^|})\s*([^{}]+)\{', self.glass)
+        for _, sel in selectors:
+            for part in sel.split(','):
+                self.assertTrue(part.strip().startswith('.pane.chat'), part)
+        self.assertNotIn('#', re.sub(r'rgba\([^)]*\)', '', self.glass))   # no hex: tokens or rgba of tokens
 
     def test_only_t3_colours_and_light_only(self):
         used = {h.upper() for h in re.findall(r'#[0-9A-Fa-f]{6}\b', self.css)}
@@ -993,6 +1006,323 @@ class RibbonButtonTests(unittest.TestCase):
         self.assertEqual(xamls, ['FamiGen'])
         keywords = discovery._gen_keywords(title, 'FamiGen.pushbutton', xamls)
         self.assertEqual(sorted(keywords), ['fami', 'famigen', 'gen'])
+
+
+def _flex_family():
+    """A 1000 x 600 x 400 box whose right face follows a 'Width' dimension."""
+    fam = copy.deepcopy(GOOD)
+    fam['parameters'] = [{'name': 'Width', 'type': 'length', 'value': 1000},
+                         {'name': 'Depth', 'type': 'length', 'value': 600},
+                         {'name': 'Note', 'type': 'text', 'value': 'x'}]
+    fam['types'] = [{'name': 'W1000', 'values': {}}, {'name': 'W1400', 'values': {'Width': 1400}}]
+    fam['reference_planes'] = [{'name': 'Left', 'axis': 'x', 'offset': -500},
+                               {'name': 'Right', 'axis': 'x', 'offset': 500}]
+    fam['dimensions'] = [{'parameter': 'Width', 'from': 'Left', 'to': 'Right'}]
+    fam['geometry'] = [_box('Body', -500, -300, 500, 300, 0, 400, material='Oak',
+                            locks={'x_min': 'Left', 'x_max': 'Right'}),
+                       _box('Loose', -100, -100, 100, 100, 400, 450, material='Oak')]
+    fam.pop('joints', None)
+    return fam
+
+
+class OutboxTests(unittest.TestCase):
+    """pyRevit drops post_message while the page loads; the outbox must not (2026-11-19)."""
+
+    def setUp(self):
+        self.Outbox = studio_page.Outbox
+
+    def test_held_until_the_page_can_take_it_then_sent_in_order(self):
+        ready, got, woke = [False], [], []
+
+        def send(msg):
+            if not ready[0]:
+                return False
+            got.append(msg)
+            return True
+        box = self.Outbox(send, wake=lambda: woke.append(1))
+        box.post({'type': 'init'})
+        box.post({'type': 'status'})
+        self.assertEqual((got, box.pending), ([], 2))
+        self.assertTrue(woke)
+        ready[0] = True
+        self.assertTrue(box.flush())
+        self.assertEqual([m['type'] for m in got], ['init', 'status'])
+
+    def test_a_message_that_raises_does_not_block_the_rest(self):
+        got = []
+
+        def send(msg):
+            if msg.get('bad'):
+                raise TypeError('not JSON')
+            got.append(msg)
+            return None                       # older pyRevit returned nothing: delivered
+        box = self.Outbox(send)
+        box.post({'bad': True})
+        box.post({'type': 'ok'})
+        self.assertEqual((got, box.pending), ([{'type': 'ok'}], 0))
+
+    def test_the_host_posts_through_the_outbox(self):
+        with open(os.path.join(LIB, 'FamilyGen', 'studio_host.py'), encoding='utf-8') as handle:
+            host = handle.read()
+        self.assertIn('post=outbox.post', host)
+        self.assertNotIn('post=lambda msg: output.post_message(msg)', host)
+
+
+class FlexTests(unittest.TestCase):
+    """Editing a length flexes the preview the way Revit flexes the type."""
+
+    def test_type_value_moves_the_free_plane_and_stretches_locked_parts_only(self):
+        fam = _flex_family()
+        text = json.dumps(fam)
+        base = sc.preview_payload(text)
+        wide = sc.preview_payload(text, 'W1400')
+        self.assertEqual(base['size_mm'][0], 1000.0)
+        self.assertEqual(wide['size_mm'][0], 1400.0)
+        self.assertEqual(wide['flexed'], ['right'])
+        self.assertEqual([d['value'] for d in wide['dimensions']], [1400.0])
+        loose = [p for p in wide['parts'] if p['label'].startswith('Loose')][0]
+        xs = loose['pos'][0::3]
+        self.assertEqual((min(xs), max(xs)), (-100.0, 100.0))       # no locks: it stays
+
+    def test_template_planes_never_move(self):
+        from FamilyGen import flex
+        fam = _flex_family()
+        fam['dimensions'] = [{'parameter': 'Width', 'from': 'Right', 'to': 'Center (Left/Right)'}]
+        moved = flex.plane_offsets(fam, {'width': 800})
+        self.assertEqual(moved['center (left/right)'], (0.0, 0.0))
+        self.assertEqual(moved['right'][1], 800.0)
+
+    def test_set_param_edits_the_type_and_reflexes(self):
+        ctl, posts = controller()
+        ctl.current_json = json.dumps(_flex_family())
+        ctl.handle({'type': 'set_param', 'param': 'width', 'type_name': 'W1000', 'value': 1200})
+        schema = json.loads(of_type(posts, 'schema')[-1]['json'])
+        self.assertEqual(schema['types'][0]['values'], {'Width': 1200.0})
+        self.assertEqual(of_type(posts, 'preview')[-1]['size_mm'][0], 1200.0)
+        self.assertEqual(of_type(posts, 'status')[-1]['tone'], 'success')
+
+    def test_a_parameter_that_drives_nothing_says_so(self):
+        ctl, posts = controller()
+        ctl.current_json = json.dumps(_flex_family())
+        ctl.handle({'type': 'set_param', 'param': 'Depth', 'type_name': '', 'value': 900})
+        self.assertEqual(json.loads(ctl.current_json)['parameters'][1]['value'], 900.0)
+        self.assertIn('drives no labelled dimension', of_type(posts, 'status')[-1]['text'])
+        ctl.handle({'type': 'set_param', 'param': 'Width', 'type_name': '', 'value': -5})
+        self.assertEqual(of_type(posts, 'status')[-1]['tone'], 'warning')
+
+    def test_switching_type_reflexes(self):
+        ctl, posts = controller()
+        ctl.current_json = json.dumps(_flex_family())
+        ctl.handle({'type': 'set_type', 'name': 'W1400'})
+        self.assertEqual(of_type(posts, 'preview')[-1]['size_mm'][0], 1400.0)
+
+
+class ProfileTests(unittest.TestCase):
+    """Category parameter profiles and the fit score (docs/famigen-param-profiles.md)."""
+
+    def test_every_category_has_a_profile_and_three_templates(self):
+        from FamilyGen import param_profiles as pp
+        self.assertTrue(pp.covers_every_category())
+        counts = {}
+        for t in tpl.templates():
+            counts[t['category']] = counts.get(t['category'], 0) + 1
+            self.assertIn('Make it parametric', t['prompt'])
+        self.assertEqual(sorted(c for c in fs.SUPPORTED_CATEGORIES if counts.get(c, 0) < 3), [])
+        self.assertEqual(len(set(t['id'] for t in tpl.templates())), len(tpl.templates()))
+
+    def test_driven_present_missing_and_score(self):
+        from FamilyGen import param_profiles as pp
+        fam = _flex_family()
+        fit = pp.evaluate(fam)
+        states = dict((r['name'], r['state']) for r in fit['rows'] if r['required'])
+        self.assertEqual(states, {'Width': 'driven', 'Depth': 'present', 'Height': 'missing'})
+        self.assertEqual(fit['score'], 50)
+        brief = pp.brief(fam)
+        self.assertIn('Depth', brief)
+        self.assertIn('Height', brief)
+        self.assertNotIn('Width (', brief)
+
+    def test_make_parametric_sends_the_brief_to_claude(self):
+        http = FakeHttp((200, submit(GOOD)))
+        ctl, posts = controller(http=http)
+        ctl.current_json = json.dumps(_flex_family())
+        ctl.handle({'type': 'make_parametric'})
+        self.assertIn('Height', of_type(posts, 'chat')[0]['text'])
+        self.assertTrue(http.bodies)
+
+
+class ProgressTests(unittest.TestCase):
+    def test_a_send_walks_the_strip(self):
+        http = FakeHttp((200, submit(GOOD)))
+        ctl, posts = controller(http=http)
+        ctl.handle({'type': 'ready'})
+        self.assertEqual(of_type(posts, 'init')[0]['progress']['steps'][0]['state'], 'todo')
+        ctl.handle({'type': 'send', 'text': 'Side table', 'json': ''})
+        last = dict((s['id'], s['state']) for s in of_type(posts, 'progress')[-1]['steps'])
+        self.assertEqual(last, {'brief': 'done', 'draft': 'done', 'check': 'done', 'review': 'wait',
+                                'compare': 'skip', 'create': 'todo'})
+        ctl.handle({'type': 'create', 'json': ctl.current_json, 'load': False})
+        last = dict((s['id'], s['state']) for s in of_type(posts, 'progress')[-1]['steps'])
+        self.assertIn(last['create'], ('done', 'warn'))
+        self.assertEqual(last['review'], 'done')
+
+
+class McpReceiptTests(unittest.TestCase):
+    def setUp(self):
+        os.environ['APPDATA'] = tempfile.mkdtemp(prefix='famigen_receipt_')
+
+    def test_sent_read_answered(self):
+        ctl, posts = controller(engine='mcp')
+        ctl.handle({'type': 'send', 'text': 'Make it 2 m long', 'json': ''})
+        mine = of_type(posts, 'chat')[0]
+        self.assertTrue(mine['mcp_id'])
+        self.assertIn('not read', mine['mcp_state'])
+        ctl.tick()
+        self.assertEqual(of_type(posts, 'mcp_status'), [])
+        studio_link.take_unread()                    # the AI app read it (famigen_get_studio_state)
+        ctl.tick()
+        self.assertEqual(of_type(posts, 'mcp_status')[0]['state'], 'read')
+        self.assertEqual(ctl._mcp_waiting, [])
+
+
+class ChatInputTests(unittest.TestCase):
+    def setUp(self):
+        with open(os.path.join(STUDIO, 'studio.js'), encoding='utf-8') as handle:
+            self.js = handle.read()
+
+    def test_enter_sends_shift_enter_breaks_and_ime_is_respected(self):
+        self.assertIn("e.key === 'Enter' && !e.shiftKey", self.js)
+        self.assertIn('e.isComposing', self.js)
+        self.assertNotIn("(e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }", self.js)
+
+    def test_ready_is_repeated_until_init_and_send_never_locks_before_it(self):
+        self.assertIn('if (state.inited) return;', self.js)
+        self.assertIn('return !state.inited ||', self.js)
+
+
+class McpFirstTests(unittest.TestCase):
+    """Auto puts MCP first, then the API key; the app listens instead of "continue"."""
+
+    def setUp(self):
+        os.environ['APPDATA'] = tempfile.mkdtemp(prefix='famigen_first_')
+
+    def test_auto_order(self):
+        ctl, _ = controller()
+        self.assertEqual(ctl.engine(), 'claude')                 # key, no app
+        studio_link.note_activity('claude-ai', 'list_open_documents')
+        ctl.tick()
+        self.assertEqual(ctl.engine(), 'mcp')                    # any tool call: app connected
+        ctl2, _ = controller(claude=FakeClaude(key=None))
+        self.assertEqual(ctl2.engine(), 'mcp')                   # no key: MCP rather than nothing
+        ctl3, _ = controller(engine='claude')
+        studio_link.note_activity('claude-ai', 'famigen_get_schema')
+        ctl3.tick()
+        self.assertEqual(ctl3.engine(), 'claude')                # an explicit choice wins
+
+    def test_wait_returns_messages_or_times_out(self):
+        t = [0.0]
+        clock = lambda: t[0]
+
+        def sleep(d):
+            t[0] += d
+        self.assertEqual(studio_link.wait_unread(3, clock=clock, sleep=sleep), [])
+        self.assertGreaterEqual(t[0], 3)
+        studio_link.post_message('Make it 2 m long')
+        got = studio_link.wait_unread(30, clock=clock, sleep=sleep)
+        self.assertEqual([m['text'] for m in got], ['Make it 2 m long'])
+        self.assertEqual(studio_link.unread_count(), 0)
+
+    def test_listener_and_listen_command(self):
+        self.assertIsNone(studio_link.listener())
+        studio_link.note_listening('claude-ai')
+        self.assertEqual(studio_link.listener(), 'Claude Desktop')
+        self.assertIn('famigen_wait_for_message', studio_link.LISTEN_COMMAND)
+        self.assertIn('past chats', studio_link.LISTEN_COMMAND)
+        ctl, posts = controller()
+        ctl.tick()
+        self.assertTrue(of_type(posts, 'engine')[-1]['listening'])
+        ctl.handle({'type': 'send', 'text': 'Taller', 'json': ''})
+        self.assertFalse([p for p in of_type(posts, 'chat') if p.get('listen')])   # no nagging
+
+    def test_server_waits_off_the_revit_thread(self):
+        with open(os.path.join(LIB, 'core', 'server.py'), encoding='utf-8') as handle:
+            server = handle.read()
+        head = server[server.index('    def _execute_tool(self'):server.index('if self._external_event:', server.index('    def _execute_tool(self'))]
+        self.assertIn("if tool_name == 'famigen_wait_for_message':", head)
+        self.assertNotIn('continue in FamiGen', server)
+
+    def test_mcp_fallback_moves_the_message_to_claude(self):
+        http = FakeHttp((200, submit(GOOD)))
+        ctl, posts = controller(http=http)
+        studio_link.note_activity('claude-ai', 'list_open_documents')
+        ctl.tick()
+        ctl.handle({'type': 'send', 'text': 'Side table', 'json': ''})
+        mcp_id = [p for p in of_type(posts, 'chat') if p.get('mcp_id')][0]['mcp_id']
+        ctl.handle({'type': 'mcp_fallback', 'id': mcp_id})
+        self.assertTrue(http.bodies)
+        self.assertEqual(studio_link.unread_count(), 0)
+        self.assertEqual(of_type(posts, 'mcp_status')[-1]['state'], 'moved')
+
+
+class FinishingTests(unittest.TestCase):
+    """Fable review leftovers and MCP replies (2026-11-19)."""
+
+    def setUp(self):
+        os.environ['APPDATA'] = tempfile.mkdtemp(prefix='famigen_finish_')
+        with open(os.path.join(STUDIO, 'studio.js'), encoding='utf-8') as handle:
+            self.js = handle.read()
+        with open(os.path.join(STUDIO, 'studio.html'), encoding='utf-8') as handle:
+            self.html = handle.read()
+
+    def test_mcp_reply_in_words_reaches_the_chat(self):
+        ctl, posts = controller(engine='mcp')
+        ctl.handle({'type': 'send', 'text': 'What size?', 'json': ''})
+        studio_link.post_reply('Which width: 1800 or 2100?', 'claude-ai')
+        ctl.tick()
+        answer = [p for p in of_type(posts, 'chat') if p.get('role') == 'assistant'][-1]
+        self.assertIn('1800', answer['text'])
+        self.assertIn('Claude Desktop', answer['meta'])
+        self.assertEqual(of_type(posts, 'mcp_status')[-1]['state'], 'answered')
+        self.assertEqual(studio_link.take_replies(), [])
+
+    def test_category_change_keeps_the_chat(self):
+        ctl, posts = controller()
+        ctl.session = object()                      # a conversation is running
+        ctl.handle({'type': 'set_category', 'category': 'Door'})
+        self.assertIsNone(ctl.session)
+        self.assertEqual(of_type(posts, 'chat_reset'), [])
+        self.assertIn('fresh conversation', of_type(posts, 'chat')[-1]['text'])
+
+    def test_edit_after_create_reopens_create(self):
+        ctl, posts = controller()
+        ctl.current_json = json.dumps(_flex_family())
+        ctl._steps = {'create': 'done', 'review': 'done'}
+        ctl.handle({'type': 'set_param', 'param': 'Width', 'type_name': 'W1000', 'value': 1100})
+        last = dict((s['id'], s['state']) for s in of_type(posts, 'progress')[-1]['steps'])
+        self.assertEqual((last['create'], last['review']), ('todo', 'wait'))
+
+    def test_office_profiles_override(self):
+        from FamilyGen import param_profiles as pp
+        path = os.path.join(os.environ['APPDATA'], 'T3LabAI')
+        os.makedirs(path)
+        with open(os.path.join(path, 'famigen_profiles.json'), 'w', encoding='utf-8') as handle:
+            json.dump({'Furniture': {'required': [['Width', 'x', 'w'], ['Seat Height', 'z', 's']]}}, handle)
+        names = [r['name'] for r in pp.evaluate(_flex_family())['rows']]
+        self.assertEqual(names, ['Width', 'Seat Height'])
+        with open(os.path.join(path, 'famigen_profiles.json'), 'w', encoding='utf-8') as handle:
+            handle.write('{broken')
+        self.assertIn('Depth', [r['name'] for r in pp.evaluate(_flex_family())['rows']])
+
+    def test_no_emoji_or_text_glyph_icons(self):
+        for glyph in (u'📎', u'📝', u'📄', u'▸', u'▾', u'✕', u'⌕', u"'×'"):
+            self.assertNotIn(glyph, self.js + self.html)
+
+    def test_narrow_window_keeps_the_inspector_reachable(self):
+        self.assertIn('id="btn-inspect"', self.html)
+        self.assertIn("classList.toggle('show-inspect'", self.js)
+
+    def test_drawings_hide_the_size_along_the_view(self):
+        self.assertIn("{ front: 'y', right: 'x', top: 'z' }", self.js)
 
 
 if __name__ == '__main__':

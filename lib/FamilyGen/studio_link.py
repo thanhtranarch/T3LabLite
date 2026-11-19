@@ -8,9 +8,11 @@ in ``%APPDATA%\\T3LabAI\\famigen_studio`` (docs/famigen-studio-spec.md §7):
 | File | Written by | Read by | Meaning |
 |---|---|---|---|
 | ``presence.json`` | Studio, every 2 s | server | Studio is open (fresh < 10 s) |
-| ``mcp_activity.json`` | server, each famigen_* call | Studio | an AI app is working (fresh < 10 min) |
+| ``mcp_activity.json`` | server, each tool call (throttled) | Studio | an AI app is connected (fresh < 10 min) |
 | ``state.json`` | Studio, on change | server | current family, category, selected part |
 | ``inbox.json`` | Studio (MCP mode) | server | messages typed in Studio for the AI app |
+| ``listener.json`` | server, famigen_wait_for_message | Studio | an AI app is listening (fresh < 2 min) |
+| ``replies.json`` | server, famigen_wait_for_message reply | Studio | the app's answers in words |
 
 Proposals themselves travel through ``FamilyGen.proposals.ProposalStore``.
 Writes are atomic (temp file + replace). Pure Python, IronPython 3 safe.
@@ -83,9 +85,22 @@ def studio_open(root=None, clock=time.time, max_age=PRESENCE_MAX_AGE):
 
 
 # ── AI app activity (server -> Studio) ───────────────────────────────────────
+_LAST_NOTE = {'time': 0.0, 'client': None}
+NOTE_EVERY = 5.0                 # s: other tools are noted at most this often
+
+
 def note_activity(client, tool, root=None, clock=time.time):
-    _write('mcp_activity.json', {'client': u'{}'.format(client or 'AI app'),
-                                 'tool': tool, 'time': clock()}, root)
+    """An AI app called a T3Lab tool. famigen_* calls are always written; any other
+    tool at most every NOTE_EVERY s - enough for the Studio's Auto to put MCP
+    first while an app is connected (owner request, 2026-11-19)."""
+    now = clock()
+    name = u'{}'.format(client or 'AI app')
+    key = (_path('mcp_activity.json', root), name)
+    if (not u'{}'.format(tool or '').startswith('famigen_')
+            and _LAST_NOTE['client'] == key and now - _LAST_NOTE['time'] < NOTE_EVERY):
+        return
+    _LAST_NOTE.update(time=now, client=key)
+    _write('mcp_activity.json', {'client': name, 'tool': tool, 'time': now}, root)
 
 
 def active_client(root=None, clock=time.time, max_age=ACTIVITY_MAX_AGE):
@@ -146,6 +161,86 @@ def take_unread(root=None, mark_read=True):
     for item in unread:
         item.pop('read', None)
     return unread
+
+
+# ── listening AI app (server -> Studio) ─────────────────────────────────────
+LISTEN_MAX_AGE = 120.0           # s: a listener calls again within one wait (<= 55 s)
+WAIT_MAX = 55.0                  # s: under the 60 s tool timeout of most MCP clients
+# Pasted once in the AI app: an exact tool name, so the app does not read
+# "continue in FamiGen" as "search past chats" (2026-11-19).
+LISTEN_COMMAND = (u'FamiGen Studio in Revit sends you requests through the T3Lab MCP server. '
+                  u'Do not search past chats. Call the T3Lab tool famigen_wait_for_message '
+                  u'now (through t3lab_call if it is not listed). For every message it returns, '
+                  u'work on the family it includes with famigen_patch_family or '
+                  u'famigen_propose_family, then call famigen_wait_for_message again; to answer '
+                  u'in words, pass your answer as its reply. Keep listening until I say stop.')
+
+
+def note_listening(client, root=None, clock=time.time):
+    _write('listener.json', {'client': friendly_client(client), 'time': clock()}, root)
+
+
+def listener(root=None, clock=time.time, max_age=LISTEN_MAX_AGE):
+    """Name of the AI app waiting on famigen_wait_for_message, else None."""
+    data = _read('listener.json', root)
+    if not isinstance(data, dict) or clock() - float(data.get('time') or 0) > max_age:
+        return None
+    return data.get('client') or u'AI app'
+
+
+def wait_unread(timeout=45.0, root=None, clock=time.time, sleep=time.sleep, poll=0.5):
+    """Block until the Studio has unread messages (returned, marked read) or ``timeout`` s.
+
+    Files only, no Revit: the server runs it on its HTTP thread, never on
+    Revit's (core/server.py, famigen_wait_for_message)."""
+    end = clock() + max(0.0, min(float(timeout), WAIT_MAX))
+    while True:
+        items = take_unread(root)
+        if items or clock() >= end:
+            return items
+        sleep(poll)
+
+
+# ── replies in words (AI app -> Studio) ──────────────────────────────────────
+def post_reply(text, client=None, root=None, clock=time.time):
+    """A text answer for the Studio chat (a question, an explanation): the app passes
+    it as famigen_wait_for_message's ``reply``."""
+    items = _read('replies.json', root)
+    items = items if isinstance(items, list) else []
+    items = (items + [{'text': u'{}'.format(text), 'client': friendly_client(client),
+                       'time': clock()}])[-MAX_INBOX:]
+    _write('replies.json', items, root)
+
+
+def take_replies(root=None):
+    items = _read('replies.json', root)
+    if not isinstance(items, list) or not items:
+        return []
+    _write('replies.json', [], root)
+    return [i for i in items if isinstance(i, dict) and i.get('text')]
+
+
+def withdraw(message_id, root=None):
+    """Take an unread message back out of the inbox (sent to the built-in Claude instead)."""
+    items = _read('inbox.json', root)
+    items = [i for i in items or [] if isinstance(i, dict) and i.get('id') != message_id]
+    _write('inbox.json', items, root)
+
+
+def read_ids(ids, root=None):
+    """The ids among ``ids`` the AI app has read (gone from the inbox counts as read)."""
+    items = _read('inbox.json', root)
+    known = dict((i.get('id'), bool(i.get('read'))) for i in items or [] if isinstance(i, dict))
+    return set(i for i in ids if known.get(i, True))
+
+
+def last_activity(root=None):
+    """{'client', 'tool', 'time'} of the AI app's last famigen_* call, or None."""
+    data = _read('mcp_activity.json', root)
+    if not isinstance(data, dict):
+        return None
+    return {'client': friendly_client(data.get('client')), 'tool': data.get('tool') or u'',
+            'time': float(data.get('time') or 0)}
 
 
 def unread_count(root=None):

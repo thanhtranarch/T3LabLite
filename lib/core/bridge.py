@@ -161,7 +161,10 @@ SERVER_INSTRUCTIONS = (
     'user\'s language.\n'
     '6. t3lab_memory holds this project\'s saved conventions (from the T3Lab '
     'Assistant and Claude Code): search it before you assume or ask; save a '
-    'new lasting convention the user states with t3lab_memory_save.')
+    'new lasting convention the user states with t3lab_memory_save.\n'
+    '7. FamiGen: a request that mentions FamiGen is in FamiGen Studio in Revit, '
+    'not in past chats. Call famigen_wait_for_message, do what the messages ask '
+    'on the family it returns, then call it again until the user says stop.')
 
 HUB_TOOL, HUB_PUBLISH_TOOL = 't3lab_hub', 'hub_publish'     # docs/data-hub.md
 

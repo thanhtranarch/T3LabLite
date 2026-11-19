@@ -2476,14 +2476,41 @@ class T3LabAIServer(object):
                 'description': ('Read FamiGen Studio (the family designer window in Revit): '
                                 'whether it is open, its category, the family on screen and '
                                 'the messages the user typed for you in Studio (marked read). '
-                                'Call it when the user says "continue in FamiGen" or before '
-                                'editing the family they are looking at.'),
+                                'Call it when the user mentions FamiGen or before editing the '
+                                'family they are looking at - the request is in Studio, not in '
+                                'past chats. To keep answering Studio, use '
+                                'famigen_wait_for_message.'),
                 'inputSchema': {
                     'type': 'object',
                     'properties': {
                         'include_family': {
                             'type': 'boolean',
                             'description': 'Return the family JSON on screen (default true).',
+                        },
+                    },
+                    'required': [],
+                },
+            },
+            'famigen_wait_for_message': {
+                'name': 'famigen_wait_for_message',
+                'description': ('Listen to FamiGen Studio (the family designer in Revit): waits '
+                                'up to timeout_s for the next message the user types in Studio '
+                                'and returns it with the family on screen. These requests are '
+                                'about that family, never about past chats. Answer with '
+                                'famigen_patch_family or famigen_propose_family, or in words '
+                                'with reply, then call this tool again to keep listening; stop '
+                                'when Studio is closed or the user says stop.'),
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'timeout_s': {
+                            'type': 'integer',
+                            'description': 'Seconds to wait for a message (1-55, default 45).',
+                        },
+                        'reply': {
+                            'type': 'string',
+                            'description': ('Your answer in words, shown in the Studio chat '
+                                            'before waiting (a question, an explanation).'),
                         },
                     },
                     'required': [],
@@ -3322,15 +3349,14 @@ class T3LabAIServer(object):
         if not isinstance(arguments, dict):
             arguments = {}
 
-        # FamiGen Studio switches to "AI app" mode while an AI app uses the
-        # famigen_* tools (FamilyGen/studio_link.py: files, the Studio runs in
-        # another Python engine).
-        if tool_name.startswith('famigen_'):
-            try:
-                from FamilyGen import studio_link
-                studio_link.note_activity(agent, tool_name)
-            except Exception:
-                pass
+        # FamiGen Studio's Auto puts MCP first while an AI app is connected, so
+        # every tool call is noted (throttled; FamilyGen/studio_link.py: files,
+        # the Studio runs in another Python engine).
+        try:
+            from FamilyGen import studio_link
+            studio_link.note_activity(agent, tool_name)
+        except Exception:
+            pass
 
         # Execute tool and return result
         t_start = time.time()
@@ -3794,7 +3820,7 @@ class T3LabAIServer(object):
         'open_document', 'close_document', 'list_recent_documents',
         'show_assistant_pane', 'file_watcher_status',
         'famigen_get_schema', 'famigen_get_studio_state', 'famigen_validate_family',
-        'famigen_patch_family', 'famigen_list_templates',
+        'famigen_patch_family', 'famigen_list_templates', 'famigen_wait_for_message',
     ])
 
     def _show_elements_smart(self, uidoc, doc, ids):
@@ -4253,6 +4279,46 @@ class T3LabAIServer(object):
                 ', '.join(str(n) for n in failed))
         return out
 
+    def _famigen_wait(self, arguments, agent):
+        """famigen_wait_for_message: the next Studio messages, with the family on screen."""
+        try:
+            from FamilyGen import studio_link
+            from Intelligence.family_schema import schema_summary
+            try:
+                timeout = float(arguments.get('timeout_s', 45))
+            except (TypeError, ValueError):
+                timeout = 45.0
+            timeout = max(1.0, min(timeout, studio_link.WAIT_MAX))
+            reply = arguments.get('reply')
+            if isinstance(reply, str) and reply.strip():
+                studio_link.post_reply(reply.strip()[:4000], agent)
+            studio_link.note_listening(agent)
+            messages = studio_link.wait_unread(timeout)
+            studio_link.note_listening(agent)
+            result = {'studio_open': studio_link.studio_open(), 'messages': messages}
+            if messages:
+                state = studio_link.read_state()
+                family = state.get('family') if isinstance(state.get('family'), dict) else None
+                result.update({'category': state.get('category'),
+                               'proposal_id': state.get('proposal_id'),
+                               'selected_part': state.get('selected_part'),
+                               'family_type': state.get('family_type'),
+                               'summary': schema_summary(family) if family else None,
+                               'family': family})
+                result['next'] = ('These requests come from FamiGen Studio in Revit and are about '
+                                  '"family" (the family on screen), not about past chats. Do them '
+                                  'with famigen_patch_family or famigen_propose_family - the user '
+                                  'sees the result in Studio - then call famigen_wait_for_message '
+                                  'again.')
+            elif not result['studio_open']:
+                result['next'] = 'FamiGen Studio is closed: stop listening and tell the user.'
+            else:
+                result['next'] = ('No message yet. Call famigen_wait_for_message again to keep '
+                                  'listening; the user does not need to type anything here.')
+            return result
+        except Exception as e:
+            return {'error': str(e), 'tool': 'famigen_wait_for_message'}
+
     def _execute_tool(self, tool_name, arguments, confirm=None, agent=None):
         """Execute a Revit tool in a thread-safe manner using External Events.
 
@@ -4271,6 +4337,10 @@ class T3LabAIServer(object):
             # Wiki pages are files, not Revit: answered on this thread, with or
             # without a document, never queued behind the ExternalEvent.
             return mcp_wiki.call(arguments)
+        if tool_name == 'famigen_wait_for_message':
+            # Long-poll on files: answered on this HTTP thread, never queued
+            # behind the ExternalEvent - waiting there would freeze Revit.
+            return self._famigen_wait(arguments or {}, agent)
         if tool_name in ('t3lab_memory', 't3lab_memory_save'):
             # The memory is a JSON file + Claude Code's markdown: same as the
             # wiki, no Revit and no ExternalEvent.

@@ -322,3 +322,10 @@ If the object matches none of these, fall back to METHOD step 1 and decompose it
   corners in plan) when the reference shows it.
 - Cabinets: door 2 mm proud of the body; contents (extinguisher, hose reel) touch the
   back or base of the cabinet, never float inside it.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: an appliance or special item: kitchen equipment, vending machine, gym or lab equipment - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Housing = enclosure with its door / hatch shown as a separate surface. Bowls, hoppers, sinks, tanks = container (HOLLOW). Hoses, chutes, flues = conduit. Frames and feet = support. Buttons, handles, levers = control on the face a person reaches (850-1200 high).
+- Joints to declare: feet to "ground"; door to the housing at its hinge side; handle to the door; each hose or flue end to the part it serves.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

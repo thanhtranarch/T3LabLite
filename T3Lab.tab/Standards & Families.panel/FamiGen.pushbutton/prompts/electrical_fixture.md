@@ -38,3 +38,10 @@ reference gives one — list every such choice in `assumptions`.
 - Visible top edges of thick slabs and worktops: chamfer or round them (Blend, or Arc
   corners in plan) when the reference shows it.
 - Face plate on the back plane (y = 0); sockets and rockers overlap the plate front.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a socket, switch, junction box or data outlet on a wall or ceiling - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Back box = container (HOLLOW, open to the front, sits in the wall); faceplate = surface covering it and overlapping the wall face by 2-5; rocker / socket inserts = control. Socket holes are voids in the faceplate.
+- Joints to declare: faceplate to the back box; each rocker or insert to the faceplate; screws (fixing) to the faceplate.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

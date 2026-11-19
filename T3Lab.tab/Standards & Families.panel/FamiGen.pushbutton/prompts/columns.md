@@ -44,3 +44,10 @@ reference gives one — list every such choice in `assumptions`.
 - Visible top edges of thick slabs and worktops: chamfer or round them (Blend, or Arc
   corners in plan) when the reference shows it.
 - Base, shaft and capital stack exactly (top z of one = bottom z of the next).
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a column: base, shaft, capital - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Solid throughout (support). A steel hollow section or a pipe column is the exception: Cylinder with "wall", or an Extrusion with inner_loops. Base and capital are Revolutions or Blends sharing the shaft's axis.
+- Joints to declare: base to "ground"; shaft to base and to capital at exactly their meeting heights.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

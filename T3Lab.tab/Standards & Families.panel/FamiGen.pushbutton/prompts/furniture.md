@@ -742,3 +742,10 @@ one **through a rod** — the two side frames never touch directly; (e) rods run
 - Legs: from z = 0 up INTO the frame/apron by 5 mm; aprons meet legs face to face;
   tops sit exactly on apron/leg tops. Tubular frames (chairs, stools): one Tube per
   continuous frame loop.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a chair, table, sofa, bed, desk or shelf used by a person - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Legs, frames = support (solid, or Tube with "wall" for steel tube frames when the open end shows). Tops, seats, backs, shelves = surface. Drawers and storage boxes = container (HOLLOW, open top, panels 12-18). Upholstery is a solid cushion ON the frame, not fused into it.
+- Joints to declare: every leg to the seat / top it carries and to "ground" (one joint per repeated leg group); backrest to the seat or rear legs; armrest to its supports; drawer to its carcass.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

@@ -320,3 +320,10 @@ If the object matches none of these, fall back to METHOD step 1 and decompose it
   corners in plan) when the reference shows it.
 - Basin bowl as a Revolution or Blend; taps as Tubes (spout curve) on a base disc
   overlapping the deck; waste pipes as Tubes into the wall plane.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a basin, WC, bath, shower tray, sink or urinal - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Bowl, basin, tub, tray, cistern = container: HOLLOW with an open top - a Revolution / Blend of the ceramic wall section (10-15), or a solid cut by a void that leaves that wall. Never a filled block. Waste outlet = a void at the lowest point. Taps, spouts, traps and waste pipes = conduit (Tube with "wall"). Pedestal, brackets, legs = support.
+- Joints to declare: tap base to the deck or rim; spout to the tap body; waste pipe to the outlet under the bowl and to the wall plane; pedestal to the bowl and to "ground"; seat to the pan.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

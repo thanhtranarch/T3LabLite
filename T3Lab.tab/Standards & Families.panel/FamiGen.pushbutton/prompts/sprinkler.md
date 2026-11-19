@@ -39,3 +39,10 @@ reference gives one — list every such choice in `assumptions`.
   corners in plan) when the reference shows it.
 - Frame arms are Tubes from the body to the deflector boss; the bulb touches both
   the seat and the boss.
+
+## MEANING, SOLID / HOLLOW, JOINTS
+
+- `concept.what`: a sprinkler head: pendent, upright or sidewall - say which one, its main parts, and its size class. `concept.use`: who or what uses it and how. `concept.placement`: what it stands on, hangs from or connects to.
+- Roles and solid / hollow: Body / frame = support on a threaded inlet. Inlet = conduit: a short HOLLOW Cylinder ("wall" 3) on the pipe axis. Deflector = thin surface (1-2 mm) at the free end; frame arms = two Tubes from the body to the deflector boss; bulb = decor between orifice and boss.
+- Joints to declare: each frame arm to the body and to the deflector boss; deflector to the boss; escutcheon (fixing) to the body at the ceiling plane.
+- FamiGen checks the model against this: parts that do not really touch ("Not connected"), joints that miss ("Joint"), containers and conduits left solid ("Hollow"), access parts without both landings ("Access") and blocked routes or bores ("Crossing") come back for correction.

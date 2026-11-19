@@ -223,6 +223,7 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
        font-size: var(--fs-caption); cursor: default; }
 .row.mats { grid-template-columns: 1fr 120px 48px; }
 .row.kv { grid-template-columns: 1fr 104px; }
+.row.kv.fit { grid-template-columns: minmax(140px, 1fr) auto; }
 .row > span { padding: 0 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .row > span:first-child { display: flex; align-items: center; gap: 8px; padding-left: 28px; color: var(--ink); }
 .row > span.sub { color: var(--muted); }
@@ -314,12 +315,12 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .cell-edit .unit { font-size: var(--fs-label); color: var(--muted); }
 
 /* ── Sizes tab: parameter fit (status in words, never colour alone) ── */
-.row.fit .fit-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--disabled); }
+.row.fit .fit-dot { flex: none; display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--disabled); }
 .row.fit[data-state="driven"] .fit-dot { background: var(--ok-accent); }
 .row.fit[data-state="present"] .fit-dot { background: var(--warn-accent); }
 .row.fit[data-state="missing"] .fit-dot { background: var(--bad-accent); }
 .row.fit[data-state="missing"] .sub { color: var(--bad-text); }
-.fit-action { padding: 8px 16px; border-bottom: 1px solid var(--rule); }
+.fit-action { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--rule); }
 
 /* ── MCP receipts on your messages: Sent → Read → Answered ── */
 .msg .receipt { font-size: var(--fs-label); color: var(--muted); margin-top: 4px; }
@@ -384,3 +385,5 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .msg .receipt .link { margin-left: 8px; font-size: var(--fs-label); }
 .row.fit[data-state="unused"] { color: var(--disabled); }
 .chip button { display: inline-grid; place-items: center; }
+.row.fit .sub.warn-text { color: var(--warn-text); }
+.fit-note { padding: 4px 16px; font-size: var(--fs-label); color: var(--muted); border-bottom: 1px solid var(--rule); }

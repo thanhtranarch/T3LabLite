@@ -67,6 +67,7 @@ MAX_TYPES = 50
 # vertical plane x = offset, 'y' the vertical plane y = offset, 'z' the
 # horizontal plane z = offset. The template's own planes can be named too.
 PLANE_AXES = ('x', 'y', 'z')
+_GUID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 BUILTIN_PLANES = {'Center (Left/Right)': ('x', 0.0), 'Center (Front/Back)': ('y', 0.0),
                   'Ref. Level': ('z', 0.0)}
 LOCK_KEYS = ('x_min', 'x_max', 'y_min', 'y_max', 'z_min', 'z_max')
@@ -678,6 +679,11 @@ def _validate(schema, category, strict_category):
                     continue
                 if 'instance' in param and not isinstance(param['instance'], bool):
                     error(path + '.instance', 'must be a boolean')
+                if 'shared' in param and not isinstance(param['shared'], bool):
+                    error(path + '.shared', 'must be a boolean')
+                if 'guid' in param and not (isinstance(param['guid'], str) and _GUID.match(param['guid'])):
+                    error(path + '.guid', 'must be a shared parameter GUID like '
+                                          '"0a1b2c3d-0000-4000-8000-00000000abcd"')
                 value = param.get('value')
                 if value is None:
                     continue
@@ -1393,6 +1399,8 @@ def schema_contract():
             'length_unit': 'millimeters',
             'existing': 'set on the template parameter with the same name',
             'missing': 'created (type parameter unless instance is true)',
+            'shared': ('true = added from Revit\'s shared parameter file (by guid, else by name); '
+                       'not found there -> a family parameter and a warning'),
         },
         'type_rules': {
             'fields': {'name': 'unique, required', 'values': 'object: parameter name -> value'},

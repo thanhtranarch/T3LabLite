@@ -56,12 +56,36 @@ non-template plane, planes dimensioned from it follow, and faces locked to a
 moving plane stretch the part. Parts without locks stay put, as in Revit, and the
 status line says when a parameter drives nothing.
 
+## Type or instance
+
+Every profile size has a recommended scope: **type** by default (every placed
+copy shares it), **instance** where each placement differs - Window *Sill
+Height*, *Mounting Height* (plumbing, electrical, specialty equipment),
+*Suspension Length* (lighting). Parameter fit shows the scope of each size and
+"→ instance" / "→ type" when the family has it the other way. An office profile
+row may carry the scope as a 4th item: `["Sill Height", "z", "sill", "instance"]`.
+
+## Shared parameters
+
+Schedules, tags and IFC need the office's shared parameters, not same-named
+family parameters.
+
+- The Studio reads the shared parameter file Revit uses (`Manage > Shared
+  Parameters`; the path is read when the Studio opens) as text -
+  `FamilyGen/shared_params.py`, UTF-16 or UTF-8. Parameter fit shows the file
+  and marks sizes that are *shared* or *shareable* (same name, compatible type).
+- **Apply standards** (Sizes tab, no AI): sets each profile size to its
+  recommended scope and marks every parameter found in the file
+  `"shared": true` with its `"guid"`.
+- `parameters[].shared` / `.guid` in the family JSON: the builder adds the
+  `ExternalDefinition` (by GUID, else by name) with
+  `FamilyManager.AddParameter(ExternalDefinition, GroupTypeId, isInstance)`
+  (`Snippets/_compat.add_shared_family_parameter`, Revit 2022-2027). Not in
+  the file -> a family parameter and a warning in the build report.
+
 ## Next steps (not done yet)
 
-- Instance vs type: mark which profile sizes should be instance parameters
-  (e.g. Sill Height, Mounting Height) and grade that too.
-- Shared parameters / IFC: map profile names to the office's shared parameter
-  file so schedules and IFC export pick them up.
+- IFC: map profile sizes to IFC property sets (e.g. `Pset_DoorCommon`).
 - Check formulas and min/max ranges (e.g. Door Width 600–1200).
 - NEEDS VERIFICATION in Revit: that families built after "Make it parametric"
   flex the same way the preview does.

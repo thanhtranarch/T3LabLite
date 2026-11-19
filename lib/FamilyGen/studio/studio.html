@@ -117,6 +117,7 @@
           <button class="seg-btn" data-view="top" title="Plan (Ref. Level)">Plan</button>
           <button class="seg-btn hidden" data-view="ref" id="view-ref" title="Same camera as your reference picture (from Claude's analysis)">Ref</button>
         </div>
+        <button class="icon-btn narrow-only" id="btn-inspect" title="Show the details panel (Parts, Types, Sizes, Checks)" aria-label="Details"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M9.5 2.5v11"/></svg></button>
         <button class="icon-btn" id="btn-fit" title="Zoom to fit (double-click the view)" aria-label="Zoom to fit"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
         <span class="spacer"></span>
         <label class="field inline hidden" id="type-field">
@@ -216,10 +217,10 @@
   <div class="modal hidden" id="modal-templates" role="dialog" aria-modal="true" aria-label="Templates">
     <div class="modal-card">
       <div class="modal-head">
-        <span class="search-icon" aria-hidden="true">⌕</span>
+        <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg></span>
         <input id="tpl-search" type="text" placeholder="Search templates (door, valve, sink, …)" aria-label="Search templates">
         <span class="modal-count" id="tpl-count"></span>
-        <button class="btn ghost sm" data-close="modal-templates" aria-label="Close">✕</button>
+        <button class="icon-btn" data-close="modal-templates" aria-label="Close" title="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
       </div>
       <div class="modal-body" id="tpl-body"></div>
     </div>
@@ -232,7 +233,7 @@
         <span class="modal-title">My families</span>
         <span class="modal-count" id="hist-count"></span>
         <span class="spacer"></span>
-        <button class="btn ghost sm" data-close="modal-history" aria-label="Close">✕</button>
+        <button class="icon-btn" data-close="modal-history" aria-label="Close" title="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
       </div>
       <div class="modal-body"><div class="tree" id="hist-list"></div></div>
     </div>

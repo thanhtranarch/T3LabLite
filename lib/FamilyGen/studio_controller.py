@@ -51,6 +51,7 @@ PROGRESS_STEPS = (('brief', 'Brief'), ('draft', 'Claude drafts'), ('check', 'Fam
                   ('review', '3D review'), ('compare', 'Reference check'),
                   ('create', 'Create family'))
 PROGRESS_IDLE = u'Describe a family or pick a template to start.'
+REVIEW_TEXT = u'Turn the model in 3D, try sizes in Types, then Create Family.'
 
 def type_table(schema):
     """Parameters × types grid for the Studio's Parameters tab (pure)."""
@@ -464,7 +465,12 @@ class StudioController(object):
             self.category = category
             self._remember('category', category)
             if self.session is not None:
-                self._reset_session(u'Category changed to {}: new conversation.'.format(category))
+                # The chat above stays; only Claude's conversation starts over (Fable review).
+                self._request_id += 1
+                self.session = None
+                self.post({'type': 'chat', 'role': 'system',
+                           'text': u'Category changed to {}: Claude starts a fresh conversation '
+                                   u'for it.'.format(category)})
 
     def _on_set_model(self, message):
         model = message.get('model')
@@ -504,6 +510,8 @@ class StudioController(object):
 
     def _on_new_chat(self, message):
         self._reset_session(u'New conversation. The current model stays.')
+        if self.current_json:
+            self._progress_review(REVIEW_TEXT)
 
     def _on_window(self, message):
         action = message.get('action')
@@ -752,7 +760,7 @@ class StudioController(object):
                                   compared, problems=True)
         else:
             self._status(u'Review the model, then Create Family.', 'success')
-            self._progress_review(u'Review the model, then Create Family.', compared)
+            self._progress_review(REVIEW_TEXT, compared)
 
     def _on_snapshot(self, message):
         if message.get('token') != self._snapshot_token or self.session is None:
@@ -877,6 +885,10 @@ class StudioController(object):
             param['value'] = value
         text = json.dumps(schema, indent=2, ensure_ascii=False)
         self.current_json = text
+        if self._steps.get('create') in ('done', 'warn', 'error'):
+            self._steps['create'] = 'todo'
+            self._progress_review(u'Changed after Create: Create Family again to update the .rfa.',
+                                  self._steps.get('compare') == 'done')
         self.post({'type': 'schema', 'json': text, 'source': 'edit',
                    'proposal_id': self._proposal_id})
         payload = preview_payload(text, self.preview_type)
@@ -1027,8 +1039,21 @@ class StudioController(object):
         self.post({'type': 'chat', 'role': 'system', 'text': text})
 
     def _track_mcp(self):
-        """Message receipts and the AI app's last call, for MCP mode."""
+        """Message receipts, text replies and the AI app's last call, for MCP mode."""
         app = self.mcp_client or u'your AI app'
+        try:
+            replies = studio_link.take_replies()
+        except Exception:
+            replies = []
+        for reply in replies:
+            who = reply.get('client') or app
+            self.post({'type': 'chat', 'role': 'assistant', 'text': reply.get('text') or u'',
+                       'meta': u'from {} over MCP'.format(who)})
+            self._mcp_working = False
+            self._mcp_waiting = []
+            self.post({'type': 'mcp_status', 'id': None, 'state': 'answered',
+                       'text': u'Answered by {}'.format(who)})
+            self._progress('draft', 'wait', u'{} answered in the chat: reply here.'.format(who))
         if self._mcp_waiting:
             try:
                 read = studio_link.read_ids(self._mcp_waiting)
@@ -1156,6 +1181,7 @@ class StudioController(object):
         self.post({'type': 'schema', 'json': text, 'source': 'history',
                    'proposal_id': message.get('id')})
         self._preview(text)
+        self._mcp_working = False
         self._progress_review(u'Opened from My families: review it, then Create Family.')
         self.post({'type': 'chat', 'role': 'system',
                    'text': u'Opened "{}" from My families. Ask Claude for changes, or Create '

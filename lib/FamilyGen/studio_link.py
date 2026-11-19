@@ -12,6 +12,7 @@ in ``%APPDATA%\\T3LabAI\\famigen_studio`` (docs/famigen-studio-spec.md §7):
 | ``state.json`` | Studio, on change | server | current family, category, selected part |
 | ``inbox.json`` | Studio (MCP mode) | server | messages typed in Studio for the AI app |
 | ``listener.json`` | server, famigen_wait_for_message | Studio | an AI app is listening (fresh < 2 min) |
+| ``replies.json`` | server, famigen_wait_for_message reply | Studio | the app's answers in words |
 
 Proposals themselves travel through ``FamilyGen.proposals.ProposalStore``.
 Writes are atomic (temp file + replace). Pure Python, IronPython 3 safe.
@@ -171,8 +172,8 @@ LISTEN_COMMAND = (u'FamiGen Studio in Revit sends you requests through the T3Lab
                   u'Do not search past chats. Call the T3Lab tool famigen_wait_for_message '
                   u'now (through t3lab_call if it is not listed). For every message it returns, '
                   u'work on the family it includes with famigen_patch_family or '
-                  u'famigen_propose_family, then call famigen_wait_for_message again. Keep '
-                  u'listening until I say stop.')
+                  u'famigen_propose_family, then call famigen_wait_for_message again; to answer '
+                  u'in words, pass your answer as its reply. Keep listening until I say stop.')
 
 
 def note_listening(client, root=None, clock=time.time):
@@ -198,6 +199,25 @@ def wait_unread(timeout=45.0, root=None, clock=time.time, sleep=time.sleep, poll
         if items or clock() >= end:
             return items
         sleep(poll)
+
+
+# ── replies in words (AI app -> Studio) ──────────────────────────────────────
+def post_reply(text, client=None, root=None, clock=time.time):
+    """A text answer for the Studio chat (a question, an explanation): the app passes
+    it as famigen_wait_for_message's ``reply``."""
+    items = _read('replies.json', root)
+    items = items if isinstance(items, list) else []
+    items = (items + [{'text': u'{}'.format(text), 'client': friendly_client(client),
+                       'time': clock()}])[-MAX_INBOX:]
+    _write('replies.json', items, root)
+
+
+def take_replies(root=None):
+    items = _read('replies.json', root)
+    if not isinstance(items, list) or not items:
+        return []
+    _write('replies.json', [], root)
+    return [i for i in items if isinstance(i, dict) and i.get('text')]
 
 
 def withdraw(message_id, root=None):

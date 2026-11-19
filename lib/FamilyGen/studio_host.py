@@ -98,7 +98,8 @@ class _ClaudeAdapter(object):
             return None
 
     def models(self):
-        if self._models is None:
+        # An empty answer (network blip) is not kept: the next open tries again.
+        if not self._models:
             self._models = list(self._p().get_models() or [])
         return self._models
 

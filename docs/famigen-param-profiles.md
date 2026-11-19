@@ -27,13 +27,25 @@ its category needs and can ask Claude for exactly the missing sizes.
    - `present`: the parameter exists but drives nothing;
    - `missing`: not in the family.
 4. **Score** = (2 × driven + present) / (2 × required) → 0–100 %. Shown in the
-   Sizes tab as "Parameter fit · <Category> · <score>%", every row with its
+   Sizes tab as "Parameter fit · <Category> · N of M sizes resize" (optional
+   sizes a family does not use read "not used"), every row with its
    state in words.
 5. **Fix** – "Make it parametric" sends `param_profiles.brief(schema)` to Claude:
    only the sizes that do not resize yet, with their axes, asking for reference
    planes, face locks and labelled dimensions while keeping the current look.
    Every template brief already ends with its category's sizes
    (`template_note`).
+
+## Office profiles
+
+An office can replace any category's profile with
+`%APPDATA%\T3LabAI\famigen_profiles.json` (read on every check; a bad file is
+ignored):
+
+```json
+{"Door": {"required": [["Width", "x", "rough width"], ["Height", "z", "leaf height"]],
+          "optional": [["Frame Width", "x", "jamb"]]}}
+```
 
 ## Trying sizes before Revit
 
@@ -50,8 +62,6 @@ status line says when a parameter drives nothing.
   (e.g. Sill Height, Mounting Height) and grade that too.
 - Shared parameters / IFC: map profile names to the office's shared parameter
   file so schedules and IFC export pick them up.
-- Per-office profiles: read an optional JSON override in
-  `%APPDATA%\T3LabAI\famigen_profiles.json`.
 - Check formulas and min/max ranges (e.g. Door Width 600–1200).
 - NEEDS VERIFICATION in Revit: that families built after "Make it parametric"
   flex the same way the preview does.

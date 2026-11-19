@@ -88,9 +88,46 @@ ALIASES = {
 }
 
 
+def _office_profiles(path=None):
+    """{category: profile} from the office's JSON, read on each call (small file).
+
+    ``%APPDATA%\\T3LabAI\\famigen_profiles.json``: {"Door": {"required": [["Width", "x",
+    "rough width"], ...], "optional": [...]}}. A category given there replaces the
+    built-in one; a bad file is ignored.
+    """
+    import io
+    import json
+    import os
+    path = path or os.path.join(os.environ.get('APPDATA') or os.path.expanduser('~'),
+                                'T3LabAI', 'famigen_profiles.json')
+    try:
+        with io.open(path, 'r', encoding='utf-8') as handle:
+            data = json.loads(handle.read())
+    except (IOError, OSError, ValueError):
+        return {}
+    out = {}
+    for category, spec in (data.items() if isinstance(data, dict) else []):
+        if not isinstance(spec, dict):
+            continue
+        rows = {}
+        for group in ('required', 'optional'):
+            items = []
+            for item in spec.get(group) or []:
+                if isinstance(item, (list, tuple)) and item and isinstance(item[0], str):
+                    axis = item[1] if len(item) > 1 and item[1] in ('x', 'y', 'z') else None
+                    why = item[2] if len(item) > 2 and isinstance(item[2], str) else u''
+                    items.append((item[0], axis, why))
+            rows[group] = tuple(items)
+        if rows.get('required'):
+            out[category] = rows
+    return out
+
+
 def profile(category):
-    """The category's profile (Generic Model's for unknown categories)."""
-    return PROFILES.get(category) or PROFILES['Generic Model']
+    """The category's profile: the office's JSON first, then the built-in one
+    (Generic Model's for unknown categories)."""
+    office = _office_profiles()
+    return office.get(category) or PROFILES.get(category) or PROFILES['Generic Model']
 
 
 def _names(name):

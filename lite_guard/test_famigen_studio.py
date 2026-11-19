@@ -1264,5 +1264,66 @@ class McpFirstTests(unittest.TestCase):
         self.assertEqual(of_type(posts, 'mcp_status')[-1]['state'], 'moved')
 
 
+class FinishingTests(unittest.TestCase):
+    """Fable review leftovers and MCP replies (2026-11-19)."""
+
+    def setUp(self):
+        os.environ['APPDATA'] = tempfile.mkdtemp(prefix='famigen_finish_')
+        with open(os.path.join(STUDIO, 'studio.js'), encoding='utf-8') as handle:
+            self.js = handle.read()
+        with open(os.path.join(STUDIO, 'studio.html'), encoding='utf-8') as handle:
+            self.html = handle.read()
+
+    def test_mcp_reply_in_words_reaches_the_chat(self):
+        ctl, posts = controller(engine='mcp')
+        ctl.handle({'type': 'send', 'text': 'What size?', 'json': ''})
+        studio_link.post_reply('Which width: 1800 or 2100?', 'claude-ai')
+        ctl.tick()
+        answer = [p for p in of_type(posts, 'chat') if p.get('role') == 'assistant'][-1]
+        self.assertIn('1800', answer['text'])
+        self.assertIn('Claude Desktop', answer['meta'])
+        self.assertEqual(of_type(posts, 'mcp_status')[-1]['state'], 'answered')
+        self.assertEqual(studio_link.take_replies(), [])
+
+    def test_category_change_keeps_the_chat(self):
+        ctl, posts = controller()
+        ctl.session = object()                      # a conversation is running
+        ctl.handle({'type': 'set_category', 'category': 'Door'})
+        self.assertIsNone(ctl.session)
+        self.assertEqual(of_type(posts, 'chat_reset'), [])
+        self.assertIn('fresh conversation', of_type(posts, 'chat')[-1]['text'])
+
+    def test_edit_after_create_reopens_create(self):
+        ctl, posts = controller()
+        ctl.current_json = json.dumps(_flex_family())
+        ctl._steps = {'create': 'done', 'review': 'done'}
+        ctl.handle({'type': 'set_param', 'param': 'Width', 'type_name': 'W1000', 'value': 1100})
+        last = dict((s['id'], s['state']) for s in of_type(posts, 'progress')[-1]['steps'])
+        self.assertEqual((last['create'], last['review']), ('todo', 'wait'))
+
+    def test_office_profiles_override(self):
+        from FamilyGen import param_profiles as pp
+        path = os.path.join(os.environ['APPDATA'], 'T3LabAI')
+        os.makedirs(path)
+        with open(os.path.join(path, 'famigen_profiles.json'), 'w', encoding='utf-8') as handle:
+            json.dump({'Furniture': {'required': [['Width', 'x', 'w'], ['Seat Height', 'z', 's']]}}, handle)
+        names = [r['name'] for r in pp.evaluate(_flex_family())['rows']]
+        self.assertEqual(names, ['Width', 'Seat Height'])
+        with open(os.path.join(path, 'famigen_profiles.json'), 'w', encoding='utf-8') as handle:
+            handle.write('{broken')
+        self.assertIn('Depth', [r['name'] for r in pp.evaluate(_flex_family())['rows']])
+
+    def test_no_emoji_or_text_glyph_icons(self):
+        for glyph in (u'📎', u'📝', u'📄', u'▸', u'▾', u'✕', u'⌕', u"'×'"):
+            self.assertNotIn(glyph, self.js + self.html)
+
+    def test_narrow_window_keeps_the_inspector_reachable(self):
+        self.assertIn('id="btn-inspect"', self.html)
+        self.assertIn("classList.toggle('show-inspect'", self.js)
+
+    def test_drawings_hide_the_size_along_the_view(self):
+        self.assertIn("{ front: 'y', right: 'x', top: 'z' }", self.js)
+
+
 if __name__ == '__main__':
     unittest.main()

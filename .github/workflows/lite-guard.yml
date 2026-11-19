@@ -64,6 +64,7 @@ jobs:
         run: python3 lite_guard/test_mcp_cad_clients.py
       - name: Test Connect installing the AutoCAD / Civil 3D add-in
         run: python3 -W ignore lite_guard/test_addin_installer.py
+      - name: Test the pyRevit Routes port guard
         run: python3 -W ignore lite_guard/test_routes_guard.py
       - name: Test agent cursors (actions, followed views, bridge agent stamp)
         run: python3 lite_guard/test_agent_cursors.py

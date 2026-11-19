@@ -46,6 +46,15 @@ Releasing a new version:
   `famigen_get_studio_state`, `famigen_validate_family`,
   `famigen_patch_family` and `famigen_list_templates`.
 
+### Changed
+
+- **FamiGen Studio follows the T3 design system:** T3 colours, type sizes,
+  4 px spacing, 26 px rows and flat controls (no shadows or animation). The
+  right panel now reads like Revit: a Properties panel with collapsible groups
+  (Identity Data, Geometry, Dimensions) and a parts tree grouped by
+  subcategory, with repeated parts folded into one row ("Post ×8"). View
+  controls sit in a docked toolbar above the 3D view instead of floating on it.
+
 ### Fixed
 
 - **FamiGen (classic window) — the Family JSON box was one line high:** it now

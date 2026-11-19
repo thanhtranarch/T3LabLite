@@ -34,20 +34,6 @@
     </span>
   </header>
 
-  <!-- ═══ Progress strip: where the family is, brief → Create family (studio_controller.PROGRESS_STEPS) ═══ -->
-  <nav class="progress" id="progress" aria-label="Family progress">
-    <ol class="steps" id="steps">
-      <li class="step" data-step="brief" data-state="todo"><span class="step-dot">1</span><span class="step-label">Brief</span></li>
-      <li class="step" data-step="draft" data-state="todo"><span class="step-dot">2</span><span class="step-label">Claude drafts</span></li>
-      <li class="step" data-step="check" data-state="todo"><span class="step-dot">3</span><span class="step-label">FamiGen checks</span></li>
-      <li class="step" data-step="review" data-state="todo"><span class="step-dot">4</span><span class="step-label">3D review</span></li>
-      <li class="step" data-step="compare" data-state="todo"><span class="step-dot">5</span><span class="step-label">Reference check</span></li>
-      <li class="step" data-step="create" data-state="todo"><span class="step-dot">6</span><span class="step-label">Create family</span></li>
-    </ol>
-    <span class="progress-text" id="progress-text">Describe a family or pick a template to start.</span>
-    <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progress-fill"></div></div>
-  </nav>
-
   <main class="grid">
 
     <!-- ═══ Left: chat with Claude ═══ -->
@@ -59,7 +45,27 @@
         <button class="icon-btn" id="btn-history" title="My families: families generated before (Claude, T3Lab Assistant and MCP proposals)" aria-label="My families"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg></button>
         <button class="icon-btn" id="btn-new" title="New chat: start a new conversation; the current model stays" aria-label="New chat"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/></svg></button>
       </div>
-      <div class="messages" id="messages" aria-live="polite">
+      <!-- Stage card: where the family is now (studio_controller.PROGRESS_STEPS) and what the AI
+           is doing. The timeline below adds a node per step as the AI works. Liquid glass:
+           owner request 2026-11-19, see the LIQUID GLASS block in studio.css. -->
+      <div class="progress-card glass" id="progress-card" aria-live="polite">
+        <div class="stage-head">
+          <span class="stage-num" id="stage-num">0/6</span>
+          <span class="stage-label" id="stage-label">Ready</span>
+          <span class="spacer"></span>
+          <ol class="steps" id="steps" aria-label="Family progress">
+            <li class="step" data-step="brief" data-state="todo" title="Brief"></li>
+            <li class="step" data-step="draft" data-state="todo" title="Claude drafts"></li>
+            <li class="step" data-step="check" data-state="todo" title="FamiGen checks"></li>
+            <li class="step" data-step="review" data-state="todo" title="3D review"></li>
+            <li class="step" data-step="compare" data-state="todo" title="Reference check"></li>
+            <li class="step" data-step="create" data-state="todo" title="Create family"></li>
+          </ol>
+        </div>
+        <div class="stage-text" id="progress-text">Describe a family or pick a template to start.</div>
+        <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progress-fill"></div></div>
+      </div>
+      <div class="messages timeline glass" id="messages">
         <div class="empty" id="chat-empty">
           <div class="hero">What family do you need?</div>
           <p>Describe it, or attach a photo, drawing or manufacturer cut sheet (paste or drop
@@ -70,9 +76,9 @@
       </div>
       <div class="drop-hint hidden" id="drop-hint">Drop images, PDFs or text files to attach them</div>
       <div class="composer">
-        <div class="composer-box">
+        <div class="composer-box glass">
           <div class="chips" id="attachments"></div>
-          <textarea id="prompt" rows="2" aria-label="Message to Claude"
+          <textarea id="prompt" rows="1" aria-label="Message to Claude"
             title="Enter sends · Shift+Enter new line · / opens templates · paste or drop images, PDFs and text files"
             placeholder="Describe a family, or the change you want…"></textarea>
           <div class="composer-row">
@@ -80,7 +86,7 @@
             <button class="icon-btn" id="btn-templates" title="Templates: ready briefs from the template library ( / )" aria-label="Templates"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5"/><rect x="9" y="2.5" width="4.5" height="4.5"/><rect x="2.5" y="9" width="4.5" height="4.5"/><rect x="9" y="9" width="4.5" height="4.5"/></svg></button>
             <span class="spacer"></span>
             <select id="sel-mode" class="compact mode" title="Fast answers quickly; Best and Deep think longer for better geometry (more tokens)"></select>
-            <button class="btn danger sm hidden" id="btn-stop" title="Stop waiting for Claude">Stop</button>
+            <button class="btn danger sm hidden" id="btn-stop" title="Stop waiting for the AI">Stop</button>
             <button class="btn primary sm" id="btn-send" title="Send (Enter) · Shift+Enter for a new line">Send</button>
           </div>
         </div>
@@ -94,6 +100,7 @@
             <option value="mcp">Send via MCP (AI app)</option>
           </select>
           <span class="spacer"></span>
+          <button class="link hidden" id="btn-copy-listen" title="Copy the command that makes your AI app listen to FamiGen Studio; paste it there once">Copy listen command</button>
           <button class="link" id="btn-copy-prompt" title="Copy the FamiGen prompt for this category, for any other AI chat">Copy prompt</button>
         </div>
       </div>
@@ -173,7 +180,7 @@
         <div class="tab-panel" id="tab-types">
           <div class="table-wrap"><table class="table" id="types-table"></table></div>
           <p class="note">Bold values differ from the default. A length resizes the model only
-             through a labelled dimension with locked faces (Planes tab); material values
+             through a labelled dimension with locked faces (Sizes tab); material values
              change the finish.</p>
         </div>
         <div class="tab-panel" id="tab-planes">

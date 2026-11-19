@@ -354,6 +354,14 @@ try:
                 self.server._cached_uiapp = app
             except Exception:
                 pass
+            # Usage rows are built on the HTTP threads, which may not touch
+            # the Revit API: this is the one place on Revit's own thread that
+            # holds the live application (Lite only, lib/tracking/).
+            try:
+                from tracking import note_revit_context
+                note_revit_context(app)
+            except Exception:
+                pass
             # Drain everything queued: ExternalEvent coalesces multiple
             # Raise() calls into one Execute, and several callers (HTTP
             # worker + assistant thread) may be waiting at once.

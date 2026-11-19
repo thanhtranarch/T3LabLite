@@ -232,11 +232,15 @@ class DuplicateTypeNameTests(unittest.TestCase):
         self.assertIn('__namespace__ = "T3Lab.BatchOutFallback_" + uuid.uuid4().hex[:8]', src)
         self.assertNotIn('__namespace__ = "T3Lab.BatchOut"\n', src)
 
-    def test_error_dialog_says_restart_revit(self):
+    def test_error_dialog_says_run_the_tool_again(self):
+        # Not "restart Revit": the cause was never a reload. pyrevit.revit
+        # failed to load earlier in the same click
+        # (lite_guard/test_pyrevit_revit_thread.py), so the next click is clean.
         from GUI import ErrorGuard as eg
         for text in ('TypeError: Duplicate type name within an assembly.',
                      "ImportError: cannot import name 'revit' from 'pyrevit' (x)"):
-            self.assertIn('close Revit and open it again', eg.next_step(text))
+            self.assertIn('Run the tool again', eg.next_step(text))
+            self.assertNotIn('close Revit', eg.next_step(text))
         self.assertTrue(eg.next_step('ValueError: bad sheet').startswith('Try again.'))
 
 

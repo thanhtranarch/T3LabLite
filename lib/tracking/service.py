@@ -144,10 +144,32 @@ def redact_arguments(arguments):
 
 INSTALL_ID_KEY = "tracking_install_id"
 
+# The Revit version and the active document's title, as last read on Revit's
+# own thread. Kept on the AppDomain so every Python engine in the process sees
+# the same value: the CPython tools write it on each ribbon click, the
+# IronPython MCP host reads it on its HTTP threads.
+_CONTEXT_SLOT = "T3Lab.Tracking.RevitContext"
+
+
+def _injected_revit():
+    """The application object pyRevit injects as `__revit__`, or None.
+
+    Read straight from the interpreter, never through `pyrevit`: see
+    TelemetryService.note_revit_context for why nothing here may import it.
+    """
+    for module_name in ("builtins", "__builtin__", "__main__"):
+        try:
+            handle = getattr(__import__(module_name), "__revit__", None)
+        except Exception:
+            handle = None
+        if handle is not None:
+            return handle
+    return None
+
 
 class TelemetryService(object):
     _cached_user_hash = None
-    _cached_revit_version = None
+    _cached_context = None      # (version, title) when the AppDomain is unavailable
 
     @classmethod
     def is_enabled(cls):
@@ -198,26 +220,70 @@ class TelemetryService(object):
         return "doc_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 
     @classmethod
-    def get_revit_context(cls):
-        """Resolve current Revit version and open document title safely."""
-        revit_ver = cls._cached_revit_version
-        doc_title = None
+    def note_revit_context(cls, uiapp=None):
+        """Read the Revit version and the active document's title.
 
+        Call it ON REVIT'S OWN THREAD only: a ribbon click, startup, an
+        ExternalEvent. Everything else reads the stored copy through
+        get_revit_context().
+
+        It never imports `pyrevit`, and neither may anything the worker thread
+        runs. Until 2026-11-19 the worker did `from pyrevit import revit`, and
+        that one line broke every tool (verified in the pyRevit 6.5.5 source):
+        pyrevit/revit/events.py creates the .NET type `<exec id>.
+        FuncAsEventHandler` and then, still at import, calls
+        `UI.ExternalEvent.Create(...)`, which Revit refuses off its own thread.
+        The import fails after the type exists and the worker swallows the
+        error. The tool starting on Revit's thread then imports pyrevit.revit
+        itself and gets one of two errors, depending on who was first:
+          - "Duplicate type name within an assembly": the worker was done, so
+            events.py runs again in the same execution, under the same exec id;
+          - "cannot import name 'revit' from 'pyrevit'": the worker was still
+            importing; Python waits for it and hands back its failed module.
+        Every click starts this worker, so it came back on every click of every
+        tool, across Revit restarts, and only for users who allowed tracking.
+        """
+        if uiapp is None:
+            uiapp = _injected_revit()
+        version, title = cls.get_revit_context()
+        if uiapp is None:
+            return version, title
         try:
-            from pyrevit import revit, HOST_APP
-            if not revit_ver:
-                revit_ver = getattr(HOST_APP, "version", None)
-                if not revit_ver and getattr(revit, "doc", None):
-                    app = revit.doc.Application
-                    revit_ver = str(app.VersionNumber)
-                cls._cached_revit_version = str(revit_ver or "unknown")
-
-            if getattr(revit, "doc", None) and revit.doc:
-                doc_title = revit.doc.Title
+            app = (getattr(uiapp, "Application", None)
+                   or getattr(uiapp, "ControlledApplication", None) or uiapp)
+            version = u"{}".format(app.VersionNumber) or version
         except Exception:
             pass
+        try:
+            uidoc = getattr(uiapp, "ActiveUIDocument", None)
+            doc = getattr(uidoc, "Document", None)
+            title = u"{}".format(doc.Title) if doc is not None else u""
+        except Exception:
+            pass
+        cls._cached_context = (version, title)
+        try:
+            from System import AppDomain
+            AppDomain.CurrentDomain.SetData(_CONTEXT_SLOT, version + u"\n" + title)
+        except Exception:
+            pass
+        return version, title
 
-        return revit_ver or "unknown", doc_title or ""
+    @classmethod
+    def get_revit_context(cls):
+        """(Revit version, document title) as last noted on Revit's thread.
+
+        Touches neither the Revit API nor pyrevit, so it is safe on any thread.
+        """
+        try:
+            from System import AppDomain
+            stored = AppDomain.CurrentDomain.GetData(_CONTEXT_SLOT)
+            if stored:
+                version, _, title = u"{}".format(stored).partition(u"\n")
+                return version or "unknown", title
+        except Exception:
+            pass
+        version, title = cls._cached_context or ("unknown", "")
+        return version or "unknown", title or ""
 
     @classmethod
     def extract_mcp_purpose(cls, tool_name, arguments):
@@ -363,9 +429,13 @@ class TelemetryService(object):
     @classmethod
     def _dispatch_async(cls, payload):
         """Send tracking payload in a background daemon thread."""
+        # Taken here, on the caller's thread, from the copy noted on Revit's
+        # thread. The worker below does hashing and HTTP only: it must never
+        # import pyrevit or touch the Revit API (see note_revit_context).
+        revit_ver, doc_title = cls.get_revit_context()
+
         def _worker():
             try:
-                revit_ver, doc_title = cls.get_revit_context()
                 payload["revit_version"] = revit_ver
                 payload["doc_name"] = cls.doc_code(doc_title)
                 payload["user_hash"] = cls.get_user_hash()

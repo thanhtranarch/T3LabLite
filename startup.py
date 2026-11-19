@@ -506,7 +506,12 @@ def main():
     state, detail = auto_patch_pyrevit()
     if state == "applied":
         _notify_patched(detail)
-    elif state not in (None, "already"):
+    elif state == "removed":
+        # pyRevit 7.0+ survives a Reload by itself; an earlier T3Lab patched it
+        # anyway because the function text had not changed since 6.5.5.
+        _log("T3Lab took its reload patch out of pyRevit again - this pyRevit "
+             "version does not need it: %s" % detail)
+    elif state not in (None, "already", "not needed"):
         _log("pyRevit reload patch not applied (%s): %s" % (state, detail))
 
     # ─── 4. Diagnostic checks on reload & startup ─────────────────────────────

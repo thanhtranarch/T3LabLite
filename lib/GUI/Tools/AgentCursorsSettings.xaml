@@ -3,8 +3,8 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Agent Cursors"
-        Width="560" Height="420"
-        MinWidth="560" MinHeight="420"
+        Width="560" Height="480"
+        MinWidth="560" MinHeight="480"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -1797,13 +1797,18 @@
                                     BorderBrush="{StaticResource T3.Border}" BorderThickness="0,1,0,0"
                                     Padding="16" CornerRadius="0,0,4,4">
                                 <StackPanel>
-                                    <!-- T3LabLite only: the switch for everything that draws on the views.
-                                         Shown from Python when OPTIONS has 'model'. -->
-                                    <StackPanel x:Name="row_model" Margin="0,0,0,12" Visibility="Collapsed">
+                                    <!-- Groups and names are the bar's own (agent_cursors.OPTION_GROUPS /
+                                         OPTION_LABELS; owner, 2026-11-19): what a switch is called on the
+                                         bar is what its checkbox is called here. Tooltip = what it does. -->
+
+                                    <!-- Show: T3LabLite only, the switch for everything that draws on the
+                                         views. Shown from Python when OPTIONS has 'model'. -->
+                                    <StackPanel x:Name="row_model" Margin="0,0,0,16" Visibility="Collapsed">
+                                        <TextBlock Text="Show" FontWeight="SemiBold" FontSize="12.5"
+                                                   Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
                                         <CheckBox x:Name="opt_model" Style="{StaticResource T3.CheckBox}"
-                                                  Content="On model" FontWeight="SemiBold"
-                                                  Click="model_clicked"/>
-                                        <TextBlock Text="Draw the cursor, element boxes and effects on the views. Off: the bar only."
+                                                  Content="On model" Click="model_clicked"/>
+                                        <TextBlock Text="Draw the cursor, element boxes and effects on the views and let the options below act. Off: the bar only, nothing on the model"
                                                    FontSize="11" Foreground="{StaticResource T3.TextSecondary}"
                                                    TextWrapping="Wrap" Margin="24,4,0,0"/>
                                     </StackPanel>
@@ -1814,43 +1819,56 @@
                                             <ColumnDefinition Width="32"/> <!-- Spacer -->
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
 
-                                        <!-- Left Column: Views -->
-                                        <StackPanel Grid.Column="0">
-                                            <TextBlock Text="Views" FontWeight="SemiBold" FontSize="12.5"
+                                        <!-- View -->
+                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,0,16">
+                                            <TextBlock Text="View" FontWeight="SemiBold" FontSize="12.5"
                                                        Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
                                             <CheckBox x:Name="opt_follow" Style="{StaticResource T3.CheckBox}"
-                                                      Content="Follow the agent's views" Margin="0,4"
+                                                      Content="Follow" Margin="0,4"
                                                       ToolTip="Open and switch to the views the agent works in"/>
                                             <CheckBox x:Name="opt_zoom" Style="{StaticResource T3.CheckBox}"
-                                                      Content="Zoom to off-screen targets" Margin="0,4"
+                                                      Content="Zoom" Margin="0,4"
                                                       ToolTip="Zoom the view to targets that are off screen"/>
                                             <CheckBox x:Name="opt_tile" Style="{StaticResource T3.CheckBox}"
-                                                      Content="Tile the views it opens" Margin="0,4"
+                                                      Content="Tile" Margin="0,4"
                                                       ToolTip="Tile the open views when the agent opens another one"/>
                                         </StackPanel>
 
-                                        <!-- Vertical Separator -->
-                                        <Border Grid.Column="1" Width="1" Background="{StaticResource T3.Border}"
-                                                HorizontalAlignment="Center"/>
-
-                                        <!-- Right Column: Selection, effects and the bar -->
-                                        <StackPanel Grid.Column="2">
-                                            <TextBlock Text="Selection and Effects" FontWeight="SemiBold" FontSize="12.5"
+                                        <!-- Selection -->
+                                        <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,16">
+                                            <TextBlock Text="Selection" FontWeight="SemiBold" FontSize="12.5"
                                                        Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
                                             <CheckBox x:Name="opt_select" Style="{StaticResource T3.CheckBox}"
-                                                      Content="Select the agent's targets" Margin="0,4"
+                                                      Content="Select" Margin="0,4"
                                                       ToolTip="Select the agent's targets (replaces your selection)"/>
-                                            <CheckBox x:Name="opt_glow" Style="{StaticResource T3.CheckBox}"
-                                                      Content="Glow on touched elements" Margin="0,4,0,16"
-                                                      ToolTip="Experimental: outline touched elements inside the Revit view (DirectContext3D). Turn off if Revit misbehaves."/>
+                                        </StackPanel>
 
+                                        <!-- Effects -->
+                                        <StackPanel Grid.Row="1" Grid.Column="0">
+                                            <TextBlock Text="Effects" FontWeight="SemiBold" FontSize="12.5"
+                                                       Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
+                                            <CheckBox x:Name="opt_glow" Style="{StaticResource T3.CheckBox}"
+                                                      Content="Glow" Margin="0,4"
+                                                      ToolTip="Experimental: outline touched elements inside the Revit view (DirectContext3D). Turn off if Revit misbehaves."/>
+                                        </StackPanel>
+
+                                        <!-- Bar -->
+                                        <StackPanel Grid.Row="1" Grid.Column="2">
                                             <TextBlock Text="Bar" FontWeight="SemiBold" FontSize="12.5"
                                                        Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>
                                             <CheckBox x:Name="opt_keep" Style="{StaticResource T3.CheckBox}"
-                                                      Content="Keep the bar between calls" Margin="0,4"
-                                                      ToolTip="Keep the bar (folded) on screen between calls instead of fading out"/>
+                                                      Content="Keep bar" Margin="0,4"
+                                                      ToolTip="Keep the bar (folded) on screen between calls instead of fading out (the x on the bar turns Agent Cursors off)"/>
                                         </StackPanel>
+
+                                        <!-- Vertical Separator -->
+                                        <Border Grid.Row="0" Grid.Column="1" Grid.RowSpan="2" Width="1"
+                                                Background="{StaticResource T3.Border}" HorizontalAlignment="Center"/>
                                     </Grid>
                                 </StackPanel>
                             </Border>

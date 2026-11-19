@@ -19,8 +19,8 @@ except Exception:           # no WPF (tests, a broken engine): ask() falls back
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'AgentCursorsSettings.xaml')
 MASTER = 'model'            # T3LabLite: the option every drawing option hangs under
 FREE = ('model', 'keep')    # options that act without MASTER (agent_cursors.effective)
-HEIGHT, HEIGHT_OPEN = 420, 560      # size M; the taller one while the details card is open
-MODEL_ROW = 56                      # the "On model" row: without it the second card is cut off
+HEIGHT, HEIGHT_OPEN = 480, 620      # as tall as the cards; taller while the details card is open
+MODEL_ROW = 64                      # the "Show" group: without it the second card is cut off
 _UP, _DOWN = u"", u""
 
 

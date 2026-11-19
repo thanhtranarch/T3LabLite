@@ -141,6 +141,11 @@ class _RevitAdapter(object):
         self.modal = modal
         self.into_family = bool(getattr(doc, 'IsFamilyDocument', False)) and modal
         self.frameless = False      # set by open_studio once pyRevit's own title bar is hidden
+        # Read here, in the command's API context: the Studio reads the file as text later.
+        try:
+            self.shared_parameter_file = app.SharedParametersFilename or u''
+        except Exception:
+            self.shared_parameter_file = u''
         self._handler = None
         self._event = None
         if not modal:

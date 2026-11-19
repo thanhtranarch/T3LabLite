@@ -1325,5 +1325,102 @@ class FinishingTests(unittest.TestCase):
         self.assertIn("{ front: 'y', right: 'x', top: 'z' }", self.js)
 
 
+SP_TEXT = (u'# This is a Revit shared parameter file.\n'
+           u'# Do not edit manually.\n'
+           u'*META\tVERSION\tMINVERSION\nMETA\t2\t1\n'
+           u'*GROUP\tID\tNAME\nGROUP\t1\tT3 Dimensions\n'
+           u'*PARAM\tGUID\tNAME\tDATATYPE\tDATACATEGORY\tGROUP\tVISIBLE\tDESCRIPTION\tUSERMODIFIABLE\tHIDEWHENNOVALUE\n'
+           u'PARAM\t0a1b2c3d-0000-4000-8000-00000000abcd\tWidth\tLENGTH\t\t1\t1\tOverall width\t1\t0\n'
+           u'PARAM\t1a1b2c3d-0000-4000-8000-00000000abcd\tSill Height\tautodesk.spec.aec:length-2.0.0\t\t1\t1\t\t1\t0\n'
+           u'PARAM\t2a1b2c3d-0000-4000-8000-00000000abcd\tNote\tTEXT\t\t1\t1\t\t1\t0\n')
+
+
+class SharedParamTests(unittest.TestCase):
+    """Instance / type scopes and Revit shared parameters (docs/famigen-param-profiles.md)."""
+
+    def setUp(self):
+        from FamilyGen import shared_params, param_profiles
+        self.sp, self.pp = shared_params, param_profiles
+        self.dir = tempfile.mkdtemp(prefix='famigen_sp_')
+
+    def write(self, encoding):
+        path = os.path.join(self.dir, 'sp_{}.txt'.format(encoding))
+        with open(path, 'w', encoding=encoding, newline='\r\n') as handle:
+            handle.write(SP_TEXT)
+        return path
+
+    def test_reads_utf16_and_utf8_files(self):
+        for encoding in ('utf-16', 'utf-8'):
+            defs = self.sp.read(self.write(encoding))
+            self.assertEqual([d['name'] for d in defs], ['Width', 'Sill Height', 'Note'])
+            self.assertEqual([d['kind'] for d in defs], ['length', 'length', 'text'])
+            self.assertEqual(defs[0]['group'], 'T3 Dimensions')
+        self.assertEqual(self.sp.read(os.path.join(self.dir, 'missing.txt')), [])
+
+    def test_find_by_guid_then_name_with_a_matching_kind(self):
+        defs = self.sp.parse(SP_TEXT)
+        self.assertEqual(self.sp.find(defs, 'x', '1A1B2C3D-0000-4000-8000-00000000ABCD')['name'], 'Sill Height')
+        self.assertEqual(self.sp.find(defs, 'width', kind='length')['guid'][:8], '0a1b2c3d')
+        self.assertIsNone(self.sp.find(defs, 'Width', kind='text'))
+
+    def window(self):
+        return {'family_category': 'Window', 'family_name': 'W', 'parameters': [
+            {'name': 'Width', 'type': 'length', 'value': 900},
+            {'name': 'Sill Height', 'type': 'length', 'value': 900},
+            {'name': 'Note', 'type': 'text', 'value': 'x'}]}
+
+    def test_scope_grading_and_apply_standards(self):
+        defs = self.sp.parse(SP_TEXT)
+        fit = self.pp.evaluate(self.window(), defs)
+        sill = [r for r in fit['rows'] if r['name'] == 'Sill Height'][0]
+        self.assertEqual((sill['scope'], sill['scope_ok'], sill['in_file']), ('instance', False, True))
+        self.assertEqual((fit['scope_issues'], fit['shareable']), (1, 2))
+        fixed, changes = self.pp.apply_standards(self.window(), defs)
+        params = dict((p['name'], p) for p in fixed['parameters'])
+        self.assertTrue(params['Sill Height']['instance'])
+        self.assertFalse(params['Width'].get('instance', False))
+        self.assertEqual(params['Width']['guid'], '0a1b2c3d-0000-4000-8000-00000000abcd')
+        self.assertTrue(params['Note']['shared'])
+        self.assertEqual(len(changes), 4)
+        self.assertEqual(fs.validate_family_schema(dict(GOOD, parameters=fixed['parameters']))[0], [])
+        self.assertEqual(self.pp.apply_standards(fixed, defs)[1], [])            # idempotent
+        self.assertNotIn('shared', self.window()['parameters'][0])                # input untouched
+
+    def test_schema_checks_shared_and_guid(self):
+        bad = dict(GOOD, parameters=[{'name': 'Width', 'type': 'length', 'value': 1,
+                                      'shared': 'yes', 'guid': 'nope'}])
+        errors = fs.validate_family_schema(bad)[0]
+        self.assertTrue(any('.shared' in e for e in errors))
+        self.assertTrue(any('.guid' in e for e in errors))
+
+    def test_controller_applies_standards_without_ai(self):
+        revit = FakeRevit()
+        revit.shared_parameter_file = self.write('utf-16')
+        http = FakeHttp()
+        ctl, posts = controller(http=http, revit=revit)
+        ctl.handle({'type': 'ready'})
+        self.assertEqual(of_type(posts, 'init')[0]['shared_file']['count'], 3)
+        ctl.current_json = json.dumps(dict(GOOD, family_category='Window',
+                                           parameters=self.window()['parameters']))
+        ctl.handle({'type': 'apply_standards'})
+        schema = json.loads(of_type(posts, 'schema')[-1]['json'])
+        self.assertTrue([p for p in schema['parameters'] if p['name'] == 'Sill Height'][0]['instance'])
+        self.assertEqual(http.bodies, [])
+        fit = of_type(posts, 'preview')[-1]['param_fit']
+        self.assertEqual((fit['scope_issues'], fit['shareable']), (0, 0))
+        self.assertIn('Applied the parameter standard', of_type(posts, 'chat')[-1]['text'])
+
+    def test_builder_adds_shared_parameters_version_safe(self):
+        with open(os.path.join(LIB, 'FamilyGen', 'builder.py'), encoding='utf-8') as handle:
+            builder = handle.read()
+        with open(os.path.join(LIB, 'Snippets', '_compat.py'), encoding='utf-8') as handle:
+            compat = handle.read()
+        self.assertIn('add_shared_family_parameter(self.fm, definition', builder)
+        self.assertIn('OpenSharedParameterFile()', compat)
+        helper = compat[compat.index('def add_shared_family_parameter'):compat.index('def shared_definitions')]
+        self.assertLess(helper.index('_DB.GroupTypeId'), helper.index("'BuiltInParameterGroup')"))
+        self.assertIn("'shared_parameters'", builder)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -183,7 +183,9 @@ class JsonFamilyBuilder(object):
             'materials_created': [], 'materials_reused': [], 'material_parameters': [],
             'parameters_created': [], 'parameters_set': [], 'subcategories': [],
             'types': [], 'reference_planes': [], 'dimensions': [], 'locks': 0,
+            'shared_parameters': [],
         }
+        self._shared = None         # (by guid, by name) of Revit's shared parameter file
         self._forms = {}            # geometry index -> created forms
         self._materials = {}        # schema material name -> (Material, FamilyParameter|None)
         self._subcategories = {}
@@ -208,6 +210,32 @@ class JsonFamilyBuilder(object):
         else:
             raise ValueError('this parameter type cannot be set from JSON')
 
+    def _add_shared(self, spec, name, group):
+        """The shared parameter for ``spec`` (by guid, else name), or None with a warning:
+        the caller then makes a plain family parameter."""
+        if self._shared is None:
+            from Snippets._compat import shared_definitions
+            self._shared = shared_definitions(self.doc.Application)
+        by_guid, by_name = self._shared
+        definition = by_guid.get(u'{}'.format(spec.get('guid') or '').lower()) or by_name.get(name.lower())
+        if definition is None:
+            self.report['warnings'].append(
+                "Parameter '{}' is not in Revit's shared parameter file (Manage > Shared "
+                "Parameters); it was made a family parameter".format(name))
+            return None
+        try:
+            from Snippets._compat import add_shared_family_parameter
+            fparam = add_shared_family_parameter(self.fm, definition, group,
+                                                 bool(spec.get('instance', False)))
+        except Exception as ex:
+            self.report['warnings'].append(
+                "Shared parameter '{}' could not be added ({}); it was made a family "
+                "parameter".format(name, ex))
+            return None
+        self.report['parameters_created'].append(name)
+        self.report['shared_parameters'].append(name)
+        return fparam
+
     def apply_parameters(self, params):
         existing = self._family_params()
         groups = {'length': 'geometry', 'number': 'data', 'integer': 'data', 'text': 'text'}
@@ -219,6 +247,10 @@ class JsonFamilyBuilder(object):
                 continue
             ptype = spec.get('type', 'length')
             fparam = existing.get(name)
+            if fparam is None and spec.get('shared'):
+                fparam = self._add_shared(spec, name, groups.get(ptype, 'data'))
+                if fparam is not None:
+                    existing[name] = fparam
             if fparam is None:
                 try:
                     fparam = add_family_parameter(self.fm, name, groups.get(ptype, 'data'),

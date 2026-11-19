@@ -36,11 +36,13 @@ from System.Windows.Threading import (Dispatcher, DispatcherFrame,  # noqa: E402
 from Autodesk.Revit.UI import ExternalEvent, IExternalEventHandler  # noqa: E402
 
 from FamilyGen import studio_controller as sc                       # noqa: E402
-from FamilyGen.studio_page import (MESSAGING_MESSAGE, build_page,   # noqa: E402
-                                   page_folder, pyrevit_version, requirement,
+from FamilyGen.studio_page import (MESSAGING_MESSAGE, Outbox,       # noqa: E402
+                                   build_page, page_folder, pyrevit_version, requirement,
                                    version_text)
 
 WINDOW_SIZE = (1440, 900)
+FLUSH_MS = 100                   # outbox retry while the page is still loading
+BORDER_STRONG = (0xA1, 0xA1, 0xAA)   # T3.BorderStrong: the window's 1 px frame
 
 _ACTIVE = {'studio': None}       # keeps the modeless Studio alive (GC) and single
 
@@ -96,7 +98,8 @@ class _ClaudeAdapter(object):
             return None
 
     def models(self):
-        if self._models is None:
+        # An empty answer (network blip) is not kept: the next open tries again.
+        if not self._models:
             self._models = list(self._p().get_models() or [])
         return self._models
 
@@ -267,6 +270,7 @@ def _go_frameless(win):
             setattr(win, name, False)
         except Exception:
             pass
+    _t3_frame(win)
     try:
         from System.Windows import Visibility
         for name in ('LeftWindowCommands', 'RightWindowCommands'):
@@ -276,6 +280,48 @@ def _go_frameless(win):
     except Exception:
         pass
     return True
+
+
+def _t3_frame(win):
+    """One 1 px T3.BorderStrong frame, drawn by the window, never by the page.
+
+    The output window is opaque (WebView2 cannot live in a transparent
+    window), so the page's rounded border sat inside pyRevit's square accent
+    border: two frames and white corners (2026-11-19). Windows 11 rounds the
+    window itself through DWM; Windows 10 keeps square corners.
+    """
+    try:
+        from System.Windows import Thickness
+        from System.Windows.Media import Color, SolidColorBrush
+        r, g, b = BORDER_STRONG
+        brush = SolidColorBrush(Color.FromRgb(r, g, b))
+        win.BorderThickness = Thickness(1)
+        for name in ('BorderBrush', 'NonActiveBorderBrush'):
+            try:
+                setattr(win, name, brush)
+            except Exception:
+                pass
+        for name in ('GlowBrush', 'NonActiveGlowBrush'):
+            try:
+                setattr(win, name, None)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        import ctypes
+        from System.Windows.Interop import WindowInteropHelper
+        hwnd = WindowInteropHelper(win).Handle.ToInt64()
+        if not hwnd:
+            return
+        dwm = ctypes.windll.dwmapi
+        corner = ctypes.c_int(2)                                     # DWMWCP_ROUND
+        dwm.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), 33, ctypes.byref(corner), 4)
+        r, g, b = BORDER_STRONG
+        colour = ctypes.c_uint(r | (g << 8) | (b << 16))           # COLORREF 0x00BBGGRR
+        dwm.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), 34, ctypes.byref(colour), 4)
+    except Exception:
+        pass          # Windows 10 / no DWM attribute: the WPF border alone
 
 
 def _drag_window(win):
@@ -390,8 +436,17 @@ def open_studio(doc, uiapp, persistent):
     from FamilyGen.net_http import DotNetPoster
     from FamilyGen.proposals import ProposalStore
     poster = DotNetPoster()
+    pump = DispatcherTimer()
+    pump.Interval = TimeSpan.FromMilliseconds(FLUSH_MS)
+    outbox = Outbox(output.post_message, wake=pump.Start)
+
+    def _pump(sender, args):
+        if _window_closed(output) or outbox.flush():
+            pump.Stop()
+
+    pump.Tick += _pump
     controller = sc.StudioController(
-        post=lambda msg: output.post_message(msg), http=poster, revit=revit,
+        post=outbox.post, http=poster, revit=revit,
         claude=_ClaudeAdapter(), prefs=prefs, store=ProposalStore(),
         pyrevit_version=version_text(pyrevit_version()))
 
@@ -405,7 +460,8 @@ def open_studio(doc, uiapp, persistent):
         poster.dispose()
         return 'unsupported', MESSAGING_MESSAGE.format(version_text(pyrevit_version()))
 
-    state = {'output': output, 'controller': controller, 'poster': poster, 'revit': revit}
+    state = {'output': output, 'controller': controller, 'poster': poster, 'revit': revit,
+             'outbox': outbox, 'pump': pump}
     watch = DispatcherTimer()
     watch.Interval = TimeSpan.FromMilliseconds(1000)
     frame = DispatcherFrame() if modal else None
@@ -418,6 +474,7 @@ def open_studio(doc, uiapp, persistent):
                 traceback.print_exc()
             return
         watch.Stop()
+        pump.Stop()
         poster.dispose()
         controller.close_link()
         if _ACTIVE['studio'] is state:
@@ -441,6 +498,7 @@ def open_studio(doc, uiapp, persistent):
     finally:
         _set_revit_enabled(uiapp, True)
         watch.Stop()
+        pump.Stop()
         poster.dispose()
         controller.close_link()
         _ACTIVE['studio'] = None

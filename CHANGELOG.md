@@ -19,6 +19,17 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+
+- **"Duplicate type name within an assembly" — every tool dead until Revit
+  restarted:** after a pyRevit Reload, an extension switched off and on, or an
+  update applied while Revit was open, Python restarts inside the same Revit
+  session but the .NET types it created before are still there. The first tool
+  to load pyRevit then died on pyRevit's own event handler, and from that point
+  every T3Lab and pyRevit tool failed (and was slow to even fail). T3Lab now
+  clears those leftover types at the start of the first tool, so the session
+  keeps working without a Revit restart.
+
 ## [2.6.2] - 2026-11-19
 
 FamiGen Studio: chat with Claude to create Revit families and review them in 3D (needs pyRevit 7.0+).

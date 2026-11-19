@@ -20,6 +20,7 @@ _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'AgentCursorsSettings.x
 MASTER = 'model'            # T3LabLite: the option every drawing option hangs under
 FREE = ('model', 'keep')    # options that act without MASTER (agent_cursors.effective)
 HEIGHT, HEIGHT_OPEN = 420, 560      # size M; the taller one while the details card is open
+MODEL_ROW = 56                      # the "On model" row: without it the second card is cut off
 _UP, _DOWN = u"", u""
 
 
@@ -41,8 +42,11 @@ class AgentCursorsSettingsWindow(_Window):
             if box is not None:
                 box.IsChecked = bool(value)
                 self._boxes[name] = box
+        self._height = HEIGHT
         if MASTER in self._boxes and getattr(self, 'row_model', None) is not None:
             self.row_model.Visibility = self._visibility(True)
+            self._height = HEIGHT + MODEL_ROW
+        self.Height = self._height
         self.chk_enabled.IsChecked = True       # opened to turn it on, or it is on
         self.btn_ok.Content = 'Save' if enabled else 'Turn On'
         self._fill(sections)
@@ -122,7 +126,7 @@ class AgentCursorsSettingsWindow(_Window):
         opening = self.details_body.Visibility != Visibility.Visible
         self.details_body.Visibility = self._visibility(opening)
         self.details_arrow.Text = _UP if opening else _DOWN
-        self.Height = HEIGHT_OPEN if opening else HEIGHT
+        self.Height = max(HEIGHT_OPEN, self._height) if opening else self._height
 
     def ok_clicked(self, sender, e):
         self.result = self.values()

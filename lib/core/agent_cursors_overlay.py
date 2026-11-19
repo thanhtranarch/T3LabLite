@@ -11,14 +11,15 @@ import sys
 import time
 
 from core.agent_cursors import (
-    BOX_HOLD_S, DWELL_MS, FEED_SHOWN, FEED_SIZE, FRESH_HOLD_S, IDLE_HIDE_S, MAX_STOPS, MOVE_MS,
-    OPTION_GROUPS, OPTION_LABELS, REPLAY_SIZE, SPEEDS, STATES, SUMMARY_S, TAG_MAX, action_style,
-    agent_style, ago_text, classify_action, cluster_stops, compact_line, count_items,
-    describe_call, footer_text, front_hides, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
-    on_model,
-    offscreen_markers, options, place_tags, plan_progress, scan_points, set_enabled,
-    set_hud_offset, set_option, set_speed, short_text, should_collapse, speed, speed_factor,
-    status_text, tour_schedule, union_box)
+    ACTIONS, BAND_STRIPE, BAR_W, BOX_HOLD_S, COUNT_BAR_W, DWELL_MS, FEED_SHOWN, FEED_SIZE,
+    FRESH_HOLD_S, IDLE_HIDE_S, MAX_STOPS, MOVE_MS, OPTION_GROUPS, OPTION_LABELS, REPLAY_SIZE,
+    STATES, SUMMARY_S, SWEEP_W, TAG_MAX, action_style, agent_style, ago_text,
+    band_motion, band_rows, band_style, band_wash, bar_tone, classify_action,
+    cluster_stops, compact_line, count_bar, count_items, describe_call, fill_width,
+    footer_text, front_hides, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
+    motion_off, offscreen_markers, on_model, options, place_tags, plan_progress,
+    scan_points, set_enabled, set_hud_offset, set_option, short_text, should_collapse,
+    speed_factor, status_text, tour_schedule, union_box)
 
 
 class OverlayHost(object):
@@ -157,12 +158,18 @@ class _Overlay(object):
         self._asks = []             # consent questions on the bar: dicts, oldest first
         self._working = {}          # agent -> (started, caption)
         self._waiting = {}          # agent -> caption
+        self._acting = {}           # agent -> action of its running / waiting call
+        self._replay_step = None    # the step a replay shows now (band_rows `last`)
+        self._loops = []            # (target, property) of the bar's endless animations
+        self._drawn = {}            # what the bar last showed: only a change moves (_motion)
+        self._leaving = None        # token while the cursors fade out (_enter_summary)
         self._focus = {}            # agent -> frames round what its running call names
         self._history = []          # replayable show() records, oldest first
         self._replay = None         # [records, index] while replaying
         self._summary = None        # time the idle summary card appeared
         self._touched = 0
         self._marks = []            # off-screen arrows of the last call
+        self._fx = {}               # Effects switches of the call being drawn (_effects)
         self._cursors = {}          # agent -> dict(group, tx, ...): one cursor per agent
         self._counts = {}           # agent -> {action: n}
         self._views = []            # [(view id, name)] the agents worked in
@@ -193,7 +200,8 @@ class _Overlay(object):
                                              _WS_EX_TOOLWINDOW | _WS_EX_NOACTIVATE))
         self._hook(self.win, 'Closed', lambda s, e: setattr(self, 'alive', False))
 
-        self._pal = hud_palette('dark')     # set_theme() follows Revit
+        self._theme = 'dark'                # set_theme() follows Revit
+        self._pal = hud_palette('dark')
         self._paused = False        # Pause on the bar (agent_cursors.set_paused)
         self._folded = False        # the user folded the bar to one line
         self._hover = False
@@ -327,18 +335,88 @@ class _Overlay(object):
         icon.Margin = Thickness(0, 0, 4, 0)
         return self._row(icon, self._text(label, size, color=color))
 
-    def _anim(self, frames, done=None):
-        """DoubleAnimationUsingKeyFrames from [(value, ms)]."""
+    def _anim(self, frames, done=None, ease=False):
+        """DoubleAnimationUsingKeyFrames from [(value, ms)]; ease = slow down
+        into each frame instead of a straight line."""
         from System import TimeSpan
         from System.Windows.Media.Animation import (
             DoubleAnimationUsingKeyFrames, LinearDoubleKeyFrame, KeyTime)
+        curve = None
+        if ease:
+            from System.Windows.Media.Animation import CubicEase, EasingMode
+            curve = CubicEase()
+            curve.EasingMode = EasingMode.EaseOut
         anim = DoubleAnimationUsingKeyFrames()
-        for value, ms in frames:
-            anim.KeyFrames.Add(LinearDoubleKeyFrame(
-                value, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(ms))))
+        for k, (value, ms) in enumerate(frames):
+            at = KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(ms))
+            if curve is not None and k:
+                from System.Windows.Media.Animation import EasingDoubleKeyFrame
+                anim.KeyFrames.Add(EasingDoubleKeyFrame(value, at, curve))
+            else:
+                anim.KeyFrames.Add(LinearDoubleKeyFrame(value, at))
         if done is not None:
             self._hook(anim, 'Completed', done, transient=True)
         return anim
+
+    # Motion on the bar. It is decoration: Animation Off skips it and a failure
+    # never costs the bar (_motion). The bar is rebuilt on every refresh, so
+    # only what changed since the last draw moves (self._drawn, band_motion).
+
+    def _motion(self, fn, *args):
+        if self._reduce():
+            return
+        try:
+            fn(*args)
+        except Exception:
+            pass
+
+    def _loop(self, target, prop, frames):
+        """An endless animation, remembered so a rebuild can stop it."""
+        from System.Windows.Media.Animation import RepeatBehavior
+        anim = self._anim(frames)
+        anim.RepeatBehavior = RepeatBehavior.Forever
+        target.BeginAnimation(prop, anim)
+        self._loops.append((target, prop))
+
+    def _stop_loops(self):
+        for target, prop in self._loops:
+            try:
+                target.BeginAnimation(prop, None)
+            except Exception:
+                pass
+        self._loops = []
+
+    def _fade_in(self, element, ms=180):
+        element.BeginAnimation(_opacity_property(), self._anim(((0.0, 0), (1.0, ms))))
+
+    def _slide_in(self, element, dy=6.0, ms=240):
+        """Fade in while moving `dy` px into place."""
+        from System.Windows.Media import TranslateTransform
+        tt = TranslateTransform()
+        element.RenderTransform = tt
+        tt.BeginAnimation(_translate_y(), self._anim(((dy, 0), (0.0, ms)), ease=True))
+        self._fade_in(element, ms)
+
+    def _pop(self, element, cx, cy, scale=1.45, ms=260):
+        """Swell and settle: something on it just changed."""
+        self._scale_anim(element, cx, cy, ((scale, 0), (1.0, ms)))
+
+    def _shake(self, element):
+        from System.Windows.Media import TranslateTransform
+        tt = TranslateTransform()
+        element.RenderTransform = tt
+        tt.BeginAnimation(_translate_x(), self._anim(
+            ((0.0, 0), (-6.0, 60), (6.0, 120), (-4.0, 180), (0.0, 240))))
+
+    def _grow(self, element, start, end, ms=320):
+        """Width from `start` to `end` (the element already has `end`)."""
+        from System.Windows import FrameworkElement
+        if abs(end - start) >= 1.0:
+            element.BeginAnimation(FrameworkElement.WidthProperty,
+                                   self._anim(((start, 0), (end, ms)), ease=True))
+
+    def _breathe(self, element, low=0.45, ms=1400):
+        self._loop(element, _opacity_property(), ((1.0, 0), (low, ms // 2), (1.0, ms)))
 
     def _pulse(self, element, delay_ms, hold_ms, done=None):
         """Fade in at delay, hold, fade out — one animation: a second
@@ -369,9 +447,10 @@ class _Overlay(object):
     #   header   cursor-mark avatars · title · status pill · ⏸ ⚙ — ✕ (drag to move)
     #   drawer   options (⚙), grouped switches + speed
     #   goal     goal + "Step k/n" + progress bar per agent with a plan
-    #   current  what runs now (or the last step) + before→after chips
-    #   feed     last FEED_SHOWN steps, ✓ / ✕, how long ago
-    #   agents   one row per agent with its counts (2+ agents, or idle)
+    #   bands    what runs now, one colour block per agent (band_rows), else the
+    #            last step + before→after chips; a replay fills its block to k / n
+    #   feed     last FEED_SHOWN steps: action stripe, ✓ / ✕, how long ago
+    #   agents   one row per agent with its counts as a stacked bar (2+ agents, or idle)
     #   footer   "12 actions · 1 failed · 2 views" · Select touched · Replay
     # Folded (— or idle COLLAPSE_S): one line, mouse over opens it again.
 
@@ -404,6 +483,7 @@ class _Overlay(object):
 
     def set_theme(self, theme):
         """Revit switched light / dark (agent_cursors._sync_theme)."""
+        self._theme = 'light' if theme == 'light' else 'dark'
         self._pal = hud_palette(theme)
         self._apply_theme()
         if self.hud.IsVisible:
@@ -510,6 +590,8 @@ class _Overlay(object):
         pill.Background = self._brush(color, 40)
         label = self._text(status_text(state, seconds), 11.5, bold=False, color=color)
         self._status_label = label if state == 'working' else None
+        if state in ('working', 'waiting'):
+            self._motion(self._breathe, dot, 0.3, 1100)
         pill.Child = self._row(dot, label)
         pill.Margin = Thickness(8, 0, 0, 0)
         return pill
@@ -551,15 +633,34 @@ class _Overlay(object):
         grid.Margin = Thickness(0, margin_top, 0, 0)
         return grid
 
-    def _counts_row(self, counts):
-        from System.Windows import Thickness
+    def _tone(self, action):
+        """The action's colour as this bar draws it (agent_cursors.bar_tone)."""
+        return bar_tone(action_style(action)[2], self._theme)
+
+    def _counts_row(self, agent, counts):
+        """An agent's counts: one stacked bar in the actions' colours (each
+        part grows from the width it had), then glyph + number per action."""
+        from System.Windows import Thickness, CornerRadius
+        from System.Windows.Controls import Border
         parts = []
+        was, now = self._drawn.get('counts') or {}, self._drawn.setdefault('counts_now', {})
+        for k, (action, width) in enumerate(count_bar(counts, COUNT_BAR_W, 1.0)):
+            seg = Border()
+            seg.Width, seg.Height = width, 6
+            seg.CornerRadius = CornerRadius(1)
+            seg.Background = self._brush(self._tone(action))
+            seg.Margin = Thickness(1 if k else 0, 0, 0, 0)
+            seg.ToolTip = u'{} {}'.format(action_style(action)[0], counts.get(action, 0))
+            self._motion(self._grow, seg, was.get((agent, action), 0.0), width)
+            now[(agent, action)] = width
+            parts.append(seg)
         for action, n in count_items(counts):
-            _label, glyph, _color = action_style(action)
-            item = self._glyph_label(glyph, '{}'.format(n), self._c('muted'), 11)
-            item.Margin = Thickness(8, 0, 0, 0)
-            item.ToolTip = u'{} {}'.format(action_style(action)[0], n)
-            parts.append(item)
+            label, glyph, _color = action_style(action)
+            icon = self._text(glyph, 11, color=self._tone(action), glyph=True)
+            icon.Margin = Thickness(6, 0, 3, 0)
+            icon.ToolTip = u'{} {}'.format(label, n)
+            parts.append(icon)
+            parts.append(self._text('{}'.format(n), 11, color=self._c('muted')))
         return self._row(*parts)
 
     # the bar
@@ -578,10 +679,14 @@ class _Overlay(object):
         self._full.Visibility = Visibility.Collapsed if folded else Visibility.Visible
         self._compact.Visibility = Visibility.Visible if folded else Visibility.Collapsed
         self._ask_panel.Visibility = (Visibility.Collapsed if folded else Visibility.Visible)
+        self._stop_loops()
         if folded:
             self._fill_compact(state)
         else:
             self._fill_full(state)
+        if self._drawn.get('folded') != folded:     # opened, folded or first shown
+            self._drawn['folded'] = folded
+            self._motion(self._fade_in, self._compact if folded else self._full)
         self._place_hud()
 
     def _seconds(self):
@@ -608,6 +713,8 @@ class _Overlay(object):
         dot.Width = dot.Height = 7
         dot.Fill = self._brush(self._c(STATES[state][1]))
         dot.Margin = Thickness(4, 0, 8, 0)
+        if state in ('working', 'waiting'):
+            self._motion(self._breathe, dot, 0.3, 1100)
         parts.append(dot)
         caption, progress = self._now_caption()
         if self._asks:
@@ -640,7 +747,8 @@ class _Overlay(object):
             self._last = time.time()
 
     def _now_caption(self):
-        """(caption, plan progress) of what runs now, else of the last step."""
+        """(caption, plan progress) for the one-line bar: the newest running
+        call, else the step a replay shows, else the last step."""
         progress = None
         for agent in self._agents():
             progress = plan_progress(self._plans.get(agent))
@@ -649,20 +757,44 @@ class _Overlay(object):
         if self._working:
             key = max(self._working, key=lambda k: self._working[k][0])
             return self._working[key][1], progress
-        if self._replay is not None:
-            return self._note, progress
+        rows = self._bands()[0]
+        if not rows:
+            return '', progress
+        if rows[0]['state'] == 'replay':
+            return u'{} \u00b7 {}'.format(rows[0]['note'], rows[0]['caption']), progress
+        return rows[0]['caption'], progress
+
+    def _last_step(self):
         for step in self._feed:
             if not step.get('kind'):
-                return step['caption'], progress
-        return '', progress
+                return step
+        return None
+
+    def _bands(self):
+        """(rows, agents left out, the feed step a band already shows) for
+        band_rows. An agent with an Allow / Deny card gets no band: the card
+        says it."""
+        asked = set(item['agent'] for item in self._asks)
+        working = [(agent, self._acting.get(agent), work[1])
+                   for agent, work in self._working.items() if agent not in self._waiting]
+        waiting = [(agent, self._acting.get(agent), caption)
+                   for agent, caption in self._waiting.items() if agent not in asked]
+        last, replay = self._last_step(), None
+        if self._replay is not None and self._replay_step is not None:
+            last, replay = self._replay_step, (self._replay[1], len(self._replay[0]))
+        rows, more = band_rows(working, waiting, last, replay)
+        on_band = last if rows and rows[0]['state'] == 'done' else None
+        return rows, more, on_band
 
     def _fill_full(self, state):
         from System.Windows import Thickness
         from System.Windows.Controls import StackPanel
         full = self._full
         full.Children.Clear()
-        full.Width = 420
+        full.Width = BAR_W
         agents = self._agents()
+        drawn = self._drawn
+        drawn['counts_now'], drawn['plan_now'] = {}, {}
 
         # header
         left = []
@@ -713,23 +845,41 @@ class _Overlay(object):
                               color=self._c('text2'))
             full.Children.Add(self._line_row(line, right, 10))
             if progress:
-                full.Children.Add(self._progress_bar(progress))
+                full.Children.Add(self._progress_bar(progress, agent))
 
-        # what runs now / the last step
-        caption, _progress = self._now_caption()
-        if caption:
-            full.Children.Add(self._current_card(caption))
+        # bands: what runs now, one colour block per agent, else the last step
+        rows, more, on_band = self._bands()
+        motions, drawn['bands'] = band_motion(rows, drawn.get('bands') or {})
+        fill_from = drawn.get('fill', 0.0)
+        drawn['fill'] = 0.0
+        for k, row in enumerate(rows):
+            try:
+                band = self._action_band(row, len(agents) > 1, 4 if k else 10, motions[k],
+                                         fill_from)
+            except Exception:       # one block must never cost the feed and the footer
+                band = self._text(row['caption'], 12.5, color=self._c('text'))
+                band.Margin = Thickness(0, 10, 0, 0)
+            full.Children.Add(band)
+        if more:
+            extra = self._text(u'+{} more'.format(more), 11, bold=False,
+                               color=self._c('muted'))
+            extra.Margin = Thickness(BAND_STRIPE + 9, 3, 0, 0)
+            full.Children.Add(extra)
 
-        # feed
-        shown = [s for s in self._feed if s.get('kind') != 'goal'][:FEED_SHOWN]
-        if self._feed and caption and shown and not self._working and shown[0]['caption'] == caption:
-            shown = shown[1:FEED_SHOWN + 1]     # the card already shows the newest step
+        # feed (without the step a band already shows)
+        shown = [s for s in self._feed
+                 if s.get('kind') != 'goal' and s is not on_band][:FEED_SHOWN]
+        top = (shown[0].get('t'), shown[0]['caption']) if shown else None
         if shown:
             feed = StackPanel()
             feed.Margin = Thickness(0, 6, 0, 0)
-            for step in shown:
-                feed.Children.Add(self._feed_row(step, len(agents) > 1))
+            for k, step in enumerate(shown):
+                row = self._feed_row(step, len(agents) > 1)
+                if k == 0 and top != drawn.get('feed'):     # it drops in from the band
+                    self._motion(self._slide_in, row, -6.0)
+                feed.Children.Add(row)
             full.Children.Add(feed)
+        drawn['feed'] = top
 
         # agents with their counts (several agents, or a summary when idle)
         if len(agents) > 1 or (state == 'idle' and self._counts):
@@ -739,8 +889,10 @@ class _Overlay(object):
                 mark.Margin = Thickness(0, 0, 8, 0)
                 row = self._line_row(self._row(mark, self._text(tag, 12.5, bold=False,
                                                                 color=self._c('text'))),
-                                     self._counts_row(self._counts.get(agent, {})), 6)
+                                     self._counts_row(agent, self._counts.get(agent, {})), 6)
                 full.Children.Add(row)
+
+        drawn['counts'], drawn['plan'] = drawn.pop('counts_now'), drawn.pop('plan_now')
 
         # footer
         from System.Windows.Controls import Border
@@ -767,7 +919,7 @@ class _Overlay(object):
                          self.replay))
         full.Children.Add(self._line_row(foot_text, actions))
 
-    def _progress_bar(self, progress):
+    def _progress_bar(self, progress, agent=''):
         from System.Windows import Thickness, CornerRadius, HorizontalAlignment
         from System.Windows.Controls import Border
         done, total = progress
@@ -781,28 +933,84 @@ class _Overlay(object):
         fill.CornerRadius = CornerRadius(2)
         fill.Background = self._brush(self._c('accent'))
         fill.HorizontalAlignment = HorizontalAlignment.Left
-        fill.Width = max(4.0, 396.0 * done / float(total or 1))
+        fill.Width = fill_width(done, total, BAR_W, 4.0)
+        self._motion(self._grow, fill, (self._drawn.get('plan') or {}).get(agent, 0.0), fill.Width)
+        self._drawn.setdefault('plan_now', {})[agent] = fill.Width
         track.Child = fill
         return track
 
-    def _current_card(self, caption):
-        from System.Windows import Thickness, CornerRadius, TextWrapping
-        from System.Windows.Controls import Border, StackPanel
-        failed = (not self._working and bool(self._feed) and not self._feed[0].get('kind')
-                  and self._feed[0].get('failed'))
-        card = Border()
-        card.Background = self._brush(self._c('card'))
-        card.BorderBrush = self._brush(self._c('bad') if failed else self._c('accent'))
-        card.BorderThickness = Thickness(3, 0, 0, 0)
-        card.CornerRadius = CornerRadius(4)
-        card.Padding = Thickness(10, 6, 10, 7)
-        card.Margin = Thickness(0, 10, 0, 0)
+    def _action_band(self, row, with_agent, margin_top=10, motion=None, fill_from=0.0):
+        """One band_rows row as a block of its action's colour (band_style):
+        solid stripe, a wash of the same colour, glyph + caption in the bar's
+        own text colour, the action's name on the right. Running: a soft
+        block crosses it and the stripe breathes; replay: it fills to k / n
+        from `fill_from`. motion (band_motion): the band slides in, its glyph
+        pops, or it shakes."""
+        from System.Windows import (Thickness, CornerRadius, TextWrapping, GridLength,
+                                    GridUnitType, HorizontalAlignment, VerticalAlignment)
+        from System.Windows.Controls import Border, Grid, ColumnDefinition, StackPanel
+        label, glyph, color = band_style(row['action'], self._theme, row['state'], row['failed'])
+        wash = band_wash(self._theme)
+        band = Border()
+        band.CornerRadius = CornerRadius(4)
+        band.Background = self._brush(color, wash)
+        band.ClipToBounds = True
+        band.Margin = Thickness(0, margin_top, 0, 0)
+        layers = Grid()
+        band.Child = layers
+        if row['progress']:
+            done, total = row['progress']
+            fill = Border()
+            fill.HorizontalAlignment = HorizontalAlignment.Left
+            fill.Width = fill_width(done, total, BAR_W)
+            fill.CornerRadius = CornerRadius(4) if done >= total else CornerRadius(4, 0, 0, 4)
+            fill.Background = self._brush(color, wash)
+            self._motion(self._grow, fill, fill_from, fill.Width)
+            self._drawn['fill'] = fill.Width
+            layers.Children.Add(fill)
+        elif row['state'] == 'running':
+            self._motion(self._sweep, layers, color, wash)
+        stripe = Border()
+        stripe.Width = BAND_STRIPE
+        stripe.HorizontalAlignment = HorizontalAlignment.Left
+        stripe.CornerRadius = CornerRadius(4, 0, 0, 4)
+        stripe.Background = self._brush(color)
+        if row['state'] in ('running', 'waiting'):
+            self._motion(self._breathe, stripe)
+        layers.Children.Add(stripe)
+
         body = StackPanel()
-        card.Child = body
-        text = self._text(caption, 12.5, color=self._c('text'))
+        body.Margin = Thickness(BAND_STRIPE + 9, 6, 10, 7)
+        layers.Children.Add(body)
+        head = Grid()
+        for width in (GridLength.Auto, GridLength(1, GridUnitType.Star), GridLength.Auto):
+            cd = ColumnDefinition()
+            cd.Width = width
+            head.ColumnDefinitions.Add(cd)
+        lead = []
+        if with_agent and row['agent']:
+            mark = self._mark(agent_style(row['agent'])[1], 13)
+            mark.Margin = Thickness(0, 0, 6, 0)
+            mark.ToolTip = agent_style(row['agent'])[0]
+            lead.append(mark)
+        icon = self._text(glyph, 12, color=color, glyph=True)
+        icon.Margin = Thickness(0, 0, 8, 0)
+        lead.append(icon)
+        left = self._row(*lead)
+        left.VerticalAlignment = VerticalAlignment.Top
+        left.Margin = Thickness(0, 2, 0, 0)
+        head.Children.Add(left)
+        text = self._text(row['caption'], 12.5, color=self._c('text'))
         text.TextWrapping = TextWrapping.Wrap
-        body.Children.Add(text)
-        if not self._working and self._last_changes:
+        Grid.SetColumn(text, 1)
+        head.Children.Add(text)
+        note = self._text(row['note'], 11, bold=False, color=self._c('text2'))
+        note.Margin = Thickness(10, 1, 0, 0)
+        note.VerticalAlignment = VerticalAlignment.Top
+        Grid.SetColumn(note, 2)
+        head.Children.Add(note)
+        body.Children.Add(head)
+        if row['state'] in ('done', 'replay') and self._last_changes:
             from System.Windows.Controls import WrapPanel
             from System.Windows.Media import FontFamily
             chips = WrapPanel()
@@ -814,20 +1022,63 @@ class _Overlay(object):
                 chip.Margin = Thickness(0, 0, 6, 2)
                 chips.Children.Add(chip)
             body.Children.Add(chips)
-        return card
+        if motion == 'enter':
+            self._motion(self._slide_in, band)
+        elif motion == 'shake':
+            self._motion(self._shake, band)
+        elif motion == 'pop':
+            self._motion(self._pop, icon, 6.0, 6.0)
+        return band
+
+    def _sweep(self, layers, color, wash):
+        """A soft block of the band's colour that crosses it while the call
+        runs; one pass takes 1.4 s at Normal."""
+        from System.Windows import HorizontalAlignment, Point
+        from System.Windows.Controls import Border
+        from System.Windows.Media import (TranslateTransform, LinearGradientBrush, GradientStop,
+                                          Color)
+        block = Border()
+        block.Width = SWEEP_W
+        block.HorizontalAlignment = HorizontalAlignment.Left
+        block.IsHitTestVisible = False
+        try:
+            h = color.lstrip('#')
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            soft = LinearGradientBrush()
+            soft.StartPoint, soft.EndPoint = Point(0.0, 0.5), Point(1.0, 0.5)
+            for alpha, offset in ((0, 0.0), (min(255, wash * 2), 0.5), (0, 1.0)):
+                soft.GradientStops.Add(GradientStop(Color.FromArgb(alpha, r, g, b), offset))
+            block.Background = soft
+        except Exception:
+            block.Background = self._brush(color, wash)     # a plain block still reads
+        tt = TranslateTransform()
+        tt.X = -SWEEP_W
+        block.RenderTransform = tt
+        layers.Children.Add(block)
+        self._loop(tt, _translate_x(), ((-SWEEP_W, 0), (BAR_W, int(1400 * speed_factor()))))
 
     def _feed_row(self, step, with_agent):
-        """✓ / ✕ / ⚠ · [agent] caption · how long ago."""
-        from System.Windows import Thickness
+        """Stripe in the action's colour · ✓ / ✕ / ⚠ · [agent] caption · how
+        long ago. The stripes line up under the band's: one colour column."""
+        from System.Windows import Thickness, CornerRadius
+        from System.Windows.Controls import Border
         if step.get('kind') in ('warn', 'note'):
             glyph, tint = u'', self._c('warn')
         elif step['failed']:
             glyph, tint = u'', self._c('bad')
         else:
             glyph, tint = u'', self._c('ok')
+        stripe = Border()
+        stripe.Width, stripe.Height = 3, 12
+        stripe.CornerRadius = CornerRadius(1.5)
+        stripe.Background = self._brush(tint if step.get('kind') else
+                                        self._tone(step.get('action')))
+        stripe.Margin = Thickness(1, 0, BAND_STRIPE + 5, 0)
+        if not step.get('kind'):
+            stripe.ToolTip = action_style(step.get('action'))[0]
         icon = self._text(glyph, 10, color=tint, glyph=True)
         icon.Margin = Thickness(0, 0, 8, 0)
-        parts = [icon]
+        parts = [stripe, icon]
         if with_agent:
             mark = self._mark(agent_style(step['agent'])[1], 12)
             mark.Margin = Thickness(0, 0, 6, 0)
@@ -841,10 +1092,9 @@ class _Overlay(object):
         return row
 
     def _options_drawer(self):
-        """⚙: the options as switches in groups, plus speed."""
+        """⚙: the options as switches in groups and what each icon means."""
         from System.Windows import Thickness, CornerRadius
         from System.Windows.Controls import Border, StackPanel
-        from System.Windows.Input import Cursors
         box = Border()
         box.Background = self._brush(self._c('card'))
         box.CornerRadius = CornerRadius(4)
@@ -869,28 +1119,25 @@ class _Overlay(object):
                 text = self._text(label, 12.5, bold=False, color=self._c('text'))
                 text.ToolTip = tip
                 col.Children.Add(self._line_row(text, self._switch(opts[name], flip), 3))
-            if group == 'Motion':
-                seg = []
-                for value, _factor in SPEEDS:
-                    on = value == speed()
-                    part = self._pill(self._text(value.capitalize(), 11, bold=False,
-                                                 color=self._c('on_accent') if on else
-                                                 self._c('muted')),
-                                      self._c('accent') if on else self._c('chip'), radius=3)
-                    part.Margin = Thickness(2, 0, 0, 0)
-                    part.Cursor = Cursors.Hand
-
-                    def pick(s, e, value=value):
-                        try:
-                            set_speed(value)
-                            self._refresh_hud()
-                        except Exception:
-                            pass
-                    self._hook(part, 'MouseLeftButtonUp', pick, transient=True)
-                    seg.append(part)
-                col.Children.Add(self._line_row(
-                    self._text('Speed', 12.5, bold=False, color=self._c('text')), self._row(*seg), 3))
+        head = self._text('ACTIONS', 10.5, bold=False, color=self._c('faint'))
+        head.Margin = Thickness(0, 6, 0, 2)
+        col.Children.Add(head)
+        col.Children.Add(self._legend())
         return box
+
+    def _legend(self):
+        """What each action's icon and colour mean: icon + name, no swatch
+        (owner, 2026-11-19)."""
+        from System.Windows import Thickness
+        from System.Windows.Controls import WrapPanel
+        wrap = WrapPanel()
+        for key, label, glyph, _color in ACTIONS:
+            icon = self._text(glyph, 11.5, color=self._tone(key), glyph=True)
+            icon.Margin = Thickness(0, 0, 4, 0)
+            item = self._row(icon, self._text(label, 11.5, bold=False, color=self._c('text2')))
+            item.Margin = Thickness(0, 2, 12, 0)
+            wrap.Children.Add(item)
+        return wrap
 
     def _toggle_drawer(self):
         self._drawer = not self._drawer
@@ -952,8 +1199,8 @@ class _Overlay(object):
     def _cursor(self, agent, action=None):
         """Minimal cursor (owner, 2026-11-17): a bare pointer tip in the
         agent's colour and one tag, "Claude · Moving 12 walls". One per
-        agent: the action only tints the tag's left edge (two cursors of one
-        agent sat on top of each other, 2026-11-17)."""
+        agent: the action only changes the icon at the head of the tag (two
+        cursors of one agent sat on top of each other, 2026-11-17)."""
         cur = self._cursors.get(agent)
         if cur is not None:
             if action:
@@ -982,13 +1229,16 @@ class _Overlay(object):
         spin.Fill = self._brush('#FFFFFF')
         spin.Margin = Thickness(0, 0, 5, 0)
         spin.Visibility = Visibility.Collapsed
+        glyph = self._text('', 10, color='#FFFFFF', glyph=True)     # the action (_accent)
+        glyph.Margin = Thickness(0, 0, 5, 0)
+        glyph.Visibility = Visibility.Collapsed
         name = self._text(tag, 11, color='#FFFFFF')
         state = self._text('', 11, bold=False, color='#FFFFFF')     # " · what it does"
         pill = Border()
         pill.CornerRadius = CornerRadius(6)
         pill.Padding = Thickness(7, 1, 7, 2)
         pill.Background = self._brush(color)
-        pill.Child = self._row(spin, name, state)
+        pill.Child = self._row(spin, glyph, name, state)
         Canvas.SetLeft(pill, 12)
         Canvas.SetTop(pill, 12)
         group.Children.Add(pill)
@@ -1004,22 +1254,37 @@ class _Overlay(object):
             x = (bounds[0] + bounds[2]) / 2.0 + 36 * slot
             y = (bounds[1] + bounds[3]) / 2.0 + 24 * slot
         cur = {'group': group, 'tx': tx, 'press': press, 'spin': spin, 'pill': pill,
-               'name': name, 'state': state, 'color': color, 'caption': '',
-               'x': x, 'y': y, 'action': None}
+               'glyph': glyph, 'name': name, 'state': state, 'color': color,
+               'caption': '', 'x': x, 'y': y, 'action': None, 'new': True}
         tx.X, tx.Y = cur['x'], cur['y']
         self._cursors[agent] = cur
         if action:
             self._accent(cur, action)
         return cur
 
+    def _wake(self, cur):
+        """Full opacity; a cursor shown for the first time fades in and its
+        tag grows out of the tip."""
+        cur['group'].BeginAnimation(_opacity_property(), None)
+        cur['group'].Opacity = 1.0
+        if cur.pop('new', False):
+            self._motion(self._fade_in, cur['group'], 220)
+            self._motion(self._pop, cur['pill'], 0.0, 0.0, 0.6, 240)
+
     def _accent(self, cur, action):
-        """The action shows as a coloured left edge on the agent's tag."""
-        from System.Windows import Thickness
+        """The action shows as its icon at the head of the agent's tag, in
+        the tag's own ink: no block, no colour (owner, 2026-11-19). The old
+        coloured edge did not read (amber on Claude's terracotta). The icon
+        pops when the action changes."""
+        from System.Windows import Visibility
         if cur.get('action') == action:
             return
+        changed = cur.get('action') is not None
         cur['action'] = action
-        cur['pill'].BorderBrush = self._brush(action_style(action)[2])
-        cur['pill'].BorderThickness = Thickness(3, 0, 0, 0)
+        cur['glyph'].Text = action_style(action)[1]
+        cur['glyph'].Visibility = Visibility.Visible
+        if changed:
+            self._motion(self._pop, cur['glyph'], 5.0, 6.0, 1.6, 240)
 
     def _bounds(self):
         """The canvas in its own DIP (l, t, r, b), or None before it is placed."""
@@ -1065,7 +1330,8 @@ class _Overlay(object):
         pill.Background = self._brush({'waiting': '#F59E0B', 'failed': '#DC2626'}.get(
             state, cur['color']))
         ink = '#1F2937' if state == 'waiting' else '#FFFFFF'
-        cur['name'].Foreground = cur['state'].Foreground = self._brush(ink)
+        for part in ('glyph', 'name', 'state'):
+            cur[part].Foreground = self._brush(ink)
         if state == 'waiting':
             caption = u'Waiting for your OK'
         if caption is not None:
@@ -1264,11 +1530,12 @@ class _Overlay(object):
             Canvas.SetLeft(handle, hx - 2)
             Canvas.SetTop(handle, hy - 2)
             group.Children.Add(handle)
-        badge = self._pill(self._glyph_label(glyph, size, '#FFFFFF'), color, radius=2)
-        badge.Padding = Thickness(4, 1, 4, 1)
-        Canvas.SetLeft(badge, max(x0, (x0 + x1) / 2.0 - 60))
-        Canvas.SetTop(badge, y1 + 4)
-        group.Children.Add(badge)
+        if self._fx.get('labels', True):
+            badge = self._pill(self._glyph_label(glyph, size, '#FFFFFF'), color, radius=2)
+            badge.Padding = Thickness(4, 1, 4, 1)
+            Canvas.SetLeft(badge, max(x0, (x0 + x1) / 2.0 - 60))
+            Canvas.SetTop(badge, y1 + 4)
+            group.Children.Add(badge)
         self.canvas.Children.Insert(0, group)    # under the cursors
         hold = int((FRESH_HOLD_S if fresh else BOX_HOLD_S) * 1000 * speed_factor())
         fx = None if self._reduce() else ('create' if fresh and action == 'code' else action)
@@ -1428,10 +1695,16 @@ class _Overlay(object):
         self._marks = []
 
     def _show_hud(self, rect):
-        scale = self._dpi()
-        self._view_dip = (rect[0] / scale, rect[1] / scale, rect[2] / scale, rect[3] / scale)
-        if self._canvas_px is None or not self.win.IsVisible:
-            self._canvas_px = tuple(rect)   # bar only: the view the bar sits in
+        """rect = the active view (screen px); None = a call with no view to
+        draw in: the bar stays where it last was, or stays away if it never
+        had a place."""
+        if rect is not None:
+            scale = self._dpi()
+            self._view_dip = (rect[0] / scale, rect[1] / scale, rect[2] / scale, rect[3] / scale)
+            if self._canvas_px is None or not self.win.IsVisible:
+                self._canvas_px = tuple(rect)   # bar only: the view the bar sits in
+        if self._view_dip is None:
+            return
         if not self.hud.IsVisible and (self._front_ok or self._asks):
             self.hud.Show()
         self._refresh_hud()             # places it too (_place_hud)
@@ -1443,23 +1716,31 @@ class _Overlay(object):
         plan, the cursor names the current task and the call goes underneath.
         targets = screen boxes of the elements the call names: framed until
         it ends, the cursor goes to the first. None: the cursor stays where
-        it last worked."""
+        it last worked. rect None = no view to draw in: the bar only."""
         self._end_summary()
+        self._stop_replay()             # a live call wins over a replay
         if task_text:
             caption, tool_name = task_text, u'{} · {}'.format(caption, tool_name)
+        self._working[agent] = (time.time(), caption)
+        self._acting[agent] = action
         if not self._model():
-            self._working[agent] = (time.time(), caption)
-            self._bar_only()
-            self._last = time.time()
-            self._show_hud(rect)
-            return
+            self._bar_only()            # the default: the bar, nothing on the model
+        elif rect is not None:
+            try:
+                self._draw_working(agent, action, caption, rect, targets, canvas)
+            except Exception:
+                pass            # the drawing is decoration: the bar still says Working
+        self._last = time.time()
+        self._show_hud(rect)
+
+    def _draw_working(self, agent, action, caption, rect, targets, canvas):
+        """The running call on the model: its cursor, the frames round what it
+        names, the path to the first."""
         if canvas or not self.win.IsVisible or self._origin == (0.0, 0.0):
             self._place(canvas or rect)
         cur = self._cursor(agent, action)
-        self._working[agent] = (time.time(), caption)
         self._cursor_state(cur, 'working', caption)
-        cur['group'].BeginAnimation(_opacity_property(), None)
-        cur['group'].Opacity = 1.0
+        self._wake(cur)
         self._clear_focus(agent)
         if targets:
             acolor = action_style(action)[2]
@@ -1468,25 +1749,26 @@ class _Overlay(object):
                 self._draw_focus(agent, b, acolor)
             point = ((boxes[0][0] + boxes[0][2]) / 2.0, (boxes[0][1] + boxes[0][3]) / 2.0)
             reduce = self._reduce()
-            if not reduce:
+            if not reduce and self._effects()['trail']:
                 self._trail(cur['x'], cur['y'], point[0], point[1], acolor)
             self._tour(cur, tour_schedule([point], 1 if reduce else int(hop_ms(1) * speed_factor()), 0))
         self._layout_tags(agent)
-        self._last = time.time()
-        self._show_hud(rect)
 
     def waiting(self, agent, tool_name, caption, on):
         """The call waits for the user's OK: an amber, pulsing pill."""
         cur = self._cursors.get(agent)
         if on:
             self._waiting[agent] = caption
+            self._acting.setdefault(agent, classify_action(tool_name))
             if cur is None and self.win.IsVisible and self._model():
                 cur = self._cursor(agent, classify_action(tool_name))
-                cur['group'].Opacity = 1.0
+                self._wake(cur)
             if cur is not None:
                 self._cursor_state(cur, 'waiting')
         else:
             self._waiting.pop(agent, None)
+            if agent not in self._working:
+                self._acting.pop(agent, None)
             if cur is not None:
                 work = self._working.get(agent)
                 self._cursor_state(cur, 'working' if work else 'idle', work[1] if work else None)
@@ -1568,7 +1850,7 @@ class _Overlay(object):
             card.CornerRadius = CornerRadius(6)
             card.Padding = Thickness(10, 8, 10, 8)
             card.Margin = Thickness(0, 0, 0, 8)
-            card.Width = 420
+            card.Width = BAR_W
             body = StackPanel()
             card.Child = body
             head = self._glyph_label('\uE7BA', u'{} asks for your OK'.format(tag), self._c('warn'), 11)
@@ -1628,9 +1910,21 @@ class _Overlay(object):
             except Exception:
                 pass
 
-    def _reduce(self):
+    def _effects(self):
+        """The Effects switches for the call being drawn, read once per call:
+        {'trail', 'ripple', 'labels'} (agent_cursors.OPTIONS; on when unreadable).
+        Glow is the main thread's (agent_cursors_glow)."""
         try:
-            return bool(options().get('reduce'))
+            opts = options()
+        except Exception:
+            opts = {}
+        self._fx = dict((name, bool(opts.get(name, True))) for name in ('trail', 'ripple', 'labels'))
+        return self._fx
+
+    def _reduce(self):
+        """Animation is Off (agent_cursors.motion_off)."""
+        try:
+            return motion_off()
         except Exception:
             return False
 
@@ -1640,9 +1934,11 @@ class _Overlay(object):
              args=None, n_targets=0, changes=(), clashes=(), touched=0, goal='',
              record=True, task_text='', created='', fresh=()):
         """created = 'Walls ×3 created' (agent_cursors.work_label), fresh =
-        the ids it is about: those boxes stay highlighted longer."""
+        the ids it is about: those boxes stay highlighted longer. record =
+        False is a replayed step: it is drawn, not counted or listed again."""
         self._end_summary()
         if record:
+            self._stop_replay()         # a live call wins over a replay
             self._history.append((agent, action, tool_name, failed, _light(snap), list(followed),
                                   args, n_targets, list(changes), list(clashes), touched, goal,
                                   task_text, created, list(fresh)))
@@ -1651,24 +1947,57 @@ class _Overlay(object):
         if goal and agent not in self._goals:
             self._goals[agent] = goal
         label, _glyph, acolor = action_style(action)
-        caption = describe_call(tool_name, args, n_targets, failed)
-        detail = tool_name
-        if task_text:           # the plan's task leads; what the call did goes underneath
-            detail = u'{} · {}'.format(caption, tool_name)
-            caption = (u'Failed: ' if failed else u'') + task_text
+        caption, detail = self._step_text(tool_name, args, n_targets, failed, task_text)
         self._working.pop(agent, None)
         self._waiting.pop(agent, None)
+        self._acting.pop(agent, None)
         for vid, name, is_new in followed:
             if vid not in [v[0] for v in self._views]:
                 self._views.append((vid, name))
         if self._model():
-            self._draw_step(agent, action, failed, snap, followed, n_targets, changes,
-                            clashes, created, fresh, caption, label, acolor)
+            try:
+                self._draw_step(agent, action, failed, snap, followed, n_targets, changes,
+                                clashes, created, fresh, caption, label, acolor)
+            except Exception:
+                self._clear_focus(agent)    # decoration: the bar still gets the step
         else:
             self._bar_only()            # the default: the bar, nothing on the model
         self._log_step(agent, action, tool_name, failed, caption, detail, changes, clashes,
                        record)
         self._show_hud(snap['active']['rect'])
+
+    @staticmethod
+    def _step_text(tool_name, args, n_targets, failed, task_text='', document=''):
+        """(caption, detail) of a finished call: with a plan the task leads
+        and what the call did goes underneath."""
+        caption = describe_call(tool_name, args, n_targets, failed)
+        detail = tool_name
+        if task_text:
+            detail = u'{} · {}'.format(caption, tool_name)
+            caption = (u'Failed: ' if failed else u'') + task_text
+        if document:            # a file that is open but not on screen
+            caption = u'{} · in {}'.format(caption, document)
+        return caption, detail
+
+    def done(self, agent, action, tool_name, failed, args=None, n_targets=0, goal='',
+             task_text=''):
+        """A call ended with nothing to draw (no document or view left, or
+        notify() failed half way): the bar gets the step and stops saying
+        Working. Before 2026-11-19 such a call never ended on the bar."""
+        self._end_summary()
+        self._stop_replay()
+        if goal and agent not in self._goals:
+            self._goals[agent] = goal
+        caption, detail = self._step_text(tool_name, args, n_targets, failed, task_text)
+        self._working.pop(agent, None)
+        self._waiting.pop(agent, None)
+        self._acting.pop(agent, None)
+        self._clear_focus(agent)
+        cur = self._cursors.get(agent)
+        if cur is not None:
+            self._cursor_state(cur, 'failed' if failed else 'idle', caption)
+        self._log_step(agent, action, tool_name, failed, caption, detail, (), (), True)
+        self._show_hud(None)
 
     def _bar_only(self):
         """Bar only (On model off): the bar may show, the canvas never does;
@@ -1695,6 +2024,7 @@ class _Overlay(object):
         self._place(snap['rect'])
         f = speed_factor()
         reduce = self._reduce()
+        fx = self._effects()
         cur = self._cursor(agent, action)
         self._clear_focus(agent)
         self._cursor_state(cur, 'failed' if failed else 'idle', caption)
@@ -1743,7 +2073,7 @@ class _Overlay(object):
                 self._draw_box(b[0], b[1], b[2], b[3], item.get('label') or item['size'],
                                action, arrive,
                                fresh=item.get('fresh') or item.get('id') in fresh_ids)
-                if item.get('id') in change_by_id:
+                if fx['labels'] and item.get('id') in change_by_id:
                     self._draw_chip(b[0], b[3] + 24, change_by_id[item['id']], acolor, arrive)
                 if item.get('id') in clash_ids:
                     self._flash_clash(b, arrive)
@@ -1756,40 +2086,44 @@ class _Overlay(object):
         if created and fresh_boxes and not failed:
             # What the call made or changed, named once above it; it stays.
             hold = int(FRESH_HOLD_S * 1000 * f)
-            self._draw_label(union_box(fresh_boxes), created, action, sched[-1][2], hold)
-            if not reduce and len(fresh_boxes) > 1 and len(stops) == len(boxes) > 1:
+            if fx['labels']:
+                self._draw_label(union_box(fresh_boxes), created, action, sched[-1][2], hold)
+            if not reduce and fx['trail'] and len(fresh_boxes) > 1 and len(stops) == len(boxes) > 1:
                 self._build_trail(sched, acolor, hold)
-        if not reduce:
+        if not reduce and fx['trail']:
             self._trail(cur['x'], cur['y'], points[0][0], points[0][1], acolor)
         self._tour(cur, sched, shake=failed and not reduce)
         self._layout_tags(agent)
-        if not reduce:
+        if not reduce and fx['ripple']:
             ring = '#DC2626' if failed else acolor
             for x, y, arrive, _leave in sched:
                 self._ripple(x, y, ring, arrive)
             self._press(cur, [st[2] for st in sched])
-        cur['group'].BeginAnimation(_opacity_property(), None)
-        cur['group'].Opacity = 1.0
+        self._wake(cur)
 
     def _log_step(self, agent, action, tool_name, failed, caption, detail, changes, clashes,
                   record):
         """The step on the bar: feed row, counts, changed values."""
-        self._feed.insert(0, {'agent': agent, 'action': action, 'caption': caption,
-                              'tool': detail, 'failed': failed, 't': time.time()})
+        step = {'agent': agent, 'action': action, 'caption': caption, 'tool': detail,
+                'failed': failed, 't': time.time()}
         self._last_changes = [text for _i, text in changes]
-        for elem_id, others in clashes:
-            self._feed.insert(0, {
-                'agent': agent, 'action': action, 'tool': tool_name, 'failed': True,
-                'kind': 'warn', 't': time.time(),
-                'caption': u'{} and {} both edited element {}'.format(
-                    agent_style(agent)[0], ', '.join(agent_style(o)[0] for o in others), elem_id)})
-        del self._feed[FEED_SIZE:]
-        if record:                  # a replay does not count twice
+        if record:                  # a replay neither counts nor lists a step twice
+            self._feed.insert(0, step)
+            for elem_id, others in clashes:
+                self._feed.insert(0, {
+                    'agent': agent, 'action': action, 'tool': tool_name, 'failed': True,
+                    'kind': 'warn', 't': time.time(),
+                    'caption': u'{} and {} both edited element {}'.format(
+                        agent_style(agent)[0], ', '.join(agent_style(o)[0] for o in others),
+                        elem_id)})
+            del self._feed[FEED_SIZE:]
             counts = self._counts.setdefault(agent, {})
             counts[action] = counts.get(action, 0) + 1
             self._actions += 1
             self._failed += 1 if failed else 0
             self._note = ''
+        else:
+            self._replay_step = step    # the band fills to k / n with this step on it
         self._last = time.time()
 
     # ── chips, conflicts, off-screen arrows ──────────────────────────────────
@@ -1852,11 +2186,16 @@ class _Overlay(object):
     # ── replay and the idle summary ─────────────────────────────────────────
 
     def replay(self):
-        """Play the last steps again (screen positions as they were then)."""
+        """Play the last steps again (screen positions as they were then).
+        Not while a call runs: it would clear that call's cursor."""
         if not self._history or self._replay is not None:
+            return
+        if self._working:
+            self._note = u'Replay waits until the running call ends'
             return
         from System import TimeSpan
         self._end_summary()
+        self._note = ''
         for cur in self._cursors.values():
             cur['group'].BeginAnimation(_opacity_property(), None)
         self.canvas.Children.Clear()
@@ -1874,22 +2213,28 @@ class _Overlay(object):
                 return
             records, k = self._replay
             if k >= len(records):
-                self._replay = None
-                self._replay_timer.Stop()
-                self._note = u'Replay done · {} steps'.format(len(records))
+                self._stop_replay(u'Replay done · {} steps'.format(len(records)))
                 self._refresh_hud()
                 return
             rec = records[k]
             self._replay[1] = k + 1
+            # show() redraws the bar: its band carries the step and fills to k / n.
             self.show(rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], args=rec[6],
                       n_targets=rec[7], changes=rec[8], clashes=rec[9], touched=rec[10],
                       goal=rec[11], record=False, task_text=rec[12], created=rec[13],
                       fresh=rec[14])
-            self._note = u'Replay {} / {}'.format(k + 1, len(records))
-            self._refresh_hud()
         except Exception:
-            self._replay = None
-            self._replay_timer.Stop()
+            self._stop_replay()
+
+    def _stop_replay(self, note=''):
+        """End a replay (done, failed, or a live call arrived); `note` goes
+        to the footer."""
+        if self._replay is None:
+            return
+        self._replay = None
+        self._replay_step = None
+        self._replay_timer.Stop()
+        self._note = note
 
     def _keep(self):
         try:
@@ -1900,20 +2245,44 @@ class _Overlay(object):
     def _enter_summary(self, keep=False):
         """Agents idle: cursors, boxes and Glow leave (owner, 2026-11-17: they
         stayed after the agent stopped); the bar lists each agent's counts
-        and Keep bar keeps only the bar (folded)."""
+        and Keep bar keeps only the bar (folded). They fade out; a call that
+        arrives meanwhile keeps them (_end_summary)."""
         self._summary = time.time()
         self._resting = keep
+        fn = (self.host.callbacks if self.host is not None else {}).get('idle')
+        if fn is not None:
+            fn()                        # Glow off the model (main thread)
+        if self._reduce() or not self._cursors:
+            self._leave()
+            return
+        token = self._leaving = object()
+
+        def gone(s, e):
+            if self._leaving is token:      # nothing came back meanwhile
+                self._leave()
+        try:
+            self.canvas.BeginAnimation(_opacity_property(),
+                                       self._anim(((1.0, 0), (0.0, 420)), gone))
+        except Exception:
+            self._leave()
+
+    def _leave(self):
+        """Take cursors and boxes off the views and hide the canvas window."""
+        self._leaving = None
         for cur in self._cursors.values():
             cur['group'].BeginAnimation(_opacity_property(), None)
         self.canvas.Children.Clear()
         self._cursors = {}
         self._focus = {}
         self.win.Hide()
-        fn = (self.host.callbacks if self.host is not None else {}).get('idle')
-        if fn is not None:
-            fn()                        # Glow off the model (main thread)
+        self.canvas.BeginAnimation(_opacity_property(), None)
+        self.canvas.Opacity = 1.0
 
     def _end_summary(self):
+        if self._leaving is not None:       # back before the cursors had gone
+            self._leaving = None
+            self.canvas.BeginAnimation(_opacity_property(), None)
+            self.canvas.Opacity = 1.0
         if self._summary is not None:
             self._summary = None
             self._resting = False
@@ -1939,6 +2308,7 @@ class _Overlay(object):
         self._transient = []
         self._working = {}
         self._waiting = {}
+        self._acting = {}
         self._goals = {}
         self._plans = {}
         self._failed = 0
@@ -1947,7 +2317,10 @@ class _Overlay(object):
         self._drawer = False
         self._folded = False
         self._replay = None
+        self._replay_step = None
         self._replay_timer.Stop()
+        self._stop_loops()
+        self._drawn = {}
         self._end_summary()
         self._wanted = False
         self.win.Hide()

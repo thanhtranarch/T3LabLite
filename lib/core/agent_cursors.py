@@ -1,18 +1,20 @@
 # -*- coding: utf-8 -*-
 """Agent cursors: a live overlay of which AI agent does what, where.
 
-Each MCP tool call moves the agent's one cursor (the action only tints its
-tag) to each element it read, edited, created or deleted in turn (move,
+Each MCP tool call moves the agent's one cursor (the action is the icon on
+its tag) to each element it read, edited, created or deleted in turn (move,
 click, next), in every visible view, with a plain caption ("Moving elements ·
 3 elements"), a badge per element ("Walls · 1200 × 300") and an effect per
 action. Elements a call names are framed while it runs; what it created or
 changed is taken from Revit's DocumentChanged too (code returns no ids) and
 stays highlighted with a chip ("Walls ×3 created"). A call with no element
 scans next to where the cursor last worked.
-The HUD lists the last steps and each agent's plan (t3lab_narrate tasks / step):
+The HUD shows what runs now as a block of the action's colour (band_rows),
+lists the last steps and each agent's plan (t3lab_narrate tasks / step):
 while a step runs the cursor names that task, the call goes underneath; a
 send_code_to_revit call is named by its `purpose` or its code (summarize_code).
-Keep bar (on by default) keeps the HUD and dimmed cursors between calls.
+Keep bar (on by default) keeps the bar, folded, between calls; the cursors
+leave when the agents go idle.
 Follow mode opens the views the agent works in; zoom brings off-screen
 targets into view. Idea after swarm-cursors (github.com/DhvanilPatel/
 swarm-cursors); drawn here in code-built WPF, no code from it.
@@ -22,7 +24,8 @@ MCPExternalEventHandler.Execute (core/server.py): before() just ahead of the
 tool (boxes of what a delete / move is about to change), notify() after the
 caller has its result. Off by default; Settings > Agent Cursors or the HUD.
 Engine-agnostic (IronPython 2.7 + CPython 3); the pure helpers are tested by
-lite_guard/test_agent_cursors.py.
+lite_guard/test_agent_cursors.py, the bar on a fake WPF by
+lite_guard/test_agent_cursors_overlay.py.
 """
 
 from __future__ import unicode_literals
@@ -65,13 +68,21 @@ OPTIONS = (
     ('zoom', 'agent_cursors_zoom', True),
     ('select', 'agent_cursors_select', True),
     ('tile', 'agent_cursors_tile_views', True),
-    ('reduce', 'agent_cursors_reduce_motion', True),
     ('glow', 'agent_cursors_glow', True),
+    ('trail', 'agent_cursors_trail', True),
+    ('ripple', 'agent_cursors_ripple', True),
+    ('labels', 'agent_cursors_labels', True),
     ('keep', 'agent_cursors_keep_bar', True),
 )
-# Motion speed (mcp_paths.json agent_cursors_speed): name -> time factor.
+# Animation (mcp_paths.json agent_cursors_speed): name -> time factor. 'off' =
+# no glides, ripples or sweeps, boxes and captions only. Motion is part of the
+# feature: no control on the bar or in Settings (owner, 2026-11-19), the key
+# stays for a machine that needs it off. It replaced the "Less motion" switch,
+# which shipped on and was saved for everyone by the Settings dialog, so a
+# saved value never meant a choice.
 SPEED_KEY = 'agent_cursors_speed'
-SPEEDS = (('calm', 1.6), ('normal', 1.0), ('fast', 0.55))
+SPEEDS = (('off', 1.0), ('calm', 1.6), ('normal', 1.0), ('fast', 0.55))
+SPEED_DEFAULT = 'calm'      # owner, 2026-11-19
 OPTION_LABELS = {
     'model': ('On model', 'Draw the cursor, element boxes and effects on the views and let the '
                           'options below act. Off: the bar only, nothing on the model'),
@@ -79,9 +90,14 @@ OPTION_LABELS = {
     'zoom': ('Zoom', 'Zoom the view to targets that are off screen'),
     'select': ('Select', "Select the agent's targets (replaces your selection)"),
     'tile': ('Tile', 'Tile the open views when the agent opens another one'),
-    'reduce': ('Less motion', 'No glides, ripples or scans: boxes and captions only'),
     'glow': ('Glow', 'Experimental: outline touched elements inside the Revit view '
                      '(DirectContext3D). Turn off if Revit misbehaves.'),
+    'trail': ('Trail', 'Draw the path the cursor takes to its next target, and join the '
+                       'elements a call created'),
+    'ripple': ('Ripple', 'A ring where the cursor lands on a target, and the click of '
+                         'the pointer'),
+    'labels': ('Labels', 'Name each target (category and size), say what a call created '
+                         'and show the values it changed'),
     'keep': ('Keep bar', 'Keep the bar (folded) on screen between calls instead of '
                          'fading out (the x on the bar turns Agent Cursors off)'),
 }
@@ -140,7 +156,7 @@ _ACTION = dict((a[0], a) for a in ACTIONS)
 
 PROS = (
     "See at a glance which AI app is working, what it does and on which elements.",
-    "Plain-English captions, the agent's goal (t3lab_narrate) and a feed of the last steps on the bar.",
+    "The bar shows each step as a block of its action's colour with a plain-English caption, plus the agent's goal (t3lab_narrate) and a feed of the last steps.",
     "One cursor per AI app moves to each target and clicks it; new or changed elements stay highlighted (\"Walls ×3 created\"), changed values show as \"Mark: A-101 → A-102\".",
     "Long calls show \"Working 8 s\"; a call waiting for your OK pulses amber.",
     "Two agents editing the same element flash red; targets off screen get an edge arrow.",
@@ -156,8 +172,13 @@ CONS = (
 )
 
 
+def pros_cons_sections():
+    """[(heading, [line], glyph)] for the Settings dialog (T3Dialog sections)."""
+    return [('Benefits', list(PROS), '\uE73E'), ('Drawbacks', list(CONS), '\uE7BA')]
+
+
 def pros_cons_text():
-    """Benefits and drawbacks, as shown when the feature is toggled."""
+    """The same as plain text (TaskDialog fallback)."""
     lines = ['Benefits']
     lines += ['  + ' + p for p in PROS]
     lines += ['', 'Drawbacks']
@@ -238,9 +259,14 @@ def set_option(name, value):
 
 
 def speed():
-    """'calm' | 'normal' | 'fast'."""
-    name = _settings().get(SPEED_KEY, 'normal')
-    return name if name in dict(SPEEDS) else 'normal'
+    """'off' | 'calm' | 'normal' | 'fast'."""
+    name = _settings().get(SPEED_KEY, SPEED_DEFAULT)
+    return name if name in dict(SPEEDS) else SPEED_DEFAULT
+
+
+def motion_off():
+    """Animation is Off: nothing glides, ripples or sweeps."""
+    return speed() == 'off'
 
 
 def speed_factor(name=None):
@@ -249,11 +275,11 @@ def speed_factor(name=None):
 
 def next_speed(name):
     names = [n for n, _f in SPEEDS]
-    return names[(names.index(name) + 1) % len(names)] if name in names else 'normal'
+    return names[(names.index(name) + 1) % len(names)] if name in names else SPEED_DEFAULT
 
 
 def set_speed(name):
-    _paths().set_setting(SPEED_KEY, name if name in dict(SPEEDS) else 'normal')
+    _paths().set_setting(SPEED_KEY, name if name in dict(SPEEDS) else SPEED_DEFAULT)
     _cache['mtime'] = None
     return speed()
 
@@ -965,13 +991,172 @@ OPTION_GROUPS = (
     ('Show', ('model',)),
     ('View', ('follow', 'zoom', 'tile')),
     ('Selection', ('select',)),
-    ('Motion', ('reduce', 'glow')),
+    ('Effects', ('glow', 'trail', 'ripple', 'labels')),
     ('Bar', ('keep',)),
 )
 
 
 def hud_palette(theme):
     return HUD_PALETTES['light' if theme == 'light' else 'dark']
+
+
+# ─── Action bands (the bar's colour blocks) ──────────────────────────────────
+# A step shows as a block of its action's colour: a solid stripe, a wash of the
+# same colour and a glyph. Text on it stays the bar's own text colour: green
+# on white is 3.3:1, enough for a stripe, too weak for 12.5 px text.
+
+BAR_W = 420.0           # width of the bar's content; fills are measured on it
+BAND_STRIPE = 5.0       # px of solid colour on a band's left edge
+BAND_WASH = {'dark': 56, 'light': 36}   # alpha of the colour behind a band
+BAND_MAX = 3            # bands at once (agents working together), then "+n more"
+SWEEP_W = 96.0          # block that crosses a band while its call runs
+COUNT_BAR_W = 72.0      # an agent's counts as one stacked bar
+_FAILED_GLYPH = ''
+_WAITING_GLYPH = ''
+_tones = {}
+
+
+def _rgb(color):
+    h = color.lstrip('#')
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _luminance(color):
+    lin = []
+    for v in _rgb(color):
+        v = v / 255.0
+        lin.append(v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def contrast(a, b):
+    """WCAG contrast ratio of two '#RRGGBB' colours, 1.0 to 21.0."""
+    la, lb = _luminance(a), _luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def blend(color, onto, alpha):
+    """`color` at `alpha` (0-255) over `onto`, as one opaque '#RRGGBB'."""
+    t = max(0, min(255, alpha)) / 255.0
+    return '#{:02X}{:02X}{:02X}'.format(*[
+        int(round(c * t + o * (1.0 - t))) for c, o in zip(_rgb(color), _rgb(onto))])
+
+
+def band_wash(theme):
+    return BAND_WASH['light' if theme == 'light' else 'dark']
+
+
+def bar_tone(color, theme, target=3.0):
+    """`color` as the bar draws it: moved towards white (dark bar) or black
+    (light bar) just far enough to read at `target`:1 on its own wash. Purple
+    and blue are 2.5:1 on the dark bar as they are. The model overlay keeps
+    the raw colour."""
+    theme = 'light' if theme == 'light' else 'dark'
+    key = (color, theme, target)
+    if key not in _tones:
+        bg = HUD_PALETTES[theme]['bg']
+        pole = '#000000' if theme == 'light' else '#FFFFFF'
+        tone = color
+        for step in range(21):
+            tone = blend(pole, color, int(round(255 * step / 20.0)))
+            if contrast(tone, blend(tone, bg, BAND_WASH[theme])) >= target:
+                break
+        _tones[key] = tone
+    return _tones[key]
+
+
+def band_style(action, theme, state='done', failed=False):
+    """(label, glyph, colour) of a band on the `theme` bar: the action's own
+    label and colour; a failed step turns red with a cross, a call waiting
+    for the user's OK turns amber. The label always stays the action's."""
+    label, glyph, color = action_style(action)
+    pal = hud_palette(theme)
+    if failed:
+        return label, _FAILED_GLYPH, bar_tone(pal['bad'], theme)
+    if state == 'waiting':
+        return label, _WAITING_GLYPH, bar_tone(pal['warn'], theme)
+    return label, glyph, bar_tone(color, theme)
+
+
+def band_rows(working=(), waiting=(), last=None, replay=None, limit=BAND_MAX):
+    """What the bar's bands show, top to bottom: ([row], agents left out).
+    working / waiting = [(agent, action, caption)] of the calls running now /
+    waiting for the user's OK; last = the newest step {'agent', 'action',
+    'caption', 'failed'}; replay = (k, n) when `last` is step k of a replay.
+    Live calls win, one band per agent in agent order (a band never jumps
+    when another agent starts); else the one last step.
+    row = {'agent', 'action', 'caption', 'state', 'failed', 'note',
+    'progress'}; state: running | waiting | replay | done; note = the text on
+    the band's right; progress = (k, n) or None."""
+    live = {}
+    for state, calls in (('running', working), ('waiting', waiting)):
+        for agent, action, caption in calls or ():
+            live[agent] = {'agent': agent, 'action': action, 'caption': caption or '',
+                           'state': state, 'failed': False, 'progress': None,
+                           'note': 'Waiting' if state == 'waiting' else action_style(action)[0]}
+    if live:
+        rows = [live[agent] for agent in sorted(live)]
+        return rows[:limit], max(0, len(rows) - limit)
+    if not last:
+        return [], 0
+    row = {'agent': last.get('agent') or '', 'action': last.get('action'),
+           'caption': last.get('caption') or '', 'failed': bool(last.get('failed')),
+           'state': 'done', 'progress': None, 'note': action_style(last.get('action'))[0]}
+    if replay:
+        k, n = replay
+        row.update(state='replay', progress=(k, n), note='Replay {} / {}'.format(k, n))
+    return [row], 0
+
+
+def band_motion(rows, seen):
+    """([motion], signatures for the next draw): how each band_rows row comes
+    on when the bar is drawn again. 'enter' = its agent had no band, 'shake' =
+    its step failed, 'pop' = another step or state, None = nothing changed
+    (the bar is redrawn on every hover: a plain redraw must not move).
+    `seen` = {agent: signature} of the last draw."""
+    motions, now = [], {}
+    for row in rows:
+        sig = (row['state'], row['action'], row['caption'], row['failed'], row['progress'])
+        old = seen.get(row['agent'])
+        if old is None:
+            motions.append('enter')
+        elif old == sig:
+            motions.append(None)
+        else:
+            motions.append('shake' if row['failed'] else 'pop')
+        now[row['agent']] = sig
+    return motions, now
+
+
+def fill_width(done, total, width=BAR_W, minimum=0.0):
+    """px of `width` that `done` of `total` covers, within [minimum, width]."""
+    try:
+        part = float(done) / float(total)
+    except (TypeError, ValueError, ZeroDivisionError):
+        part = 0.0
+    return min(float(width), max(float(minimum), width * min(1.0, max(0.0, part))))
+
+
+def count_bar(counts, width=COUNT_BAR_W, gap=1.0, minimum=3.0):
+    """[(action, px)] in ACTIONS order: an agent's counts as one stacked bar.
+    Widths follow the counts, none under `minimum` (1 call in 30 still
+    shows), and with the gaps between them they add up to `width`."""
+    items = count_items(counts or {})
+    if not items:
+        return []
+    room = width - gap * (len(items) - 1)
+    if room <= minimum * len(items):
+        return [(action, room / len(items)) for action, _n in items]
+    pinned = set()
+    while True:
+        rest = float(sum(n for action, n in items if action not in pinned))
+        free = room - minimum * len(pinned)
+        widths = [(action, minimum if action in pinned else free * n / rest)
+                  for action, n in items]
+        small = [action for action, w in widths if w < minimum]
+        if not small:
+            return widths
+        pinned.update(small)
 
 
 def hud_state(working, waiting, asks, paused):
@@ -1617,6 +1802,13 @@ def before(app, task):
                     'working', agent, action, describe_call(tool, args, len(ids)), tool,
                     geos[active]['rect'], task_text=current_task(_plan_of(agent)),
                     targets=[b['box'] for b in boxes[:MAX_STOPS]], canvas=union_rect(shown))
+            elif _state.get('overlay') is not None:
+                # No view to draw in (no document, a view window too small):
+                # the bar, once it is up, still shows the call.
+                agent = _agent_of(task)
+                _state['overlay'].call(
+                    'working', agent, action, describe_call(tool, args, len(ids)), tool, None,
+                    task_text=current_task(_plan_of(agent)))
         except Exception:
             pass
         name, ok = _param_name(tool, args)
@@ -1640,8 +1832,27 @@ def _changes(app, task, ids):
     return out
 
 
+def _done(task, agent, action, tool, failed, args):
+    """End a call on the bar when notify() had nothing to draw or failed.
+    Only when the bar exists: a call never brings it up without a view."""
+    try:
+        ov = _state.get('overlay')
+        if ov is not None and ov.alive:
+            ov.call('done', agent, action, tool, failed, args=args,
+                    goal=_session['goals'].get(agent_key(agent) or 'mcp-client', ''),
+                    task_text=current_task(_plan_of(agent)))
+    except Exception:
+        pass
+
+
 def notify(app, task):
-    """One finished tool call. Never raises."""
+    """One finished tool call. Never raises. Whatever happens after before()
+    said Working, the bar is told the call is over: show(), or done() when
+    there is nothing to draw or this function failed half way (2026-11-19:
+    such a call left the bar on "Working" for ever). finish() takes that
+    over once it is handed the call, also when it runs later (_when_settled)."""
+    agent = action = tool = args = None
+    failed, started, handed = False, False, False
     try:
         _flush_pending()        # keep the steps in order
         if not is_enabled():
@@ -1660,6 +1871,7 @@ def notify(app, task):
         action = classify_action(tool, args, result)
         ids = [] if failed else extract_ids(args, result)
         agent = _agent_of(task)
+        started = True
         opts = effective(options())     # bar only: nothing below touches the model
         uidoc = app.ActiveUIDocument
         # What Revit says the call added / modified (code returns no ids).
@@ -1713,29 +1925,42 @@ def notify(app, task):
         task_text = current_task(_plan_of(agent))
 
         def finish():
-            if not is_enabled():
-                return
-            # Bar only: the views place the bar; no element boxes to measure.
-            snap = _snapshot(app, ids if opts['model'] else [], pre)
-            if snap is None:
-                return
-            if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
-                    and uidoc is not None and _zoom_to(uidoc, ids)):
-                snap = _snapshot(app, ids) or snap
-            _overlay(_hwnd(app)).call(
-                'show', agent, action, tool, failed, snap, followed, args=args,
-                n_targets=len(ids), changes=changes, clashes=clashes,
-                touched=touched, goal=goal, task_text=task_text,
-                created=label, fresh=fresh)
+            ended = False
+            try:
+                if not is_enabled():
+                    ended = True        # switched off meanwhile: the bar is gone
+                    return
+                # Bar only: the views place the bar; no element boxes to measure.
+                snap = _snapshot(app, ids if opts['model'] else [], pre)
+                if snap is None:
+                    return
+                if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
+                        and uidoc is not None and _zoom_to(uidoc, ids)):
+                    snap = _snapshot(app, ids) or snap
+                _overlay(_hwnd(app)).call(
+                    'show', agent, action, tool, failed, snap, followed, args=args,
+                    n_targets=len(ids), changes=changes, clashes=clashes,
+                    touched=touched, goal=goal, task_text=task_text,
+                    created=label, fresh=fresh)
+                ended = True
+            except Exception:
+                pass
+            finally:
+                if not ended:
+                    _done(task, agent, action, tool, failed, args)
 
         # Opening views and the posted Tile land AFTER this event returns:
         # measured now, every box and the cursor sat where the views used to
         # be. Measure once Revit has laid the views out.
+        handed = True
         if (followed or tiled) and _when_settled(app, finish):
             return
         finish()
     except Exception:
         pass
+    finally:
+        if started and not handed:
+            _done(task, agent, action, tool, failed, args)
 
 
 # ─── Deferred show: wait for Revit to finish laying views out ────────────────

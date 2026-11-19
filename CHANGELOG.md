@@ -19,7 +19,43 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent Cursors — the bar shows each step in its action's colour:** the step
+  that runs now is a block in the colour of what the agent does (read, create,
+  modify, delete, view, export, code) with its icon; a failed step is red, a
+  call waiting for your OK is amber. The call that runs and each call that
+  waits get their own block. The last steps carry a stripe in the same
+  colours, and each app's counts are also one small coloured bar.
+- **Agent Cursors — more motion:** a new step slides in, its icon pops when
+  the step changes, a failed step shakes, a running call sweeps across its
+  block, and cursors fade in and out instead of jumping. The "Less motion"
+  option is gone: it was on for everyone, so the cursors never moved.
+- **Agent Cursors — the tag on the cursor shows the action as an icon** in
+  front of the app's name.
+- **Agent Cursors — three more Effects switches:** Trail (the path the cursor
+  takes), Ripple (the ring where it clicks) and Labels (names, sizes and
+  changed values on the model) can each be turned off, on the bar and in
+  Settings. All three are on by default and need "On model".
+- **Agent Cursors — Replay** now fills its block step by step and shows which
+  step it replays.
+- **Settings > Agent Cursors window, redrawn like BatchOut's Format page:** one
+  card with the on/off checkbox in its header and, below it, the same groups
+  and names as on the bar (Show, View, Selection, Effects, Bar). Unticking
+  "On model" greys out what draws on the views. The benefits and drawbacks
+  are a second, folded card instead of a long scrolling text. Not tried in
+  Revit yet.
+
 ### Fixed
+
+- **Agent Cursors — the bar could stay on "Working" for ever:** when a call
+  ended with no view to show it in (the last document closed, a view window
+  too small) or its drawing failed, the bar never learned that the call was
+  over: it never went idle and Replay was refused. Every call now ends on
+  the bar, and a drawing error no longer loses the step.
+- **Agent Cursors — Replay filled the step list with copies** that all said
+  "now" and pushed the real last steps out. A replay no longer adds to the
+  list, and a new call from an AI app ends it.
 
 - **T3Lab Assistant — "Mana Select" could not be opened by name (since 2.6.2):**
   the FamiGen button borrowed a helper from Mana Select, so the Assistant

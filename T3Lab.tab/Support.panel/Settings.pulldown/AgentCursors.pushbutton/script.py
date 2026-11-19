@@ -28,14 +28,18 @@ from GUI.T3Dialog import confirm_options, show_info, show_error
 
 
 def _option_rows(on):
-    """Checkboxes for the dialog: the on/off switch (when on) + every bar option."""
+    """Rows for the dialog: the on/off switch (when on) + every bar option
+    with what it does. A row greys out while what it hangs under is unticked:
+    everything under the switch, the options that draw on the model under
+    "On model" (agent_cursors.effective)."""
     current = agent_cursors.options()
     rows = []
     if on:
         rows.append(('enabled', 'Show agent cursors', 'Untick to turn the cursors off', True))
     for name, _key, _default in agent_cursors.OPTIONS:
         label, tip = agent_cursors.OPTION_LABELS[name][:2]
-        rows.append((name, label, tip, current.get(name, True)))
+        rows.append((name, label, tip, current.get(name, True),
+                     'enabled' if name in ('model', 'keep') else 'model'))
     return rows
 
 
@@ -49,7 +53,10 @@ def main():
                    'working in Revit through MCP?')
         ok_text = 'Turn On'
     values = confirm_options(message, _option_rows(on), title='Agent Cursors', ok_text=ok_text,
-                             cancel_text='Cancel', details=agent_cursors.pros_cons_text())
+                             cancel_text='Cancel', details=agent_cursors.pros_cons_text(),
+                             subtitle='Live cursors for the AI agents working in Revit',
+                             sections=agent_cursors.pros_cons_sections(),
+                             sections_title='Benefits and drawbacks')
     if values is None:
         return
     enable = values.pop('enabled', True)
@@ -75,8 +82,9 @@ def main():
                     'Tick "On model" to also draw a cursor per agent and the elements it '
                     'visits on the views. Long calls say "Working"; a '
                     'call waiting for your OK pulses amber. When the agents go idle the '
-                    'bar shows a summary with Select touched and Replay. The same options, '
-                    'plus Speed, switch on the bar; its X turns the cursors off again.\n\n'
+                    'bar shows a summary with Select touched and Replay. The same options '
+                    'and what each icon means are on the bar; its X turns the cursors off '
+                    'again.\n\n'
                     'Options: {}'.format(agent_cursors.options_text()))
 
 

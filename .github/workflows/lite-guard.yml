@@ -68,6 +68,8 @@ jobs:
         run: python3 -W ignore lite_guard/test_routes_guard.py
       - name: Test agent cursors (actions, followed views, bridge agent stamp)
         run: python3 lite_guard/test_agent_cursors.py
+      - name: Test the Agent Cursors bar and Settings dialog on a fake WPF (bands, motion)
+        run: python3 lite_guard/test_agent_cursors_overlay.py
       - name: Test consent on the Agent Cursors bar (Allow / Deny, offer)
         run: python3 lite_guard/test_cursor_consent.py
       - name: Test the opt-in tool open timing log

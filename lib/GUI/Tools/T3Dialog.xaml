@@ -1746,7 +1746,7 @@
                                RenderOptions.BitmapScalingMode="HighQuality"/>
                         <StackPanel Orientation="Vertical" VerticalAlignment="Center">
                             <TextBlock x:Name="dlg_title" Text="Notification" Style="{StaticResource T3.Title}"/>
-                            <TextBlock Text="T3Lab notification and confirmation dialog" Style="{StaticResource T3.Subtitle}"/>
+                            <TextBlock x:Name="dlg_subtitle" Text="T3Lab notification and confirmation dialog" Style="{StaticResource T3.Subtitle}"/>
                         </StackPanel>
                     </StackPanel>
 
@@ -1775,8 +1775,8 @@
                     </Border>
                 </Grid>
 
-                <!-- Text / Message Area -->
-                <Grid Grid.Column="1" Margin="0,16,16,16">
+                <!-- Text / Message Area (pnl_body: measured to fit the options dialog) -->
+                <Grid x:Name="pnl_body" Grid.Column="1" Margin="0,16,16,16">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
@@ -1788,13 +1788,27 @@
                     <TextBlock x:Name="txt_message" Grid.Row="0" Text="Operation completed successfully."
                                Style="{StaticResource T3.BodyStrong}" TextWrapping="Wrap" Margin="0,0,0,8"/>
 
-                    <!-- Option checkboxes (confirm_options only), filled from Python -->
-                    <WrapPanel x:Name="pnl_options" Grid.Row="1" Margin="0,0,0,8" Visibility="Collapsed"/>
+                    <!-- Options (confirm_options only): one row per option, checkbox + what it does,
+                         filled from Python -->
+                    <Grid x:Name="pnl_options" Grid.Row="1" Margin="0,8,0,8" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                    </Grid>
                     <!-- Details / Secondary Description -->
                     <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                         <TextBlock x:Name="txt_details" Text=""
                                    Style="{StaticResource T3.Body.Secondary}" TextWrapping="Wrap"/>
                     </ScrollViewer>
+                    <!-- Long reading (confirm_options sections): folded, so the options stay in view -->
+                    <Expander x:Name="exp_details" Grid.Row="2" Header="Details" VerticalAlignment="Top"
+                              Style="{StaticResource T3.Expander}" Visibility="Collapsed">
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel x:Name="pnl_sections" Margin="12,4,12,12"/>
+                        </ScrollViewer>
+                    </Expander>
 
                     <!-- One-line answer (ask_for_string only) -->
                     <TextBox x:Name="txt_input" Grid.Row="3" Style="{StaticResource T3.TextBox}"

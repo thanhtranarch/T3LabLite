@@ -19,7 +19,32 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent Cursors — the bar shows each step in its action's colour:** the step
+  that runs now is a block in the colour of what the agent does (read, create,
+  modify, delete, view, export, code) with its icon; a failed step is red, a
+  call waiting for your OK is amber. With several AI apps at work, each gets
+  its own block. The last steps carry a stripe in the same colours, and each
+  app's counts are also one small coloured bar.
+- **Agent Cursors — more motion:** a new step slides in, its icon pops when
+  the step changes, a failed step shakes, a running call sweeps across its
+  block, and cursors fade in and out instead of jumping. The "Less motion"
+  option is gone: it was on for everyone, so the cursors never moved.
+- **Agent Cursors — the tag on the cursor shows the action as an icon** in
+  front of the app's name.
+- **Agent Cursors — Replay** now fills its block step by step and shows which
+  step it replays.
+- **Settings > Agent Cursors dialog:** every option says what it does next to
+  its checkbox, options that need "On model" grey out while it is unticked,
+  and the benefits and drawbacks sit in a folded section instead of a long
+  scrolling text. Not tried in Revit yet.
+
 ### Fixed
+
+- **Agent Cursors — Replay filled the step list with copies** that all said
+  "now" and pushed the real last steps out. A replay no longer adds to the
+  list, and a new call from an AI app ends it.
 
 - **T3Lab Assistant — "Mana Select" could not be opened by name (since 2.6.2):**
   the FamiGen button borrowed a helper from Mana Select, so the Assistant

@@ -439,7 +439,10 @@ def test_setting():
         check('every bar glyph is in Segoe MDL2', used <= known, sorted(used - known))
     check('options default: bar only (owner, 2026-11-18), the rest on for On model',
           opts == {'model': False, 'follow': True, 'zoom': True, 'select': True, 'tile': True,
-                   'reduce': True, 'glow': True, 'keep': True}, opts)
+                   'glow': True, 'keep': True}, opts)
+    check('Less motion is no option any more: Animation Off replaced it',
+          'reduce' not in opts and 'reduce' not in AC.OPTION_LABELS
+          and 'agent_cursors_reduce_motion' not in [k for _n, k, _d in AC.OPTIONS])
     eff = AC.effective(opts)
     check('bar only: nothing touches the model, Keep bar stays',
           eff['keep'] and not any(eff[n] for n in ('follow', 'zoom', 'select', 'tile', 'glow')))
@@ -449,10 +452,11 @@ def test_setting():
     tick = src.split('    def _on_tick(self, sender, e):', 1)[1].split('    def ', 1)[0]
     check('keep bar: never auto-hidden after the summary',
           'now - self._summary >= SUMMARY_S and not self._keep()' in tick)
-    summary = src.split('    def _enter_summary(self, keep=False):', 1)[1].split('    def ', 1)[0]
+    summary = src.split('    def _enter_summary(self, keep=False):', 1)[1].split('\n    def ', 1)[0]
+    leave = src.split('    def _leave(self):', 1)[1].split('\n    def ', 1)[0]
     check('idle: cursors and boxes always leave (Keep bar keeps only the bar)',
-          'if not keep:' not in summary and 'self.canvas.Children.Clear()' in summary
-          and 'self.win.Hide()' in summary)
+          'if not keep:' not in summary and 'self._leave()' in summary
+          and 'self.canvas.Children.Clear()' in leave and 'self.win.Hide()' in leave)
     check('idle: Glow taken off the model through the main thread',
           ".get('idle')" in summary and "'idle': agents_idle" in open(
               os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read())
@@ -479,12 +483,21 @@ def test_setting():
           AC.agent_style('local-agent-mode-t3lab')[0] not in ('Claude', 'Antigravity'))
     check('no name at all reads "AI app", not Claude',
           AC.agent_style('')[0] == 'AI app' and AC.agent_style(None)[0] == 'AI app')
-    check('speed normal by default', AC.speed() == 'normal' and AC.speed_factor() == 1.0)
-    AC.set_speed('calm')
-    check('speed saved', AC.speed() == 'calm' and AC.speed_factor() > 1.0)
-    check('speed cycles', AC.next_speed('calm') == 'normal' and AC.next_speed('fast') == 'calm')
+    check('animation calm by default: the cursors move (owner, 2026-11-19)',
+          AC.speed() == 'calm' and AC.speed_factor() > 1.0 and not AC.motion_off())
+    AC._paths().set_setting('agent_cursors_reduce_motion', True)
+    AC._cache['mtime'] = None
+    check('the old Less motion key is ignored (the Settings dialog saved it for everyone)',
+          AC.speed() == 'calm' and not AC.motion_off())
+    AC.set_speed('fast')
+    check('speed saved', AC.speed() == 'fast' and AC.speed_factor() < 1.0)
+    AC.set_speed('off')
+    check('Off: no motion, timings as Normal',
+          AC.motion_off() and AC.speed_factor() == AC.speed_factor('normal') == 1.0)
+    check('speed cycles through Off', AC.next_speed('calm') == 'normal'
+          and AC.next_speed('fast') == 'off' and AC.next_speed('off') == 'calm')
     AC.set_speed('nonsense')
-    check('unknown speed -> normal', AC.speed() == 'normal')
+    check('unknown speed -> the default', AC.speed() == AC.SPEED_DEFAULT == 'calm')
     AC.set_option('tile', True)
     check('option saved', AC.options()['tile'] is True)
     AC.set_option('tile', False)
@@ -629,13 +642,157 @@ def test_settings_dialog():
     check('rows come from OPTIONS (new options appear by themselves)',
           'for name, _key, _default in agent_cursors.OPTIONS' in btn and 'set_option(name, value)' in btn)
     check('on: an untickable on/off switch', "('enabled', 'Show agent cursors'" in btn)
+    check('no motion row in the dialog: motion is not an option (owner, 2026-11-19)',
+          'animate' not in btn.lower() and 'set_speed' not in btn and 'Less motion' not in btn)
+    check('rows grey out under the on/off switch, model options under "On model"',
+          "rows.append((name, label, tip, current.get(name, True)," in btn
+          and "'enabled' if name in ('model', 'keep') else 'model'))" in btn)
+    check('benefits and drawbacks go in as sections, the plain text stays for the fallback',
+          'sections=agent_cursors.pros_cons_sections()' in btn
+          and 'details=agent_cursors.pros_cons_text()' in btn and 'subtitle=' in btn)
+    sections = AC.pros_cons_sections()
+    check('sections: Benefits / Drawbacks, every line, a T3 glyph each',
+          [(h, lines) for h, lines, _g in sections]
+          == [('Benefits', list(AC.PROS)), ('Drawbacks', list(AC.CONS))]
+          and [g for _h, _l, g in sections] == ['\uE73E', '\uE7BA'])
     dsrc = open(os.path.join(LIB, 'GUI', 'T3Dialog.py'), encoding='utf-8').read()
-    check('T3Dialog builds T3.CheckBox rows', "FindResource('T3.CheckBox')" in dsrc
+    check('T3Dialog builds T3.CheckBox rows', "self._style('T3.CheckBox')" in dsrc
           and 'def confirm_options(' in dsrc and 'option_values' in dsrc)
+    check('T3 styles are looked up by their dotted names, guarded (new-tool rule 21)',
+          'return self.FindResource(key)' in dsrc
+          and all("'{}'".format(k) in dsrc for k in ('T3.Caption', 'T3.Label', 'T3.Icon.Muted',
+                                                     'T3.Body.Secondary')))
     xaml = open(os.path.join(LIB, 'GUI', 'Tools', 'T3Dialog.xaml'), encoding='utf-8').read()
     rows = _re.findall(r'Grid\.Row="(\d)"', xaml.split('txt_message', 1)[1].split('ROW 2: FOOTER', 1)[0])
-    check('message row 0, pnl_options row 1, details row 2, input row 3',
-          'x:Name="pnl_options" Grid.Row="1"' in xaml and rows[:4] == ['0', '1', '2', '3'], rows)
+    check('message row 0, pnl_options row 1, details + folded sections row 2, input row 3',
+          '<Grid x:Name="pnl_options" Grid.Row="1"' in xaml and rows == ['0', '1', '2', '2', '3'],
+          rows)
+    check('XAML has what the options dialog fills: body to measure, subtitle, sections',
+          all('x:Name="{}"'.format(n) in xaml for n in ('pnl_body', 'dlg_subtitle', 'exp_details',
+                                                         'pnl_sections'))
+          and 'Style="{StaticResource T3.Expander}" Visibility="Collapsed"' in xaml)
+
+
+def test_action_band():
+    print('[action bands: colour rule, rows, fills, counts bar]')
+    acts = [a[0] for a in AC.ACTIONS]
+    for theme in ('dark', 'light'):
+        pal = AC.hud_palette(theme)
+        wash = AC.band_wash(theme)
+        worst = min(AC.contrast(AC.band_style(a, theme)[2],
+                                AC.blend(AC.band_style(a, theme)[2], pal['bg'], wash))
+                    for a in acts)
+        check(theme + ': every action glyph reads 3:1 on its own wash', worst >= 3.0, worst)
+        text = min(AC.contrast(pal['text'], AC.blend(AC.band_style(a, theme, s, f)[2], pal['bg'],
+                                                     wash * 2))
+                   for a in acts for s in ('done', 'waiting') for f in (False, True))
+        check(theme + ': caption reads 4.5:1 even on a filled (replay) band', text >= 4.5, text)
+        for state, failed in (('waiting', False), ('done', True)):
+            color = AC.band_style('delete', theme, state, failed)[2]
+            check('{}: {} band reads 3:1'.format(theme, 'failed' if failed else state),
+                  AC.contrast(color, AC.blend(color, pal['bg'], wash)) >= 3.0)
+    check('raw purple is too dim on the dark bar: the reason bar_tone exists',
+          AC.contrast('#7C3AED', AC.blend('#7C3AED', AC.HUD_PALETTES['dark']['bg'],
+                                          AC.BAND_WASH['dark'])) < 3.0
+          and AC.bar_tone('#7C3AED', 'dark') != '#7C3AED')
+    check('a colour that already reads is left alone',
+          AC.bar_tone('#7C3AED', 'light') == '#7C3AED' and AC.bar_tone('#D97706', 'dark') == '#D97706')
+    check('tone stays the same hue family (moved towards white, not replaced)',
+          AC.contrast(AC.bar_tone('#2563EB', 'dark'), '#FFFFFF') < AC.contrast('#2563EB', '#FFFFFF'))
+    check('blend', AC.blend('#FFFFFF', '#000000', 0) == '#000000'
+          and AC.blend('#FFFFFF', '#000000', 255) == '#FFFFFF'
+          and AC.blend('#FF0000', '#0000FF', 128) == '#80007F')
+    check('contrast', round(AC.contrast('#000000', '#FFFFFF'), 1) == 21.0
+          and AC.contrast('#777777', '#777777') == 1.0)
+
+    label, glyph, color = AC.band_style('create', 'light')
+    check('band = the action label, glyph and colour',
+          (label, glyph) == AC.action_style('create')[:2]
+          and color == AC.bar_tone(AC.action_style('create')[2], 'light'))
+    flabel, fglyph, fcolor = AC.band_style('create', 'light', failed=True)
+    check('failed: red and a cross, the label still names the action',
+          flabel == 'Create' and fglyph != glyph
+          and fcolor == AC.bar_tone(AC.HUD_PALETTES['light']['bad'], 'light'))
+    check('waiting: amber', AC.band_style('create', 'dark', 'waiting')[2]
+          == AC.bar_tone(AC.HUD_PALETTES['dark']['warn'], 'dark'))
+    check('unknown action -> modify', AC.band_style(None, 'dark')[0] == 'Modify')
+
+    br = AC.band_rows
+    check('nothing yet: no band', br() == ([], 0))
+    last = {'agent': 'codex', 'action': 'delete', 'caption': 'Failed: Deleting element',
+            'failed': True, 't': 1.0}
+    rows, more = br(last=last)
+    check('idle: the last step', more == 0 and len(rows) == 1 and rows[0]['state'] == 'done'
+          and rows[0]['failed'] and rows[0]['note'] == 'Delete' and rows[0]['progress'] is None,
+          rows)
+    rows, _more = br(last=last, replay=(3, 20))
+    check('replay: the step, "Replay 3 / 20" and its progress',
+          rows[0]['state'] == 'replay' and rows[0]['progress'] == (3, 20)
+          and rows[0]['note'] == 'Replay 3 / 20' and rows[0]['caption'] == last['caption'])
+    working = [('codex', 'delete', 'Deleting'), ('claude-desktop', 'read', 'Listing')]
+    rows, more = br(working, last=last, replay=(3, 20))
+    check('live calls win over the last step and a replay; one band per agent, agent order',
+          more == 0 and [(r['agent'], r['state'], r['note']) for r in rows]
+          == [('claude-desktop', 'running', 'Read'), ('codex', 'running', 'Delete')], rows)
+    rows, _more = br(working, [('codex', 'delete', 'Deleting')])
+    check('a call waiting for the OK: its band says Waiting',
+          [(r['agent'], r['state'], r['note']) for r in rows]
+          == [('claude-desktop', 'running', 'Read'), ('codex', 'waiting', 'Waiting')], rows)
+    many = [('agent-{}'.format(k), 'read', 'x') for k in range(5)]
+    rows, more = br(many)
+    check('more agents than bands: the rest is counted', len(rows) == AC.BAND_MAX and more == 2)
+
+    bm = AC.band_motion
+    one = br([('claude-desktop', 'read', 'Listing')])[0]
+    motions, seen = bm(one, {})
+    check('motion: a band that was not there enters', motions == ['enter'])
+    check('motion: a plain redraw moves nothing', bm(one, seen)[0] == [None])
+    two = br([('claude-desktop', 'read', 'Listing'), ('codex', 'delete', 'Deleting')])[0]
+    check('motion: only the new agent enters', bm(two, seen)[0] == [None, 'enter'])
+    done = br(last={'agent': 'claude-desktop', 'action': 'read', 'caption': 'Listing'})[0]
+    check('motion: running -> done pops', bm(done, seen)[0] == ['pop'])
+    check('motion: a failed step shakes', bm(br(last=last)[0], {'codex': ('x',)})[0] == ['shake'])
+    step3, step4 = br(last=last, replay=(3, 20))[0], br(last=last, replay=(4, 20))[0]
+    check('motion: every replay step moves, even with the same caption',
+          bm(step4, bm(step3, {})[1])[0] == ['shake'] and bm(step3, bm(step3, {})[1])[0] == [None])
+    check('motion: only the agents on the bar are remembered',
+          sorted(bm(two, {'gone': ('x',)})[1]) == ['claude-desktop', 'codex'])
+
+    fw = AC.fill_width
+    check('fill width', fw(1, 4) == AC.BAR_W / 4 and fw(20, 20) == AC.BAR_W
+          and fw(0, 5) == 0.0 and fw(0, 5, minimum=4.0) == 4.0)
+    check('fill width never leaves the bar', fw(9, 5) == AC.BAR_W and fw(-1, 5) == 0.0
+          and fw(1, 0) == 0.0 and fw(None, 3) == 0.0)
+
+    cb = AC.count_bar
+    check('no counts: no bar', cb({}) == [] and cb(None) == [] and cb({'read': 0}) == [])
+    check('one action fills the bar', cb({'code': 9}) == [('code', AC.COUNT_BAR_W)])
+    bar = cb({'create': 1, 'read': 3}, 41.0, 1.0)
+    check('widths follow the counts, ACTIONS order, gap included',
+          bar == [('read', 30.0), ('create', 10.0)], bar)
+    bar = cb({'read': 1, 'code': 27}, 56.0, 1.0, 3.0)
+    check('1 call in 28 still shows (minimum width)',
+          bar[0] == ('read', 3.0) and abs(sum(w for _a, w in bar) + 1.0 - 56.0) < 1e-9, bar)
+    full = cb(dict((a, 1 + k * 40) for k, a in enumerate(acts)), 56.0, 1.0, 3.0)
+    check('every action at once: all shown, still the same width',
+          len(full) == len(acts) and min(w for _a, w in full) >= 3.0
+          and abs(sum(w for _a, w in full) + (len(acts) - 1) - 56.0) < 1e-9, full)
+    tight = cb({'read': 1, 'create': 1, 'modify': 1}, 8.0, 1.0, 3.0)
+    check('no room for the minimum: an equal split', [w for _a, w in tight] == [2.0, 2.0, 2.0], tight)
+
+    osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
+    check('the bar is built from these helpers (no second colour rule in the overlay)',
+          'band_rows(working, waiting, last, replay)' in osrc and 'def _action_band(' in osrc
+          and 'def _current_card(' not in osrc and '396.0' not in osrc
+          and 'fill_width(done, total, BAR_W' in osrc)
+    check('Animation Off = no motion', 'return motion_off()' in osrc
+          and "options().get('reduce')" not in osrc)
+    check('no motion control on the bar (owner, 2026-11-19): the key is the only switch',
+          'set_speed' not in osrc and 'SPEEDS' not in osrc
+          and [g for g, _n in AC.OPTION_GROUPS] == ['Show', 'View', 'Selection', 'Effects', 'Bar'])
+    check('bar motion is decoration: skipped when off, never fatal',
+          'def _motion(self, fn, *args):' in osrc
+          and 'if self._reduce():\n            return\n        try:\n            fn(*args)' in osrc)
 
 
 def test_hud_redesign():
@@ -870,6 +1027,7 @@ if __name__ == '__main__':
         test_server_hook()
         test_agent_stamp()
         test_settings_dialog()
+        test_action_band()
         test_hud_redesign()
         test_stability()
         test_bar_only()

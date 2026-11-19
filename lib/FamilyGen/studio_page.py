@@ -10,6 +10,7 @@ the same page runs in a test browser (``lite_guard/test_famigen_studio.py``).
 import base64
 import io
 import os
+import traceback
 
 from FamilyGen.studio_controller import MIN_PYREVIT
 
@@ -59,6 +60,47 @@ MESSAGING_MESSAGE = (
     u'Revit (output.on_message, added in pyRevit 7.1), or the WebView2 runtime is missing. '
     u'Update pyRevit to 7.1 or later and install the Microsoft Edge WebView2 Runtime, then '
     u'restart Revit.')
+
+
+class Outbox(object):
+    """Posts to the page in order; holds them while the page cannot take them.
+
+    pyRevit's ``post_message`` returns False until the page has finished
+    loading (``IsWindowReady``), and the page says ``ready`` before that: the
+    ``init`` answer (models, categories, AI state) was dropped, the badge
+    stayed "AI …" and Send locked after the first reply (2026-11-19).
+    ``wake`` is called when something is held, so the host retries soon.
+    """
+    LIMIT = 500
+
+    def __init__(self, send, wake=None):
+        self._send = send
+        self._wake = wake
+        self._queue = []
+
+    @property
+    def pending(self):
+        return len(self._queue)
+
+    def post(self, message):
+        self._queue.append(message)
+        if len(self._queue) > self.LIMIT:
+            del self._queue[0]
+        if not self.flush() and self._wake is not None:
+            self._wake()
+
+    def flush(self):
+        """Send what is held, oldest first. True when nothing is left."""
+        while self._queue:
+            try:
+                delivered = self._send(self._queue[0])
+            except Exception:
+                traceback.print_exc()      # a message that cannot be sent must not block the rest
+                delivered = True
+            if delivered is False:
+                return False
+            del self._queue[0]
+        return True
 
 
 # ── the page ─────────────────────────────────────────────────────────────────

@@ -44,9 +44,34 @@ button, select, input, textarea { font: inherit; color: inherit; }
 svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 :focus-visible { outline: 1px solid var(--ink); outline-offset: 0; }      /* L9: focus = 1 px T3.Ink */
 
-/* outer window border: Surface, 1 px BorderStrong, R.Window */
-.app { display: grid; grid-template-rows: var(--h-bar) 1fr var(--h-bar); height: 100vh; min-height: 560px;
-       border: 1px solid var(--border-strong); border-radius: var(--r-window); overflow: hidden; background: var(--surface); }
+/* The 1 px BorderStrong frame (and Windows 11's rounded corners) belong to the host window
+   (studio_host._t3_frame): an opaque WebView2 window cannot show a page's rounded border. */
+.app { display: grid; grid-template-rows: var(--h-bar) auto 1fr var(--h-bar); height: 100vh; min-height: 560px;
+       overflow: hidden; background: var(--surface); }
+
+/* ── progress strip: brief → Create family ───────────────── */
+.progress { position: relative; display: flex; align-items: center; gap: 16px; height: 40px; padding: 0 16px;
+            background: var(--surface); border-bottom: 1px solid var(--border); }
+.steps { display: flex; align-items: center; gap: 4px; margin: 0; padding: 0; list-style: none; min-width: 0; }
+.step { display: inline-flex; align-items: center; gap: 4px; color: var(--disabled); font-size: var(--fs-caption); white-space: nowrap; }
+.step + .step::before { content: ""; width: 24px; height: 1px; margin-right: 4px; background: var(--border); }
+.step-dot { width: 20px; height: 20px; display: inline-grid; place-items: center; border-radius: 50%; border: 1px solid var(--border);
+            background: var(--surface); font-size: var(--fs-label); font-weight: 600; color: var(--muted); }
+.step[data-state="active"] { color: var(--ink); font-weight: 600; }
+.step[data-state="active"] .step-dot { border-color: var(--progress); background: var(--progress); color: var(--surface); }
+.step[data-state="done"] { color: var(--text-2); }
+.step[data-state="done"] .step-dot { border-color: var(--ok-accent); background: var(--ok-fill); color: var(--ok-text); }
+.step[data-state="done"]::before, .step[data-state="active"]::before, .step[data-state="warn"]::before { background: var(--ok-accent); }
+.step[data-state="wait"] { color: var(--ink); }
+.step[data-state="wait"] .step-dot, .step[data-state="warn"] .step-dot { border-color: var(--warn-accent); background: var(--warn-fill); color: var(--warn-text); }
+.step[data-state="warn"] { color: var(--warn-text); }
+.step[data-state="error"] { color: var(--bad-text); }
+.step[data-state="error"] .step-dot { border-color: var(--bad-accent); background: var(--bad-fill); color: var(--bad-text); }
+.step[data-state="skip"] { color: var(--disabled); text-decoration: line-through; }
+.progress-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-caption); color: var(--text-2); text-align: right; }
+.progress-track { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: transparent; }
+.progress-fill { width: 0; height: 100%; background: var(--progress); }
+@media (max-width: 1180px) { .step-label { display: none; } .step[data-state="active"] .step-label { display: inline; } }
 
 /* ── title bar = T3.TitleBar ─────────────────────────────── */
 .titlebar { display: flex; align-items: center; padding: 0 8px 0 12px; background: var(--sunken); border-bottom: 1px solid var(--border); }
@@ -137,12 +162,12 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .dots { display: inline-flex; gap: 4px; }
 .dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--progress); }   /* running state = progress orange */
 
-.composer { padding: 8px 12px 12px; flex: none; border-top: 1px solid var(--border); }
+.composer { padding: 8px; flex: none; border-top: 1px solid var(--border); }
 .composer-box { border: 1px solid var(--border); border-radius: var(--r-control); background: var(--surface); padding: 4px; }
 .composer-box:focus-within { border-color: var(--ink); }
-.composer textarea { display: block; width: 100%; resize: none; min-height: 56px; max-height: 200px; padding: 4px 8px; border: 0; outline: none; background: transparent; }
+.composer textarea { display: block; width: 100%; resize: none; min-height: 36px; max-height: 160px; padding: 4px 8px; border: 0; outline: none; background: transparent; line-height: 1.35; }
 .composer-row { display: flex; align-items: center; gap: 4px; }
-.composer-foot { display: flex; align-items: center; gap: 8px; padding-top: 8px; font-size: var(--fs-caption); }
+.composer-foot { display: flex; align-items: center; gap: 8px; padding: 4px 4px 0; font-size: var(--fs-caption); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
 .chips:empty { display: none; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: var(--h-row); padding: 0 4px; border-radius: var(--r-pill);
@@ -291,3 +316,25 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
   .grid { grid-template-columns: 300px 1fr; }
   .inspect { display: none; }
 }
+
+/* ── Types grid: values edited in place ─────────────────── */
+.cell-edit { display: inline-flex; align-items: center; gap: 4px; }
+.cell-input { width: 88px; height: 24px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--r-pill);
+              background: var(--surface); font-family: var(--mono); font-size: var(--fs-caption); text-align: right; }
+.cell-input:hover { border-color: var(--border-strong); }
+.cell-input:focus { border-color: var(--ink); outline: none; }
+.cell-edit .unit { font-size: var(--fs-label); color: var(--muted); }
+
+/* ── Sizes tab: parameter fit (status in words, never colour alone) ── */
+.row.fit .fit-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--disabled); }
+.row.fit[data-state="driven"] .fit-dot { background: var(--ok-accent); }
+.row.fit[data-state="present"] .fit-dot { background: var(--warn-accent); }
+.row.fit[data-state="missing"] .fit-dot { background: var(--bad-accent); }
+.row.fit[data-state="missing"] .sub { color: var(--bad-text); }
+.fit-action { padding: 8px 16px; border-bottom: 1px solid var(--rule); }
+
+/* ── MCP receipts on your messages: Sent → Read → Answered ── */
+.msg .receipt { font-size: var(--fs-label); color: var(--muted); margin-top: 4px; }
+.msg .receipt::before { content: "● "; color: var(--disabled); }
+.msg .receipt[data-state="read"]::before { color: var(--warn-accent); }
+.msg .receipt[data-state="answered"]::before { color: var(--ok-accent); }

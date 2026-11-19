@@ -34,6 +34,20 @@
     </span>
   </header>
 
+  <!-- ═══ Progress strip: where the family is, brief → Create family (studio_controller.PROGRESS_STEPS) ═══ -->
+  <nav class="progress" id="progress" aria-label="Family progress">
+    <ol class="steps" id="steps">
+      <li class="step" data-step="brief" data-state="todo"><span class="step-dot">1</span><span class="step-label">Brief</span></li>
+      <li class="step" data-step="draft" data-state="todo"><span class="step-dot">2</span><span class="step-label">Claude drafts</span></li>
+      <li class="step" data-step="check" data-state="todo"><span class="step-dot">3</span><span class="step-label">FamiGen checks</span></li>
+      <li class="step" data-step="review" data-state="todo"><span class="step-dot">4</span><span class="step-label">3D review</span></li>
+      <li class="step" data-step="compare" data-state="todo"><span class="step-dot">5</span><span class="step-label">Reference check</span></li>
+      <li class="step" data-step="create" data-state="todo"><span class="step-dot">6</span><span class="step-label">Create family</span></li>
+    </ol>
+    <span class="progress-text" id="progress-text">Describe a family or pick a template to start.</span>
+    <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progress-fill"></div></div>
+  </nav>
+
   <main class="grid">
 
     <!-- ═══ Left: chat with Claude ═══ -->
@@ -58,16 +72,16 @@
       <div class="composer">
         <div class="composer-box">
           <div class="chips" id="attachments"></div>
-          <textarea id="prompt" rows="3" aria-label="Message to Claude"
-            title="Ctrl+Enter sends · / opens templates · paste or drop images, PDFs and text files"
+          <textarea id="prompt" rows="2" aria-label="Message to Claude"
+            title="Enter sends · Shift+Enter new line · / opens templates · paste or drop images, PDFs and text files"
             placeholder="Describe a family, or the change you want…"></textarea>
           <div class="composer-row">
             <button class="icon-btn" id="btn-attach" title="Attach photos, drawings, PDF cut sheets or text files (or paste / drop them)" aria-label="Attach"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 7.5l-5 5a3 3 0 0 1-4.2-4.2l5.3-5.3a2 2 0 0 1 2.8 2.8L6.6 11a1 1 0 0 1-1.4-1.4L10 4.8"/></svg></button>
-            <button class="btn ghost sm" id="btn-templates" title="Ready briefs from the template library ( / )"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5"/><rect x="9" y="2.5" width="4.5" height="4.5"/><rect x="2.5" y="9" width="4.5" height="4.5"/><rect x="9" y="9" width="4.5" height="4.5"/></svg> Templates</button>
+            <button class="icon-btn" id="btn-templates" title="Templates: ready briefs from the template library ( / )" aria-label="Templates"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5"/><rect x="9" y="2.5" width="4.5" height="4.5"/><rect x="2.5" y="9" width="4.5" height="4.5"/><rect x="9" y="9" width="4.5" height="4.5"/></svg></button>
             <span class="spacer"></span>
             <select id="sel-mode" class="compact mode" title="Fast answers quickly; Best and Deep think longer for better geometry (more tokens)"></select>
             <button class="btn danger sm hidden" id="btn-stop" title="Stop waiting for Claude">Stop</button>
-            <button class="btn primary" id="btn-send" title="Send (Ctrl+Enter)">Send</button>
+            <button class="btn primary sm" id="btn-send" title="Send (Enter) · Shift+Enter for a new line">Send</button>
           </div>
         </div>
         <div class="composer-foot">
@@ -77,7 +91,7 @@
           <select id="sel-engine" class="compact" title="Who answers: the built-in Claude, or the AI app connected over MCP (Claude Desktop, Claude Code, ChatGPT…). Auto switches to the AI app while it is working with FamiGen.">
             <option value="auto">Auto</option>
             <option value="claude">Built-in Claude</option>
-            <option value="mcp">AI app (MCP)</option>
+            <option value="mcp">Send via MCP (AI app)</option>
           </select>
           <span class="spacer"></span>
           <button class="link" id="btn-copy-prompt" title="Copy the FamiGen prompt for this category, for any other AI chat">Copy prompt</button>

@@ -702,7 +702,18 @@ class T3StyleTests(unittest.TestCase):
         glass = re.search(r'/\* ── LIQUID GLASS ──.*?/\* END LIQUID GLASS \*/', raw, re.S)
         cls.glass = re.sub(r'/\*.*?\*/', '', glass.group(0), flags=re.S) if glass else ''
         raw = raw.replace(glass.group(0), '') if glass else raw
+        # TIMELINE GEOMETRY: exact pixels for the dots and segments (2026-11-20), checked below.
+        geometry = re.search(r'/\* ── TIMELINE GEOMETRY ──.*?/\* END TIMELINE GEOMETRY \*/', raw, re.S)
+        cls.geometry = re.sub(r'/\*.*?\*/', '', geometry.group(0), flags=re.S) if geometry else ''
+        raw = raw.replace(geometry.group(0), '') if geometry else raw
         cls.css = re.sub(r'/\*.*?\*/', '', raw, flags=re.S)       # rules, not comments
+
+    def test_timeline_geometry_stays_on_the_timeline(self):
+        self.assertIn('::before', self.geometry)
+        for _, sel in re.findall(r'(^|})\s*([^{}]+)\{', self.geometry):
+            for part in sel.split(','):
+                self.assertTrue(part.strip().startswith('.timeline .msg'), part)
+        self.assertNotIn('transform', self.geometry)        # one rounding for dot and segment
 
     def test_liquid_glass_stays_in_the_chat_column(self):
         self.assertIn('backdrop-filter', self.glass)

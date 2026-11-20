@@ -56,7 +56,7 @@ from GUI.WPF_Base import T3WPFWindow, to_items_source
 from GUI.InputLock import ThreadInputLock
 from Autodesk.Revit.DB import (
     Transaction, FilteredElementCollector, BuiltInCategory,
-    ViewSheet, ViewSet, ViewSheetSet, DWGExportOptions, DWFExportOptions,
+    ViewSheet, ViewSheetSet, DWGExportOptions, DWFExportOptions,
     DGNExportOptions, ExportDWGSettings, ACADVersion, PDFExportOptions,
     ImageExportOptions, ImageFileType, ImageResolution,
     PropOverrideMode, View, ViewPlan, ViewSection, View3D,
@@ -73,9 +73,10 @@ lib_dir = os.path.join(extension_dir, 'lib')
 if lib_dir not in sys.path:
     sys.path.append(lib_dir)
 
-from Snippets._compat import eid_value, make_eid
+from Snippets._compat import disposing, eid_value, make_eid
 from core.paths import user_data_path
 from Services import batchout_report, batchout_profiles, batchout_refs, batchout_pdf24
+from Services.SheetManager.viewsheet_sets_service import ViewSheetSetsService
 from Services.batchout_report import DEFAULT_COLUMNS as REPORT_DEFAULT_COLUMNS
 
 try:
@@ -3047,43 +3048,28 @@ class ExportManagerWindow(T3WPFWindow):
             if not set_name:
                 return
 
-            # Create ViewSet with selected items
-            view_set = ViewSet()
-            for item in selected_items:
-                if self.selection_mode == "sheets":
-                    view_set.Insert(item.Sheet)
-                else:
-                    view_set.Insert(item.View)
+            views = [item.Sheet if self.selection_mode == "sheets" else item.View
+                     for item in selected_items]
 
-            # Save as ViewSheetSet using PrintManager
-            print_manager = self.doc.PrintManager
-            view_sheet_setting = print_manager.ViewSheetSetting
-
-            # Start a transaction to save the set
-            t = Transaction(self.doc, "Save View/Sheet Set")
-            t.Start()
-
-            try:
-                # Save the view set
-                view_sheet_setting.SaveAs(set_name)
-                view_sheet_setting.CurrentViewSheetSet.Views = view_set
-
+            # PrintManager.ViewSheetSetting exists only while PrintRange is Select
+            # — reading it straight off the manager threw "This property is only
+            # available when user choose Select of Print Range" (2026-11-20).
+            # ViewSheetSetsService sets the range, assigns the views before SaveAs
+            # and puts the document's print settings back.
+            service = ViewSheetSetsService(self.doc)
+            with disposing(Transaction(self.doc, "Save View/Sheet Set")) as t:
+                t.Start()
+                service.create_set_from_views(set_name, views)
                 t.Commit()
 
-                # Refresh the sheet set filter dropdown
-                self.load_sheet_sets_for_filter()
+            self.load_sheet_sets_for_filter()
 
-                # Show success message
-                self.status_text.Text = "Saved '{}' with {} {}s".format(
-                    set_name, len(selected_items), mode_name.lower())
+            self.status_text.Text = "Saved '{}' with {} {}s".format(
+                set_name, len(selected_items), mode_name.lower())
 
-                forms.alert("Successfully saved '{}' with {} {}s".format(
-                    set_name, len(selected_items), mode_name.lower()),
-                    title="Success")
-
-            except Exception as save_ex:
-                t.RollBack()
-                raise save_ex
+            forms.alert("Successfully saved '{}' with {} {}s".format(
+                set_name, len(selected_items), mode_name.lower()),
+                title="Success")
 
         except Exception as ex:
             logger.error("Error saving View/Sheet Set: {}".format(ex))

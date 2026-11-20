@@ -39,7 +39,7 @@ from Intelligence.family_schema import (
     type_names, validate_family_schema,
 )
 
-STUDIO_VERSION = '1.1'
+STUDIO_VERSION = '1.1.1'
 MIN_PYREVIT = (7, 0)
 MESSAGING_PYREVIT = (7, 1)
 PREVIEW_DECIMALS = 1
@@ -1283,11 +1283,13 @@ class StudioController(object):
                 return
             from FamilyGen.builder_report import report_lines
             lines = report_lines(report)
-            self.post({'type': 'created', 'path': report.get('saved_path') or u'',
-                       'lines': lines,
+            # Progress first: the page rewrites the "building" node in place, then the report card.
+            saved = report.get('saved_path') or u''
+            self._progress('create', 'warn' if report.get('skipped') or report.get('warnings')
+                           else 'done', u'Saved {}'.format(os.path.basename(saved)) if saved
+                           else lines[0])
+            self.post({'type': 'created', 'path': saved, 'lines': lines,
                        'problems': bool(report.get('skipped') or report.get('warnings'))})
             self._status(lines[0] + (u' ' + lines[1] if len(lines) > 1 else u''), 'success')
-            self._progress('create', 'warn' if report.get('skipped') or report.get('warnings')
-                           else 'done', lines[0])
 
         self.revit.create_family(schema, folder, load, _done)

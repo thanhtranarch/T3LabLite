@@ -42,6 +42,7 @@ python dev/test_assistant_pane.py
 python lite_guard/test_ribbon_memory.py
 python lite_guard/test_batchout_refs.py
 python lite_guard/test_batchout_pdf24.py
+python lite_guard/test_batchout_sheet_sets.py
 python lite_guard/test_mcp_cad_clients.py
 python lite_guard/test_addin_installer.py
 python lite_guard/test_routes_guard.py

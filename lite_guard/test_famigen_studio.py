@@ -1438,6 +1438,88 @@ class IronPythonSourceTests(unittest.TestCase):
     source file without a coding line (famigen_wait_for_message failed on
     family_schema.py's box-drawing comments, 2026-11-20)."""
 
+    # Python 3-only syntax IronPython 2.7 rejects at import ("unexpected token 'from'":
+    # family_schema.py's "raise ... from ex", 2026-11-20).
+    PY3_ONLY = (('Raise', lambda n: n.cause is not None, 'raise ... from'),
+                ('YieldFrom', None, 'yield from'), ('JoinedStr', None, 'f-string'),
+                ('Nonlocal', None, 'nonlocal'), ('AnnAssign', None, 'variable annotation'),
+                ('NamedExpr', None, 'walrus'), ('AsyncFunctionDef', None, 'async def'),
+                ('Await', None, 'await'), ('MatMult', None, '@ operator'),
+                ('Starred', lambda n: isinstance(n.ctx, __import__('ast').Store), 'starred assignment'),
+                ('Dict', lambda n: None in n.keys, '{**dict} unpacking'))
+
+    def server_modules(self):
+        """lib/ modules the MCP server (IronPython) can import, followed statically."""
+        import ast
+        seen, queue = {}, ['core.server', 'core.mcp_ipy_host']
+        while queue:
+            name = queue.pop()
+            if name in seen:
+                continue
+            base = os.path.join(LIB, *name.split('.'))
+            path = next((p for p in (base + '.py', os.path.join(base, '__init__.py'))
+                         if os.path.isfile(p)), None)
+            if not path:
+                continue
+            seen[name] = path
+            parts = name.split('.')
+            queue += ['.'.join(parts[:i]) for i in range(1, len(parts))]
+            pkg = name if path.endswith('__init__.py') else name.rsplit('.', 1)[0]
+            with open(path, 'rb') as handle:
+                tree = ast.parse(handle.read())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    queue += [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    mod = node.module or ''
+                    if node.level:
+                        up = pkg.split('.')
+                        mod = '.'.join(up[:len(up) - node.level + 1]) + ('.' + mod if mod else '')
+                    queue += [mod] + [mod + '.' + a.name for a in node.names]
+        return seen
+
+    def test_server_modules_parse_in_ironpython_2(self):
+        import ast
+        modules = self.server_modules()
+        self.assertIn('Intelligence.family_schema', modules)
+        self.assertIn('FamilyGen.studio_link', modules)
+        bad = []
+        for name, path in sorted(modules.items()):
+            with open(path, 'rb') as handle:
+                tree = ast.parse(handle.read())
+            for node in ast.walk(tree):
+                for kind, test, label in self.PY3_ONLY:
+                    if type(node).__name__ == kind and (test is None or test(node)):
+                        bad.append('{}:{} {}'.format(name, getattr(node, 'lineno', '?'), label))
+                if isinstance(node, (ast.FunctionDef, ast.Lambda)):
+                    args = node.args
+                    if args.kwonlyargs or getattr(args, 'posonlyargs', None):
+                        bad.append('{}:{} keyword-only / positional-only args'.format(
+                            name, getattr(node, 'lineno', '?')))
+                    if isinstance(node, ast.FunctionDef) and (node.returns or any(
+                            a.annotation for a in args.args + args.kwonlyargs)):
+                        bad.append('{}:{} annotation'.format(name, node.lineno))
+                if isinstance(node, ast.Call) and any(isinstance(a, ast.Starred) for a in node.args) \
+                        and [type(a).__name__ for a in node.args].index('Starred') < len(node.args) - 1:
+                    bad.append('{}:{} argument after *args'.format(name, node.lineno))
+        self.assertEqual(bad, [])
+
+    def test_server_modules_avoid_python3_only_calls(self):
+        # Parse fine, fail when called: math.isfinite broke schema checks on the server.
+        calls = re.compile(r'math\.isfinite|exist_ok\s*=|\.isascii\(|\.casefold\(|time\.monotonic|'
+                           r'time\.perf_counter|math\.(inf|nan|gcd)\b|functools\.lru_cache|pathlib|'
+                           r'\bFileNotFoundError\b|\bFileExistsError\b|\bPermissionError\b')
+        bad = []
+        for name, path in sorted(self.server_modules().items()):
+            if not (name.startswith('FamilyGen') or name == 'Intelligence.family_schema'):
+                continue
+            with open(path, encoding='utf-8') as handle:
+                for number, line in enumerate(handle, 1):
+                    code = line.split('#')[0]
+                    if calls.search(code) and not code.strip().startswith(('"""', "'")):
+                        bad.append('{}:{} {}'.format(name, number, line.strip()))
+        self.assertEqual(bad, [])
+
     def test_non_ascii_sources_declare_utf8(self):
         bad = []
         for root, _dirs, files in os.walk(LIB):

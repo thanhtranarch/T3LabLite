@@ -144,7 +144,10 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .composer-box:focus-within { border-color: var(--ink); }
 .composer textarea { display: block; width: 100%; resize: none; min-height: 28px; max-height: 120px; padding: 4px 8px; border: 0; outline: none; background: transparent; line-height: 1.35; }
 .composer-row { display: flex; align-items: center; gap: 4px; }
-.composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 4px 0; font-size: var(--fs-caption); }
+.composer-foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; padding: 4px 4px 0; font-size: var(--fs-caption); }
+.composer-foot #sel-engine { justify-self: start; max-width: 100%; }
+.foot-links { display: inline-flex; gap: 8px; white-space: nowrap; }
+.foot-check { grid-column: 1 / -1; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
 .chips:empty { display: none; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: var(--h-row); padding: 0 4px; border-radius: var(--r-pill);
@@ -353,6 +356,12 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
                          border: 2px solid var(--border-strong); background: var(--surface); }
 .timeline .msg::after { content: ""; position: absolute; left: -20px; top: 16px; bottom: -8px; width: 2px; background: var(--border); transform: translateX(1px); }
 .timeline .msg:last-child::after { display: none; }
+/* Cards with their own padding (8 px): the dot sits on their first line too. */
+.timeline .msg.user::before, .timeline .msg.error::before, .timeline .msg.created::before,
+.timeline .msg.analysis::before { top: 12px; }
+.timeline .msg.user::after, .timeline .msg.error::after, .timeline .msg.created::after,
+.timeline .msg.analysis::after { top: 24px; }
+.msg > .btn { display: flex; width: fit-content; margin-top: 8px; white-space: nowrap; }
 .timeline .msg.user::before { border-color: var(--ink); background: var(--ink); }
 .timeline .msg.assistant::before, .timeline .msg.created::before { border-color: var(--ok-accent); background: var(--ok-fill); }
 .timeline .msg.error::before { border-color: var(--bad-accent); background: var(--bad-fill); }

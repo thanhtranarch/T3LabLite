@@ -1422,5 +1422,25 @@ class SharedParamTests(unittest.TestCase):
         self.assertIn("'shared_parameters'", builder)
 
 
+class IronPythonSourceTests(unittest.TestCase):
+    """The MCP server runs these modules in IronPython 2, which refuses a non-ASCII
+    source file without a coding line (famigen_wait_for_message failed on
+    family_schema.py's box-drawing comments, 2026-11-20)."""
+
+    def test_non_ascii_sources_declare_utf8(self):
+        bad = []
+        for root, _dirs, files in os.walk(LIB):
+            for name in files:
+                if not name.endswith('.py'):
+                    continue
+                path = os.path.join(root, name)
+                with open(path, 'rb') as handle:
+                    raw = handle.read()
+                if any(b > 127 for b in raw) and not any(
+                        re.search(rb'coding[:=]\s*([-\w.]+)', line) for line in raw.split(b'\n')[:2]):
+                    bad.append(os.path.relpath(path, LIB))
+        self.assertEqual(bad, [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -27,10 +27,12 @@ Releasing a new version:
   command" led to a failed `famigen_wait_for_message` call: the MCP server
   could not load the FamiGen schema file. Fixed, with a check that keeps every
   T3Lab file loadable by the MCP server.
-- **FamiGen Studio — layout:** the timeline dots line up with the cards, the
-  "Copy listen command" button sits on its own line, the bar under the message
-  box stays on one line, the empty model list is hidden while an AI app over
-  MCP answers, and a finished step no longer shows twice.
+- **FamiGen Studio — layout:** the timeline line runs through the centre of
+  every dot at any display scaling and the dots line up with the cards; the
+  "Copy listen command" button sits on its own line; the links under the
+  message box are gone (the listen command is in the chat and on the AI badge,
+  "Copy prompt" is in Templates); the empty model list is hidden while an AI
+  app over MCP answers; a finished step no longer shows twice.
 
 ## [2.7.0] - 2026-11-19
 

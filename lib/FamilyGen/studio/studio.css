@@ -144,10 +144,10 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .composer-box:focus-within { border-color: var(--ink); }
 .composer textarea { display: block; width: 100%; resize: none; min-height: 28px; max-height: 120px; padding: 4px 8px; border: 0; outline: none; background: transparent; line-height: 1.35; }
 .composer-row { display: flex; align-items: center; gap: 4px; }
-.composer-foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; padding: 4px 4px 0; font-size: var(--fs-caption); }
-.composer-foot #sel-engine { justify-self: start; max-width: 100%; }
-.foot-links { display: inline-flex; gap: 8px; white-space: nowrap; }
-.foot-check { grid-column: 1 / -1; }
+.composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 4px 0; font-size: var(--fs-caption); }
+.composer-foot #sel-engine { max-width: 100%; }
+.claude-pill-action { cursor: pointer; }
+.modal-head .link { white-space: nowrap; font-size: var(--fs-caption); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
 .chips:empty { display: none; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: var(--h-row); padding: 0 4px; border-radius: var(--r-pill);
@@ -354,7 +354,9 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .timeline .msg { position: relative; align-self: stretch; max-width: none; text-align: left; }
 .timeline .msg::before { content: ""; position: absolute; left: -24px; top: 4px; width: 12px; height: 12px; border-radius: 50%;
                          border: 2px solid var(--border-strong); background: var(--surface); }
-.timeline .msg::after { content: ""; position: absolute; left: -20px; top: 16px; bottom: -8px; width: 2px; background: var(--border); transform: translateX(1px); }
+/* The axis starts at the dot's own left edge: a 7 px box whose 2 px right border sits on the
+   dot's centre (12 px dot -> centre at 6 px), so both round the same at 125 % / 150 % scaling. */
+.timeline .msg::after { content: ""; position: absolute; left: -24px; top: 16px; bottom: -8px; width: 7px; border-right: 2px solid var(--border); }
 .timeline .msg:last-child::after { display: none; }
 /* Cards with their own padding (8 px): the dot sits on their first line too. */
 .timeline .msg.user::before, .timeline .msg.error::before, .timeline .msg.created::before,

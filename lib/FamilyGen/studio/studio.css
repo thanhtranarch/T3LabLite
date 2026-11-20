@@ -144,7 +144,10 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .composer-box:focus-within { border-color: var(--ink); }
 .composer textarea { display: block; width: 100%; resize: none; min-height: 28px; max-height: 120px; padding: 4px 8px; border: 0; outline: none; background: transparent; line-height: 1.35; }
 .composer-row { display: flex; align-items: center; gap: 4px; }
-.composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 4px 0; font-size: var(--fs-caption); }
+.composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 4px 0; font-size: var(--fs-caption); }
+.composer-foot #sel-engine { max-width: 100%; }
+.claude-pill-action { cursor: pointer; }
+.modal-head .link { white-space: nowrap; font-size: var(--fs-caption); }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
 .chips:empty { display: none; }
 .chip { display: inline-flex; align-items: center; gap: 4px; height: var(--h-row); padding: 0 4px; border-radius: var(--r-pill);
@@ -349,10 +352,7 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 
 .timeline { margin: 8px; padding: 12px 12px 12px 36px; gap: 8px; }
 .timeline .msg { position: relative; align-self: stretch; max-width: none; text-align: left; }
-.timeline .msg::before { content: ""; position: absolute; left: -24px; top: 4px; width: 12px; height: 12px; border-radius: 50%;
-                         border: 2px solid var(--border-strong); background: var(--surface); }
-.timeline .msg::after { content: ""; position: absolute; left: -20px; top: 16px; bottom: -8px; width: 2px; background: var(--border); transform: translateX(1px); }
-.timeline .msg:last-child::after { display: none; }
+.msg > .btn { display: flex; width: fit-content; margin-top: 8px; white-space: nowrap; }
 .timeline .msg.user::before { border-color: var(--ink); background: var(--ink); }
 .timeline .msg.assistant::before, .timeline .msg.created::before { border-color: var(--ok-accent); background: var(--ok-fill); }
 .timeline .msg.error::before { border-color: var(--bad-accent); background: var(--bad-fill); }
@@ -369,6 +369,30 @@ select.compact { font-size: var(--fs-caption); max-width: 200px; }
 .timeline .msg.progress-node[data-state="error"] { color: var(--bad-text); }
 .msg.progress-node .dots { margin-left: 8px; }
 .timeline .empty { padding-left: 0; }
+
+/* ── TIMELINE GEOMETRY ── exact pixels, off the 4 px grid on purpose (T3StyleTests checks
+   this block on its own). Each dot sits on the centre of its node's first line; each segment
+   starts 4 px under its dot and stops 4 px above the next dot, so no segment touches a
+   circle (owner screenshots, 2026-11-20). The segment is a 7 px box whose 2 px right border
+   is centred on the 12 px dot: dot and line round the same at any display scaling.
+   Dot top per node: 2 (system / plain), 1 (step / Claude), 9 (You card), 10 (cards).
+   Segment bottom = -(8 px gap + next dot top - 4). */
+.timeline .msg::before { content: ""; position: absolute; left: -24px; top: 2px; width: 12px; height: 12px; border-radius: 50%;
+                         border: 2px solid var(--border-strong); background: var(--surface); }
+.timeline .msg.progress-node::before, .timeline .msg.assistant::before { top: 1px; }
+.timeline .msg.user::before { top: 9px; }
+.timeline .msg.error::before, .timeline .msg.created::before, .timeline .msg.analysis::before { top: 10px; }
+.timeline .msg::after { content: ""; position: absolute; left: -24px; top: 18px; bottom: -6px; width: 7px;
+                        border-right: 2px solid var(--border); }
+.timeline .msg.progress-node::after, .timeline .msg.assistant::after { top: 17px; }
+.timeline .msg.user::after { top: 25px; }
+.timeline .msg.error::after, .timeline .msg.created::after, .timeline .msg.analysis::after { top: 26px; }
+.timeline .msg:has(+ .msg.progress-node)::after, .timeline .msg:has(+ .msg.assistant)::after { bottom: -5px; }
+.timeline .msg:has(+ .msg.user)::after { bottom: -13px; }
+.timeline .msg:has(+ .msg.error)::after, .timeline .msg:has(+ .msg.created)::after,
+.timeline .msg:has(+ .msg.analysis)::after { bottom: -14px; }
+.timeline .msg:last-child::after { display: none; }
+/* END TIMELINE GEOMETRY */
 
 /* ── LIQUID GLASS ── owner request 2026-11-19 (FamiGen Studio chat column only).
    The one place where translucency, backdrop blur, a tinted backdrop and the glass

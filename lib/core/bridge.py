@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """T3Lab MCP stdio bridge.
 
 Forwards JSON-RPC requests from an MCP client (Claude Desktop / Claude Code)

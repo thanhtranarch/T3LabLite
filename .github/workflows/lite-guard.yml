@@ -60,6 +60,8 @@ jobs:
         run: python3 lite_guard/test_batchout_refs.py
       - name: Test the BatchOut PDF24 printer engine
         run: python3 lite_guard/test_batchout_pdf24.py
+      - name: Test BatchOut Save V/S Set (PrintRange, view order)
+        run: python3 lite_guard/test_batchout_sheet_sets.py
       - name: Test MCP Control's AutoCAD tab (t3lab-autocad client configs)
         run: python3 lite_guard/test_mcp_cad_clients.py
       - name: Test Connect installing the AutoCAD / Civil 3D add-in

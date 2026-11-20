@@ -19,6 +19,16 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.7.2] - 2026-11-20
+
+### Fixed
+
+- **FamiGen Studio — the AI app still could not listen (2.7.1):** every FamiGen
+  tool over MCP stopped with "unexpected token 'from'": the MCP server runs an
+  older Python that could not read one line of the FamiGen schema file, and a
+  number check it lacks would have failed next. Both fixed; a check now reads
+  every file the MCP server loads the way that Python does.
+
 ## [2.7.1] - 2026-11-20
 
 ### Fixed

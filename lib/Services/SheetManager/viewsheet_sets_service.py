@@ -8,7 +8,7 @@ ViewSet.Insert(View). Read paths never access PrintManager.
 from contextlib import contextmanager
 
 from Autodesk.Revit.DB import (
-    FilteredElementCollector, PrintRange, ViewSet, ViewSheet, ViewSheetSet,
+    FilteredElementCollector, PrintRange, View, ViewSet, ViewSheet, ViewSheetSet,
 )
 from Snippets._compat import disposing
 
@@ -67,6 +67,19 @@ class ViewSheetSetsService(object):
             sheets[self._id_key(sheet.Id)] = sheet
         return list(sheets.values())
 
+    def _printable(self, views):
+        """Accept View objects, sheets or not — BatchOut saves either kind."""
+        result = {}
+        for view in views or ():
+            if (not isinstance(view, View) or not view.IsValidObject
+                    or view.IsTemplate or not view.CanBePrinted
+                    or getattr(view, 'IsPlaceholder', False)):
+                raise ValueError('Every selected item must be a printable view or sheet.')
+            result[self._id_key(view.Id)] = view
+        if not result:
+            raise ValueError('Select at least one view or sheet.')
+        return list(result.values())
+
     @staticmethod
     def _view_set(views):
         result = ViewSet()
@@ -105,17 +118,25 @@ class ViewSheetSetsService(object):
 
     def create_sheet_set(self, name, sheet_ids=None):
         self._require_transaction()
-        name = self._name(name)
-        views = self._view_set(self._sheets(sheet_ids or []))
+        return self._create(self._name(name), self._sheets(sheet_ids or []))
+
+    def create_set_from_views(self, name, views):
+        """Create a saved set from View objects (sheets or views alike)."""
+        self._require_transaction()
+        return self._create(self._name(name), self._printable(views))
+
+    def _create(self, name, views):
         with self._setting() as setting:
             setting.CurrentViewSheetSet = setting.InSession
-            setting.CurrentViewSheetSet.Views = views
+            # Assign the views BEFORE SaveAs: SaveAs stores the current set as
+            # it stands, and a later assignment needs its own Save().
+            setting.CurrentViewSheetSet.Views = self._view_set(views)
             self._check(setting.SaveAs(name), 'create')
-            # Resolve the persisted element rather than returning an in-session wrapper.
-            for item in self.get_all_sheet_sets():
-                if item['name'] == name:
-                    return item['element']
-            raise RuntimeError('Revit did not return the newly saved sheet set.')
+        # Resolve the persisted element rather than returning an in-session wrapper.
+        for item in self.get_all_sheet_sets():
+            if item['name'] == name:
+                return item['element']
+        raise RuntimeError('Revit did not return the newly saved sheet set.')
 
     def delete_sheet_set(self, set_name):
         self._require_transaction()

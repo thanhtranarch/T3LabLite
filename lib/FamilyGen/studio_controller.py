@@ -39,7 +39,7 @@ from Intelligence.family_schema import (
     type_names, validate_family_schema,
 )
 
-STUDIO_VERSION = '1.1.1'
+STUDIO_VERSION = '1.1.2'
 MIN_PYREVIT = (7, 0)
 MESSAGING_PYREVIT = (7, 1)
 PREVIEW_DECIMALS = 1

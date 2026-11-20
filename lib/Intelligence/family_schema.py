@@ -68,6 +68,11 @@ MAX_TYPES = 50
 # vertical plane x = offset, 'y' the vertical plane y = offset, 'z' the
 # horizontal plane z = offset. The template's own planes can be named too.
 PLANE_AXES = ('x', 'y', 'z')
+def _isfinite(value):
+    """Finite number check that IronPython 2.7 (the MCP server) has: no math.isfinite there."""
+    return not (math.isinf(value) or math.isnan(value))
+
+
 _GUID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 BUILTIN_PLANES = {'Center (Left/Right)': ('x', 0.0), 'Center (Front/Back)': ('y', 0.0),
                   'Ref. Level': ('z', 0.0)}
@@ -155,7 +160,7 @@ def parse_color(value):
             if isinstance(channel, bool) or not isinstance(channel, (int, float)):
                 return None
             try:
-                if not math.isfinite(channel):
+                if not _isfinite(channel):
                     return None
             except (OverflowError, TypeError, ValueError):
                 return None
@@ -406,7 +411,7 @@ The JSON object contract, exact category and supported types above take preceden
 def _finite_number(value):
     try:
         return (isinstance(value, (int, float)) and not isinstance(value, bool)
-                and math.isfinite(value))
+                and _isfinite(value))
     except (OverflowError, TypeError, ValueError):
         return False
 
@@ -1453,7 +1458,7 @@ def generate_family_schema(bridge, description, category, overlay='', max_tokens
         try:
             result = bridge.ask_json(prompt, system_prompt=system_prompt, max_tokens=max_tokens)
         except Exception as ex:
-            raise ValueError('AI provider request failed: {}'.format(ex)) from ex
+            raise ValueError('AI provider request failed: {}'.format(ex))   # no "from": IronPython 2
         if result is None:
             raise ValueError('AI provider returned no parseable JSON. Check provider availability or response length and try again.')
         errors = validate_ai_schema(result, category)

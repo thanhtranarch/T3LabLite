@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Pure FamiGen family-schema contract (v2: geometry + materials + parameters).
 
 One source of truth for every FamiGen consumer:

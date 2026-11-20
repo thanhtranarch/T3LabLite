@@ -90,18 +90,17 @@
             <button class="btn primary sm" id="btn-send" title="Send (Enter) · Shift+Enter for a new line">Send</button>
           </div>
         </div>
+        <!-- Who answers, and the reference toggle when the built-in Claude does. The copy
+             actions live in the chat (listen command, AI badge) and in Templates (prompt). -->
         <div class="composer-foot">
-          <label class="toggle" title="With a reference attached, Claude compares a render of its model with the reference once and fixes what differs">
-            <input type="checkbox" id="chk-check"> Compare with my reference
-          </label>
-          <select id="sel-engine" class="compact" title="Who answers: the built-in Claude, or the AI app connected over MCP (Claude Desktop, Claude Code, ChatGPT…). Auto switches to the AI app while it is working with FamiGen.">
+          <select id="sel-engine" class="compact" title="Who answers: the AI app connected over MCP (Claude Desktop, Claude Code, ChatGPT…) or the built-in Claude. Auto puts the AI app first, then your Claude API key.">
             <option value="auto">Auto</option>
             <option value="claude">Built-in Claude</option>
             <option value="mcp">Send via MCP (AI app)</option>
           </select>
-          <span class="spacer"></span>
-          <button class="link hidden" id="btn-copy-listen" title="Copy the command that makes your AI app listen to FamiGen Studio; paste it there once">Copy listen command</button>
-          <button class="link" id="btn-copy-prompt" title="Copy the FamiGen prompt for this category, for any other AI chat">Copy prompt</button>
+          <label class="toggle foot-check" title="With a reference attached, Claude compares a render of its model with the reference once and fixes what differs">
+            <input type="checkbox" id="chk-check"> Compare with my reference
+          </label>
         </div>
       </div>
     </section>
@@ -220,6 +219,7 @@
         <span class="search-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/></svg></span>
         <input id="tpl-search" type="text" placeholder="Search templates (door, valve, sink, …)" aria-label="Search templates">
         <span class="modal-count" id="tpl-count"></span>
+        <button class="link" id="btn-copy-prompt" title="Copy the FamiGen prompt for this category, to use in any other AI chat">Copy prompt</button>
         <button class="icon-btn" data-close="modal-templates" aria-label="Close" title="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
       </div>
       <div class="modal-body" id="tpl-body"></div>

@@ -702,7 +702,18 @@ class T3StyleTests(unittest.TestCase):
         glass = re.search(r'/\* ── LIQUID GLASS ──.*?/\* END LIQUID GLASS \*/', raw, re.S)
         cls.glass = re.sub(r'/\*.*?\*/', '', glass.group(0), flags=re.S) if glass else ''
         raw = raw.replace(glass.group(0), '') if glass else raw
+        # TIMELINE GEOMETRY: exact pixels for the dots and segments (2026-11-20), checked below.
+        geometry = re.search(r'/\* ── TIMELINE GEOMETRY ──.*?/\* END TIMELINE GEOMETRY \*/', raw, re.S)
+        cls.geometry = re.sub(r'/\*.*?\*/', '', geometry.group(0), flags=re.S) if geometry else ''
+        raw = raw.replace(geometry.group(0), '') if geometry else raw
         cls.css = re.sub(r'/\*.*?\*/', '', raw, flags=re.S)       # rules, not comments
+
+    def test_timeline_geometry_stays_on_the_timeline(self):
+        self.assertIn('::before', self.geometry)
+        for _, sel in re.findall(r'(^|})\s*([^{}]+)\{', self.geometry):
+            for part in sel.split(','):
+                self.assertTrue(part.strip().startswith('.timeline .msg'), part)
+        self.assertNotIn('transform', self.geometry)        # one rounding for dot and segment
 
     def test_liquid_glass_stays_in_the_chat_column(self):
         self.assertIn('backdrop-filter', self.glass)
@@ -1420,6 +1431,26 @@ class SharedParamTests(unittest.TestCase):
         helper = compat[compat.index('def add_shared_family_parameter'):compat.index('def shared_definitions')]
         self.assertLess(helper.index('_DB.GroupTypeId'), helper.index("'BuiltInParameterGroup')"))
         self.assertIn("'shared_parameters'", builder)
+
+
+class IronPythonSourceTests(unittest.TestCase):
+    """The MCP server runs these modules in IronPython 2, which refuses a non-ASCII
+    source file without a coding line (famigen_wait_for_message failed on
+    family_schema.py's box-drawing comments, 2026-11-20)."""
+
+    def test_non_ascii_sources_declare_utf8(self):
+        bad = []
+        for root, _dirs, files in os.walk(LIB):
+            for name in files:
+                if not name.endswith('.py'):
+                    continue
+                path = os.path.join(root, name)
+                with open(path, 'rb') as handle:
+                    raw = handle.read()
+                if any(b > 127 for b in raw) and not any(
+                        re.search(rb'coding[:=]\s*([-\w.]+)', line) for line in raw.split(b'\n')[:2]):
+                    bad.append(os.path.relpath(path, LIB))
+        self.assertEqual(bad, [])
 
 
 if __name__ == '__main__':

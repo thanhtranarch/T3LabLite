@@ -350,6 +350,7 @@ READ_ONLY_TOOL_NAMES = frozenset([
     "get_current_view_elements", "get_current_view_info",
     "get_element_bounding_box", "get_elements_by_level",
     "get_material_quantities", "get_model_health", "get_model_warnings",
+    "manage_material",      # list / get_element_materials only; assigning goes via bulk_set_parameter
     "get_parameter", "get_revit_context", "get_schedule_data",
     "list_levels", "list_open_documents", "list_recent_documents",
     "list_worksets", "query_stored_data", "revit_get_active_view",

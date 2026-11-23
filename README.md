@@ -294,9 +294,12 @@ Nothing to install by hand: **Connect** downloads the add-in from the
 it, then writes the AI-app entry. Restart AutoCAD once after the first install.
 Only apps whose add-in installs this way are listed. A bridge somewhere else can be set with
 `"autocad_bridge": "<path>"` in
-`%APPDATA%\T3LabAI\mcp_paths.json`. MCP Control does not write to Claude
-Desktop's config while Claude Desktop is running (it would drop the entry
-when it quits) — quit it from the tray icon first.
+`%APPDATA%\T3LabAI\mcp_paths.json`. For every app, Revit included, MCP
+Control does not write to Claude Desktop's config while Claude Desktop is
+running (it would drop the entry when it quits) — quit it from the tray icon
+first. Claude Desktop from the Microsoft Store keeps its config in
+`%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude`; Connect
+finds it by itself.
 
 ### Data hub
 

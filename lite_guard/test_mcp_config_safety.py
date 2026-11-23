@@ -173,5 +173,79 @@ class StalePathsModuleTests(unittest.TestCase):
         self.assertIn('core.paths', B.HOT_RELOAD_MODULES)
 
 
+class ClaudeDesktopTests(_TempHome):
+    """Store / MSIX Claude Desktop reads its own copy of the config."""
+
+    def setUp(self):
+        _TempHome.setUp(self)
+        import platform
+        self.system = platform.system
+        platform.system = lambda: 'Windows'
+        self.local = os.environ.get('LOCALAPPDATA')
+        os.environ['LOCALAPPDATA'] = os.path.join(self.dir, 'Local')
+
+    def tearDown(self):
+        import platform
+        platform.system = self.system
+        if self.local is None:
+            os.environ.pop('LOCALAPPDATA', None)
+        else:
+            os.environ['LOCALAPPDATA'] = self.local
+        _TempHome.tearDown(self)
+
+    def classic(self):
+        return os.path.join(self.dir, 'AppData', 'Claude', 'claude_desktop_config.json')
+
+    def msix(self):
+        return os.path.join(self.dir, 'Local', 'Packages', 'Claude_pzs8sxrjxfjjc', 'LocalCache',
+                            'Roaming', 'Claude', 'claude_desktop_config.json')
+
+    def test_classic_install_uses_appdata(self):
+        ok, msg = M.MCPService.configure_client('claude')
+        self.assertTrue(ok, msg)
+        self.assertEqual(os.path.normpath(msg), os.path.normpath(self.classic()))
+
+    def test_msix_copy_is_the_one_written(self):
+        _write(self.msix(), b'{"mcpServers": {"other": {"command": "x"}}}')
+        ok, msg = M.MCPService.configure_client('claude')
+        self.assertTrue(ok, msg)
+        self.assertEqual(os.path.normpath(msg), os.path.normpath(self.msix()))
+        servers = json.loads(_read(self.msix()).decode('utf-8'))['mcpServers']
+        self.assertIn('other', servers)
+        self.assertIn(M.MCP_SERVER_NAME, servers)
+        self.assertFalse(os.path.exists(self.classic()))
+
+    def test_msix_folder_without_file_is_used(self):
+        os.makedirs(os.path.dirname(self.msix()))
+        ok, msg = M.MCPService.configure_client('claude')
+        self.assertTrue(ok, msg)
+        self.assertTrue(os.path.isfile(self.msix()))
+
+    def test_msix_copy_replaces_a_remembered_classic_path(self):
+        ok, _ = M.MCPService.configure_client('claude')          # classic, remembered
+        self.assertTrue(ok)
+        self.assertTrue(M.MCPService.client_status('claude')['configured'])
+        _write(self.msix(), b'{}')                               # Store build installed
+        status = M.MCPService.client_status('claude')
+        self.assertEqual(os.path.normpath(status['path']), os.path.normpath(self.msix()))
+        self.assertFalse(status['configured'])
+
+    def test_hand_set_path_still_wins(self):
+        custom = os.path.join(self.dir, 'my', 'claude.json')
+        _write(custom, b'{}')
+        _write(self.msix(), b'{}')
+        paths.set_setting('claude_desktop_config', custom)
+        self.assertEqual(M.MCPService.client_status('claude')['path'], custom)
+
+    def test_revit_refused_while_claude_desktop_runs(self):
+        M._claude_desktop_running = lambda: True
+        ok, msg = M.MCPService.configure_client('claude')
+        self.assertFalse(ok)
+        self.assertIn('quit', msg.lower())
+        self.assertFalse(os.path.exists(self.classic()))
+        ok, msg = M.MCPService.configure_client('antigravity')
+        self.assertTrue(ok, msg)
+
+
 if __name__ == '__main__':
     unittest.main()

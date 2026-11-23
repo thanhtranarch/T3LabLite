@@ -513,11 +513,32 @@ def _appdata():
     return os.environ.get('APPDATA', os.path.join(_home(), 'AppData', 'Roaming'))
 
 
+def _local_appdata():
+    return os.environ.get('LOCALAPPDATA', os.path.join(_home(), 'AppData', 'Local'))
+
+
+def _claude_msix_candidates():
+    """claude_desktop_config.json of every packaged (Store / MSIX) Claude
+    Desktop on this PC; [] when Claude Desktop is the classic installer."""
+    import glob
+    pattern = os.path.join(_local_appdata(), 'Packages', 'Claude_*', 'LocalCache',
+                           'Roaming', 'Claude')
+    try:
+        return [os.path.join(d, 'claude_desktop_config.json')
+                for d in sorted(glob.glob(pattern)) if os.path.isdir(d)]
+    except Exception:
+        return []
+
+
 def _claude_candidates():
     import platform
     system = platform.system()
     if system == 'Windows':
-        return [os.path.join(_appdata(), 'Claude', 'claude_desktop_config.json')]
+        # The Store / MSIX build reads its own copy of %APPDATA%\Claude: Windows
+        # redirects it to %LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming.
+        # When that copy exists it is the live file and the plain one is dead.
+        return _claude_msix_candidates() + [
+            os.path.join(_appdata(), 'Claude', 'claude_desktop_config.json')]
     if system == 'Darwin':
         return [os.path.join(_home(), 'Library', 'Application Support', 'Claude',
                              'claude_desktop_config.json')]
@@ -582,6 +603,10 @@ def _client_spec(key):
     raise KeyError('Unknown MCP client: {}'.format(key))
 
 
+def _same_path(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
 def _resolve_client_path(spec):
     """
     Config path for one client.
@@ -600,6 +625,13 @@ def _resolve_client_path(spec):
         stored = paths.load_settings().get(spec['setting'])
     except Exception:
         paths, stored = None, None
+    # A stored path that is one of the candidates was only remembered by an
+    # earlier look, not typed by the user: a candidate that ranks higher and
+    # exists now (Claude Desktop moved to the Store build) replaces it.
+    if stored and found and not _same_path(stored, found):
+        ranks = [i for i, c in enumerate(candidates) if _same_path(c, stored)]
+        if ranks and candidates.index(found) < ranks[0]:
+            stored = None
     if stored and (os.path.isfile(stored) or not found):
         return stored
     if found:
@@ -1515,8 +1547,8 @@ class MCPService(object):
 
         Creates the file and its directory if absent, merges with existing
         entries, and keeps a one-time `<path>.t3lab-backup` of the original.
-        AutoCAD: refuses when its bridge is not deployed, and refuses Claude
-        Desktop while it runs (it would drop the entry on quit).
+        AutoCAD: refuses when its bridge is not deployed. Every server: refuses
+        Claude Desktop while it runs (it would drop the entry on quit).
 
         Returns:
             (success: bool, message: str) — config path on success, error text
@@ -1546,9 +1578,6 @@ class MCPService(object):
                 if not os.path.isfile(bridge):
                     return False, ('{} add-in not installed ({} is missing) — {}'.format(
                         app[1], bridge, app[4]))
-                if key == 'claude' and _claude_desktop_running():
-                    return False, ('Claude Desktop is running and would drop the entry '
-                                   'when it quits — quit it from the tray icon, then Connect again')
             else:
                 if port is None:
                     try:
@@ -1556,6 +1585,12 @@ class MCPService(object):
                     except Exception:
                         port = 48884
                 bridge = _get_bridge_path()
+
+            # Every server, Revit too: Claude Desktop saves its config when it
+            # quits, and that drops an entry written while it ran.
+            if key == 'claude' and _claude_desktop_running():
+                return False, ('Claude Desktop is running and would drop the entry '
+                               'when it quits — quit it from the tray icon, then Connect again')
 
             agent = None if name in _BRIDGE_SERVERS else spec.get('agent')
             if spec['fmt'] == 'toml':

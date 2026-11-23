@@ -21,7 +21,7 @@ from System.Collections.Generic import List
 import Autodesk.Revit.DB as DB
 
 from Snippets import _cad_geometry as geo
-from Snippets._compat import disposing, eid_value, elem_name
+from Snippets._compat import clr_namespace, disposing, eid_value, elem_name
 
 TOL = geo.TOL
 
@@ -55,7 +55,7 @@ _WARNINGS = {"count": 0}
 
 class CADToElementsWarnings(DB.IFailuresPreprocessor):
     """Dismiss Revit WARNINGS raised while creating; errors are left alone."""
-    __namespace__ = "T3Lab.CADToElementsWarnings"
+    __namespace__ = clr_namespace('CADToElementsWarnings')
 
     def PreprocessFailures(self, failuresAccessor):
         try:

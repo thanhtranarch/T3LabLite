@@ -151,17 +151,33 @@ check('family transfer without execute_plans: one call per target, error kept as
 FT.execute_plans = staticmethod(lambda s, plans, overwrite_values=False: 'many')
 check('execute_plans used when the module has it', HF._run_plans(FT, 's', [], False) == 'many')
 
-# T3Lab and T3Lab Lite share one CPython engine and both ship these modules: a
-# fixed __namespace__ raises "Duplicate type name" after the other one's click.
+# T3Lab and T3Lab Lite share one CPython engine; claim_lib re-imports a lib module
+# after the other one's click: a fixed __namespace__ raises "Duplicate type name".
 from Snippets._compat import clr_namespace   # noqa: E402
 check('clr_namespace is unique per load',
       clr_namespace('X').startswith('T3Lab.X_') and clr_namespace('X') != clr_namespace('X'))
 for rel in ('Snippets/finish_floors.py', 'Snippets/wall_tools.py', 'Snippets/_links.py',
-            'Snippets/_auto_dimension.py', 'Services/point_cloud_build.py'):
+            'Snippets/_auto_dimension.py', 'Services/point_cloud_build.py',
+            'Snippets/_rebar_wizard.py', 'Snippets/_cad_revit.py', 'Snippets/family_transfer.py',
+            'Snippets/_drawing_clone.py', 'Services/revit_context.py', 'Services/join_service.py',
+            'GUI/ManaSelectDialog.py', 'GUI/FamiGenDialog.py', 'GUI/TextToElementDialog.py',
+            'GUI/ManaLocaDialog.py', 'FamilyGen/builder.py', 'core/agent_cursors_glow.py',
+            'core/agent_cursors.py', 'core/file_watcher.py', 'core/server.py'):
     lines = [l.strip() for l in open(os.path.join(LIB, *rel.split('/')), encoding='utf-8')
              if '__namespace__' in l and '=' in l]
     check('{}: .NET class namespace is per load'.format(rel),
           lines and all('clr_namespace(' in l for l in lines), lines)
+
+import glob   # noqa: E402
+import re     # noqa: E402
+PER_LOAD = ('clr_namespace(', 'uuid.uuid4()', '_NS_SUFFIX')
+fixed = []
+for path in glob.glob(os.path.join(LIB, '**', '*.py'), recursive=True):
+    with open(path, encoding='utf-8', errors='replace') as fh:
+        for no, line in enumerate(fh, 1):
+            if re.match(r'\s*__namespace__\s*=', line) and not any(m in line for m in PER_LOAD):
+                fixed.append('{}:{}'.format(os.path.relpath(path, LIB), no))
+check('no fixed __namespace__ left in lib/', not fixed, fixed)
 
 print('')
 if FAILURES:

@@ -6,7 +6,7 @@ import sys
 import json
 
 from pyrevit import revit, script
-from Snippets._compat import eid_value
+from Snippets._compat import clr_namespace, eid_value
 
 try:
     import clr
@@ -80,7 +80,7 @@ DEFAULT_RULES = [
 
 
 class JoinFailuresPreprocessor(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.JoinServiceFailures"
+    __namespace__ = clr_namespace('JoinServiceFailures')
 
     def PreprocessFailures(self, failuresAccessor):
         for f in failuresAccessor.GetFailureMessages():

@@ -44,7 +44,7 @@ from Autodesk.Revit.DB import (
 )
 from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
 from Autodesk.Revit.UI.Selection import ObjectType
-from Snippets._compat import disposing
+from Snippets._compat import clr_namespace, disposing
 # Coordinates are shown and typed in the project's length unit; the rows
 # keep mm internally (odd / round / edit checks). Read per load, not at import.
 from Snippets._units import project_length_unit, paper_unit, MILLIMETERS
@@ -371,7 +371,7 @@ _T = _TypeCache()
 # ==================================================
 
 class LocationManagerHandler(IExternalEventHandler):
-    __namespace__ = "T3Lab.ManaLoca"
+    __namespace__ = clr_namespace('ManaLoca')
 
     def __init__(self, window):
         self.window             = window

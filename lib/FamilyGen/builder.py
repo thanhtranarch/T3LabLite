@@ -49,7 +49,7 @@ from Intelligence.family_schema import (
     expand_schema, material_parameter_name, parse_color, validate_family_schema,
     SUPPORTED_CATEGORIES,
 )
-from Snippets._compat import add_family_parameter, disposing, family_parameter_kind
+from Snippets._compat import add_family_parameter, clr_namespace, disposing, family_parameter_kind
 from FamilyGen.form_frames import local_to_world, path_ends, profile_at
 
 logger = logging.getLogger('T3Lab.FamilyGen')
@@ -63,7 +63,7 @@ class FamilyBuildError(Exception):
 
 
 class _WarningSwallower(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.FamilyBuilder"
+    __namespace__ = clr_namespace('FamilyBuilder')
 
     def PreprocessFailures(self, failuresAccessor):
         for failure in failuresAccessor.GetFailureMessages():
@@ -74,7 +74,7 @@ class _WarningSwallower(IFailuresPreprocessor):
 
 class _OverwriteLoadOptions(IFamilyLoadOptions):
     """Reload over an already loaded family, overwriting its parameter values."""
-    __namespace__ = "T3Lab.FamilyBuilder"
+    __namespace__ = clr_namespace('FamilyBuilder')
 
     def OnFamilyFound(self, familyInUse, overwriteParameterValues):
         try:                                   # IronPython: out param is a StrongBox

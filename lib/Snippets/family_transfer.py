@@ -248,9 +248,7 @@ def open_projects(app):
 def _handler_classes():
     """Tạo (một lần) các class implement interface .NET.
 
-    Class nằm trong lib/ nên `__namespace__` tĩnh là an toàn: module chỉ được
-    import một lần mỗi phiên engine. Tạo lười để import module này không kéo
-    theo Revit API (test chạy ngoài Revit).
+    Tạo lười để import module này không kéo theo Revit API (test chạy ngoài Revit).
     """
     global _HANDLERS
     if _HANDLERS is not None:
@@ -259,9 +257,10 @@ def _handler_classes():
                                    IFamilyLoadOptions, FamilySource,
                                    IFailuresPreprocessor, FailureProcessingResult,
                                    FailureSeverity)
+    from Snippets._compat import clr_namespace
 
     class UseDestinationTypes(IDuplicateTypeNamesHandler):
-        __namespace__ = "T3Lab.FamilyTransfer"
+        __namespace__ = clr_namespace('FamilyTransfer')
 
         def OnDuplicateTypeNamesFound(self, args):
             return DuplicateTypeAction.UseDestinationTypes
@@ -269,7 +268,7 @@ def _handler_classes():
     class OverwriteLoadOptions(IFamilyLoadOptions):
         # pythonnet 3: tham số out được trả về trong tuple, theo đúng thứ tự
         # khai báo, sau giá trị trả về của method.
-        __namespace__ = "T3Lab.FamilyTransfer"
+        __namespace__ = clr_namespace('FamilyTransfer')
 
         def __init__(self, overwrite_values=False):
             self._values = bool(overwrite_values)
@@ -282,7 +281,7 @@ def _handler_classes():
             return (True, FamilySource.Family, self._values)
 
     class SwallowWarnings(IFailuresPreprocessor):
-        __namespace__ = "T3Lab.FamilyTransfer"
+        __namespace__ = clr_namespace('FamilyTransfer')
 
         def PreprocessFailures(self, accessor):
             for msg in accessor.GetFailureMessages():

@@ -75,6 +75,7 @@ from GUI.ProgressPauseMixin import ProgressPauseMixin
 # document's own units when FamiGen runs inside one). The JSON contract and
 # the presets stay in mm. Read per window, never at import.
 from Snippets._units import project_length_unit, MILLIMETERS
+from Snippets._compat import clr_namespace
 from FamilyGen import builder as family_builder
 from FamilyGen import guidance as family_guidance
 from FamilyGen import preview_mesh
@@ -412,7 +413,7 @@ _CAT_HINTS = [
 # ==============================================================================
 
 class WarningSwallower(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.FamiGen"
+    __namespace__ = clr_namespace('FamiGen')
 
     def PreprocessFailures(self, failuresAccessor):
         fail_list = failuresAccessor.GetFailureMessages()
@@ -535,10 +536,9 @@ class _FamiGenAction(IExternalEventHandler):
     """Runs one queued callable on Revit's API thread for the modeless window.
 
     Only the window the MCP server opens is modeless; its WPF handlers run
-    OUTSIDE Revit API context, so Create Family is queued here. Static
-    `__namespace__` is right: the class lives in lib/ (rule S15).
+    OUTSIDE Revit API context, so Create Family is queued here.
     """
-    __namespace__ = "T3Lab.FamiGenAction"
+    __namespace__ = clr_namespace('FamiGenAction')
 
     def __init__(self):
         self._action = None

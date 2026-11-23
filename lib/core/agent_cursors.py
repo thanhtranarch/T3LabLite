@@ -2109,10 +2109,11 @@ def _ensure_select_event():
         return _session['select_event']
     try:
         from Autodesk.Revit.UI import ExternalEvent, IExternalEventHandler
+        from Snippets._compat import clr_namespace
         cls = _session['select_cls']
         if cls is None:
             class _SelectTouched(IExternalEventHandler):
-                __namespace__ = 'T3Lab.AgentCursorsSelect'
+                __namespace__ = clr_namespace('AgentCursorsSelect')
 
                 def Execute(self, uiapp):
                     actions, _session['ui_actions'] = _session.get('ui_actions') or [], []

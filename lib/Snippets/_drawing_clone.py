@@ -1430,16 +1430,16 @@ _ASSEMBLY_FILTER = None
 def assembly_selection_filter():
     """ISelectionFilter that accepts AssemblyInstances only (Pick in model, D8).
 
-    Static namespace is safe here: lib/ modules import once per engine session
-    and the class is built lazily, so tests never touch .NET (S15).
+    Built lazily so tests never touch .NET.
     """
     global _ASSEMBLY_FILTER
     if _ASSEMBLY_FILTER is None:
         from Autodesk.Revit.DB import AssemblyInstance
         from Autodesk.Revit.UI.Selection import ISelectionFilter
+        from Snippets._compat import clr_namespace
 
         class AssemblyFilter(ISelectionFilter):
-            __namespace__ = "T3Lab.CloneDrawing"
+            __namespace__ = clr_namespace('CloneDrawing')
 
             def AllowElement(self, element):
                 return isinstance(element, AssemblyInstance)

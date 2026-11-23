@@ -47,6 +47,7 @@ import os
 from Snippets._compat import (
     create_rebar_from_curves,
     add_to_assembly_of,
+    clr_namespace,
     disposing,
     eid_value,
     elem_name,
@@ -1069,9 +1070,8 @@ def _warning_swallower():
                                    FailureSeverity)
 
     class SwallowRebarWarnings(IFailuresPreprocessor):
-        # Static namespace is safe: lib/ modules are imported once per engine
-        # session, and the class is built lazily so tests never touch .NET.
-        __namespace__ = "T3Lab.RebarWizard"
+        # Built lazily so tests never touch .NET.
+        __namespace__ = clr_namespace('RebarWizard')
 
         def __init__(self):
             self.dismissed = 0
@@ -1099,7 +1099,7 @@ def host_filter():
                                   _bic("OST_StructuralFoundation")) if c is not None)
 
         class HostFilter(ISelectionFilter):
-            __namespace__ = "T3Lab.RebarWizard"
+            __namespace__ = clr_namespace('RebarWizard')
 
             def AllowElement(self, element):
                 return _category_int(element) in allowed

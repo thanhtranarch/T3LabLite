@@ -113,8 +113,10 @@ except Exception:
 # ─── ExternalEvent handler ─────────────────────────────────────────────────────
 
 if HAS_REVIT_UI:
+    from Snippets._compat import clr_namespace
+
     class _FileTaskEventHandler(IExternalEventHandler):
-        __namespace__ = "T3Lab.Core"
+        __namespace__ = clr_namespace('Core')
         """
         Runs inside Revit's main thread (called by ExternalEvent.Raise()).
         Pops the pending task from the watcher, executes it, writes result.

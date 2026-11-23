@@ -133,9 +133,10 @@ try:
     import clr
     clr.AddReference('RevitAPIUI')
     from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
+    from Snippets._compat import clr_namespace
 
     class _ApiContextHandler(IExternalEventHandler):
-        __namespace__ = "T3Lab.Services"
+        __namespace__ = clr_namespace('Services')
         """Drains the task queue inside Revit's API context."""
 
         def Execute(self, app):

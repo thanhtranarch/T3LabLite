@@ -8,6 +8,7 @@ Run:  python lite_guard/test_tools_views_domain.py      (no Revit: a fake API st
 import json
 import os
 import sys
+from types import SimpleNamespace
 import tempfile
 import types
 
@@ -224,7 +225,8 @@ DB.__dict__.update(
     Transaction=Tx, TransactionGroup=Tx, SubTransaction=lambda doc: Tx(doc, 'sub'),
     TransactionStatus=STATUS, ViewType=VT, BuiltInParameter=BIP,
     BuiltInCategory=NS(OST_Rooms='rooms', OST_TitleBlocks='titleblocks'),
-    ViewFamily=NS(Elevation='ElevationFamily'), FilteredElementCollector=Collector,
+    ViewFamily=NS(Elevation='ElevationFamily', FloorPlan='FloorPlanFamily',
+                  CeilingPlan='CeilingPlanFamily'), FilteredElementCollector=Collector,
     View=View, ViewPlan=NS(Create=_plan_create, __name__='ViewPlan'), ViewSheet=ViewSheet,
     ViewFamilyType=ViewFamilyType, Viewport=Viewport, XYZ=XYZ,
     BoundingBoxXYZ=lambda: NS(Min=None, Max=None),
@@ -355,6 +357,17 @@ check('read-back: crop not active reported', r['not_in_model_after'] ==
 check('write_verify fails on it', W.verify('sync_views', {}, r, 0,
                                            doc.model.__contains__)['verified'] is False)
 BROKEN.clear()
+# Shape asked, Revit refused it for this view: sync_crop_to_view still says True.
+_crop_data = CS.get_view_crop_data
+CS.get_view_crop_data = lambda v: CS.ViewCropData(is_active=True, is_visible=False,
+                                                  is_shaped=True, curve_loops=['loop'],
+                                                  width=8000.0, height=6000.0)
+t1.GetCropRegionShapeManager = lambda: SimpleNamespace(ShapeSet=False)
+r = TS.run('sync_views', doc, {'operation': 'crop', 'view_ids': [2]})
+check('read-back: crop shape not applied reported',
+      any('crop shape not applied' in p for p in r.get('not_in_model_after', [])), r)
+del t1.GetCropRegionShapeManager
+CS.get_view_crop_data = _crop_data
 BROKEN['raise'] = True
 r = TS.run('sync_views', doc, {'operation': 'crop', 'view_ids': [2, 3]})
 check('one view fails, the other still synced', r['updated_view_ids'] == [2]
@@ -417,10 +430,12 @@ print('[generate_room_views]')
 
 def model():
     d = Doc()
-    for i, (fam, vt) in enumerate((('Floor Plan', VT.FloorPlan), ('Ceiling Plan', VT.CeilingPlan),
-                                   ('Interior Elevation', VT.Elevation)), 1):
-        e = d.add(ViewFamilyType(10 + i, fam, FamilyName=fam, view_type=vt,
-                                 ViewFamily='ElevationFamily' if vt == VT.Elevation else fam))
+    # Localized family names (French Revit): view types are found by ViewFamily.
+    for i, (fam, vt, vf) in enumerate((('Plan d\'étage', VT.FloorPlan, 'FloorPlanFamily'),
+                                       ('Plan de plafond', VT.CeilingPlan, 'CeilingPlanFamily'),
+                                       ('Interior Elevation', VT.Elevation, 'ElevationFamily')),
+                                      1):
+        e = d.add(ViewFamilyType(10 + i, fam, FamilyName=fam, view_type=vt, ViewFamily=vf))
         e.params[BIP.SYMBOL_NAME_PARAM] = Param(fam)
     d.add(View(20, 'Enlarged 1:50', ViewType=VT.FloorPlan, IsTemplate=True))
     tb = d.add(El(30, 'A1', category='titleblocks', Family=NS(Name='A1 Metric')))

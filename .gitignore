@@ -12,3 +12,4 @@ T3Lab.tab/**/dqt_ribbon_*.json
 
 # Ribbon folders an update left behind, moved here by lib/core/ribbon_retire.py.
 _retired_ribbon/
+.claude/worktrees/

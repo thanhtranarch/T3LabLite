@@ -1411,8 +1411,8 @@ class MCPService(object):
             if fmt == 'claude_code':
                 return 'claude mcp add --scope user {} -- "{}" -I "{}"'.format(
                     name, python, bridge)
-            import json as _json
-            return _json.dumps(
+            from core import jsonsafe
+            return jsonsafe.dumps(
                 {'mcpServers': {name: _server_entry(python.replace('\\', '/'),
                                                     bridge, 0, name)}},
                 indent=2)
@@ -1440,12 +1440,8 @@ class MCPService(object):
         # C:\Users\... was invalid JSON.
         snippet = {'mcpServers': {
             MCP_SERVER_NAME: _server_entry(python, bridge, port)}}
-        try:
-            from core import jsonsafe
-            return jsonsafe.dumps(snippet, indent=2)
-        except Exception:
-            import json as _json
-            return _json.dumps(snippet, indent=2)
+        from core import jsonsafe
+        return jsonsafe.dumps(snippet, indent=2)
 
     @staticmethod
     def data_dir():

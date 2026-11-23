@@ -6,7 +6,7 @@ import sys
 import json
 
 from pyrevit import revit, script
-from Snippets._compat import clr_namespace, eid_value
+from Snippets._compat import eid_value
 
 try:
     import clr
@@ -79,6 +79,7 @@ DEFAULT_RULES = [
 ]
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class JoinFailuresPreprocessor(IFailuresPreprocessor):
     __namespace__ = clr_namespace('JoinServiceFailures')
 
@@ -386,9 +387,12 @@ def _rescue_swallowed(document, el, cand, volumes):
     return cut
 
 
-def _fill_stats(stats, state, saved=True):
+def _fill_stats(stats, state, saved=True, switched=0):
     if stats is None:
         return
+    # Join order flipped on pairs that were already joined: a model change that
+    # the joined count does not show.
+    stats["order_switched"] = switched if saved else 0
     stats["protected"] = len(state.protected) if (state and saved) else 0
     stats["duplicates"] = len(state.duplicates) if state else 0
 
@@ -439,6 +443,7 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
 
     total_joined  = 0
     total_skipped = 0
+    total_switched = 0
     total_errors  = 0
     total_rules = len(rules)
     state = EmbedState() if (protect_embedded and mode == "Join") else None
@@ -480,7 +485,7 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
                 if cancel_check and cancel_check():
                     _commit_join(t)
                     if stats is not None:
-                        _fill_stats(stats, state)
+                        _fill_stats(stats, state, switched=total_switched)
                     return (total_joined, total_skipped, total_errors,
                             JOIN_CANCELLED_MESSAGE)
 
@@ -524,6 +529,8 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
                                 inner = check.inner if check is not None else None
                                 switched = _apply_join_order(
                                     document, el, cand, switch_order, inner)
+                                if switched and are_joined:
+                                    total_switched += 1
                                 if (check is not None and inner is None and not check.certain
                                         and (switched or not are_joined)):
                                     inner = _rescue_swallowed(document, el, cand, check.volumes)
@@ -550,7 +557,7 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
 
         _commit_join(t)
         if stats is not None:
-            _fill_stats(stats, state)
+            _fill_stats(stats, state, switched=total_switched)
         return (total_joined, total_skipped, total_errors, None)
 
     except Exception as ex:

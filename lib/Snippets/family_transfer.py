@@ -248,7 +248,9 @@ def open_projects(app):
 def _handler_classes():
     """Tạo (một lần) các class implement interface .NET.
 
-    Tạo lười để import module này không kéo theo Revit API (test chạy ngoài Revit).
+    `__namespace__` theo từng lần nạp (clr_namespace): T3Lab và T3Lab Lite chung một
+    engine, claim_lib nạp lại module. Tạo lười để import module này không kéo
+    theo Revit API (test chạy ngoài Revit).
     """
     global _HANDLERS
     if _HANDLERS is not None:
@@ -274,11 +276,20 @@ def _handler_classes():
             self._values = bool(overwrite_values)
 
         def OnFamilyFound(self, familyInUse, overwriteParameterValues):
-            return (True, self._values)
+            try:                            # IronPython (MCP server): out params are StrongBox
+                overwriteParameterValues.Value = self._values
+                return True
+            except (AttributeError, TypeError):    # pythonnet 3: out values in the tuple
+                return (True, self._values)
 
         def OnSharedFamilyFound(self, sharedFamily, familyInUse, source,
                                 overwriteParameterValues):
-            return (True, FamilySource.Family, self._values)
+            try:
+                source.Value = FamilySource.Family
+                overwriteParameterValues.Value = self._values
+                return True
+            except (AttributeError, TypeError):    # pythonnet 3: out values in the tuple
+                return (True, FamilySource.Family, self._values)
 
     class SwallowWarnings(IFailuresPreprocessor):
         __namespace__ = clr_namespace('FamilyTransfer')

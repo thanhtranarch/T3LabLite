@@ -429,8 +429,16 @@ try:
                     pass
                 started = time.time()
                 try:
-                    task.result = self.server._execute_tool_in_context(
-                        task.tool_name, task.arguments, uiapp=app)
+                    if is_write and tool_specs.get(task.tool_name) is not None:
+                        # Headless tool: a Revit error rolls back, never a dialog.
+                        from core import revit_failures
+                        with revit_failures.guard(app) as session:
+                            task.result = self.server._execute_tool_in_context(
+                                task.tool_name, task.arguments, uiapp=app)
+                        revit_failures.annotate(task.result, session)
+                    else:
+                        task.result = self.server._execute_tool_in_context(
+                            task.tool_name, task.arguments, uiapp=app)
                     # Read the model back (core/write_verify). getattr: a server
                     # object from before a reload has no read-back.
                     verify = getattr(self.server, '_verify_write', None) if is_write else None
@@ -8861,7 +8869,7 @@ class T3LabAIServer(object):
             }
             out_path = _stored_data_file(doc.PathName, doc.Title, 'project_data.json')
             with open(out_path, 'w') as f:
-                _json.dump(data, f, indent=2)
+                f.write(jsonsafe.dumps(data, indent=2))
             return {'success': True, 'file': out_path, 'data': data}
 
         # ── store_room_data ──────────────────────────────────────────────────
@@ -8888,7 +8896,7 @@ class T3LabAIServer(object):
                     pass
             out_path = _stored_data_file(doc.PathName, doc.Title, 'room_data.json')
             with open(out_path, 'w') as f:
-                _json.dump({'rooms': rooms_out}, f, indent=2)
+                f.write(jsonsafe.dumps({'rooms': rooms_out}, indent=2))
             return {'success': True, 'file': out_path, 'room_count': len(rooms_out)}
 
         # ── query_stored_data ────────────────────────────────────────────────
@@ -8961,7 +8969,7 @@ class T3LabAIServer(object):
                     _res = {'task_id': 'mcp', 'status': 'success', 'output': out_str,
                             'error': '', 'timestamp': _time.time()}
                     with open(RESULT_FILE, 'w') as _f:
-                        _json.dump(_res, _f, indent=2)
+                        _f.write(jsonsafe.dumps(_res, indent=2))
                     with open(RESULT_TXT, 'w') as _f:
                         _f.write(out_str)
                 except Exception:
@@ -8977,7 +8985,7 @@ class T3LabAIServer(object):
                     _res = {'task_id': 'mcp', 'status': 'error', 'output': '',
                             'error': err_str, 'timestamp': _time.time()}
                     with open(RESULT_FILE, 'w') as _f:
-                        _json.dump(_res, _f, indent=2)
+                        _f.write(jsonsafe.dumps(_res, indent=2))
                     with open(RESULT_TXT, 'w') as _f:
                         _f.write('ERROR: {}'.format(err_str))
                 except Exception:

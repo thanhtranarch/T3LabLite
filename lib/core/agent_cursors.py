@@ -2102,6 +2102,7 @@ def touched_ids():
     return sorted(_session['touched'])
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 def _ensure_select_event():
     """ExternalEvent the HUD's "Select touched" raises. Created here, in an
     API context (notify runs inside Execute); one per Revit session."""
@@ -2109,7 +2110,6 @@ def _ensure_select_event():
         return _session['select_event']
     try:
         from Autodesk.Revit.UI import ExternalEvent, IExternalEventHandler
-        from Snippets._compat import clr_namespace
         cls = _session['select_cls']
         if cls is None:
             class _SelectTouched(IExternalEventHandler):

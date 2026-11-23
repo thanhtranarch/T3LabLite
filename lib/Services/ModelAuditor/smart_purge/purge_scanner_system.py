@@ -32,6 +32,7 @@ from Autodesk.Revit.DB import (
 )
 from Autodesk.Revit.DB.Architecture import Room
 from Autodesk.Revit import DB
+from Snippets._compat import elem_name as _elem_name   # IronPython hides ElementType.Name
 
 # Import compatibility helper
 try:
@@ -146,8 +147,9 @@ class ImportSymbolsScanner(BasePurgeScanner):
                                 return os.path.basename(path)
                     
                     # Fallback to type name
-                    if hasattr(import_type, 'Name') and import_type.Name:
-                        return import_type.Name
+                    type_name = _elem_name(import_type)
+                    if type_name:
+                        return type_name
             
             # Try getting from element name
             if hasattr(imp, 'Name') and imp.Name:

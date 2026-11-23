@@ -18,7 +18,7 @@ from Autodesk.Revit.DB import (
     View,
 )
 
-from Snippets._compat import eid_value
+from Snippets._compat import eid_value, elem_name
 
 logger = logging.getLogger('T3Lab.cad_imports')
 
@@ -59,7 +59,7 @@ def collect_dwg_items(document):
 
             if link_type is not None:
                 try:
-                    name = link_type.Name
+                    name = elem_name(link_type)
                 except Exception:
                     name = "Unknown"
             else:

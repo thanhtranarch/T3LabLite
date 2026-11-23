@@ -59,6 +59,7 @@ python lite_guard/test_mcp_config_safety.py
 python lite_guard/test_python_installer.py
 python lite_guard/audit_ipy_compat.py --quiet
 python lite_guard/test_audit_ipy_compat.py
+python lite_guard/test_compat_replace_file.py
 python lite_guard/test_tool_specs.py
 python lite_guard/test_bridge_contract.py
 python lite_guard/test_write_verify.py
@@ -100,7 +101,7 @@ python dev/test_icons_t3space.py
 
 5. **.NET Interface Namespaces:**
    - Classes implementing .NET interfaces (`ISelectionFilter`, `IExternalEventHandler`, `IFailuresPreprocessor`) must declare `__namespace__`.
-   - In `lib/`: `__namespace__ = clr_namespace('<Name>')` (`from Snippets._compat import clr_namespace`), never a fixed `"T3Lab.<Name>"`. T3Lab and T3Lab Lite share one CPython engine and `claim_lib` re-imports a lib module after a click in the other extension; a fixed name then raises `Duplicate type name`. Harmless under IronPython. Test: last block of `lite_guard/test_bridge_contract.py`.
+   - In `lib/`: `__namespace__ = clr_namespace('<Name>')` (`Snippets/_compat.py`, a per-load name), never a fixed `"T3Lab.<Name>"`. T3Lab and T3Lab Lite share one CPython engine and `claim_lib` re-imports the module, so a fixed name raises `Duplicate type name`. No exception: `core/server.py` is also imported under CPython (Assistant, `MCPService.ensure_external_event`). `lite_guard/test_bridge_contract.py` checks.
    - In pushbutton `script.py`: dynamic namespace `__namespace__ = "T3Lab.<Name>_" + uuid.uuid4().hex[:8]`.
 
 6. **No Multiple Inheritance with CLR Classes:**
@@ -125,4 +126,4 @@ python dev/test_icons_t3space.py
 
 10. **A new AI tool = one `ToolSpec` in `lib/core/tools/<domain>.py`** (`docs/ai-tools.md`):
    - It feeds the MCP registry, dispatch, `_WRITE_TOOLS`, confirmation (`is_destructive` -> `core/mcp_policy.py`), the read-only list, Assistant subsets, read-back and titles. Never hand-add the tool to those lists. Test: `python lite_guard/test_tool_specs.py`.
-   - The MCP server runs IronPython 2.7, so every module it can import must pass `python lite_guard/audit_ipy_compat.py --quiet`. Use `Snippets._compat.fold` / `replace_file` and `io.open`; no f-strings.
+   - The MCP server runs IronPython 2.7, so every module it can import must pass `python lite_guard/audit_ipy_compat.py --quiet`. Use `Snippets._compat.fold` / `replace_file`, `io.open` and `core.jsonsafe.dumps`; no f-strings.

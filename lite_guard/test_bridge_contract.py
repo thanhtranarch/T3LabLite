@@ -151,33 +151,110 @@ check('family transfer without execute_plans: one call per target, error kept as
 FT.execute_plans = staticmethod(lambda s, plans, overwrite_values=False: 'many')
 check('execute_plans used when the module has it', HF._run_plans(FT, 's', [], False) == 'many')
 
-# T3Lab and T3Lab Lite share one CPython engine; claim_lib re-imports a lib module
-# after the other one's click: a fixed __namespace__ raises "Duplicate type name".
+# T3Lab and T3Lab Lite share one CPython engine and both ship these modules: a
+# fixed __namespace__ raises "Duplicate type name" after the other one's click.
 from Snippets._compat import clr_namespace   # noqa: E402
 check('clr_namespace is unique per load',
       clr_namespace('X').startswith('T3Lab.X_') and clr_namespace('X') != clr_namespace('X'))
 for rel in ('Snippets/finish_floors.py', 'Snippets/wall_tools.py', 'Snippets/_links.py',
-            'Snippets/_auto_dimension.py', 'Services/point_cloud_build.py',
-            'Snippets/_rebar_wizard.py', 'Snippets/_cad_revit.py', 'Snippets/family_transfer.py',
-            'Snippets/_drawing_clone.py', 'Services/revit_context.py', 'Services/join_service.py',
-            'GUI/ManaSelectDialog.py', 'GUI/FamiGenDialog.py', 'GUI/TextToElementDialog.py',
-            'GUI/ManaLocaDialog.py', 'FamilyGen/builder.py', 'core/agent_cursors_glow.py',
-            'core/agent_cursors.py', 'core/file_watcher.py', 'core/server.py'):
+            'Snippets/_auto_dimension.py', 'Services/point_cloud_build.py'):
     lines = [l.strip() for l in open(os.path.join(LIB, *rel.split('/')), encoding='utf-8')
              if '__namespace__' in l and '=' in l]
     check('{}: .NET class namespace is per load'.format(rel),
           lines and all('clr_namespace(' in l for l in lines), lines)
 
-import glob   # noqa: E402
-import re     # noqa: E402
-PER_LOAD = ('clr_namespace(', 'uuid.uuid4()', '_NS_SUFFIX')
+
+# IronPython 2.7 runtime traps fixed in the shared modules (same checks as t3lab_dev).
+def _src(rel):
+    return open(os.path.join(LIB, *rel.split('/')), encoding='utf-8').read()
+
+
+check('smart_purge reads type names through elem_name (default types stay protected)',
+      "hasattr(wall_type, 'Name')" not in _src(
+          'Services/ModelAuditor/smart_purge/purge_scanner_elements.py'))
+check('CSV report: BOM written once', "encoding='utf-8-sig'" not in _src(
+    'Services/batchout_report.py'))
+check('profile scan catches IOError on 2.7', 'except (EnvironmentError, ValueError)' in _src(
+    'Services/batchout_profiles.py'))
+check('JSON with accented text (IronPython)', 'ensure_ascii=False' in _src('Snippets/_cad_plan.py')
+      and 'jsonsafe.dumps' in _src('Snippets/xlsx_table.py')
+      and 'jsonsafe.dumps(info)' in _src('Snippets/excel_table_revit.py'))
+
+
+# Headless tools: a Revit error rolls back instead of a modal dialog holding Revit.
+from core import revit_failures as RF       # noqa: E402
+
+
+class _Msg(object):
+    def __init__(self, sev, text):
+        self.sev, self.text = sev, text
+
+    def GetSeverity(self):
+        return self.sev
+
+    def GetDescriptionText(self):
+        return self.text
+
+
+class _Opts(object):
+    def SetClearAfterRollback(self, on):
+        self.clear = on
+
+
+class _FA(object):
+    def __init__(self, msgs):
+        self.msgs, self.deleted, self.opts = msgs, [], _Opts()
+
+    def GetFailureMessages(self):
+        return self.msgs
+
+    def DeleteWarning(self, m):
+        self.deleted.append(m.text)
+
+    def GetFailureHandlingOptions(self):
+        return self.opts
+
+    def SetFailureHandlingOptions(self, o):
+        pass
+
+
+class _Args(object):
+    def __init__(self, fa):
+        self.fa, self.result = fa, None
+
+    def GetFailuresAccessor(self):
+        return self.fa
+
+    def SetProcessingResult(self, r):
+        self.result = r
+
+
+fs = RF.FailureSession(rollback_result='ROLLBACK')
+fa = _FA([_Msg('Warning', 'Walls overlap'), _Msg('Error', 'Cannot join')])
+args = _Args(fa)
+fs.on_failures(None, args)
+res = RF.annotate({'success': True}, fs)
+check('failure guard: warning dismissed, error rolled back without a dialog',
+      fa.deleted == ['Walls overlap'] and args.result == 'ROLLBACK' and fa.opts.clear
+      and res['success'] is False and res['revit_failures']['errors_rolled_back'] == ['Cannot join'],
+      res)
+check('handler wraps spec write tools in the guard',
+      'is_write and tool_specs.get(task.tool_name) is not None' in src
+      and 'revit_failures.guard(app)' in src)
+
+# No fixed .NET namespace left in lib/ (core/server.py too: the Assistant imports it under CPython).
+import re as _re                           # noqa: E402
+_pat = _re.compile(r"""__namespace__ *= *["']T3Lab\.[A-Za-z0-9_.]+["'] *($|#)""")
 fixed = []
-for path in glob.glob(os.path.join(LIB, '**', '*.py'), recursive=True):
-    with open(path, encoding='utf-8', errors='replace') as fh:
-        for no, line in enumerate(fh, 1):
-            if re.match(r'\s*__namespace__\s*=', line) and not any(m in line for m in PER_LOAD):
-                fixed.append('{}:{}'.format(os.path.relpath(path, LIB), no))
-check('no fixed __namespace__ left in lib/', not fixed, fixed)
+for root, _d, files in os.walk(LIB):
+    for name in files:
+        if name.endswith('.py'):
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, LIB)
+            for n, line in enumerate(open(path, encoding='utf-8'), 1):
+                if _pat.search(line):
+                    fixed.append('{}:{}'.format(rel, n))
+check('every lib .NET class namespace is per load (clr_namespace)', not fixed, fixed)
 
 print('')
 if FAILURES:

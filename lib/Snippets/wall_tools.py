@@ -94,6 +94,21 @@ def plan_rehost(doc, elem, new_level, adjust_base=True):
             'new_offset': actual_elevation - new_level.Elevation}
 
 
+def _beam_end1(elem, plan):
+    """(END1 offset parameter, its elevation) of a beam being rehosted, else None."""
+    from Autodesk.Revit.DB import BuiltInCategory, FamilyInstance, BuiltInParameter
+    try:
+        if not (isinstance(elem, FamilyInstance) and elem.Category is not None and
+                eid_value(elem.Category.Id) == BuiltInCategory.OST_StructuralFraming.value__):
+            return None
+        p = elem.get_Parameter(BuiltInParameter.STRUCTURAL_BEAM_END1_ELEVATION)
+        if p is None or p.IsReadOnly:
+            return None
+        return p, plan['old_level'].Elevation + p.AsDouble()
+    except Exception:
+        return None
+
+
 def adjust_element(doc, elem, new_level, adjust_base=True):
     """Re-host elem's base (or top) on new_level keeping its elevation; True when set.
     Call inside an open Transaction."""
@@ -101,8 +116,12 @@ def adjust_element(doc, elem, new_level, adjust_base=True):
         plan = plan_rehost(doc, elem, new_level, adjust_base)
         if 'reason' in plan:
             return False
+        end1 = _beam_end1(elem, plan)
         plan['p_lvl'].Set(new_level.Id)
         plan['p_off'].Set(plan['new_offset'])
+        if end1 is not None:
+            # A beam has two end offsets from its reference level: keep the end too.
+            end1[0].Set(end1[1] - new_level.Elevation)
         return True
     except Exception:
         return False
@@ -252,9 +271,8 @@ def execute_openings(doc, walls, sources, categories, method, offset_ft, symbol,
     new_ids = []
 
     t = Transaction(doc, "T3Lab: Wall Cut Profile")
-    silence_warnings(t)
-
     t.Start()
+    silence_warnings(t)            # after Start, as every other T3Lab transaction
     try:
         if symbol and not symbol.IsActive:
             symbol.Activate()
@@ -278,7 +296,9 @@ def execute_openings(doc, walls, sources, categories, method, offset_ft, symbol,
                     opening = doc.Create.NewOpening(w, p0, p1)
                     if opening is not None:
                         new_ids.append(eid_value(opening.Id))
-                    created += 1
+                        created += 1
+                    else:
+                        errors += 1
             except Exception:
                 errors += 1
 

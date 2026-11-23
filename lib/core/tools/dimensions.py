@@ -84,9 +84,9 @@ def auto_dimension(doc, args):
         except (TypeError, ValueError):
             v = None
         if v is None or not hasattr(v, 'ViewType'):
-            skipped.append({'id': raw, 'reason': 'not a view'})
+            skipped.append({'view': raw, 'reason': 'not a view'})
         elif getattr(v, 'IsTemplate', False) or not ad._is_valid_view(v):
-            skipped.append({'id': raw, 'reason': 'not a plan, section, elevation or detail view'})
+            skipped.append({'view': raw, 'reason': 'not a plan, section, elevation or detail view'})
         else:
             views.append(v)
     if not ids:

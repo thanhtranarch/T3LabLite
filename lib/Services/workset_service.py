@@ -27,8 +27,6 @@ try:
         Transaction,
         TransactionStatus,
         WorksetTable,
-        DeleteWorksetSettings,
-        DeleteWorksetOption,
         View3D,
         ViewFamilyType,
         ViewFamily,
@@ -36,8 +34,12 @@ try:
     )
 except Exception:
     FilteredElementCollector = FilteredWorksetCollector = Workset = WorksetKind = None
-    Transaction = TransactionStatus = WorksetTable = DeleteWorksetSettings = DeleteWorksetOption = None
+    Transaction = TransactionStatus = WorksetTable = None
     View3D = ViewFamilyType = ViewFamily = WorksetVisibility = None
+try:        # Revit 2022.1+: alone, so 2022.0 keeps every other workset operation
+    from Autodesk.Revit.DB import DeleteWorksetSettings, DeleteWorksetOption
+except Exception:
+    DeleteWorksetSettings = DeleteWorksetOption = None
 
 logger = script.get_logger()
 REVIT_VERSION = get_revit_version()
@@ -331,6 +333,9 @@ def rename_workset(doc, workset_id, new_name):
 def delete_workset(doc, ws_to_delete, ws_to_reassign=None):
     """Delete a user workset, moving its elements into another workset or deleting them."""
     t = None
+    if DeleteWorksetSettings is None:
+        return False, ("This Revit version cannot delete worksets through the API "
+                       "(Revit 2022.1 or newer): delete it in Manage > Worksets.")
     try:
         ws_all = get_user_worksets(doc)
         ws_del = next((w for w in ws_all if w.Name == ws_to_delete), None)

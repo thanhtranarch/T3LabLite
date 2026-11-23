@@ -17,8 +17,9 @@ the read-only list, the Assistant subsets and prompt (`lib/Intelligence/`), the 
   `transfer_view_templates` stays off.
 - Every write tool has `dry_run` and a read-back mode; `ToolSpec.problems()` refuses one without.
 - The MCP server runs IronPython 2.7: `python lite_guard/audit_ipy_compat.py --quiet` checks every
-  module it can import (no f-strings, `casefold`, `open(encoding=)`; use `Snippets._compat.fold`,
-  `replace_file`, `io.open`).
+  module it can import (no f-strings, `casefold`, `open(encoding=)`, `json.dumps` without
+  `ensure_ascii=False`, `except OSError` around `open`, utf-8-sig writes; use `Snippets._compat.fold`,
+  `replace_file`, `io.open`, `core.jsonsafe.dumps`).
 
 ## Tools (23)
 

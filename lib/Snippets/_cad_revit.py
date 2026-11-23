@@ -21,7 +21,7 @@ from System.Collections.Generic import List
 import Autodesk.Revit.DB as DB
 
 from Snippets import _cad_geometry as geo
-from Snippets._compat import clr_namespace, disposing, eid_value, elem_name
+from Snippets._compat import disposing, eid_value, elem_name
 
 TOL = geo.TOL
 
@@ -53,6 +53,7 @@ class RunResult(object):
 _WARNINGS = {"count": 0}
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class CADToElementsWarnings(DB.IFailuresPreprocessor):
     """Dismiss Revit WARNINGS raised while creating; errors are left alone."""
     __namespace__ = clr_namespace('CADToElementsWarnings')

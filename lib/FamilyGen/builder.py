@@ -49,7 +49,7 @@ from Intelligence.family_schema import (
     expand_schema, material_parameter_name, parse_color, validate_family_schema,
     SUPPORTED_CATEGORIES,
 )
-from Snippets._compat import add_family_parameter, clr_namespace, disposing, family_parameter_kind
+from Snippets._compat import add_family_parameter, disposing, family_parameter_kind
 from FamilyGen.form_frames import local_to_world, path_ends, profile_at
 
 logger = logging.getLogger('T3Lab.FamilyGen')
@@ -62,6 +62,7 @@ class FamilyBuildError(Exception):
     """A family could not be created; the message is shown to the user."""
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class _WarningSwallower(IFailuresPreprocessor):
     __namespace__ = clr_namespace('FamilyBuilder')
 

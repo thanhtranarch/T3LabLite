@@ -53,7 +53,6 @@ if _LIB_DIR not in sys.path:
 from GUI.WPF_Base import T3WPFWindow
 from GUI import T3Dialog
 from Selection import explorer
-from Snippets._compat import clr_namespace
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'ManaSelect.xaml')
 
@@ -87,6 +86,7 @@ def _save_settings(data):
         pass
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class _ActionHandler(IExternalEventHandler):
     """Chạy một callable trên thread API của Revit.
 
@@ -94,7 +94,7 @@ class _ActionHandler(IExternalEventHandler):
     gọi thẳng `Transaction` hay `uidoc.Selection` từ đó là
     "Attempting to access Revit API outside of API context".
 
-    `__namespace__` mới mỗi lần nạp module (luật S15: T3Lab Lite chung engine).
+    `__namespace__` mới mỗi lần nạp module (luật S15: T3Lab chung engine).
     """
 
     __namespace__ = clr_namespace('ManaSelectActionHandler')

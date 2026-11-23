@@ -9,7 +9,7 @@ this module without it. Test: dev/test_tools_model_domain.py.
 import logging
 
 MM_TO_FT = 1.0 / 304.8
-_log = logging.getLogger('T3Lab.finish_floors')
+_log = logging.getLogger('T3Lab.finish_floors')   # dialogs point it at pyRevit's logger
 _SWALLOWER = None
 
 
@@ -49,11 +49,12 @@ def _revit_version(doc):
 
 def floor_type_label(floor_type):
     """'Family: Type' as both windows list floor types."""
+    from Snippets._compat import elem_name      # IronPython hides ElementType.Name
     try:
         p = floor_type.LookupParameter("Type Name")
-        type_name = p.AsString() if p else floor_type.Name
+        type_name = p.AsString() if p else elem_name(floor_type)
     except Exception:
-        type_name = floor_type.Name
+        type_name = elem_name(floor_type)
     return u"{}: {}".format(floor_type.FamilyName or u"", type_name or u"")
 
 
@@ -157,7 +158,7 @@ class FloorGenerator(object):
         from Autodesk.Revit.DB import (BuiltInParameter, CurveArray, CurveLoop, Floor,
                                        SpatialElementBoundaryLocation,
                                        SpatialElementBoundaryOptions, Transaction)
-        from Snippets._compat import disposing
+        from Snippets._compat import committed, disposing
         self.last_error = None
         try:
             area_param = room.get_Parameter(BuiltInParameter.ROOM_AREA)
@@ -211,7 +212,8 @@ class FloorGenerator(object):
                                 struct_param.Set(1)
 
                     _silence(t)
-                    t.Commit()
+                    if not committed(t):
+                        return self._fail("Revit rolled the floor back")
 
             else:
                 floor_shape = room_boundaries[0]
@@ -233,7 +235,8 @@ class FloorGenerator(object):
                             param.Set(offset_ft)
 
                     _silence(t)
-                    t.Commit()
+                    if not committed(t):
+                        return self._fail("Revit rolled the floor back")
 
                 if new_floor and openings:
                     with disposing(Transaction(self.doc, "T3Lab: Create Floor Openings")) as t2:
@@ -350,7 +353,7 @@ class ThresholdGenerator(object):
         """(new floors, created, errors, error messages); one Transaction."""
         from Autodesk.Revit.DB import (BuiltInParameter, CurveLoop, Floor, Line, Transaction,
                                        XYZ)
-        from Snippets._compat import disposing
+        from Snippets._compat import committed, disposing
         offset_ft = offset_mm * MM_TO_FT
         modern = _revit_version(self.doc) >= 2022
 
@@ -452,7 +455,9 @@ class ThresholdGenerator(object):
                     error_messages.append("{}: {}".format(label, ex))
                     error_count += 1
 
-            t.Commit()
+            if not committed(t):
+                error_messages.append("Revit rolled the thresholds back")
+                return [], 0, error_count + created_count, error_messages
 
         return new_floors, created_count, error_count, error_messages
 

@@ -4,7 +4,7 @@ Doc: docs/agents/headless-tools.md. Test: dev/test_headless_tools.py."""
 from __future__ import unicode_literals
 
 from core.tool_specs import ToolSpec
-from core.tools._common import MAX_ROWS
+from core.tools._common import MAX_ROWS, int_ids
 
 
 def snap_diameters(values, fields, available):
@@ -43,7 +43,10 @@ def rebar_wizard(doc, args):
     kind_asked = args.get('kind')
     if kind_asked and kind_asked not in wiz.KINDS:
         return {'error': 'kind must be one of: {}.'.format(', '.join(wiz.KINDS))}
-    elements, ignored = wiz.hosts_from_ids(doc, args.get('element_ids') or [])
+    ids, bad = int_ids(args.get('element_ids'))
+    if bad:
+        return {'error': 'element_ids must be element ids: {}.'.format(', '.join(bad[:10]))}
+    elements, ignored = wiz.hosts_from_ids(doc, ids)
     hosts, out_of_scope = [], []
     for el in elements:
         section = wiz.read_section(doc, el)

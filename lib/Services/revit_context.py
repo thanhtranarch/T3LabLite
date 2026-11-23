@@ -129,11 +129,11 @@ def _remove_task(token):
 
 # ── Revit binding ─────────────────────────────────────────────────────────────
 HAS_REVIT_UI = False
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 try:
     import clr
     clr.AddReference('RevitAPIUI')
     from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
-    from Snippets._compat import clr_namespace
 
     class _ApiContextHandler(IExternalEventHandler):
         __namespace__ = clr_namespace('Services')

@@ -89,7 +89,12 @@ check('cad_imports delete is destructive, list / dry run are not',
       and not TS.is_destructive('cad_imports', {'operation': 'delete', 'dry_run': True})
       and not TS.is_destructive('cad_imports', {'operation': 'list'}))
 check('link_models never deletes, so ids read-back is allowed',
-      'ids' in SPECS['link_models'].verify and not SPECS['link_models'].destructive)
+      'ids' in SPECS['link_models'].verify)
+check('link_models: reloads clear Revit undo -> confirmed; linking is not',
+      TS.is_destructive('link_models', {'operation': 'reload_from'})
+      and TS.is_destructive('link_models', {'operation': 'set_worksets'})
+      and not TS.is_destructive('link_models', {'operation': 'link'})
+      and not TS.is_destructive('link_models', {'operation': 'reload_from', 'dry_run': True}))
 check('element ids accept "@set" handles',
       SPECS['cad_imports'].properties['element_ids']['items']['type'] == ['integer', 'string'])
 
@@ -175,6 +180,18 @@ if openpyxl is not None:
     sheet['B2'] = 'D01-NEW'
     sheet['C3'] = 1250
     wb.save(path)
+    before = os.path.getmtime(path)
+    r = TS.run('schedule_roundtrip', doc, {'operation': 'export', 'schedules': [sched.Id.Value],
+                                           'xlsx_path': out})
+    check('export over an edited workbook -> refused, file kept',
+          'overwrite=true' in r.get('error', '') and os.path.getmtime(path) == before, r)
+    r = TS.run('schedule_roundtrip', doc, {'operation': 'export', 'schedules': [sched.Id.Value],
+                                           'xlsx_path': out, 'dry_run': True})
+    check('export dry run names the file it would overwrite',
+          r.get('would_overwrite') == 'doors.xlsx', r)
+    check('overwrite=true asks the person first',
+          TS.is_destructive('schedule_roundtrip', {'operation': 'export', 'overwrite': True})
+          and not TS.is_destructive('schedule_roundtrip', {'operation': 'export'}))
     r = TS.run('schedule_roundtrip', doc, {'operation': 'preview', 'xlsx_path': path})
     got = sorted((c['field'], c['old'], c['new']) for c in r['changes'])
     check('preview: the two edited cells, nothing written',

@@ -47,7 +47,6 @@ import os
 from Snippets._compat import (
     create_rebar_from_curves,
     add_to_assembly_of,
-    clr_namespace,
     disposing,
     eid_value,
     elem_name,
@@ -1061,6 +1060,7 @@ def default_hook_name(hook_names):
 _HANDLERS = None
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 def _warning_swallower():
     """IFailuresPreprocessor that dismisses warnings and counts them (lazy, once)."""
     global _HANDLERS

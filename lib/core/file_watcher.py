@@ -60,6 +60,7 @@ from __future__ import unicode_literals
 
 import threading
 import json
+from core import jsonsafe
 import os
 import sys
 import time
@@ -112,9 +113,8 @@ except Exception:
 
 # ─── ExternalEvent handler ─────────────────────────────────────────────────────
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 if HAS_REVIT_UI:
-    from Snippets._compat import clr_namespace
-
     class _FileTaskEventHandler(IExternalEventHandler):
         __namespace__ = clr_namespace('Core')
         """
@@ -481,7 +481,7 @@ class TaskFileWatcher(object):
         # Always write structured JSON
         try:
             with open(RESULT_FILE, 'w') as f:
-                json.dump(result, f, indent=2)
+                f.write(jsonsafe.dumps(result, indent=2))
         except Exception:
             pass
 

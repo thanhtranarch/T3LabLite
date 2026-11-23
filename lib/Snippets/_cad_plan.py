@@ -440,7 +440,8 @@ def group_mapping(mapping):
         if not isinstance(layers, (list, tuple)):
             layers = [layers] if layers else []
         key = json.dumps([entry.get("element"), entry.get("type"), entry.get("level"),
-                          entry.get("options") or {}], sort_keys=True, default=str)
+                          entry.get("options") or {}], sort_keys=True, default=str,
+                         ensure_ascii=False)     # "Sàn": IronPython's ASCII escaper fails
         if key not in groups:
             groups[key] = (entry, [])
             order.append(key)

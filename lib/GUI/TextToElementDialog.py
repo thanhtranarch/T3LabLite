@@ -16,7 +16,6 @@ clr.AddReference('RevitAPIUI')
 from pyrevit import forms
 from GUI.WPF_Base import T3WPFWindow, to_items_source
 from Snippets._units import project_length_unit
-from Snippets._compat import clr_namespace
 
 from Autodesk.Revit.DB import (
     FilteredElementCollector, BuiltInCategory, BuiltInParameter,
@@ -79,6 +78,7 @@ class _CategoryItem(object):
 # SELECTION FILTER
 # =============================================================================
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class TextNoteSelectionFilter(ISelectionFilter):
     __namespace__ = clr_namespace('TextToElement')
     """ISelectionFilter that only allows TextNote elements."""

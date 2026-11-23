@@ -14,7 +14,7 @@ import math
 from Services.point_cloud_analysis import (
     DetectedColumn, DetectedFloor, DetectedOpening, DetectedRoof, DetectedStair,
     DetectedWall, mm_to_ft)
-from Snippets._compat import clr_namespace, disposing
+from Snippets._compat import clr_namespace, committed, disposing
 
 try:
     import clr
@@ -30,6 +30,16 @@ try:
         from Autodesk.Revit.DB.Structure import StructuralType
 except Exception:   # outside Revit: only the pure half is used
     pass
+
+def _footprint_roof(doc, curves, level, roof_type):
+    """NewFootPrintRoof; its last parameter is `out ModelCurveArray`."""
+    box = getattr(clr, 'Reference', None)
+    if box is not None:                     # IronPython: a StrongBox for the out value
+        return doc.Create.NewFootPrintRoof(curves, level, roof_type, box[DB.ModelCurveArray]())
+    # pythonnet 3 has no clr.Reference: pass a placeholder, get (roof, curves) back.
+    out = doc.Create.NewFootPrintRoof(curves, level, roof_type, DB.ModelCurveArray())
+    return out[0] if isinstance(out, tuple) else out
+
 
 try:
     from pyrevit import script as _script
@@ -202,7 +212,8 @@ class ElementBuilder(object):
             try:
                 wall = Wall.Create(self.doc, wline, wt.Id, lv.Id,
                                    height_ft, 0.0, False, False)
-                t.Commit()
+                if not committed(t):
+                    return None           # rolled back by Revit
                 return wall
             except Exception as ex:
                 logger.error("build_wall: {}".format(ex))
@@ -234,7 +245,8 @@ class ElementBuilder(object):
                 self._set_offset_from_level(
                     floor, BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM,
                     d['z_ft'] - lv.Elevation)
-                t.Commit()
+                if not committed(t):
+                    return None           # rolled back by Revit
                 return floor
             except Exception as ex:
                 logger.error("build_floor: {}".format(ex))
@@ -275,7 +287,8 @@ class ElementBuilder(object):
                     for curve in cl:
                         ca.Append(curve)
                     ceiling = self.doc.Create.NewFloor(ca, ft, lv, False)
-                t.Commit()
+                if not committed(t):
+                    return None           # rolled back by Revit
                 return ceiling
             except Exception as ex:
                 logger.error("build_ceiling: {}".format(ex))
@@ -311,7 +324,8 @@ class ElementBuilder(object):
                     sym.Activate()
                 col = self.doc.Create.NewFamilyInstance(
                     pt, sym, lv, StructuralType.Column)
-                t.Commit()
+                if not committed(t):
+                    return None           # rolled back by Revit
                 return col
             except Exception as ex:
                 logger.error("build_column: {}".format(ex))
@@ -360,7 +374,8 @@ class ElementBuilder(object):
                     non_structural = StructuralType.NonStructural
                 inst = self.doc.Create.NewFamilyInstance(
                     pt, sym, host_wall_revit_elem, lv, non_structural)
-                t.Commit()
+                if not committed(t):
+                    return None           # rolled back by Revit
                 return inst
             except Exception as ex:
                 logger.error("build_opening: {}".format(ex))
@@ -396,14 +411,12 @@ class ElementBuilder(object):
                     p2 = pts[(i + 1) % n]
                     if p1.DistanceTo(p2) > 0.01:
                         ca.Append(Line.CreateBound(p1, p2))
-                # NewFootPrintRoof has an 'out ModelCurveArray' parameter —
-                # IronPython requires a clr.Reference box for it
-                ma_ref = clr.Reference[DB.ModelCurveArray]()
-                roof = self.doc.Create.NewFootPrintRoof(ca, lv, rt, ma_ref)
+                roof = _footprint_roof(self.doc, ca, lv, rt)
                 self._set_offset_from_level(
                     roof, BuiltInParameter.ROOF_LEVEL_OFFSET_PARAM,
                     z_ft - lv.Elevation)
-                t.Commit()
+                if not committed(t):
+                    return None           # rolled back by Revit
                 return roof
             except Exception as ex:
                 logger.error("build_roof: {}".format(ex))
@@ -428,6 +441,7 @@ class ElementBuilder(object):
         skipped       = {'Stair': 0}
         errors        = 0
         created_walls = {}   # id(detected wall _data dict) → Revit Wall element
+        wall_order = []      # creation order: IronPython 2.7 dicts are unordered
 
         def made(element):
             if element and created is not None:
@@ -445,6 +459,7 @@ class ElementBuilder(object):
                     if w:
                         counts['Wall'] += 1
                         created_walls[id(elem._data)] = w
+                        wall_order.append(w)
                     else:
                         errors += 1
 
@@ -477,10 +492,7 @@ class ElementBuilder(object):
 
             # Pass 3: doors / windows — host into the wall each opening was
             # detected in; fall back to any created wall
-            fallback_wall = None
-            for w in created_walls.values():
-                fallback_wall = w
-                break
+            fallback_wall = wall_order[0] if wall_order else None
             for elem in elements:
                 if not elem.Include:
                     continue

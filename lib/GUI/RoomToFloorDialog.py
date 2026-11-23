@@ -30,6 +30,8 @@ from Snippets.finish_floors import FloorGenerator
 
 XAML_FILE = os.path.join(os.path.dirname(__file__), 'Tools', 'RoomToFloor.xaml')
 logger = script.get_logger()
+import Snippets.finish_floors as _finish_floors       # noqa: E402
+_finish_floors._log = logger      # per-room / per-door errors to the pyRevit output
 
 
 class RoomItem(object):

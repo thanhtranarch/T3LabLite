@@ -44,7 +44,7 @@ from Autodesk.Revit.DB import (
 )
 from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
 from Autodesk.Revit.UI.Selection import ObjectType
-from Snippets._compat import clr_namespace, disposing
+from Snippets._compat import disposing
 # Coordinates are shown and typed in the project's length unit; the rows
 # keep mm internally (odd / round / edit checks). Read per load, not at import.
 from Snippets._units import project_length_unit, paper_unit, MILLIMETERS
@@ -370,6 +370,7 @@ _T = _TypeCache()
 # EXTERNAL EVENT HANDLER
 # ==================================================
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class LocationManagerHandler(IExternalEventHandler):
     __namespace__ = clr_namespace('ManaLoca')
 

@@ -5,7 +5,7 @@ cut_wall_openings, create_door_thresholds against a fake Revit API.
 The shipped Snippets/finish_floors.py, Snippets/wall_tools.py and
 Services/join_service.py run here; only Autodesk / System / pyrevit are faked.
 
-Run:  python lite_guard/test_tools_model_domain.py
+Run:  python dev/test_tools_model_domain.py
 """
 import ast
 import io
@@ -24,7 +24,7 @@ except Exception:
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(REPO, 'lib')
 sys.path.insert(0, LIB)
-sys.path.insert(0, os.path.join(REPO, 'lite_guard'))
+sys.path.insert(0, os.path.join(REPO, 'dev'))
 os.environ['APPDATA'] = tempfile.mkdtemp(prefix='t3lab_model_tools_test_')
 
 logging.getLogger('T3Lab.finish_floors').addHandler(logging.NullHandler())
@@ -683,6 +683,17 @@ r = TS.run('auto_join', jdoc, {'element_ids': [1], 'protect_embedded': False,
 check('nothing left to join -> success false + message (no false read-back alarm)',
       r['success'] is False and 'Nothing to join' in r['message']
       and W.verify('auto_join', {}, r, 0, exists_in(jdoc), changes=(0, 0, 0)) is None, r)
+# Already joined, wrong cutter: the order is switched and committed, so it is a change.
+JS.JoinGeometryUtils = SimpleNamespace(
+    AreElementsJoined=lambda d, a, b: True, JoinGeometry=lambda d, a, b: None,
+    IsCuttingElementInJoin=lambda d, a, b: False, SwitchJoinOrder=lambda d, a, b: None)
+r = TS.run('auto_join', jdoc, {'element_ids': [1], 'protect_embedded': False,
+                               'rules': [{'priority': 'Walls', 'join_with': 'Floors'}]})
+check('only join order switched -> success, counted, not "Nothing to join"',
+      r['success'] and r['applied'] and r['pairs_changed'] == 0
+      and r['join_order_switched'] == 2 and 'message' not in r, r)
+check('dry run says switches are not counted',
+      'switch_order' in TS.run('auto_join', jdoc, {'dry_run': True})['note'])
 
 
 # ── declarations / server ───────────────────────────────────────────────────

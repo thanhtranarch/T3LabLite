@@ -51,6 +51,7 @@ __title__ = "Drawing Clone"
 
 import io
 import json
+from core import jsonsafe
 import math
 import os
 import time
@@ -440,7 +441,7 @@ def save_presets(path, presets, last):
         if folder and not os.path.isdir(folder):
             os.makedirs(folder)
         with io.open(path, "w", encoding="utf-8") as handle:
-            handle.write(u"%s" % json.dumps(payload, indent=2, sort_keys=True))
+            handle.write(jsonsafe.dumps(payload, indent=2, sort_keys=True))
     except (IOError, OSError, TypeError, ValueError) as exc:
         return short_error(exc)
     return None
@@ -1427,6 +1428,7 @@ def read_source(doc, assembly, views_index=None):
 _ASSEMBLY_FILTER = None
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 def assembly_selection_filter():
     """ISelectionFilter that accepts AssemblyInstances only (Pick in model, D8).
 
@@ -1436,7 +1438,6 @@ def assembly_selection_filter():
     if _ASSEMBLY_FILTER is None:
         from Autodesk.Revit.DB import AssemblyInstance
         from Autodesk.Revit.UI.Selection import ISelectionFilter
-        from Snippets._compat import clr_namespace
 
         class AssemblyFilter(ISelectionFilter):
             __namespace__ = clr_namespace('CloneDrawing')

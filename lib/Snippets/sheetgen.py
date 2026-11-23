@@ -210,9 +210,10 @@ def find_view_types(doc):
     floor = ceiling = elevation = None
     for vt in DB.FilteredElementCollector(doc).OfClass(DB.ViewFamilyType) \
             .WhereElementIsElementType().ToElements():
-        if vt.FamilyName == 'Floor Plan' and floor is None:
+        # ViewFamily, not FamilyName: the family name is translated on a localized Revit.
+        if vt.ViewFamily == DB.ViewFamily.FloorPlan and floor is None:
             floor = vt.Id
-        elif vt.FamilyName == 'Ceiling Plan' and ceiling is None:
+        elif vt.ViewFamily == DB.ViewFamily.CeilingPlan and ceiling is None:
             ceiling = vt.Id
         elif vt.ViewFamily == DB.ViewFamily.Elevation and elevation is None:
             elevation = vt.Id

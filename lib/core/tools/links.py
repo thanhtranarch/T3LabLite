@@ -327,6 +327,8 @@ SPECS = [
             'dry_run': {'type': 'boolean'},
         },
         required=['operation'], effect='write', placement='modify', verify=('ids', 'self'),
+        # A reload clears the whole Revit undo history: the person confirms.
+        destructive=('operation', ('reload_from', 'set_worksets')),
         title_vi='Link hàng loạt file Revit, mở đóng workset trong link',
         keywords=['link revit', 'liên kết mô hình', 'batch link', 'workset link', 'reload from'],
         ribbon='BatchLink.pushbutton'),

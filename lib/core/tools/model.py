@@ -8,27 +8,9 @@ Test: dev/test_tools_model_domain.py.
 from __future__ import unicode_literals
 
 from core.tool_specs import ToolSpec
-from core.tools._common import MAX_ROWS
+from core.tools._common import MAX_ROWS, int_ids
 
 _IDS = {'type': 'array', 'items': {'type': ['integer', 'string']}}
-
-
-def int_ids(value):
-    """(ids, bad) from ints or digit strings ("@set" is expanded by the server)."""
-    if value is None:
-        return [], []
-    if not isinstance(value, (list, tuple)):
-        value = [value]
-    ids, bad = [], []
-    for v in value:
-        try:
-            i = int('{}'.format(v).strip())
-        except (TypeError, ValueError):
-            bad.append('{}'.format(v))
-            continue
-        if i not in ids:
-            ids.append(i)
-    return ids, bad
 
 
 def pick_name(items, wanted, name_of):
@@ -119,6 +101,9 @@ def auto_join(doc, args):
         rows = js.count_pairs(rules, scope, title, doc=doc, selected_ids=ids or None)
         out.update(dry_run=True, applied=False, per_rule=rows,
                    pairs_to_change=sum(r['to_change'] for r in rows))
+        if mode == 'join' and args.get('switch_order', True) is not False:
+            out['note'] = ('switch_order is on: pairs already joined may also get their '
+                           'join order switched (not counted here).')
         return out
 
     stats = {}
@@ -126,7 +111,11 @@ def auto_join(doc, args):
         rules, scope, title, args.get('switch_order', True) is not False, doc=doc,
         protect_embedded=args.get('protect_embedded', True) is not False, stats=stats,
         selected_ids=ids or None)
-    out.update(applied=bool(changed), pairs_changed=changed, skipped=skipped, errors=errors)
+    switched = stats.get('order_switched') or 0
+    out.update(applied=bool(changed or switched), pairs_changed=changed, skipped=skipped,
+               errors=errors)
+    if switched:
+        out['join_order_switched'] = switched       # pairs that were already joined
     if stats.get('protected'):
         out['embedded_kept_visible'] = stats['protected']
     if stats.get('duplicates'):
@@ -136,7 +125,7 @@ def auto_join(doc, args):
         out['success'] = False
         out['error'] = '{} {}'.format(message, 'Resolve any Revit failure dialog and check '
                                                'the model before retrying.')
-    elif not changed:
+    elif not (changed or switched):
         # No change, so the must_change read-back would fail: report it as nothing done.
         out['success'] = False
         out['message'] = ('Nothing to {}: no intersecting pair in {} needed it. Try another '

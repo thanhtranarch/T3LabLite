@@ -26,6 +26,7 @@ from __future__ import unicode_literals
 import hashlib
 import io
 import json
+from core import jsonsafe
 import os
 import threading
 import time
@@ -126,9 +127,7 @@ def _disk_put(key, fp, pages, reason):
         'saved': time.strftime('%Y-%m-%d %H:%M:%S'),
     }
     try:
-        text = json.dumps(payload, ensure_ascii=True)
-        if isinstance(text, bytes):
-            text = text.decode('ascii')
+        text = jsonsafe.dumps(payload)
         with io.open(_disk_path(key), 'w', encoding='utf-8') as f:
             f.write(text)
     except Exception:

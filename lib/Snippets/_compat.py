@@ -22,7 +22,10 @@ def eid_value(element_id):
         try:
             return int(element_id.IntegerValue)   # Revit 2023 and earlier
         except Exception:
-            return -1
+            try:
+                return int(element_id)        # IronPython long / System.Int64
+            except Exception:
+                return -1
 
 
 # Cached constructor strategy: None = not probed yet, False = ElementId(int)
@@ -653,6 +656,13 @@ def clr_namespace(name):
     return 'T3Lab.{}_{}'.format(name, uuid.uuid4().hex[:8])
 
 
+def committed(transaction):
+    """Commit; False when Revit rolled it back while processing failures, in which
+    case every element the transaction created is gone (its Id is invalid)."""
+    from Autodesk.Revit.DB import TransactionStatus
+    return transaction.Commit() == TransactionStatus.Committed
+
+
 def fold(text):
     """Case-insensitive key: str.casefold on CPython 3, lower() on IronPython 2.7."""
     try:
@@ -662,11 +672,43 @@ def fold(text):
 
 
 def replace_file(src, dst):
-    """os.replace (atomic on CPython 3); IronPython 2.7 has none: remove, rename."""
+    """Move src over dst; a failed move leaves dst as it was and raises.
+
+    CPython 3: os.replace. IronPython 2.7 has none: .NET File.Replace / File.Move,
+    else dst -> dst.t3bak, src -> dst, drop the backup (put back on failure).
+    Test: lite_guard/test_compat_replace_file.py.
+    """
     import os
     rep = getattr(os, 'replace', None)
     if rep is not None:
         return rep(src, dst)
-    if os.path.exists(dst):
-        os.remove(dst)
-    os.rename(src, dst)
+    try:
+        from System.IO import File
+    except ImportError:
+        File = None
+    if File is not None:
+        try:
+            if os.path.exists(dst):
+                File.Replace(src, dst, None)
+            else:
+                File.Move(src, dst)
+            return None
+        except Exception:
+            pass                    # e.g. another volume: the rename path below
+    if not os.path.exists(dst):
+        os.rename(src, dst)
+        return None
+    bak = dst + '.t3bak'
+    if os.path.exists(bak):
+        os.remove(bak)
+    os.rename(dst, bak)
+    try:
+        os.rename(src, dst)
+    except Exception:
+        os.rename(bak, dst)
+        raise
+    try:
+        os.remove(bak)
+    except EnvironmentError:
+        pass
+    return None

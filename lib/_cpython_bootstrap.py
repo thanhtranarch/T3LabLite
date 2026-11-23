@@ -294,7 +294,7 @@ def _log_diagnosis():
                 return
             if size > _BOOTSTRAP_LOG_MAX_BYTES:
                 try:
-                    os.replace(path, path + '.1')
+                    os.replace(path, path + '.1')  # ipy-ok: log rotation, 2.7 drops the log
                 except Exception:
                     os.remove(path)
         import io as _io

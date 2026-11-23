@@ -576,7 +576,8 @@ def spatial_issues(schema, expanded, model):
         return []
     geometry = [g for g in (expanded.get('geometry') or [])]
     try:
-        key = json.dumps([geometry, schema.get('joints')], sort_keys=True, default=str)
+        key = json.dumps([geometry, schema.get('joints')], sort_keys=True, default=str,
+                         ensure_ascii=False)
     except (TypeError, ValueError):
         key = None
     if key is not None and key in _CACHE:

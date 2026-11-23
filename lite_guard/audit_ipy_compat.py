@@ -15,6 +15,15 @@ logic modules the windows run under CPython).
   I4  nonlocal / keyword-only args / annotations / walrus / async / yield from /
       `raise ... from` / zero-arg super()           SyntaxError or TypeError
   I5  os.replace, os.makedirs(exist_ok=), pathlib, typing   missing on 2.7
+  I6  json.dump(s) without ensure_ascii=False  IronPython's ASCII escaper raises on
+      accented text -> core.jsonsafe.dumps (ASCII, CPython bytes unchanged) or
+      ensure_ascii=False (text written via io.open(encoding='utf-8') / in memory)
+  I7  `except OSError` around open()       2.7 IOError is not an OSError -> EnvironmentError
+  I8  open(.., 'w'/'a', encoding='utf-8-sig'/'utf-16')  IronPython writes a BOM on
+      every write -> encoding='utf-8' + write the BOM (u'\\ufeff') once
+  I9  list comprehension rebinds an `except .. as name` used after it (2.7 leaks
+      the loop variable) -> rename the loop variable
+  I10 '\\uXXXX' in a plain str without unicode_literals   6 literal chars on 2.7 -> u'...'
 
 A line ending in `# ipy-ok: <reason>` is exempt (a guarded fallback).
 
@@ -24,12 +33,13 @@ Run:  python3 lite_guard/audit_ipy_compat.py [--quiet] [--list]
 import ast
 import io
 import os
+import re
 import sys
+import tokenize
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(ROOT, 'lib')
 ENTRY = ['core/server.py', 'core/mcp_ipy_host.py', 'core/tool_specs.py']
-PACKAGES = ('core', 'Snippets', 'Services', 'Intelligence', 'GUI', 'Selection', 'Pattern')
 
 # Module (lib-relative path) -> why its CPython-only code is never reached under
 # IronPython. Keep this short: fix the code instead when the server can call it.
@@ -43,14 +53,19 @@ def _rel(path):
 
 def _resolve(dotted):
     """lib-relative .py path of a dotted module name, or None (stdlib / .NET)."""
-    parts = dotted.split('.')
-    if parts[0] not in PACKAGES:
-        return None
-    base = os.path.join(LIB, *parts)
+    base = os.path.join(LIB, *dotted.split('.'))
     for cand in (base + '.py', os.path.join(base, '__init__.py')):
         if os.path.isfile(cand):
             return _rel(cand)
     return None
+
+
+def _package(rel, level):
+    """Dotted package a `from .<level>` import in lib module `rel` starts from."""
+    parts = rel[:-3].split('/')[:-1]        # pkg/mod.py and pkg/__init__.py -> pkg
+    if level > 1:
+        parts = parts[:len(parts) - (level - 1)]
+    return '.'.join(parts)
 
 
 def imports_of(rel):
@@ -65,12 +80,19 @@ def imports_of(rel):
                 r = _resolve(a.name)
                 if r:
                     out.add(r)
-        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-            r = _resolve(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                pkg = _package(rel, node.level)
+                mod = '.'.join(p for p in (pkg, node.module) if p)
+            else:
+                mod = node.module
+            if not mod:
+                continue
+            r = _resolve(mod)
             if r:
                 out.add(r)
             for a in node.names:            # from core import tool_specs
-                r = _resolve('{}.{}'.format(node.module, a.name))
+                r = _resolve('{}.{}'.format(mod, a.name))
                 if r:
                     out.add(r)
     return out
@@ -95,9 +117,121 @@ _PY3_MODULES = ('pathlib', 'typing', 'concurrent', 'asyncio', 'dataclasses', 'en
                 'secrets', 'statistics', 'zoneinfo', 'graphlib')
 
 
-def _future_print(tree):
+def _future(tree, name):
     return any(isinstance(n, ast.ImportFrom) and n.module == '__future__'
-               and any(a.name == 'print_function' for a in n.names) for n in tree.body)
+               and any(a.name == name for a in n.names) for n in tree.body)
+
+
+def _json_names(tree):
+    """(names bound to the json module, names bound to json.dump / json.dumps)."""
+    mods, funcs = set(), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name == 'json':
+                    mods.add(a.asname or 'json')
+        elif isinstance(n, ast.ImportFrom) and n.module == 'json' and not n.level:
+            for a in n.names:
+                if a.name in ('dump', 'dumps'):
+                    funcs.add(a.asname or a.name)
+    return mods, funcs
+
+
+def _is_json_dump(call, mods, funcs):
+    f = call.func
+    if isinstance(f, ast.Attribute) and f.attr in ('dump', 'dumps'):
+        return isinstance(f.value, ast.Name) and f.value.id in mods
+    return isinstance(f, ast.Name) and f.id in funcs
+
+
+def _ascii_false(call):
+    return any(k.arg == 'ensure_ascii' and isinstance(k.value, ast.Constant)
+               and k.value.value is False for k in call.keywords)
+
+
+_OPEN_FUNCS = {'open': (1, 3), 'io.open': (1, 3), 'codecs.open': (1, 2)}   # mode, encoding pos
+
+
+def _open_kind(call):
+    f = call.func
+    if isinstance(f, ast.Name) and f.id == 'open':
+        return 'open'
+    if (isinstance(f, ast.Attribute) and f.attr == 'open' and isinstance(f.value, ast.Name)
+            and f.value.id in ('io', 'codecs', '_io')):
+        return 'codecs.open' if f.value.id == 'codecs' else 'io.open'
+    return None
+
+
+def _arg(call, pos, name):
+    for k in call.keywords:
+        if k.arg == name:
+            return k.value
+    return call.args[pos] if len(call.args) > pos else None
+
+
+def _const_str(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+_BOM_ENCODINGS = ('utf-8-sig', 'utf_8_sig', 'utf8-sig', 'utf-16', 'utf_16', 'utf16')
+_IO_CATCHERS = ('IOError', 'EnvironmentError', 'Exception', 'BaseException')
+
+
+def _handler_names(handler):
+    t = handler.type
+    elts = t.elts if isinstance(t, ast.Tuple) else [t] if t is not None else []
+    return [e.id if isinstance(e, ast.Name) else getattr(e, 'attr', '') for e in elts]
+
+
+def _scope_walk(nodes):
+    """ast.walk over `nodes` without entering nested functions / classes / lambdas."""
+    todo = list(nodes)
+    while todo:
+        n = todo.pop()
+        yield n
+        for c in ast.iter_child_nodes(n):
+            if not isinstance(c, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                                  ast.Lambda)):
+                todo.append(c)
+
+
+def _comp_leaks(handler):
+    """List comprehensions in an `except .. as name` body that rebind name before a use."""
+    name = handler.name
+    body = list(_scope_walk(handler.body))
+    out = []
+    for comp in body:
+        if not isinstance(comp, ast.ListComp):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == name
+                   for g in comp.generators for t in ast.walk(g.target)):
+            continue
+        end = (comp.end_lineno, comp.end_col_offset)
+        if any(isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)
+               and (n.lineno, n.col_offset) >= end for n in body):
+            out.append(comp)
+    return out
+
+
+_U_ESCAPE = re.compile(r'(?<!\\)(?:\\\\)*\\[uUN]')
+
+
+def _plain_u_escapes(src):
+    """Lines of plain (no u/r/b/f prefix) str literals holding a backslash-u/U/N escape."""
+    if '\\u' not in src and '\\U' not in src and '\\N' not in src:
+        return []
+    out = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type != tokenize.STRING:
+                continue
+            text = tok.string
+            prefix = text[:len(text) - len(text.lstrip('rRuUbBfF'))].lower()
+            if not prefix and _U_ESCAPE.search(text):
+                out.append(tok.start[0])
+    except (tokenize.TokenError, SyntaxError):
+        pass
+    return out
 
 
 def scan(rel):
@@ -112,7 +246,8 @@ def scan_source(src):
     except SyntaxError as ex:
         return [(ex.lineno or 0, 'I4', 'not valid Python 3 either: {}'.format(ex.msg))]
     out = []
-    future_print = _future_print(tree)
+    future_print = _future(tree, 'print_function')
+    json_mods, json_funcs = _json_names(tree)
     lines = src.splitlines()
 
     def hit(node, code, text):
@@ -142,6 +277,31 @@ def scan_source(src):
             elif (isinstance(f, ast.Attribute) and f.attr == 'makedirs'
                   and any(k.arg == 'exist_ok' for k in node.keywords)):
                 hit(node, 'I5', 'os.makedirs(exist_ok=)')
+            elif _is_json_dump(node, json_mods, json_funcs) and not _ascii_false(node):
+                hit(node, 'I6', 'json.dump(s) escapes ASCII -> core.jsonsafe.dumps(), '
+                                'or ensure_ascii=False for text kept in memory / io.open utf-8')
+            kind = _open_kind(node)
+            if kind:
+                mpos, epos = _OPEN_FUNCS[kind]
+                mode = _const_str(_arg(node, mpos, 'mode')) or ''
+                enc = (_const_str(_arg(node, epos, 'encoding')) or '').lower()
+                if enc in _BOM_ENCODINGS and any(c in mode for c in 'wax'):
+                    hit(node, 'I8', "{} writing '{}' (BOM on every write) -> encoding='utf-8' "
+                                    "and write u'\\ufeff' once".format(kind, enc))
+        elif isinstance(node, ast.Try):
+            opens = any(isinstance(n, ast.Call) and _open_kind(n)
+                        for b in node.body for n in ast.walk(b))
+            for h in node.handlers:
+                names = _handler_names(h)
+                if (opens and 'OSError' in names
+                        and not any(n in _IO_CATCHERS for n in names)):
+                    hit(h, 'I7', 'except OSError around open() misses IOError on 2.7 '
+                                 '-> except EnvironmentError')
+                if h.name:
+                    for comp in _comp_leaks(h):
+                        hit(comp, 'I9', "list comprehension rebinds '{}' from `except .. as "
+                                        "{}` (2.7 leaks it) -> rename the loop variable"
+                                        .format(h.name, h.name))
         elif isinstance(node, ast.Nonlocal):
             hit(node, 'I4', 'nonlocal')
         elif isinstance(node, (ast.AsyncFunctionDef, ast.Await, ast.YieldFrom, ast.NamedExpr)):
@@ -164,6 +324,10 @@ def scan_source(src):
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             if node.module.split('.')[0] in _PY3_MODULES:
                 hit(node, 'I5', 'from {} import'.format(node.module))
+    if not _future(tree, 'unicode_literals'):
+        for line in _plain_u_escapes(src):
+            hit(type('L', (), {'lineno': line})(), 'I10',
+                "'\\u..' in a plain str is 6 literal chars on 2.7 -> u'...' prefix")
     return sorted(out)
 
 

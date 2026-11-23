@@ -196,7 +196,7 @@ def _append(line):
     path = log_path()
     if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
         try:
-            os.replace(path, path + '.1')
+            os.replace(path, path + '.1')  # ipy-ok: log rotation, 2.7 drops the log
         except Exception:
             os.remove(path)
     with io.open(path, 'a', encoding='utf-8') as f:

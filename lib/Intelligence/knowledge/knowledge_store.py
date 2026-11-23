@@ -23,6 +23,7 @@ from __future__ import unicode_literals
 import hashlib
 import io
 import json
+from core import jsonsafe
 import os
 import threading
 import time
@@ -61,9 +62,7 @@ def _doc_id_for(path):
 
 
 def _write_json(path, data):
-    payload = json.dumps(data, ensure_ascii=True)
-    if isinstance(payload, bytes):
-        payload = payload.decode('ascii')
+    payload = jsonsafe.dumps(data)
     with io.open(path, 'w', encoding='utf-8') as f:
         f.write(payload)
 

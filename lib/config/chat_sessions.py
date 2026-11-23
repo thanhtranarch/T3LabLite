@@ -151,13 +151,8 @@ def _read_json(path):
 
 def _write_json(path, data):
     """Serialize first, then write in one go (a failed encode never truncates)."""
-    try:
-        from core import jsonsafe
-        payload = jsonsafe.dumps(data, indent=2)
-    except Exception:
-        payload = json.dumps(data, ensure_ascii=True, indent=2)
-    if isinstance(payload, bytes):
-        payload = payload.decode('ascii')
+    from core import jsonsafe
+    payload = jsonsafe.dumps(data, indent=2)
     with io.open(path, 'w', encoding='utf-8') as f:
         f.write(payload)
 

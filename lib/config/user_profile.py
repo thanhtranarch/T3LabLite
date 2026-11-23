@@ -24,6 +24,7 @@ __title__  = "User Profile"
 import io
 import os
 import json
+from core import jsonsafe
 import datetime
 
 # Lite keeps the user's name in its own file (config/lite_user.py), never a
@@ -102,9 +103,7 @@ class UserProfile(object):
             # json.dump(..., ensure_ascii=False) on a bytes-mode file dies
             # with UnicodeEncodeError under IronPython 2.7 (the default name
             # "Thạnh" alone triggers it), truncating the profile to 0 bytes.
-            data = json.dumps(self._data, indent=2, ensure_ascii=True)
-            if isinstance(data, bytes):
-                data = data.decode('ascii')
+            data = jsonsafe.dumps(self._data, indent=2)
             with io.open(self._path, 'w', encoding='utf-8') as f:
                 f.write(data)
             return True

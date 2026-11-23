@@ -34,6 +34,7 @@ from __future__ import unicode_literals
 import os
 import sys
 import json
+from core import jsonsafe
 import time
 import re
 import uuid
@@ -389,7 +390,7 @@ class TelemetryService(object):
             for k, v in arguments.items():
                 try:
                     # Filter out huge payloads
-                    val_str = json.dumps(v)
+                    val_str = json.dumps(v, ensure_ascii=False)
                     if len(val_str) < 1000:
                         details[k] = v
                     else:
@@ -447,7 +448,7 @@ class TelemetryService(object):
                 payload["timestamp"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
                 url = cls.get_tracking_url()
-                json_data = json.dumps(payload).encode("utf-8")
+                json_data = jsonsafe.dumps(payload).encode("utf-8")
 
                 sent = False
                 if urlopen is not None and Request is not None:
@@ -470,7 +471,7 @@ class TelemetryService(object):
                     client = WebClient()
                     client.Headers.Add("Content-Type", "application/json")
                     client.Headers.Add("User-Agent", "T3Lab-Lite-Telemetry/1.0")
-                    client.UploadString(url, "POST", json.dumps(payload))
+                    client.UploadString(url, "POST", jsonsafe.dumps(payload))
             except Exception:
                 # Silently catch all network issues -- telemetry must never break user workflows
                 pass

@@ -119,7 +119,7 @@ def save_state(choices, path=None):
         folder = os.path.dirname(path)
         if folder and not os.path.isdir(folder):
             os.makedirs(folder)
-        text = json.dumps({"split_current": merged}, indent=2, sort_keys=True)
+        text = json.dumps({"split_current": merged}, indent=2, sort_keys=True, ensure_ascii=False)
         with io.open(path, "w", encoding="utf-8") as fh:
             fh.write("%s\n" % text)
         return True

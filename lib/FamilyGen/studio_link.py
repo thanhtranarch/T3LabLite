@@ -45,12 +45,8 @@ def _write(name, data, root=None):
     tmp = '{}.{}.tmp'.format(path, uuid.uuid4().hex[:6])
     with io.open(tmp, 'w', encoding='utf-8') as handle:
         handle.write(json.dumps(data, ensure_ascii=False))
-    try:
-        os.replace(tmp, path)
-    except AttributeError:            # very old runtimes without os.replace
-        if os.path.exists(path):
-            os.remove(path)
-        os.rename(tmp, path)
+    from Snippets._compat import replace_file      # IronPython 2.7: no os.replace
+    replace_file(tmp, path)
 
 
 def _read(name, root=None):
@@ -260,7 +256,7 @@ def patch_family(schema, set_fields=None, parts=None):
     """
     if not isinstance(schema, dict):
         raise ValueError('There is no family to patch.')
-    out = json.loads(json.dumps(schema))
+    out = json.loads(json.dumps(schema, ensure_ascii=False))
     notes = []
     for key, value in (set_fields or {}).items():
         if key == 'geometry':

@@ -803,7 +803,7 @@ class T3WPFWindow(Window):
     def _load_via_xaml_reader(self, xaml_content):
         """Hydrates Window via System.Windows.Markup.XamlReader with multi-strategy fallbacks."""
         if xaml_content is not None:
-            xaml_content = xaml_content.lstrip('\ufeff \t\r\n')
+            xaml_content = xaml_content.lstrip(u'\ufeff \t\r\n')
         clean_xaml, event_bindings, named_elements = _sanitize_xaml_cached(
             xaml_content, getattr(self, '_sanitize_cache_key', None))
         self._t3_step('sanitize')

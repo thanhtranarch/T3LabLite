@@ -539,7 +539,8 @@ class MCPControlWindow(T3WPFWindow):
             self._apply_client_row(
                 widgets, status, 'T3Lab' if revit else server_name,
                 'Rewrite the T3Lab entry — use after changing the port' if revit
-                else 'Rewrite the {} entry'.format(server_name),
+                else 'Download and install the newest {} add-in, then rewrite the {} entry'.format(
+                    _label, server_name),
                 enabled=revit or self._addin_installed or self._addin_installable)
         if self._configure_all_btn is not None:
             self._configure_all_btn.IsEnabled = (revit or self._addin_installed
@@ -686,7 +687,7 @@ class MCPControlWindow(T3WPFWindow):
         label = self._client_labels.get(key, key)
         app_label, server_name = self._app_spec()
         ok, msg = MCPService.configure_client(key, port=self._current_port(),
-                                              server=self._app)
+                                              server=self._app, fresh_addin=True)
         self._refresh_addin()
         if ok:
             logger.info('{} configured for {}: {}'.format(key, app_label, msg))
@@ -842,7 +843,8 @@ class MCPControlWindow(T3WPFWindow):
         if self._addin_installed:
             self._set_dot(self._addin_dot, 'T3.Success.Accent')
             label = '{} add-in installed'.format(app_label)
-            hint = '{} {}'.format(found, bridge.get('path') or '')
+            hint = '{} Update below downloads and installs the newest add-in. {}'.format(
+                found, bridge.get('path') or '')
         elif self._addin_installable:
             self._set_dot(self._addin_dot, 'T3.Warning.Accent')
             label = '{} add-in not installed yet'.format(app_label)

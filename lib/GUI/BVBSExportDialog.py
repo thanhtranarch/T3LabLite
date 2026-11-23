@@ -28,7 +28,6 @@ Part of T3Lab Extension.
 
 import json
 import os
-import re
 
 import clr
 clr.AddReference('System')
@@ -44,34 +43,20 @@ from System import Uri, UriKind
 from GUI.WPF_Base import T3WPFWindow
 from GUI.T3Dialog import confirm as t3_confirm, show_error, show_info, show_warning
 
-from Snippets import _assembly, _bvbs, _rebar
-from Snippets._compat import bar_mass_per_metre, eid_value, make_eid, short_error, to_mm
+from Snippets import _assembly, _bvbs, _bvbs_read, _rebar
+from Snippets._bvbs_read import (DEFAULT_GRADE, DEFAULT_PLAN, DEFAULT_REVISION, SEV_FAIL,
+                                 SEV_OK, SEV_WARN, natural_key as _natural_key)
+from Snippets._compat import eid_value, short_error
 from Snippets._host import resolve_uidoc
 
 GUI_DIR = os.path.dirname(__file__)
 XAML_FILE = os.path.join(GUI_DIR, 'Tools', 'BVBSExport.xaml')
 DIALOG_TITLE = "BVBS Export"
 
-DEFAULT_PLAN = "MODEL"
-DEFAULT_REVISION = "a"
-DEFAULT_GRADE = "B500B"
-
 SCOPE_MODEL = "model"
 SCOPE_SELECTION = "selection"
 SCOPE_ASSEMBLY = "assembly"
 SCOPE_PARTITION = "partition"
-
-SEV_OK = "Success"
-SEV_WARN = "Warning"
-SEV_FAIL = "Danger"
-
-PROGRESS_EVERY = 5            # pump the UI every N bars while reading centre-lines
-LENGTH_TOLERANCE_MM = 1.0     # sets sharing a mark must agree on length within this
-
-
-def _natural_key(text):
-    return [int(part) if part.isdigit() else part.lower()
-            for part in re.split(r"(\d+)", u"%s" % text)]
 
 
 def _plural(count, word):
@@ -112,6 +97,15 @@ class BarRow(object):
     @property
     def exportable(self):
         return self.record is not None and self.Severity != SEV_FAIL
+
+    @classmethod
+    def from_item(cls, item):
+        row = cls(item.mark, item.status, item.severity, record=item.record,
+                  diameter_mm=item.diameter_mm, quantity=item.quantity,
+                  length_mm=item.length_mm, legs=item.legs, detail=item.detail,
+                  group=item.group, ids=item.ids, reason=item.reason)
+        row.is_selected = item.selected
+        return row
 
 
 # ── DIALOG ───────────────────────────────────────────────────────────────────
@@ -323,11 +317,8 @@ class BVBSExportDialog(T3WPFWindow):
         self._rebuild_preview()
 
     def _build_maps(self):
-        self._asm_marks = {a.id: a.mark for a in self._assemblies}
-        self._by_assembly = {}
-        for row in self._index.rows:
-            if row.assembly_id is not None and row.assembly_id >= 0:
-                self._by_assembly.setdefault(row.assembly_id, []).append(row)
+        self._asm_marks, self._by_assembly = _bvbs_read.assembly_maps(self._index,
+                                                                      self._assemblies)
 
     def _fill_scope_combos(self):
         self._loading = True
@@ -339,10 +330,7 @@ class BVBSExportDialog(T3WPFWindow):
             if labels:
                 self.cb_assembly.SelectedIndex = 0
 
-            counts = {}
-            for row in self._index.rows:
-                if row.kind == "Rebar" and row.partition:
-                    counts[row.partition] = counts.get(row.partition, 0) + 1
+            counts = _bvbs_read.partition_counts(self._index)
             self._partition_choices = sorted(counts, key=_natural_key)
             self.set_items_source(self.cb_partition, [u"%s (%d)" % (p, counts[p])
                                                       for p in self._partition_choices])
@@ -376,41 +364,15 @@ class BVBSExportDialog(T3WPFWindow):
     # ── SCOPE ────────────────────────────────────────────────────────────────
 
     def _assembly_rows(self, assembly):
-        """Rebar that are members of the assembly plus rebar hosted by its members (A1)."""
-        out, seen = [], set()
-        candidates = list(self._by_assembly.get(assembly.id, ()))
-        for member in assembly.members:
-            candidates.extend(self._index.by_host.get(member, ()))
-        for row in candidates:
-            if row.id not in seen:
-                seen.add(row.id)
-                out.append(row)
-        return out
+        return _bvbs_read.assembly_rows(self._index, self._by_assembly, assembly)
 
     def _selection_rows(self):
         """Rebar for the selection: rebar itself, the rebar of selected hosts, the
         rebar of selected assemblies. Unique, in selection order."""
         if self._index is None:
             return []
-        assemblies = {a.id: a for a in self._assemblies}
-        out, seen = [], set()
-
-        def add(rows):
-            for row in rows:
-                if row.id not in seen:
-                    seen.add(row.id)
-                    out.append(row)
-
-        for eid in self._selection_ids():
-            row = self._index.by_id.get(eid)
-            if row is not None:
-                add([row])
-            if eid in self._index.by_host:
-                add(self._index.by_host[eid])
-            assembly = assemblies.get(eid)
-            if assembly is not None:
-                add(self._assembly_rows(assembly))
-        return out
+        return _bvbs_read.selection_rows(self._index, self._assemblies, self._by_assembly,
+                                         self._selection_ids())
 
     def _scope_rows(self):
         """(rows in scope, group label forced for all of them or None)."""
@@ -433,226 +395,7 @@ class BVBSExportDialog(T3WPFWindow):
             return [], None
         return list(self._index.rows), None
 
-    # ── PREVIEW: READ EVERY BAR ──────────────────────────────────────────────
-
-    def _existing_positions(self, element):
-        try:
-            count = int(element.NumberOfBarPositions)
-        except Exception:
-            count = 0
-        if count <= 0:
-            return [0]
-        out = []
-        for position in range(count):
-            try:
-                if element.DoesBarExistAtPosition(position):
-                    out.append(position)
-            except Exception:
-                out.append(position)
-        return out or [0]
-
-    def _shape_at(self, element, position, diameter_mm):
-        """BarShape of one bar position; an unreadable centre-line is a skip reason."""
-        try:
-            curves = _rebar.centerline_points(element, position)
-        except Exception as exc:
-            return _bvbs.BarShape(reason=u"centre-line unreadable", error=short_error(exc))
-        return _bvbs.chain_to_shape(curves, diameter_mm)
-
-    def _read_shapes(self, element, diameter_mm, quantity):
-        """[(BarShape, count)] for a rebar set.
-
-        A small set is read bar by bar. A big one is sampled (first / middle /
-        last, R11) and counted as uniform when the samples agree; when they
-        differ every bar is read and grouped, so a set with varying lengths
-        becomes one record per distinct shape with its own count.
-        Returns (groups, positions read, positions in the set).
-        """
-        existing = self._existing_positions(element)
-        sample = _bvbs.sample_positions(existing)
-        shapes = [self._shape_at(element, p, diameter_mm) for p in sample]
-        agree = len({(s.key(), s.reason) for s in shapes}) == 1
-        if len(sample) < len(existing) and not agree:
-            shapes = [self._shape_at(element, p, diameter_mm) for p in existing]
-            return self._group_with_failures(shapes), len(existing), len(existing)
-        if len(sample) < len(existing):
-            count = quantity if quantity and quantity > 0 else len(existing)
-            return [(shapes[0], count)], len(sample), len(existing)
-        return self._group_with_failures(shapes), len(existing), len(existing)
-
-    @staticmethod
-    def _group_with_failures(shapes):
-        """Distinct good shapes with their counts, then one entry per failure reason."""
-        groups = _bvbs.group_distinct([s for s in shapes if s.ok])
-        failed, order = {}, []
-        for shape in shapes:
-            if shape.ok:
-                continue
-            if shape.reason not in failed:
-                failed[shape.reason] = [shape, 0]
-                order.append(shape.reason)
-            failed[shape.reason][1] += 1
-        groups.extend((failed[reason][0], failed[reason][1]) for reason in order)
-        return groups
-
-    @staticmethod
-    def _revit_length_mm(element):
-        """Per-bar length Revit schedules ("Bar Length"), mm; None when unreadable."""
-        try:
-            from Autodesk.Revit.DB import BuiltInParameter
-            built_in = getattr(BuiltInParameter, "REBAR_ELEM_LENGTH", None)
-            if built_in is None:
-                return None
-            param = element.get_Parameter(built_in)
-            if param is None or not param.HasValue:
-                return None
-            value = to_mm(param.AsDouble())
-            return value if value > 0 else None
-        except Exception:
-            return None
-
-    def _bar_type_info(self, element, bar_type, cache):
-        """(mandrel mm or None, kg/m or None, weight source or None), cached per type + style."""
-        style = getattr(element, "Style", None)
-        style_name = u"%s" % style if style is not None else u""
-        key = (eid_value(bar_type.Id) if bar_type is not None else -1, style_name)
-        if key not in cache:
-            roll = None
-            if bar_type is not None:
-                roll = _rebar.mandrel_diameter_mm(bar_type, style)
-            value, source = bar_mass_per_metre(bar_type)
-            cache[key] = (roll, value, source)
-        return cache[key]
-
-    @staticmethod
-    def _skip_row(row, mark, reason, detail=u""):
-        return BarRow(mark or (u"(id %d)" % row.id), u"Skipped: %s" % reason, SEV_FAIL,
-                      diameter_mm=row.diameter_mm, quantity=max(int(row.quantity or 1), 1),
-                      detail=detail or (u"Element %d — %s." % (row.id, reason)),
-                      ids=[row.id], reason=reason)
-
-    def _read_one(self, row, group, cache):
-        """(entries, skip rows) for one rebar set.
-
-        A set whose bars differ becomes one entry per distinct shape; bars that
-        cannot be written come back as skip rows, never silently dropped.
-        """
-        mark = _bvbs.build_mark(row.partition, row.number, row.mark)
-        if not row.diameter_mm or row.diameter_mm <= 0:
-            return [], [self._skip_row(row, mark, u"no diameter")]
-        if not mark:
-            return [], [self._skip_row(
-                row, u"", u"no mark",
-                u"Element %d has no Rebar Number and no Schedule Mark — number the "
-                u"reinforcement in Revit first." % row.id)]
-        element = self.doc.GetElement(make_eid(row.id))
-        if element is None:
-            return [], [self._skip_row(row, mark, u"element missing")]
-
-        bar_type = _rebar.bar_type_of(self.doc, element)
-        roll, rev_value, rev_source = self._bar_type_info(element, bar_type, cache)
-        roll_assumed = not roll or roll <= 0
-        if roll_assumed:
-            roll = 4.0 * row.diameter_mm       # BVBS standard mandrel: 4 x diameter
-        revit_length = self._revit_length_mm(element)
-
-        groups, read, total = self._read_shapes(element, row.diameter_mm, row.quantity)
-        bars_in_groups = sum(count for _, count in groups)
-        entries, skips = [], []
-        for shape, count in groups:
-            if not shape.ok:
-                detail = u"Element %d — %s" % (row.id, shape.reason)
-                if shape.error:
-                    detail += u": %s" % shape.error
-                if len(groups) > 1:
-                    detail += u" (%d of %d bars)" % (count, bars_in_groups)
-                skip = self._skip_row(row, mark, shape.reason, detail + u".")
-                skip.quantity = count
-                skip.qty_text = u"%d" % count
-                skips.append(skip)
-                continue
-            entries.append({
-                "mark": mark, "group": group, "diameter": row.diameter_mm, "shape": shape,
-                "count": count, "ids": [row.id], "roll": roll, "roll_assumed": roll_assumed,
-                "rev_value": rev_value, "rev_source": rev_source,
-                "lengths": [revit_length] if (revit_length and len(groups) == 1) else [],
-                "read": read, "total": total})
-        return entries, skips
-
-    def _merge_entries(self, entries):
-        """One entry per (assembly, mark, diameter, shape): quantities add up, as on a schedule."""
-        merged, order = {}, []
-        for entry in entries:
-            key = (entry["group"], entry["mark"], int(round(entry["diameter"] * 10)),
-                   entry["shape"].key())
-            if key not in merged:
-                merged[key] = entry
-                order.append(key)
-                continue
-            target = merged[key]
-            target["count"] += entry["count"]
-            target["ids"].extend(entry["ids"])
-            target["lengths"].extend(entry["lengths"])
-            target["read"] += entry["read"]
-            target["total"] += entry["total"]
-        return [merged[key] for key in order]
-
-    def _entry_to_row(self, entry, reused):
-        """BarRow + BarRecord for one merged entry."""
-        shape = entry["shape"]
-        diameter = entry["diameter"]
-        lengths = entry["lengths"]
-        revit_length = None
-        if lengths and max(lengths) - min(lengths) <= LENGTH_TOLERANCE_MM:
-            revit_length = sum(lengths) / len(lengths)
-        length_ok, length_note = _bvbs.length_check(
-            revit_length, shape.outer_sum, shape.bends, diameter, entry["roll"])
-        if revit_length and length_ok:
-            length_mm, length_source = revit_length, u"Revit bar length"
-        else:
-            length_mm, length_source = shape.outer_sum, u"sum of the outer legs"
-
-        kg_per_m, source = _bvbs.resolve_weight(
-            diameter, entry["rev_value"], entry["rev_source"], self._weight_table)
-        weight = _bvbs.bar_weight_kg(length_mm, kg_per_m)
-        self._weight_counts[source] = self._weight_counts.get(source, 0) + entry["count"]
-
-        record = _bvbs.BarRecord(
-            entry["mark"], diameter, entry["count"], shape.segments,
-            weight_kg=weight, roll_diameter_mm=entry["roll"], total_length_mm=length_mm,
-            group=entry["group"])
-        status, severity, selected = u"Ready", SEV_OK, True
-        if not length_ok:
-            status, severity, selected = u"Check legs", SEV_WARN, False
-        elif reused:
-            status, severity, selected = u"Same mark, other shape", SEV_WARN, False
-
-        ids = sorted(set(entry["ids"]))
-        parts = [u"Element%s %s" % (u"" if len(ids) == 1 else u"s",
-                                    u", ".join(str(i) for i in ids[:5])
-                                    + (u" +%d more" % (len(ids) - 5) if len(ids) > 5 else u"")),
-                 u"centre-line legs %s" % _bvbs.legs_text(shape.centre_legs),
-                 u"outer legs %s" % _bvbs.legs_text(shape.segments),
-                 u"length %d mm (%s)" % (int(round(length_mm)), length_source),
-                 u"Ø%d, mandrel %d mm%s" % (
-                     int(round(diameter)), int(round(entry["roll"])),
-                     u" (assumed 4 x Ø: the bar type has no bend diameter)"
-                     if entry["roll_assumed"] else u""),
-                 u"%.3f kg/m from %s" % (kg_per_m, _bvbs.WEIGHT_SOURCE_LABELS.get(source, source))]
-        if entry["read"] < entry["total"]:
-            parts.append(u"read %d of %d bars, the rest assumed identical"
-                         % (entry["read"], entry["total"]))
-        if not length_ok:
-            parts.append(length_note + u" — compare with the bending schedule, then tick it")
-        if reused:
-            parts.append(u"this mark has more than one shape in the model — check the "
-                         u"numbering, then tick it")
-        row = BarRow(entry["mark"], status, severity, record=record, diameter_mm=diameter,
-                     quantity=entry["count"], length_mm=length_mm,
-                     legs=_bvbs.legs_text(shape.segments), detail=u" · ".join(parts),
-                     group=entry["group"], ids=ids)
-        row.is_selected = selected
-        return row
+    # ── PREVIEW: READ EVERY BAR (Snippets/_bvbs_read.py) ──────────────────────
 
     def _rebuild_preview(self):
         """Read every bar in the current scope and fill the grid. Never raises."""
@@ -674,56 +417,23 @@ class BVBSExportDialog(T3WPFWindow):
 
     def _read_scope(self):
         rows_in_scope, forced_group = self._scope_rows()
-        only_shape_driven = bool(self.chk_only_shape_driven.IsChecked)
+        sets, self._notes = _bvbs_read.bar_sets(rows_in_scope,
+                                                bool(self.chk_only_shape_driven.IsChecked))
 
-        sets = [r for r in rows_in_scope if r.kind == "Rebar"]
-        others = len(rows_in_scope) - len(sets)
-        hidden = 0
-        if only_shape_driven:
-            hidden = sum(1 for r in sets if not r.is_shape_driven)
-            sets = [r for r in sets if r.is_shape_driven]
-        self._notes = []
-        if others:
-            self._notes.append(
-                u"%s (area, path, fabric, coupler or in-system rebar) are outside BVBS BF2D and "
-                u"are not read." % _plural(others, u"element"))
-        if hidden:
-            self._notes.append(
-                u"%s hidden by “Shape-driven rebar only”." % _plural(hidden, u"free-form set"))
+        def progress(number, total):
+            return bool(self.step_progress(
+                number, u"Reading centre-lines — %d / %d" % (number, total)))
 
-        entries, skips = [], []
-        cache = {}
         self.begin_progress(maximum=max(len(sets), 1), disable=self._busy_controls())
         try:
-            for number, row in enumerate(sets, 1):
-                if number % PROGRESS_EVERY == 1:
-                    if not self.step_progress(
-                            number, u"Reading centre-lines — %d / %d" % (number, len(sets))):
-                        self._partial = True
-                        break
-                group = forced_group if forced_group is not None \
-                    else self._asm_marks.get(row.assembly_id, u"")
-                try:
-                    found, skipped = self._read_one(row, group, cache)
-                except Exception as exc:
-                    found, skipped = [], [self._skip_row(
-                        row, _bvbs.build_mark(row.partition, row.number, row.mark),
-                        u"unexpected error", u"Element %d — %s" % (row.id, short_error(exc)))]
-                entries.extend(found)
-                skips.extend(skipped)
+            items, stopped = _bvbs_read.read_sets(self.doc, sets, forced_group, self._asm_marks,
+                                                  self._weight_table, self._weight_counts,
+                                                  progress=progress)
         finally:
             self.end_progress()
-
-        merged = self._merge_entries(entries)
-        shapes_per_mark = {}
-        for entry in merged:
-            shapes_per_mark.setdefault((entry["group"], entry["mark"]), set()).add(
-                (int(round(entry["diameter"] * 10)), entry["shape"].key()))
-        ready = [self._entry_to_row(e, len(shapes_per_mark[(e["group"], e["mark"])]) > 1)
-                 for e in merged]
-        ready.sort(key=lambda r: (_natural_key(r.group), _natural_key(r.mark)))
-        skips.sort(key=lambda r: (_natural_key(r.mark), r.reason))
-        return ready + skips
+        if stopped:
+            self._partial = True
+        return [BarRow.from_item(item) for item in items]
 
     # ── GRID & SUMMARY ───────────────────────────────────────────────────────
 
@@ -909,16 +619,9 @@ class BVBSExportDialog(T3WPFWindow):
             self.tb_folder.Text = folder
 
     def _apply_fields(self, records):
-        project = self.tb_project.Text.strip()
-        plan = self.tb_plan.Text.strip()
-        revision = self.tb_revision.Text.strip()
-        grade = self.tb_grade.Text.strip()
-        for record in records:
-            record.project = project
-            record.plan = plan
-            record.index = revision
-            record.grade = grade
-        return plan
+        return _bvbs_read.apply_fields(records, self.tb_project.Text.strip(),
+                                       self.tb_plan.Text.strip(), self.tb_revision.Text.strip(),
+                                       self.tb_grade.Text.strip())
 
     def _skipped_summary(self):
         """' · 4 skipped (free-form 3D, curved leg)' or '' when nothing was skipped."""

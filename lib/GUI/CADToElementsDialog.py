@@ -29,7 +29,6 @@ rounding and the per-size column type names use mm / inches (`paper_unit`).
 Copyright (c) 2026 T3Lab
 """
 import os
-import re
 
 from System.Windows import Visibility, RoutedEventHandler
 from System.Windows.Controls import CheckBox, ComboBoxItem
@@ -42,6 +41,7 @@ from GUI.WPF_Base import T3WPFWindow
 from GUI.T3Dialog import show_info, show_warning, show_error, confirm
 from Snippets import _cad_geometry as geo
 from Snippets import _cad_revit as cr
+from Snippets import _cad_plan as cp
 from Snippets._compat import eid_value
 from Snippets._units import project_length_unit, paper_unit
 
@@ -109,25 +109,6 @@ def _counted(n, noun):
     if n == 1 and noun.endswith("s"):
         noun = noun[:-1]
     return u"{} {}".format(n, noun)
-
-
-_ONE_PLURAL = re.compile(r"\b1 ([A-Za-z][A-Za-z ]*?)s\b")
-
-
-class Plan(object):
-    """What a run will do — shown in the confirm dialog before anything changes."""
-
-    def __init__(self, count, noun, question, ok_text, details, execute, empty_msg=None):
-        if count == 1:
-            question = _ONE_PLURAL.sub(r"1 \1", question, count=1)
-            ok_text = _ONE_PLURAL.sub(r"1 \1", ok_text, count=1)
-        self.count = count
-        self.noun = noun
-        self.question = question
-        self.ok_text = ok_text
-        self.details = details
-        self.execute = execute
-        self.empty_msg = empty_msg
 
 
 class CADToElementsWindow(T3WPFWindow):
@@ -736,7 +717,7 @@ class CADToElementsWindow(T3WPFWindow):
                         "grid": self._plan_grid, "lines": self._plan_lines,
                         "mep": self._plan_mep}
             plan = planners[self._mode](ctx)
-        except _InputError as ex:
+        except (_InputError, cp.PlanError) as ex:
             show_warning(str(ex), title=TITLE, owner=self)
             self._set_status(str(ex).splitlines()[0], "warning")
             return
@@ -868,304 +849,98 @@ class CADToElementsWindow(T3WPFWindow):
                               u"options card), then run again.".format(what))
         return item
 
-    @staticmethod
-    def _segments(layers, merge):
-        segs = [s for lg in layers for s in lg.segments]
-        return geo.merge_collinear(segs) if merge else segs
-
-    @staticmethod
-    def _outline_groups(layers, with_holes):
-        loops = [lp for lg in layers for lp in lg.loops()]
-        polys = [geo.loop_polygon(lp) for lp in loops]
-        keep = geo.dedupe_polygons(polys)
-        loops = [loops[i] for i in keep]
-        polys = [polys[i] for i in keep]
-        if not with_holes:
-            return [(lp, []) for lp in loops], polys, [[] for _ in loops]
-        groups = geo.nest_loops(polys)
-        return ([(loops[o], [loops[h] for h in holes]) for o, holes in groups],
-                [polys[o] for o, _h in groups],
-                [[polys[h] for h in holes] for _o, holes in groups])
-
     def _category(self, combo_name):
         cat = self._pick(combo_name)
         if cat is None:
             raise _InputError("Pick a part category in the options card, then run again.")
         return cat
 
-    # ── Walls ──
+    # ── Plans: the window reads its controls, Snippets/_cad_plan plans ──
 
     def _plan_wall(self, ctx):
-        doc, level = self._doc, ctx["level"]
         height = self._length(self.txt_wall_height, "Height", positive=True)
         offset = self._length(self.txt_wall_offset, "Base offset")
         default_thk = self._length(self.txt_wall_thickness, "Unpaired thickness", positive=True,
                                    maximum=geo.mm(3000))
-        include = self._checked(self.chk_include_unpaired)
-        segs = self._segments(ctx["layers"], self._checked(self.chk_merge_collinear))
-        pairs, unpaired = geo.find_parallel_pairs(segs)
-        items = [(c[0], c[1], c[2], c[3], c[4]) for c in pairs]
-        if include:
-            items += [(s[0], s[1], s[2], s[3], default_thk) for s in unpaired]
-        thicknesses = []                # one per wall type (1 mm apart), in the project unit
-        for size_mm in sorted(geo.group_by_size(items, lambda it: it[4])):
-            text = self._len(geo.mm(size_mm))
-            if text not in thicknesses:
-                thicknesses.append(text)
-        details = [u"Wall pairs found: {}".format(len(pairs)),
-                   u"Single lines: {} ({})".format(len(unpaired), "included" if include else "ignored"),
-                   u"Thicknesses: {}".format(", ".join(thicknesses[:12]) or "—"),
-                   u"Height {} · base offset {}".format(self._len(height), self._len(offset))]
-        empty = (u"No two parallel lines lie within {} of each other. Tick the layers that hold "
-                 u"both faces of each wall, or turn on Include unpaired lines."
-                 .format(self._len(geo.MAX_WALL_THICKNESS)))
-        n = len(items)
-        if self._checked(self.rb_wall_part_mode):
-            cat = self._category("cmb_wall_part_category")
-            profiles = []
-            for (x0, y0, x1, y1, t) in items:
-                rect = geo.centerline_rect(x0, y0, x1, y1, t / 2.0)
-                lp = geo.loop_from_polygon(rect) if rect else None
-                if lp:
-                    profiles.append((lp, [], level.Elevation + offset, height))
-            details.append(u"Category: {}".format(cat["name"]))
-            return Plan(len(profiles), "wall parts",
-                        u"Create {} wall parts on {}?".format(len(profiles), ctx["level_name"]),
-                        u"Create {} Parts".format(len(profiles)), u"\n".join(details),
-                        lambda p: cr.create_parts(doc, profiles, cat["bic"],
-                                                  "T3Lab: CAD to Wall Parts", p), empty)
-        wtype = self._need("cmb_wall_type", "basic wall type")
-        match = self._checked(self.chk_wall_match_thickness)
-        details.append(u"Base type: {}{}".format(wtype["name"], " (copied per thickness)" if match else ""))
-        structural = self._checked(self.chk_structural)
-        return Plan(n, "walls", u"Create {} walls on {}?".format(n, ctx["level_name"]),
-                    u"Create {} Walls".format(n), u"\n".join(details),
-                    lambda p: cr.create_walls(doc, items, level, wtype["element"], height,
-                                              offset, structural, match, p), empty)
-
-    # ── Floors / Ceilings ──
+        part = self._checked(self.rb_wall_part_mode)
+        return cp.plan_wall(
+            self._doc, ctx["layers"], ctx["level"], ctx["level_name"], height, offset,
+            default_thk, self._checked(self.chk_include_unpaired),
+            self._checked(self.chk_merge_collinear),
+            part_category=self._category("cmb_wall_part_category") if part else None,
+            wall_type=None if part else self._need("cmb_wall_type", "basic wall type"),
+            match=self._checked(self.chk_wall_match_thickness),
+            structural=self._checked(self.chk_structural), fmt=self._len)
 
     def _plan_floor(self, ctx):
-        doc, level = self._doc, ctx["level"]
         offset = self._length(self.txt_floor_offset, "Height offset")
-        groups, _p, _h = self._outline_groups(ctx["layers"], self._checked(self.chk_floor_holes))
-        n = len(groups)
-        holes = sum(len(h) for _o, h in groups)
-        details = [u"Outlines: {} · openings: {}".format(n, holes),
-                   u"Height offset {}".format(self._len(offset))]
-        empty = ("The ticked layers hold no closed outline. Use closed polylines or lines whose "
-                 "ends meet, or tick the layer that holds the slab edges.")
+        holes = self._checked(self.chk_floor_holes)
         if self._checked(self.rb_part_mode):
             thk = self._length(self.txt_part_thickness, "Part thickness", positive=True)
-            cat = self._category("cmb_part_category")
-            profiles = [(o, h, level.Elevation + offset, thk) for o, h in groups]
-            details.append(u"Part thickness {} · category {}".format(self._len(thk), cat["name"]))
-            return Plan(n, "floor parts", u"Create {} floor parts on {}?".format(n, ctx["level_name"]),
-                        u"Create {} Parts".format(n), u"\n".join(details),
-                        lambda p: cr.create_parts(doc, profiles, cat["bic"],
-                                                  "T3Lab: CAD to Floor Parts", p), empty)
-        ftype = self._need("cmb_floor_type", "floor type")
-        structural = self._checked(self.chk_floor_structural)
-        details.append(u"Floor type: {}".format(ftype["name"]))
-        return Plan(n, "floors", u"Create {} floors on {}?".format(n, ctx["level_name"]),
-                    u"Create {} Floors".format(n), u"\n".join(details),
-                    lambda p: cr.create_floors(doc, groups, ftype["id"], level, offset,
-                                               structural, p), empty)
+            return cp.plan_floor(self._doc, ctx["layers"], ctx["level"], ctx["level_name"],
+                                 offset, holes, part_category=self._category("cmb_part_category"),
+                                 part_thickness=thk, fmt=self._len)
+        return cp.plan_floor(self._doc, ctx["layers"], ctx["level"], ctx["level_name"], offset,
+                             holes, floor_type=self._need("cmb_floor_type", "floor type"),
+                             structural=self._checked(self.chk_floor_structural), fmt=self._len)
 
     def _plan_ceiling(self, ctx):
-        doc, level = self._doc, ctx["level"]
         offset = self._length(self.txt_ceiling_offset, "Height offset")
-        groups, _p, _h = self._outline_groups(ctx["layers"], self._checked(self.chk_ceiling_holes))
-        n = len(groups)
-        details = [u"Outlines: {} · openings: {}".format(n, sum(len(h) for _o, h in groups)),
-                   u"Height offset {}".format(self._len(offset))]
-        empty = ("The ticked layers hold no closed outline. Tick the layer that holds the ceiling "
-                 "outlines (closed polylines or lines whose ends meet).")
+        holes = self._checked(self.chk_ceiling_holes)
         if self._checked(self.rb_ceiling_part_mode):
             thk = self._length(self.txt_ceiling_part_thickness, "Part thickness", positive=True)
-            cat = self._category("cmb_ceiling_part_category")
-            profiles = [(o, h, level.Elevation + offset, thk) for o, h in groups]
-            details.append(u"Part thickness {} · category {}".format(self._len(thk), cat["name"]))
-            return Plan(n, "ceiling parts", u"Create {} ceiling parts on {}?".format(n, ctx["level_name"]),
-                        u"Create {} Parts".format(n), u"\n".join(details),
-                        lambda p: cr.create_parts(doc, profiles, cat["bic"],
-                                                  "T3Lab: CAD to Ceiling Parts", p), empty)
-        ctype = self._need("cmb_ceiling_type", "ceiling type")
-        details.append(u"Ceiling type: {}".format(ctype["name"]))
-        return Plan(n, "ceilings", u"Create {} ceilings on {}?".format(n, ctx["level_name"]),
-                    u"Create {} Ceilings".format(n), u"\n".join(details),
-                    lambda p: cr.create_ceilings(doc, groups, ctype["id"], level, offset, p),
-                    empty)
-
-    # ── Rooms ──
+            return cp.plan_ceiling(self._doc, ctx["layers"], ctx["level"], ctx["level_name"],
+                                   offset, holes,
+                                   part_category=self._category("cmb_ceiling_part_category"),
+                                   part_thickness=thk, fmt=self._len)
+        return cp.plan_ceiling(self._doc, ctx["layers"], ctx["level"], ctx["level_name"], offset,
+                               holes, ceiling_type=self._need("cmb_ceiling_type", "ceiling type"),
+                               fmt=self._len)
 
     def _plan_room(self, ctx):
-        doc, level = self._doc, ctx["level"]
         make_lines = not self._checked(self.rb_room_only)
-        make_rooms = not self._checked(self.rb_room_lines)
-        view = None
-        if make_lines:
-            item = self._pick("cmb_room_view")
-            if item is None:
-                raise _InputError(u"{} has no floor plan to hold room separation lines.\nCreate a "
-                                  u"floor plan for this level, or choose Rooms only."
-                                  .format(ctx["level_name"]))
-            view = item["element"]
-        edges = [e for lg in ctx["layers"] for e in lg.all_edges()] if make_lines else []
-        points, too_small = [], 0
-        if make_rooms:
-            _g, polys, _h = self._outline_groups(ctx["layers"], False)
-            points, too_small = geo.room_points(polys)
-        name = (self.txt_room_name.Text or "").strip()
-        skip = self._checked(self.chk_room_skip_existing)
-        if make_rooms:
-            n, noun = len(points), "rooms"
-            question = u"Create {} rooms on {}{}?".format(
-                n, ctx["level_name"],
-                u" with {} room separation lines".format(len(edges)) if make_lines else u"")
-            ok = u"Create {} Rooms".format(n)
-        else:
-            n, noun = len(edges), "room separation lines"
-            question = u"Draw {} room separation lines on {}?".format(n, ctx["level_name"])
-            ok = u"Draw {} Lines".format(n)
-        details = [u"Closed outlines (one room each): {}{}".format(
-                       len(points), u" · too small or too narrow for a room: {}".format(too_small)
-                       if too_small else u"") if make_rooms else u"Rooms: none (lines only)",
-                   u"Separation lines: {}{}".format(len(edges), u" in view " + view.Name if view else "")]
-        empty = ("The ticked layers hold no closed outline to put a room in. Tick the wall or room "
-                 "boundary layers, or choose Lines only.") if make_rooms else \
-            "The ticked layers hold no linework."
-        return Plan(n, noun, question, ok, u"\n".join(details),
-                    lambda p: cr.create_rooms(doc, level, view, edges, points, make_lines,
-                                              make_rooms, name, skip, p), empty)
-
-    # ── Columns ──
+        return cp.plan_room(self._doc, ctx["layers"], ctx["level"], ctx["level_name"],
+                            make_lines, not self._checked(self.rb_room_lines),
+                            self._pick("cmb_room_view") if make_lines else None,
+                            (self.txt_room_name.Text or "").strip(),
+                            self._checked(self.chk_room_skip_existing))
 
     def _plan_column(self, ctx):
-        doc, level = self._doc, ctx["level"]
         size_unit = self._size_unit
         step = self._length(self.txt_column_rounding, "Size rounding", positive=True,
                             maximum=geo.mm(500), unit=size_unit)
         height = self._length(self.txt_column_height, "Height", positive=True)
-        rect_item = self._pick("cmb_column_type")
-        round_item = self._pick("cmb_column_round_type")
-        rect_sym = rect_item["element"] if rect_item else None
-        round_sym = round_item["element"] if round_item else None
-        fps = geo.filter_footprints([fp for lg in ctx["layers"] for fp in lg.footprints()])
-        rects = [f for f in fps if f["shape"] == "rect"]
-        rounds = [f for f in fps if f["shape"] == "round"]
-        if rects and rect_sym is None:
-            raise _InputError("No column type is loaded for rectangles.\nLoad a column family "
-                              "(for example Concrete-Rectangular-Column), then run again.")
-        items = (rects if rect_sym is not None else []) + (rounds if round_sym is not None else [])
-        top = self._pick("cmb_column_top_level")
-        top_level = top["element"] if top else None
-        sizes = {}
-        for f in items:
-            nm = geo.footprint_type_name(f, step, size_unit)
-            sizes[nm] = sizes.get(nm, 0) + 1
-        details = [u"Rectangles: {} · circles: {}{}".format(
-            len(rects), len(rounds), u" (skipped — no round type chosen)" if rounds and round_sym is None else u""),
-            u"Sizes: {}".format(u", ".join(u"{} ×{}".format(k, v) for k, v in sorted(sizes.items())[:8]) or u"—"),
-            u"Top: {}".format(top["name"] if top_level is not None else u"unconnected, {}".format(self._len(height)))]
-        structural = self._checked(self.rb_column_structural)
-        match = self._checked(self.chk_column_match_size)
-        rotate = self._checked(self.chk_column_rotate)
-        n = len(items)
-        empty = (u"The ticked layers hold no closed rectangle or circle {}–{} across. Tick the "
-                 u"layer that holds the column outlines.".format(
-                     self._len(geo.mm(geo.FOOTPRINT_MIN_MM)), self._len(geo.mm(geo.FOOTPRINT_MAX_MM))))
-        return Plan(n, "columns", u"Place {} columns on {}?".format(n, ctx["level_name"]),
-                    u"Place {} Columns".format(n), u"\n".join(details),
-                    lambda p: cr.create_columns(doc, items, level, top_level, height,
-                                                rect_sym, round_sym, structural, match, rotate,
-                                                step, p, size_unit=size_unit), empty)
-
-    # ── Beams ──
+        return cp.plan_column(self._doc, ctx["layers"], ctx["level"], ctx["level_name"], step,
+                              height, self._pick("cmb_column_type"),
+                              self._pick("cmb_column_round_type"),
+                              self._pick("cmb_column_top_level"),
+                              self._checked(self.rb_column_structural),
+                              self._checked(self.chk_column_match_size),
+                              self._checked(self.chk_column_rotate),
+                              size_unit=size_unit, fmt=self._len)
 
     def _plan_beam(self, ctx):
-        doc, level = self._doc, ctx["level"]
         offset = self._length(self.txt_beam_offset, "Top offset")
         w_min = self._length(self.txt_beam_min_width, "Min width", positive=True)
         w_max = self._length(self.txt_beam_max_width, "Max width", minimum=w_min)
-        segs = self._segments(ctx["layers"], self._checked(self.chk_beam_merge))
-        pairs, _unpaired = geo.find_parallel_pairs(segs, max_sep=w_max,
-                                                   min_sep=w_min, min_overlap=0.7)
-        items = []
-        for (x0, y0, x1, y1, sep, _layer) in pairs:
-            w = max(50, geo.round_to(geo.to_mm(sep), 50))
-            items.append((x0, y0, x1, y1, w, geo.beam_height_for_width(w)))
-        sizes = sorted(set("{}x{}".format(w, h) for *_xy, w, h in items))
-        details = [u"Beam pairs found: {}".format(len(items)),
-                   u"Sizes (mm): {}".format(", ".join(sizes[:10]) or "—"),
-                   u"Top offset {}".format(self._len(offset))]
-        empty = (u"No two parallel lines {}–{} apart overlap enough to be a beam. Tick the "
-                 u"layer that holds both edges of each beam.".format(self._len(w_min), self._len(w_max)))
-        n = len(items)
-        if self._checked(self.rb_beam_part_mode):
-            cat = self._category("cmb_beam_part_category")
-            top = level.Elevation + offset
-            profiles = []
-            for (x0, y0, x1, y1, w, h) in items:
-                rect = geo.centerline_rect(x0, y0, x1, y1, geo.mm(w) / 2.0)
-                lp = geo.loop_from_polygon(rect) if rect else None
-                if lp:
-                    profiles.append((lp, [], top - geo.mm(h), geo.mm(h)))
-            details.append(u"Category: {}".format(cat["name"]))
-            return Plan(len(profiles), "beam parts",
-                        u"Create {} beam parts on {}?".format(len(profiles), ctx["level_name"]),
-                        u"Create {} Parts".format(len(profiles)), u"\n".join(details),
-                        lambda p: cr.create_parts(doc, profiles, cat["bic"],
-                                                  "T3Lab: CAD to Beam Parts", p), empty)
-        sym = self._need("cb_beam_types", "structural framing type")
-        match = self._checked(self.chk_beam_match_size)
-        details.append(u"Type: {}{}".format(sym["name"], " (copied per size)" if match else ""))
-        return Plan(n, "beams", u"Create {} beams on {}?".format(n, ctx["level_name"]),
-                    u"Create {} Beams".format(n), u"\n".join(details),
-                    lambda p: cr.create_beams(doc, items, level, sym["element"], offset,
-                                              match, p), empty)
-
-    # ── Grids ──
+        part = self._checked(self.rb_beam_part_mode)
+        return cp.plan_beam(
+            self._doc, ctx["layers"], ctx["level"], ctx["level_name"], offset, w_min, w_max,
+            self._checked(self.chk_beam_merge),
+            part_category=self._category("cmb_beam_part_category") if part else None,
+            beam_type=None if part else self._need("cb_beam_types", "structural framing type"),
+            match=self._checked(self.chk_beam_match_size), fmt=self._len)
 
     def _plan_grid(self, ctx):
-        doc = self._doc
         extend = self._length(self.txt_grid_extend, "Extend ends", minimum=0.0,
                               maximum=geo.mm(100000))
         min_len = self._length(self.txt_grid_min_length, "Min length", minimum=0.0)
         auto = self._checked(self.rb_grid_autoname)
         start_number = int(self._num(self.txt_grid_start_number, "First number", 1, 0, 100000)) if auto else 1
         start_letter = (self.txt_grid_start_letter.Text or "A").strip() or "A"
-        if auto and geo.letter_index(start_letter) == 0 and start_letter.upper() != "A":
-            raise _InputError(u"First letter is \"{}\", which is not a grid letter.\nUse letters "
-                              u"A–Z without I and O (for example A, C or AA).".format(start_letter))
-        axes = geo.collapse_axis_lines(self._segments(ctx["layers"], False), min_len=min_len)
-        skipped = 0
-        existing, taken = cr.existing_grid_lines(doc)
-        if self._checked(self.chk_grid_skip_existing):
-            kept = [a for a in axes if not any(geo.same_axis(a, ex) for ex in existing)]
-            skipped = len(axes) - len(kept)
-            axes = kept
-        names = geo.name_grids(axes, start_number, start_letter) if auto else None
-        lines = [geo.extend_line(a[0], a[1], a[2], a[3], extend) for a in axes]
-        gtype = self._pick("cmb_grid_type")
-        type_id = gtype["id"] if gtype else None
-        numbers = [nm for nm in (names or []) if nm.isdigit()]
-        letters = [nm for nm in (names or []) if not nm.isdigit()]
-        details = [u"Axes found: {} · already in the model (skipped): {}".format(len(axes) + skipped, skipped)]
-        if auto:
-            if numbers:
-                details.append(u"Numbered {}–{}".format(numbers and min(numbers, key=int), max(numbers, key=int)))
-            if letters:
-                details.append(u"Lettered {}–{}".format(geo.grid_letter(geo.letter_index(start_letter)),
-                                                          geo.grid_letter(geo.letter_index(start_letter) + len(letters) - 1)))
-        n = len(lines)
-        empty = (u"The ticked layers hold no straight axis line of at least {}{}. Tick the axis "
-                 u"layer.".format(self._len(min_len), ", or every axis already has a grid" if skipped else ""))
-        return Plan(n, "grids", u"Create {} grids?".format(n), u"Create {} Grids".format(n),
-                    u"\n".join(details),
-                    lambda p: cr.create_grids(doc, lines, names, type_id, set(taken), p), empty)
-
-    # ── Lines ──
+        return cp.plan_grid(self._doc, ctx["layers"], extend, min_len, auto, start_number,
+                            start_letter, self._checked(self.chk_grid_skip_existing),
+                            self._pick("cmb_grid_type"), fmt=self._len)
 
     def _plan_lines(self, ctx):
         doc, level = self._doc, ctx["level"]
@@ -1189,30 +964,10 @@ class CADToElementsWindow(T3WPFWindow):
                 pass
         else:
             z = level.Elevation + self._length(self.txt_lines_offset, "Offset from level")
-        merge = self._checked(self.chk_lines_merge)
-        edges = []
-        for lg in ctx["layers"]:
-            segs = geo.merge_collinear(lg.segments) if merge else lg.segments
-            edges.extend(("L", (s[0], s[1]), (s[2], s[3]), None) for s in segs)
-            edges.extend(lg.arc_edges)
-            edges.extend(lg.spline_edges)
-            for (cx, cy, r) in lg.circles:
-                edges.extend(geo.loop_from_circle(cx, cy, r))
-        style = self._pick("cmb_line_style")
-        gs = style["element"] if style else None
-        noun = "detail lines" if detail else "model lines"
-        where = u"in view {}".format(view.Name) if detail else u"on {}".format(ctx["level_name"])
-        n = len(edges)
-        details = [u"Curves: {}".format(n), u"Line style: {}".format(style["name"] if style else "default")]
-        return Plan(n, noun, u"Create {} {} {}?".format(n, noun, where),
-                    u"Create {} Lines".format(n), u"\n".join(details),
-                    lambda p: cr.create_lines(doc, edges, view, z, gs, p),
-                    "The ticked layers hold no linework.")
-
-    # ── MEP runs ──
+        return cp.plan_lines(doc, ctx["layers"], ctx["level_name"], view, z,
+                             self._checked(self.chk_lines_merge), self._pick("cmb_line_style"))
 
     def _plan_mep(self, ctx):
-        doc, level = self._doc, ctx["level"]
         key = self._mep_key
         cat = geo.mep_category(key)
         tp = self._need("cmb_mep_type", cat["type_label"])
@@ -1227,30 +982,10 @@ class CADToElementsWindow(T3WPFWindow):
         if cat["height"]:
             height = self._length(self.txt_mep_height, "Height", positive=True)
         offset = self._length(self.txt_mep_offset, "Offset from level")
-        segs = self._segments(ctx["layers"], self._checked(self.chk_mep_merge))
-        unpaired = []
-        if double:
-            pairs, unpaired = geo.find_parallel_pairs(segs, max_sep=geo.mm(2500))
-            segments = [(c[0], c[1], c[2], c[3], c[4]) for c in pairs]
-        else:
-            segments = [(s[0], s[1], s[2], s[3], None) for s in segs]
-        n = len(segments)
-        details = [u"{}: {}".format("Line pairs" if double else "Lines", n),
-                   u"Type: {}".format(tp["name"]),
-                   u"Size: {}".format("from the pair spacing" if double else self._len(width)) +
-                   (u" × {}".format(self._len(height)) if height else u""),
-                   u"Offset from level {}".format(self._len(offset))]
-        if double and unpaired:
-            details.append(u"Single lines ignored: {}".format(len(unpaired)))
-        auto_elbow = self._checked(self.chk_mep_elbows)
-        noun = cat["noun"]
-        return Plan(n, noun, u"Create {} {} on {}?".format(n, noun, ctx["level_name"]),
-                    u"Create {} {}".format(n, cat["verb"][len("Create "):]), u"\n".join(details),
-                    lambda p: cr.create_mep_runs(doc, key, segments, level, offset, tp["id"],
-                                                 system_id, width, height, auto_elbow,
-                                                 noun, "T3Lab: CAD to {}".format(cat["label"] + "s"), p),
-                    "The ticked layers hold no straight line." if not double else
-                    "No parallel line pairs found. Switch to Single line or tick the layer with both edges.")
+        return cp.plan_mep(self._doc, ctx["layers"], ctx["level"], ctx["level_name"], key, tp,
+                           system_id, double, width, height, offset,
+                           self._checked(self.chk_mep_merge), self._checked(self.chk_mep_elbows),
+                           fmt=self._len)
 
 
 # ===========================================================================

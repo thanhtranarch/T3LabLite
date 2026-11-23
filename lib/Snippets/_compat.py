@@ -639,3 +639,25 @@ def add_to_assembly_of(doc, host, new_ids):
         return len(wanted), assembly_id, None
     except Exception as exc:
         return 0, assembly_id, short_error(exc)
+
+
+# ─── Python 2.7 (IronPython, MCP server) / 3 (CPython, windows) ───
+# dev/audit_ipy_compat.py blocks the raw calls in modules the server can load.
+
+def fold(text):
+    """Case-insensitive key: str.casefold on CPython 3, lower() on IronPython 2.7."""
+    try:
+        return text.casefold()      # ipy-ok: guarded, lower() below on 2.7
+    except AttributeError:
+        return text.lower()
+
+
+def replace_file(src, dst):
+    """os.replace (atomic on CPython 3); IronPython 2.7 has none: remove, rename."""
+    import os
+    rep = getattr(os, 'replace', None)
+    if rep is not None:
+        return rep(src, dst)
+    if os.path.exists(dst):
+        os.remove(dst)
+    os.rename(src, dst)

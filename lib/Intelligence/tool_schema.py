@@ -24,6 +24,8 @@ __title__  = "Tool Schema"
 
 import copy
 
+from core import tool_specs as _specs     # tools declared in core/tools/<domain>.py
+
 
 # Synthetic tool exposed ONLY to the in-chat agent (not the MCP HTTP surface):
 # lets the model open a T3Lab pushbutton window. The agent loop treats it as
@@ -169,6 +171,22 @@ def make_past_chats_tool():
     }
 
 
+def _headless_hint(intents):
+    """' To DO the job without the window: open_x -> tool, ...' for the intents
+    whose button has a spec tool (core/tools/<domain>.py, field ribbon)."""
+    import re as _re
+    pairs = []
+    for button, names in sorted(_specs.by_ribbon().items()):
+        stem = button.rsplit('.', 1)[0]
+        intent = 'open_' + _re.sub(r'_+', '_', _re.sub(r'[\s\(\)\-\[\]]', '_', stem)).strip('_').lower()
+        if intent in (intents or ()):
+            pairs.append('{} -> {}'.format(intent, '/'.join(names)))
+    if not pairs:
+        return ''
+    return (' To DO the job without the window, call the tool instead: '
+            + ', '.join(pairs) + '.')
+
+
 def make_launcher_tool(intents):
     """Build the open_t3lab_tool schema in server-registry shape.
 
@@ -180,7 +198,7 @@ def make_launcher_tool(intents):
         "description": (
             "Open a T3Lab tool window inside Revit by its intent name. "
             "This ends the conversation turn — call it as your FINAL action, "
-            "never followed by other tool calls."
+            "never followed by other tool calls." + _headless_hint(intents)
         ),
         "inputSchema": {
             "type": "object",
@@ -248,6 +266,7 @@ ESSENTIAL_TOOL_NAMES = frozenset([
     "export_sheets_pdf", "export_dwg", "export_image", "export_model",
     "export_room_data",
 ])
+ESSENTIAL_TOOL_NAMES = ESSENTIAL_TOOL_NAMES | _specs.names(placement='essential')
 
 
 # ─── Cloud: deferred loading + server-side tool search ───────────────────────
@@ -302,6 +321,7 @@ LOCAL_HIDDEN_TOOLS = frozenset([
     "store_project_data", "store_room_data", "query_stored_data",
     "run_batch",            # for MCP clients; the assistant plans its own steps
 ])
+LOCAL_HIDDEN_TOOLS = LOCAL_HIDDEN_TOOLS | _specs.names(placement='hidden')
 
 
 # Tools that leave NO trace: they neither change the document nor write a
@@ -357,6 +377,7 @@ READ_ONLY_TOOL_NAMES = frozenset([
     # Data hub snapshot (core/hub_snapshot.py): writes a file, never the model.
     "hub_publish",
 ])
+READ_ONLY_TOOL_NAMES = READ_ONLY_TOOL_NAMES | _specs.names(effect='read')
 
 
 # Tools whose only side effect is a NEW FILE (PDF, DWG, image, IFC/NWC, CSV):
@@ -369,6 +390,7 @@ FILE_OUTPUT_TOOL_NAMES = frozenset([
     "export_dwg", "export_image", "export_model", "export_room_data",
     "export_sheets_pdf",
 ])
+FILE_OUTPUT_TOOL_NAMES = FILE_OUTPUT_TOOL_NAMES | _specs.names(effect='file')
 
 
 def is_file_output_only(name):
@@ -434,7 +456,7 @@ _EXTERNAL_ONLY_TOOLS = frozenset([
     't3lab_wiki',
     # The assistant has its own memory tools (recall_memory, remember_fact).
     't3lab_memory', 't3lab_memory_save',
-])
+]) | _specs.names(placement='external')
 
 
 # ─── Converters ────────────────────────────────────────────────────────────────

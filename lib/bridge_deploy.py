@@ -23,11 +23,13 @@ import time
 
 BRIDGE = 'bridge.py'
 # (lib/core name, deployed name). skills.json -> t3lab_capabilities;
-# mcp_providers.py -> external providers; hub_store.py -> t3lab_hub. A missing
-# source is skipped: the bridge runs without it, feature off.
+# mcp_providers.py -> external providers; hub_store.py -> t3lab_hub; tool_cli.py ->
+# the argument check and t3lab_verify. A missing source is skipped: the bridge
+# runs without it, feature off.
 COMPANIONS = (('skills_registry.json', 'skills.json'),
               ('mcp_providers.py', 'mcp_providers.py'),
-              ('hub_store.py', 'hub_store.py'))
+              ('hub_store.py', 'hub_store.py'),
+              ('tool_cli.py', 'tool_cli.py'))
 SOURCE_FILE = 'bridge_source.txt'
 
 

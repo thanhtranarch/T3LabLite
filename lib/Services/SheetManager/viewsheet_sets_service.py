@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from Autodesk.Revit.DB import (
     FilteredElementCollector, PrintRange, View, ViewSet, ViewSheet, ViewSheetSet,
 )
-from Snippets._compat import disposing
+from Snippets._compat import disposing, fold
 
 
 class ViewSheetSetsService(object):
@@ -31,7 +31,7 @@ class ViewSheetSetsService(object):
             elements = collector.OfClass(ViewSheetSet).ToElements()
         return sorted(
             [{'element': item, 'name': item.Name, 'id': item.Id}
-             for item in elements], key=lambda item: item['name'].casefold())
+             for item in elements], key=lambda item: fold(item['name']))
 
 
     def _require_transaction(self):
@@ -52,7 +52,7 @@ class ViewSheetSetsService(object):
         if not name:
             raise ValueError('Enter a non-empty sheet set name.')
         for item in self.get_all_sheet_sets():
-            if (item['name'].casefold() == name.casefold()
+            if (fold(item['name']) == fold(name)
                     and (sheet_set is None or item['id'] != sheet_set.Id)):
                 raise ValueError('A sheet set named "{}" already exists.'.format(name))
         return name

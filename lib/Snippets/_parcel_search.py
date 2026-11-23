@@ -21,6 +21,7 @@ Author: Tran Tien Thanh
 Mail: trantienthanh909@gmail.com
 """
 
+import io
 import os
 import re
 
@@ -292,7 +293,7 @@ def _vn2000_parcel(query):
     path = query.strip("\"'")
     if os.path.isfile(path):
         try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+            with io.open(path, "r", encoding="utf-8", errors="ignore") as handle:
                 points = vn2000.parse_coordinate_table(handle.read())
         except (IOError, OSError, UnicodeError) as ex:
             _log("Could not read {} as a VN-2000 table: {}".format(path, ex), "warning")

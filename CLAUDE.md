@@ -55,6 +55,20 @@ python lite_guard/test_pyrevit_revit_thread.py
 python lite_guard/test_pyrevit_patch_versions.py
 python lite_guard/test_data_hub.py
 python lite_guard/test_bridge_deploy.py
+python lite_guard/audit_ipy_compat.py --quiet
+python lite_guard/test_audit_ipy_compat.py
+python lite_guard/test_tool_specs.py
+python lite_guard/test_bridge_contract.py
+python lite_guard/test_write_verify.py
+python lite_guard/test_sheet_export.py
+python lite_guard/test_batch_link.py
+python lite_guard/test_tools_standards_domain.py
+python lite_guard/test_tools_rebar_domain.py
+python lite_guard/test_tools_views_domain.py
+python lite_guard/test_tools_data_domain.py
+python lite_guard/test_tools_model_domain.py
+python lite_guard/test_tools_create_domain.py
+python lite_guard/test_tools_launch.py
 python dev/test_icons_t3space.py
 ```
 
@@ -106,3 +120,7 @@ python dev/test_icons_t3space.py
 9. **Frozen ribbon icons — never touch (owner's request, 2026-10-09):**
    - The 3 cloud-link icons (`Autodesk Forma.urlbutton`, `Autodesk Health.urlbutton`, `Bluebeam Status.urlbutton` in `Support.panel/CloudLinks.stack`, Bluebeam inside `PDFMarkup.splitbutton` since 2026-10-12 — moved with its bytes unchanged) and the `T3LabAssistant.pushbutton` icon stay exactly as they are — no edit, redraw, restyle, new variant or deletion, including during a full icon redesign.
    - Enforced by `dev/audit_icons.py` against the sha256 lock in `dev/icons/frozen_icons.json` (P0 on any change); `dev/build_icons.py` skips them through `iconlib.EXEMPT_BUNDLES`. Only the owner can lift the lock.
+
+10. **A new AI tool = one `ToolSpec` in `lib/core/tools/<domain>.py`** (`docs/ai-tools.md`):
+   - It feeds the MCP registry, dispatch, `_WRITE_TOOLS`, confirmation (`is_destructive` -> `core/mcp_policy.py`), the read-only list, Assistant subsets, read-back and titles. Never hand-add the tool to those lists. Test: `python lite_guard/test_tool_specs.py`.
+   - The MCP server runs IronPython 2.7, so every module it can import must pass `python lite_guard/audit_ipy_compat.py --quiet`. Use `Snippets._compat.fold` / `replace_file` and `io.open`; no f-strings.

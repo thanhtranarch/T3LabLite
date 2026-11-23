@@ -651,6 +651,16 @@ def _parse_export_params(raw, cmd=None):
             fmt = f
             break
 
+    # A quoted Revit sheet set: bộ "Kiến trúc" / sheet set "A - Plans" (direct_export).
+    try:
+        from Services.batchout_executor import SHEET_SET
+        m = SHEET_SET.search(raw)
+        if m:
+            return {'format': fmt, 'filter': '', 'combine': False,
+                    'sheet_set': m.group(1).strip()}
+    except ImportError:
+        pass
+
     m = re.search(r'\b([A-Z])\s*[-–]?\s*(?:sheet|tờ|bản\s*vẽ)', raw, re.IGNORECASE)
     if m:
         return {'format': fmt, 'filter': m.group(1).upper(), 'combine': False}

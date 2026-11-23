@@ -10,6 +10,14 @@ Line Patterns and Fill Patterns tabs:
 Every message follows "what · where · next" and is plain English (UI text).
 """
 
+def _fold(text):
+    """Snippets._compat.fold, inlined: this module stays import-free."""
+    try:
+        return text.casefold()      # ipy-ok: guarded, lower() below on 2.7
+    except AttributeError:
+        return text.lower()
+
+
 # Characters Revit refuses in a line style (Lines subcategory), line pattern
 # and fill pattern name — the set Revit's own rename dialogs list:
 #   \ : { } [ ] | ; < > ? ` ~
@@ -111,8 +119,8 @@ def validate_style_rename(kind, old_name, new_name, existing_names, is_system=Fa
             "{}: '{}' contains characters Revit does not allow ({}). "
             "Remove them or press Esc to cancel.".format(where, clean, shown))
 
-    folded = clean.casefold()
-    old_folded = (old_name or "").casefold()
+    folded = _fold(clean)
+    old_folded = _fold((old_name or ""))
 
     if folded == old_folded and not _CASE_ONLY_ALLOWED.get(kind, True):
         return False, clean, (
@@ -123,7 +131,7 @@ def validate_style_rename(kind, old_name, new_name, existing_names, is_system=Fa
     for other in existing_names or ():
         if other is None or other == old_name:
             continue
-        if other.casefold() == folded:
+        if _fold(other) == folded:
             return False, clean, (
                 "{}: a {} named '{}' already exists. "
                 "Choose another name or press Esc to cancel.".format(where, label, other))

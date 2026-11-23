@@ -39,6 +39,7 @@ Part of T3Lab Extension.
 __author__ = "Tran Tien Thanh"
 __title__ = "Rebar Wizard"
 
+import io
 import json
 import math
 import os
@@ -50,6 +51,7 @@ from Snippets._compat import (
     eid_value,
     elem_name,
     make_eid,
+    replace_file,
     short_error,
     to_feet,
     to_mm,
@@ -690,7 +692,7 @@ def load_presets(path):
     old preset file never breaks the window.
     """
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with io.open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (IOError, OSError, ValueError):
         return {}
@@ -713,9 +715,10 @@ def save_presets(path, presets):
         folder = os.path.dirname(path)
         if folder and not os.path.isdir(folder):
             os.makedirs(folder)
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(presets, handle, indent=2, sort_keys=True, ensure_ascii=False)
-        os.replace(tmp, path)
+        with io.open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(u"%s" % json.dumps(presets, indent=2, sort_keys=True,
+                                            ensure_ascii=False))
+        replace_file(tmp, path)
         return None
     except (IOError, OSError, TypeError, ValueError) as exc:
         try:

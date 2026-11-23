@@ -38,6 +38,7 @@ class Env(object):
         self.paths = {
             'claude': os.path.join(self.dir, 'Claude', 'claude_desktop_config.json'),
             'chatgpt': os.path.join(self.dir, 'codex', 'config.toml'),
+            'claudecode': os.path.join(self.dir, 'cc', '.claude.json'),
             'antigravity': os.path.join(self.dir, 'ag', 'mcp_config.json'),
         }
         self.bridge = os.path.join(self.dir, 'T3LabCAD', 'bridge.py')
@@ -53,9 +54,9 @@ class Env(object):
             else self.app_bridges.get(app, os.path.join(self.dir, app, 'bridge.py'))
         ).replace('\\', '/')
         M._claude_desktop_running = lambda: self.desktop_running
-        M._get_bridge_path = lambda: 'C:/T3LabAI/bridge.py'
+        M._get_bridge_path = lambda take_ownership=True: 'C:/T3LabAI/bridge.py'
         self.real_update = M.MCPService.update_addin       # no download in these tests
-        M.MCPService.update_addin = staticmethod(lambda app='autocad': '')
+        M.MCPService.update_addin = staticmethod(lambda app='autocad', force=False: '')
         return self
 
     def install_bridge(self):

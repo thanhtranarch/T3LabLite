@@ -1831,7 +1831,7 @@
                                               SelectionUnit="FullRow"
                                               ToolTip="Tick Dims to clone the dimensions of that view (Tekla: dimension creation method in this view)">
                                         <DataGrid.Columns>
-                                            <DataGridTemplateColumn Width="48" CanUserResize="False" CanUserSort="False"
+                                            <DataGridTemplateColumn Width="36" CanUserResize="False" CanUserSort="False"
                                                                     HeaderStyle="{StaticResource T3.DataGridColumnHeader.Check}"
                                                                     CellStyle="{StaticResource T3.DataGridCell.Check}">
                                                 <DataGridTemplateColumn.Header>

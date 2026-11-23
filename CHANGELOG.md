@@ -19,7 +19,14 @@ Releasing a new version:
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-23
+
 ### Added
+- **AI apps do whole T3Lab jobs without opening the window:** 23 tools for Claude, ChatGPT and the T3Lab Assistant — export sheets to PDF / DWG / DXF / DGN by Revit sheet set, worksets, purge, CAD imports, family transfer, rebar, BVBS, room floors, door thresholds, wall tools, room views, schedules through Excel, auto dimension, point cloud to model. Each one previews first (dry run), destructive steps still ask you in Revit, read-only mode still blocks every change, and a Revit error rolls the change back instead of leaving a dialog waiting for a click.
+- **The AI checks its own work:** after a change, T3Lab reads the model back and tells the AI app when Revit does not show what the tool reported, so it does not say "done" by mistake. Exported files are checked too (`t3lab_verify`).
+- **Switch between open models without clicking:** with models A, B and C open in one Revit window, the AI app can bring any of them to the front (`switch_active_document`), Autodesk Docs / BIM 360 models included. `list_open_documents` says which ones can be switched (a model never saved cannot).
+- **BIM Harness — several AI apps on one model:** one task board; a lead app (e.g. Claude) splits the work and the others (ChatGPT, Antigravity) take tasks. A write outside your task is refused, Revit calls wait in a fair queue, and the board shows in MCP Control (new Harness tab), on Agent Cursors, and in the new **Harness** button (Support panel) that opens Harness Studio. See `docs/harness.md`.
+- **Agent Cursors move like a person:** the cursor glides and walks through the Revit UI (Project Browser, Properties) to what the AI is working on.
 - **AI apps connect by themselves:** when Revit starts, T3Lab writes its entry into Claude Desktop, Claude Code, ChatGPT (Codex) and Antigravity if the app is installed and does not have the entry yet. Nobody has to open MCP Control and click Connect. Restart the AI app once so it loads T3Lab. An app that is not installed gets no file, an entry that is already there is not changed, and your other MCP servers stay. Claude Desktop must be closed when Revit starts (it is tried again at the next start). To turn this off, set `"auto_connect_clients": false` in `%APPDATA%\T3LabAI\mcp_paths.json`.
 - **Claude Code in MCP Control:** a Claude Code row with Connect / Update, next to Claude Desktop. It writes `~/.claude.json`, so T3Lab is there in every project — no `claude mcp add` line to paste.
 - **No Python on the PC? T3Lab gets one:** AI apps need Python 3 to reach Revit. When none is found and an AI app is waiting to be connected, T3Lab downloads the newest official Python (about 17 MB, in the background at Revit start, or when you click Connect) and unpacks it to `%APPDATA%\T3LabAI\python`. It is a private copy for T3Lab only: no installer runs, no admin right is needed, and Windows' PATH and app list are not changed. Delete the folder to remove it; `"auto_install_python": false` in `mcp_paths.json` turns it off.
@@ -29,6 +36,13 @@ Releasing a new version:
 - **MCP Control — Update failed with "Claude Desktop is running" when nothing had to change:** the add-in is updated and the entry is left as it is.
 - **MCP Control — Connect had no effect on Claude Desktop from the Microsoft Store:** that build keeps its settings in `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude`, not in `%APPDATA%\Claude`, so Connect wrote a file Claude Desktop never reads and still showed "Connected". Connect now writes the file the installed build reads. If you connected before, click **Connect** once more.
 - **MCP Control — the Revit entry disappeared from Claude Desktop:** Claude Desktop saves its settings when it quits, which removed an entry written while it was open. Connect now asks you to quit Claude Desktop first (tray icon → Quit), for Revit as it already did for AutoCAD.
+- **T3Lab and T3Lab Lite installed together:** using a tool in one and then in the other no longer stops it with "Duplicate type name within an assembly", and a Lite tool never runs T3Lab's code by mistake.
+- **Accented names (Vietnamese, French) over MCP:** saving settings, Excel table links and AI tool results no longer fail on them; CAD import names and Revit 2024+ element ids come through too.
+- **BatchOut:** searching in Views mode emptied the list; the PDF24 queue row now shows its state.
+- **AI app writes never land on another Revit window** after a time-out.
+- **ChatGPT (Codex) entry:** Connect isolates its Python, skips the Microsoft Store placeholder and picks the newest Python.
+- **Clone Drawing** stays modal after Pick in model.
+- Point Cloud to Model creates roofs again; Room to Floor, Door Threshold and point-cloud elements are no longer reported when Revit rolled them back; Wall Adjust Base keeps both ends of a beam; Manage Worksets works on Revit 2022.0; Room views work on a non-English Revit.
 
 ## [2.7.2] - 2026-11-20
 

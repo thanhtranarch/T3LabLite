@@ -21,6 +21,7 @@ The Revit-free helpers (sheet naming, the xlsx writer, the diff) are tested in
 Author: Tran Tien Thanh
 """
 
+import re
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -504,3 +505,24 @@ def apply_changes(doc, changes):
             t.RollBack()
             return 0, ["Nothing was changed — {}".format(ex)], list(changes)
     return done, errors, failed
+
+
+def read_back(doc, changes):
+    """Changes whose cell does not read the new value after apply_changes()
+    (same match rule as the diff). Revit may round or refuse silently."""
+    from Snippets._compat import make_eid
+    out, cache = [], {}
+    for ch in changes:
+        elem = doc.GetElement(make_eid(ch['element_id']))
+        param = _find_param(doc, elem, ch['field_def'], cache) if elem is not None else None
+        got = (_display(param) if param is not None else '').strip()
+        new = (ch['new'] or '').strip()
+        if got != new and not _same_number(got, new) and _lead_number(got) != _lead_number(new):
+            out.append(dict(ch, now=got))
+    return out
+
+
+def _lead_number(text):
+    """'1250 mm' -> 1250.0 (typed with a unit, shown without); text never matches."""
+    m = re.match(r'^\s*([-+]?\d+(?:\.\d+)?)\s*[a-zA-Z%]*\s*$', text or '')
+    return float(m.group(1)) if m else object()

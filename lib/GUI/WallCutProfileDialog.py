@@ -16,6 +16,9 @@ import System
 from GUI.WPF_Base import T3WPFWindow, set_items_source
 from Snippets._compat import eid_value
 from Snippets._units import project_length_unit
+# Revit side shared with the cut_wall_openings tool (core/tools/model.py).
+from Snippets.wall_tools import (execute_openings, is_cut_wall, opening_symbols,
+                                 symbol_label)
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'WallCutProfile.xaml')
 _TITLE = "Wall Cut Profile"
@@ -68,42 +71,17 @@ class WallFilter(ISelectionFilter if DB else object):
     __namespace__ = "T3Lab.WallCutProfile_WallFilter_" + _NS_SUFFIX
 
     def AllowElement(self, elem):
-        if not isinstance(elem, Wall):
-            return False
-        if elem.WallType and elem.WallType.Kind in (DB.WallKind.Curtain, DB.WallKind.Stacked):
-            return False
-        loc = elem.Location
-        return loc is not None and hasattr(loc, 'Curve') and loc.Curve is not None
+        return is_cut_wall(elem)
 
     def AllowReference(self, ref, point):
         return False
-
-
-class WarningSwallower(IFailuresPreprocessor if DB else object):
-    __namespace__ = "T3Lab.WallCutProfile_Failures_" + _NS_SUFFIX
-
-    def PreprocessFailures(self, fa):
-        for f in fa.GetFailureMessages():
-            sev = f.GetSeverity()
-            if sev == FailureSeverity.Warning:
-                fa.DeleteWarning(f)
-        return FailureProcessingResult.Continue
 
 
 class OpeningFamilyItem(object):
     def __init__(self, symbol):
         self.symbol = symbol
         self.symbol_id = symbol.Id
-        try:
-            fam_name = symbol.Family.Name
-        except Exception:
-            fam_name = "Unknown"
-        try:
-            p = symbol.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME)
-            type_name = p.AsString() if p else symbol.Name
-        except Exception:
-            type_name = symbol.Name
-        self.name = "{} : {}".format(fam_name, type_name)
+        self.name = symbol_label(symbol)
 
     def __str__(self):
         return self.name
@@ -307,35 +285,7 @@ class WallCutProfileWindow(T3WPFWindow):
     def _load_opening_families(self):
         if not self._doc:
             return
-        results = []
-        cats = [
-            BuiltInCategory.OST_GenericModel,
-            BuiltInCategory.OST_Windows,
-            BuiltInCategory.OST_Doors,
-        ]
-        for bic in cats:
-            try:
-                coll = FilteredElementCollector(self._doc).OfCategory(bic).OfClass(FamilySymbol)
-                for sym in coll:
-                    fam = sym.Family
-                    if not fam:
-                        continue
-                    p = fam.get_Parameter(BuiltInParameter.FAMILY_HOSTING_BEHAVIOR)
-                    if p and p.AsInteger() == 1:
-                        results.append(OpeningFamilyItem(sym))
-                    elif any(kw in fam.Name.lower() for kw in ["opening", "void", "cutout", "penetration", "sleeve"]):
-                        results.append(OpeningFamilyItem(sym))
-            except Exception:
-                pass
-
-        seen = set()
-        unique = []
-        for item in results:
-            sid = eid_value(item.symbol_id)
-            if sid not in seen:
-                seen.add(sid)
-                unique.append(item)
-
+        unique = [OpeningFamilyItem(sym) for sym in opening_symbols(self._doc)]
         self._opening_families = sorted(unique, key=lambda x: x.name)
         set_items_source(self.cmb_families, [f.name for f in self._opening_families])
         if len(self._opening_families) > 0:
@@ -423,94 +373,7 @@ class WallCutProfileWindow(T3WPFWindow):
 
     def _execute_openings(self, walls, sources, categories, method, offset_ft, symbol):
         """sources: [(document, transform or None)] — see _sources()."""
-        created = 0
-        errors = 0
-
-        # Bounding boxes of the cutting elements, in this model's coordinates
-        cutters = []
-        for src_doc, transform in sources:
-            for cat_name, bic in categories:
-                try:
-                    coll = FilteredElementCollector(src_doc).OfCategory(bic).WhereElementIsNotElementType()
-                    for el in coll:
-                        bb = el.get_BoundingBox(None)
-                        if not bb:
-                            continue
-                        pt_min, pt_max = bb.Min, bb.Max
-                        center = (pt_min + pt_max) * 0.5
-                        if transform is not None:
-                            pt_min = transform.OfPoint(pt_min)
-                            pt_max = transform.OfPoint(pt_max)
-                            center = transform.OfPoint(center)
-                        cutters.append({
-                            'elem': el,
-                            'cat': cat_name,
-                            'center': center,
-                            'min': pt_min,
-                            'max': pt_max,
-                            'dx': abs(pt_max.X - pt_min.X),
-                            'dy': abs(pt_max.Y - pt_min.Y),
-                            'dz': abs(pt_max.Z - pt_min.Z),
-                        })
-                except Exception:
-                    pass
-
-        t = Transaction(self._doc, "T3Lab: Wall Cut Profile")
-        opts = t.GetFailureHandlingOptions()
-        opts.SetFailuresPreprocessor(WarningSwallower())
-        t.SetFailureHandlingOptions(opts)
-
-        t.Start()
-        try:
-            if symbol and not symbol.IsActive:
-                symbol.Activate()
-                self._doc.Regenerate()
-
-            for w in walls:
-                w_bb = w.get_BoundingBox(None)
-                if not w_bb:
-                    continue
-                w_min = w_bb.Min
-                w_max = w_bb.Max
-
-                for item in cutters:
-                    # Bounding box overlap test
-                    i_c = item['center']
-                    if not (w_min.X - offset_ft <= i_c.X <= w_max.X + offset_ft and
-                            w_min.Y - offset_ft <= i_c.Y <= w_max.Y + offset_ft and
-                            w_min.Z - offset_ft <= i_c.Z <= w_max.Z + offset_ft):
-                        continue
-
-                    # Overlapping: place opening
-                    try:
-                        if symbol and "Place Opening Family" in method:
-                            inst = self._doc.Create.NewFamilyInstance(i_c, symbol, w, DB.Structure.StructuralType.NonStructural)
-                            # Set parameters if available
-                            for p_name, val in [("Width", max(item['dx'], item['dy']) + offset_ft * 2),
-                                                ("Height", item['dz'] + offset_ft * 2)]:
-                                p = inst.LookupParameter(p_name)
-                                if p and not p.IsReadOnly:
-                                    p.Set(val)
-                            created += 1
-                        elif "Wall Opening" in method:
-                            # Create rectangular opening
-                            p0 = XYZ(i_c.X - 0.5, i_c.Y - 0.5, i_c.Z - item['dz']*0.5 - offset_ft)
-                            p1 = XYZ(i_c.X + 0.5, i_c.Y + 0.5, i_c.Z + item['dz']*0.5 + offset_ft)
-                            self._doc.Create.NewOpening(w, p0, p1)
-                            created += 1
-                    except Exception:
-                        errors += 1
-
-            t.Commit()
-        except Exception:
-            try:
-                t.RollBack()
-            except Exception:
-                pass
-            # Rolled back: nothing from this run is left in the model.
-            return 0, errors + 1
-
-        return created, errors
+        return execute_openings(self._doc, walls, sources, categories, method, offset_ft, symbol)
 
 
 def show_wall_cut_profile(doc, uidoc):

@@ -4,6 +4,7 @@
 Revit-free; tested by `dev/test_batchout_report.py`.
 """
 
+import io
 import json
 import os
 import re
@@ -15,7 +16,8 @@ _RESERVED_PREFIX = '_'
 
 def read_profile_file(path):
     """Profile dict from a JSON file; ValueError when it is not a BatchOut profile."""
-    with open(path, 'r', encoding='utf-8-sig') as f:
+    # io.open: IronPython (MCP server, Services/sheet_export.py) has no open(encoding=).
+    with io.open(path, 'r', encoding='utf-8-sig') as f:
         try:
             data = json.load(f)
         except ValueError as ex:
@@ -73,6 +75,6 @@ def list_profiles(folder):
 
 
 def write_profile_file(path, data):
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    with io.open(path, 'w', encoding='utf-8') as f:
+        f.write(u'{}'.format(json.dumps(data, indent=2, ensure_ascii=False)))
     return path

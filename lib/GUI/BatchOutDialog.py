@@ -227,61 +227,8 @@ VIEW_TYPE_LABELS = _build_view_type_labels()
 NON_EXPORTABLE_VIEW_TYPES = _build_non_exportable_view_types()
 
 
-def _enum_member(enum_name, *members):
-    """First member of DB.<enum_name> this Revit build has, or None."""
-    enum = getattr(DB, enum_name, None)
-    for member in members:
-        value = getattr(enum, member, None) if enum is not None else None
-        if value is not None:
-            return value
-    return None
-
-
-def apply_revit_display_fidelity(options, for_sheets=True):
-    """Make a DWG export look like the Revit view it came from.
-
-    Returns the settings that were applied, for the log.
-
-    - Colors = TrueColorPerView ("True color (RGB values) per view"): every
-      entity carries the RGB Revit draws it in, object styles plus V/G
-      overrides and view filters. The default, IndexColors, colours each layer
-      from the export layer table instead (AIA: magenta text, orange doors,
-      blue schedule fills), which is not what the sheet looks like in Revit.
-      Falls back to TrueColor on a build without the per-view mode.
-    - PropOverrides = ByEntity: element overrides (red dashed demolition,
-      halftone, filter colour / line weight / pattern) stay on the entity
-      instead of being flattened into the category layer.
-    - LineScaling: PaperSpace for sheets (PSLTSCALE = 1, dashes sized per
-      viewport as on the sheet), ViewScale for a view exported on its own.
-    - A hatch background, when the setup turns it on, is the white paper
-      Revit shows — never forced on: it is one colour behind every hatch,
-      which Revit does not draw.
-
-    Line weights go out as Revit's own; AutoCAD draws them only with LWDISPLAY on.
-    """
-    applied = []
-    for prop, value, label in (
-            ('Colors', _enum_member('ExportColorMode', 'TrueColorPerView', 'TrueColor'),
-             'true colors'),
-            ('PropOverrides', _enum_member('PropOverrideMode', 'ByEntity'),
-             'overrides by entity'),
-            ('LineScaling', _enum_member('LineScaling',
-                                         'PaperSpace' if for_sheets else 'ViewScale'),
-             'linetype scale')):
-        if value is None or not hasattr(options, prop):
-            continue
-        try:
-            setattr(options, prop, value)
-            applied.append(label)
-        except Exception as ex:
-            logger.debug("Could not set DWG {}: {}".format(prop, ex))
-    try:
-        if getattr(options, 'UseHatchBackgroundColor', False):
-            options.HatchBackgroundColor = DB.Color(255, 255, 255)
-            applied.append('white hatch background')
-    except Exception as ex:
-        logger.debug("Could not set DWG HatchBackgroundColor: {}".format(ex))
-    return applied
+# DWG "Match Revit display": shared with the MCP / Assistant export (Services/sheet_export.py).
+from Services.sheet_export import _enum_member, apply_revit_display_fidelity  # noqa: E402
 
 
 def detect_persistent_engine():

@@ -34,6 +34,7 @@ weights of the generated line styles.
 Author: Tran Tien Thanh
 """
 
+import io
 import json
 import os
 import time
@@ -148,14 +149,14 @@ def _doc_key(doc):
 
 def _fallback_load():
     try:
-        with open(_fallback_path(), encoding='utf-8') as fh:
+        with io.open(_fallback_path(), encoding='utf-8') as fh:
             return json.load(fh)
     except (IOError, OSError, ValueError):
         return {}
 
 
 def _fallback_save(data):
-    with open(_fallback_path(), 'w', encoding='utf-8') as fh:
+    with io.open(_fallback_path(), 'w', encoding='utf-8') as fh:
         json.dump(data, fh, indent=1)
 
 

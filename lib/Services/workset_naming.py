@@ -9,6 +9,14 @@ Revit. `ManaWorksetDialog` uses them for:
 
 import re
 
+
+def _fold(text):
+    """Snippets._compat.fold, inlined: this module stays import-free."""
+    try:
+        return text.casefold()      # ipy-ok: guarded, lower() below on 2.7
+    except AttributeError:
+        return text.lower()
+
 # Characters Revit refuses in a workset name (same set as the Revit
 # "Rename Workset" dialog and most element names).
 INVALID_NAME_CHARS = '\\:{}[]|;<>?`~'
@@ -30,8 +38,8 @@ def natural_sort_key(name):
     parts = _DIGITS_RE.split(text)
     key = []
     for i, part in enumerate(parts):
-        key.append(int(part) if i % 2 else part.casefold())
-    return (tuple(key), text.casefold(), text)
+        key.append(int(part) if i % 2 else _fold(part))
+    return (tuple(key), _fold(text), text)
 
 
 def sort_names(names, descending=False):
@@ -73,12 +81,12 @@ def validate_workset_rename(old_name, new_name, existing_names, is_unique=None):
             "{}: '{}' contains characters Revit does not allow ({}). "
             "Remove them or press Esc to cancel.".format(where, clean, shown))
 
-    folded = clean.casefold()
-    old_folded = (old_name or "").casefold()
+    folded = _fold(clean)
+    old_folded = _fold((old_name or ""))
     for other in existing_names or ():
         if other is None or other == old_name:
             continue
-        if other.casefold() == folded and folded != old_folded:
+        if _fold(other) == folded and folded != old_folded:
             return False, clean, (
                 "{}: a workset named '{}' already exists. "
                 "Choose another name or press Esc to cancel.".format(where, other))

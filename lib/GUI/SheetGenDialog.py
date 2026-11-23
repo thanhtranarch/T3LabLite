@@ -43,7 +43,6 @@ import clr
 import re
 import math
 import json
-from contextlib import contextmanager
 
 clr.AddReference('PresentationFramework')
 clr.AddReference('PresentationCore')
@@ -57,27 +56,21 @@ from System.Windows.Shapes import Line
 from pyrevit import revit, DB, forms, script
 from Autodesk.Revit.DB import (
     Transaction,
-    TransactionGroup,
     View,
     FilteredElementCollector,
     BuiltInCategory,
     ViewType,
-    ViewFamilyType,
-    ViewFamily,
     ViewPlan,
     ViewSheet,
-    Viewport,
-    ElevationMarker,
     SpatialElementBoundaryOptions,
     SpatialElementBoundaryLocation,
-    ElementTransformUtils,
-    XYZ,
 )
 from Autodesk.Revit.UI import TaskDialog
 from GUI.WPF_Base import T3WPFWindow, to_items_source
 # Crop offset = model length (project unit); header strip = paper size (mm
 # in a metric project, inches in an imperial one). Read per window.
 from Snippets._units import project_length_unit, paper_unit, MILLIMETERS
+from Snippets import sheetgen as sg     # the Revit side, shared with generate_room_views
 
 # ╦  ╦╔═╗╦═╗╦╔═╗╔╗ ╦  ╔═╗╔═╗
 # ╚╗╔╝╠═╣╠╦╝║╠═╣╠╩╗║  ║╣ ╚═╗
@@ -125,56 +118,10 @@ from GUI.ProgressPauseMixin import ProgressPauseMixin
 DEFAULT_OFFSET_MM = 1000.0
 DEFAULT_STRIP_MM  = 70.0
 
-# Printable margin inside the title block (~20 mm), shared by the layout
-# preview and the real viewport placement so they can never drift apart.
-SHEET_MARGIN_FT = 0.066
-
-
 # ╔═╗╦  ╔═╗╔═╗╔═╗╔═╗╔═╗
 # ║  ║  ╠═╣╚═╗╚═╗║╣ ╚═╗
 # ╚═╝╩═╝╩ ╩╚═╝╚═╝╚═╝╚═╝ CLASSES
 # ==================================================
-
-class _SheetGenPending(BaseException):
-    """Abort the batch without further API writes while Revit resolves failures."""
-
-
-@contextmanager
-def _sheetgen_transaction(name, subtransaction=False, group=False):
-    """Only expose committed results; roll back failed SheetGen operations."""
-    if group:
-        transaction = TransactionGroup(doc, "T3Lab: " + name)
-    elif subtransaction:
-        transaction = DB.SubTransaction(doc)
-    else:
-        transaction = Transaction(doc, "T3Lab: " + name)
-    try:
-        transaction.Start()
-        if transaction.GetStatus() != DB.TransactionStatus.Started:
-            raise RuntimeError("Could not start " + name)
-        if not group and not subtransaction:
-            options = transaction.GetFailureHandlingOptions()
-            options.SetForcedModalHandling(True)
-            options.SetClearAfterRollback(True)
-            transaction.SetFailureHandlingOptions(options)
-        yield transaction
-        status = transaction.Assimilate() if group else transaction.Commit()
-        if status == DB.TransactionStatus.Pending:
-            raise _SheetGenPending("Revit is awaiting failure resolution: " + name)
-        if status != DB.TransactionStatus.Committed:
-            raise RuntimeError("{} was not committed: {}".format(name, status))
-    except _SheetGenPending:
-        # Pending child transactions also prevent rolling back their group.
-        raise
-    except BaseException:
-        if transaction.GetStatus() == DB.TransactionStatus.Started:
-            transaction.RollBack()
-        raise
-    finally:
-        if transaction.GetStatus() not in (DB.TransactionStatus.Started,
-                                           DB.TransactionStatus.Pending):
-            transaction.Dispose()
-
 
 class RoomItem(object):
     """Represents a room item in the DataGrid."""
@@ -286,94 +233,27 @@ class CreateRoomPlanWindow(T3WPFWindow):
             self.room_datagrid.SelectedItem = self._all_rooms[0]
 
     def _load_view_templates(self):
-        """Collect view templates for Floor Plan and Ceiling Plan."""
-        view_elements = FilteredElementCollector(doc) \
-            .OfClass(View) \
-            .WhereElementIsNotElementType() \
-            .ToElements()
-
-        plan_templates = sorted([
-            v.Name for v in view_elements
-            if v.IsTemplate and v.ViewType == ViewType.FloorPlan
-        ])
-        rcp_templates = sorted([
-            v.Name for v in view_elements
-            if v.IsTemplate and v.ViewType == ViewType.CeilingPlan
-        ])
-
-        # Store template elements for later lookup
-        self._plan_template_map = {
-            v.Name: v.Id for v in view_elements
-            if v.IsTemplate and v.ViewType == ViewType.FloorPlan
-        }
-        self._rcp_template_map = {
-            v.Name: v.Id for v in view_elements
-            if v.IsTemplate and v.ViewType == ViewType.CeilingPlan
-        }
-
-        # Populate combo boxes with "None" option
-        self.cmb_plan_template.Items.Add("<None>")
-        for name in plan_templates:
-            self.cmb_plan_template.Items.Add(name)
-        self.cmb_plan_template.SelectedIndex = 0
-
-        self.cmb_rcp_template.Items.Add("<None>")
-        for name in rcp_templates:
-            self.cmb_rcp_template.Items.Add(name)
-        self.cmb_rcp_template.SelectedIndex = 0
-
-        # Elevation templates
-        elev_templates = sorted([
-            v.Name for v in view_elements
-            if v.IsTemplate and v.ViewType == ViewType.Elevation
-        ])
-        self._elev_template_map = {
-            v.Name: v.Id for v in view_elements
-            if v.IsTemplate and v.ViewType == ViewType.Elevation
-        }
-        self.cmb_elev_template.Items.Add("<None>")
-        for name in elev_templates:
-            self.cmb_elev_template.Items.Add(name)
-        self.cmb_elev_template.SelectedIndex = 0
+        """Floor Plan / Ceiling Plan / Elevation templates into their combo boxes."""
+        maps = sg.template_maps(doc)
+        self._plan_template_map = maps['floor']
+        self._rcp_template_map = maps['ceiling']
+        self._elev_template_map = maps['elevation']
+        for combo, mapping in ((self.cmb_plan_template, self._plan_template_map),
+                               (self.cmb_rcp_template, self._rcp_template_map),
+                               (self.cmb_elev_template, self._elev_template_map)):
+            combo.Items.Add("<None>")
+            for name in sorted(mapping):
+                combo.Items.Add(name)
+            combo.SelectedIndex = 0
 
     def _load_plan_type_options(self):
-        """Load available view family types for Floor Plan / Ceiling Plan."""
-        view_types = FilteredElementCollector(doc) \
-            .OfClass(ViewFamilyType) \
-            .WhereElementIsElementType() \
-            .ToElements()
-
-        self._floor_plan_type_id = None
-        self._ceiling_plan_type_id = None
-        self._elevation_type_id = None
-
-        for vt in view_types:
-            if vt.FamilyName == 'Floor Plan' and self._floor_plan_type_id is None:
-                self._floor_plan_type_id = vt.Id
-            elif vt.FamilyName == 'Ceiling Plan' and self._ceiling_plan_type_id is None:
-                self._ceiling_plan_type_id = vt.Id
-            elif vt.ViewFamily == ViewFamily.Elevation and self._elevation_type_id is None:
-                self._elevation_type_id = vt.Id
+        """Floor Plan / Ceiling Plan / Elevation view family types (None = missing)."""
+        (self._floor_plan_type_id, self._ceiling_plan_type_id,
+         self._elevation_type_id) = sg.find_view_types(doc)
 
     def _load_title_blocks(self):
         """Load all title block types into cmb_titleblock."""
-        tb_types = FilteredElementCollector(doc) \
-            .OfCategory(BuiltInCategory.OST_TitleBlocks) \
-            .WhereElementIsElementType() \
-            .ToElements()
-
-        self._titleblock_map = {}  # display_name -> ElementId
-        for tb in tb_types:
-            try:
-                fam_name = tb.Family.Name
-                type_name = tb.get_Parameter(
-                    DB.BuiltInParameter.SYMBOL_NAME_PARAM
-                )
-                type_name = type_name.AsString() if type_name else ""
-                display = "{}: {}".format(fam_name, type_name) if type_name else fam_name
-            except Exception:
-                display = str(tb.Id)
-            self._titleblock_map[display] = tb.Id
+        self._titleblock_map = sg.titleblock_map(doc)  # display_name -> ElementId
 
         for name in sorted(self._titleblock_map.keys()):
             self.cmb_titleblock.Items.Add(name)
@@ -406,223 +286,6 @@ class CreateRoomPlanWindow(T3WPFWindow):
             return self._unit.parse(self.txt_offset.Text)
         except (ValueError, TypeError, AttributeError):
             return MILLIMETERS.to_feet(DEFAULT_OFFSET_MM)
-
-    @staticmethod
-    def _offset_bbox(bbox, offset=1):
-        """Expand bounding box by offset in all directions."""
-        new_bbox = DB.BoundingBoxXYZ()
-        new_bbox.Min = DB.XYZ(bbox.Min.X - offset, bbox.Min.Y - offset, bbox.Min.Z - offset)
-        new_bbox.Max = DB.XYZ(bbox.Max.X + offset, bbox.Max.Y + offset, bbox.Max.Z + offset)
-        return new_bbox
-
-    def _build_view_name(self, room_item, copy_index=0):
-        """Build the plan view name from room info."""
-        if "UNIT" in room_item.Name.upper() and room_item.RoomType:
-            base = "ENLARGED PLAN - TYPE {} ({})".format(room_item.RoomType, room_item.Name)
-        else:
-            base = "ENLARGED PLAN - {} - (#{})".format(room_item.Name, room_item.Number)
-        
-        if copy_index > 0:
-            return "{} - Copy {}".format(base, copy_index)
-        return base
-
-    def _unique_view_name(self, base_name, view_type):
-        """
-        Return base_name, or base_name with an incrementing " (n)" suffix if
-        a view of the same ViewType already has that name (Revit only
-        requires view names to be unique within the same ViewType, so a
-        Floor Plan and a Ceiling Plan may legitimately share a name).
-        Tracks names it hands out in self._used_view_names so repeated
-        calls within the same run don't collide with each other either.
-        """
-        used = self._used_view_names.setdefault(view_type, set())
-        name = base_name
-        i = 2
-        while name in used:
-            name = "{} ({})".format(base_name, i)
-            i += 1
-        used.add(name)
-        return name
-
-    def _find_plan_view_for_level(self, level_id):
-        """Find an existing floor plan view for the given level.
-
-        Excludes the "ENLARGED PLAN - ..." views this same tool generates
-        (see _build_view_name) - those are tightly cropped per-room views and
-        make a poor host for a building-wide interior elevation marker.
-        Prefers a candidate whose crop box is not active, if one exists.
-        """
-        views = FilteredElementCollector(doc) \
-            .OfClass(ViewPlan) \
-            .WhereElementIsNotElementType() \
-            .ToElements()
-        fallback = None
-        for v in views:
-            if (v.IsTemplate
-                    or v.ViewType != ViewType.FloorPlan
-                    or v.GenLevel is None
-                    or v.GenLevel.Id != level_id):
-                continue
-            if v.Name.upper().startswith("ENLARGED PLAN"):
-                continue
-            if not v.CropBoxActive:
-                return v
-            if fallback is None:
-                fallback = v
-        return fallback
-
-
-    def _create_interior_elevation_view(self, marker, host_plan, idx,
-                                         cropbox_visible, max_dim,
-                                         offset, elev_template_id):
-        """Create and configure one elevation view at the given marker index.
-
-        Naming is deferred to _finalize_elevation_name so the multi-marker
-        fallback can rotate its marker into position first - direction labels
-        are read from the real ViewDirection, not the marker index.
-        """
-        ev = marker.CreateElevation(doc, host_plan.Id, idx)
-        ev.CropBoxActive  = True
-        ev.CropBoxVisible = cropbox_visible
-        p_far = ev.get_Parameter(DB.BuiltInParameter.VIEWER_BOUND_FAR_CLIPPING)
-        if p_far:
-            p_far.Set(1)
-        p_off = ev.get_Parameter(DB.BuiltInParameter.VIEWER_BOUND_OFFSET_FAR)
-        if p_off:
-            p_off.Set(max_dim / 2 + offset)
-        if elev_template_id:
-            ev.ViewTemplateId = elev_template_id
-        return ev
-
-    @staticmethod
-    def _direction_label(view):
-        """Direction label from the elevation's actual ViewDirection.
-
-        Marker index order (0..3 = S/W/N/E) is not guaranteed by the API, and
-        the multi-marker fallback always hosts at index 0 - so derive the
-        label from where the view really looks. ViewDirection points from the
-        model toward the viewer: a view of the north wall looks +Y and
-        reports -Y.
-        """
-        try:
-            d = view.ViewDirection
-            if abs(d.Y) >= abs(d.X):
-                return "North" if d.Y < 0 else "South"
-            return "East" if d.X < 0 else "West"
-        except Exception:
-            return "View"
-
-    def _finalize_elevation_name(self, ev, room_item):
-        """Name an elevation from its ViewDirection.
-
-        Call only after the hosting marker has its final orientation (i.e.
-        after the fallback rotation) and after a Regenerate.
-        """
-        label = self._direction_label(ev)
-        try:
-            d = ev.ViewDirection
-            logger.debug(
-                "Room {}: elevation ViewDirection=({:.2f}, {:.2f}, {:.2f})"
-                " -> '{}'".format(room_item.Number, d.X, d.Y, d.Z, label))
-        except Exception:
-            pass
-        base_name = "INTERIOR ELEV - {} - {} ({})".format(
-            room_item.Name, label, room_item.Number)
-        ev.Name = self._unique_view_name(base_name, ev.ViewType)
-        return label
-
-    @staticmethod
-    def _view_type_name(vt):
-        """Type name of a ViewFamilyType, defensively."""
-        try:
-            p = vt.get_Parameter(DB.BuiltInParameter.SYMBOL_NAME_PARAM)
-            name = p.AsString() if p else None
-            if name:
-                return name
-        except Exception:
-            pass
-        try:
-            return vt.Name
-        except Exception:
-            return str(vt.Id)
-
-    def _resolve_elevation_type(self):
-        """Pick the elevation ViewFamilyType whose marker hosts the most views.
-
-        The first-found Elevation type may map to a single-slot marker body
-        (Snowdon: 'Building Elevation' hosts only 1) - CreateElevation on
-        index 1..3 then throws "index is occupied or out of range". Capacity
-        is an instance property (ElevationMarker.MaximumViewCount), so probe
-        each type with a temp marker inside a rolled-back transaction.
-        Prefers capacity >= 4 with 'interior' in the name, then any capacity
-        >= 4, then the largest capacity. Cached per Create run.
-
-        Returns (type_id, type_name, capacity).
-        """
-        if getattr(self, '_resolved_elev_type', None):
-            return self._resolved_elev_type
-
-        candidates = []
-        view_types = FilteredElementCollector(doc) \
-            .OfClass(ViewFamilyType) \
-            .WhereElementIsElementType() \
-            .ToElements()
-        elev_types = [vt for vt in view_types
-                      if vt.ViewFamily == ViewFamily.Elevation]
-
-        probe = Transaction(doc, "T3Lab: Probe Elevation Marker Capacity")
-        try:
-            probe.Start()
-            for vt in elev_types:
-                name = self._view_type_name(vt)
-                try:
-                    m = ElevationMarker.CreateElevationMarker(
-                        doc, vt.Id, XYZ(0, 0, 0), 50)
-                    candidates.append((vt.Id, name, m.MaximumViewCount))
-                    logger.debug("Elevation type '{}' -> marker capacity {}"
-                                 .format(name, m.MaximumViewCount))
-                except Exception as ex:
-                    logger.debug("Elevation type '{}' probe failed: {}"
-                                 .format(name, ex))
-        except Exception as ex:
-            logger.debug("Elevation capacity probe failed: {}".format(ex))
-        finally:
-            try:
-                if probe.HasStarted():
-                    probe.RollBack()
-            except Exception:
-                pass
-
-        if candidates:
-            best = max(candidates, key=lambda c: (
-                c[2] >= 4,
-                "INTERIOR" in c[1].upper() if c[2] >= 4 else False,
-                c[2]))
-            self._resolved_elev_type = best
-        else:
-            # Probe found nothing usable - keep the first-found type and
-            # assume a single-slot marker (the safe fallback path).
-            self._resolved_elev_type = (
-                self._elevation_type_id, "<first found>", 1)
-        logger.debug("Resolved elevation type: '{}' (capacity {})".format(
-            self._resolved_elev_type[1], self._resolved_elev_type[2]))
-        return self._resolved_elev_type
-
-    def _log_marker_debug(self, marker, type_name):
-        """Debug-log marker capacity and slot availability."""
-        try:
-            cap = marker.MaximumViewCount
-        except Exception:
-            cap = "?"
-        states = []
-        for idx in range(4):
-            try:
-                states.append("{}={}".format(idx, marker.IsAvailableIndex(idx)))
-            except Exception as ex:
-                states.append("{}=err({})".format(idx, ex))
-        logger.debug(
-            "Elevation marker (type '{}'): MaximumViewCount={}, "
-            "IsAvailableIndex[{}]".format(type_name, cap, ", ".join(states)))
 
     # ── Window chrome handlers ────────────────────────
     def minimize_button_clicked(self, sender, e):
@@ -842,74 +505,18 @@ class CreateRoomPlanWindow(T3WPFWindow):
             strip = 0.0
         return side, strip
 
+    # Geometry shared with the real placement (Snippets/sheetgen.py).
     @staticmethod
-    def _usable_rect(x0, y0, w, h, margin, strip_side, strip):
-        """Printable rect (x0, y0, w, h) inside a sheet after the margin and
-        the title-block header strip (vertical right / horizontal bottom)."""
-        ux0 = x0 + margin
-        uy0 = y0 + margin
-        uw = w - 2.0 * margin
-        uh = h - 2.0 * margin
-        if strip_side == 'right':
-            uw -= strip
-        elif strip_side == 'bottom':
-            uy0 += strip
-            uh -= strip
-        if uw < 0.1:
-            uw = 0.1
-        if uh < 0.1:
-            uh = 0.1
-        return ux0, uy0, uw, uh
+    def _usable_rect(*args):
+        return sg.usable_rect(*args)
 
     @staticmethod
-    def _clamp_center(cx, cy, w_paper, h_paper, usable):
-        """Clamp a box center so the whole box stays inside the usable rect.
-        Returns (cx, cy, fits) - fits is False when the box is larger than
-        the rect (it then gets centered so the spill is symmetric)."""
-        ux0, uy0, uw, uh = usable
-        fits = True
-        if w_paper >= uw:
-            cx = ux0 + uw / 2.0
-            fits = False
-        else:
-            cx = min(max(cx, ux0 + w_paper / 2.0), ux0 + uw - w_paper / 2.0)
-        if h_paper >= uh:
-            cy = uy0 + uh / 2.0
-            fits = False
-        else:
-            cy = min(max(cy, uy0 + h_paper / 2.0), uy0 + uh - h_paper / 2.0)
-        return cx, cy, fits
+    def _clamp_center(*args):
+        return sg.clamp_center(*args)
 
     @staticmethod
-    def _slot_centers(usable, plan_count, combined):
-        """Viewport slot centers inside a usable rect.
-
-        Single source of geometry for BOTH the preview mockup and the real
-        placement, so what the user sees is what gets created.
-        Returns (plan_centers, elev_centers) as (x, y) sheet-feet tuples.
-        """
-        ux0, uy0, uw, uh = usable
-        plans, elevs = [], []
-        if combined:
-            px = ux0 + uw * 0.225  # middle of the left 45% plan zone
-            if plan_count == 1:
-                plans.append((px, uy0 + uh * 0.5))
-            elif plan_count >= 2:
-                plans.append((px, uy0 + uh * 0.72))
-                plans.append((px, uy0 + uh * 0.28))
-            for fx, fy in ((0.625, 0.75), (0.875, 0.75),
-                           (0.625, 0.25), (0.875, 0.25)):
-                elevs.append((ux0 + uw * fx, uy0 + uh * fy))
-        else:
-            if plan_count == 1:
-                plans.append((ux0 + uw * 0.5, uy0 + uh * 0.5))
-            elif plan_count >= 2:
-                plans.append((ux0 + uw * 0.5, uy0 + uh * 0.70))
-                plans.append((ux0 + uw * 0.5, uy0 + uh * 0.28))
-            for fx, fy in ((0.25, 0.75), (0.75, 0.75),
-                           (0.25, 0.25), (0.75, 0.25)):
-                elevs.append((ux0 + uw * fx, uy0 + uh * fy))
-        return plans, elevs
+    def _slot_centers(*args):
+        return sg.slot_centers(*args)
 
     @staticmethod
     def _paper_label(w_ft, h_ft, paper=None):
@@ -1085,7 +692,7 @@ class CreateRoomPlanWindow(T3WPFWindow):
         w_sheet, h_sheet = self._get_preview_sheet_size()
         strip_side, strip_ft = self._get_strip_config()
         usable = self._usable_rect(0.0, 0.0, w_sheet, h_sheet,
-                                   SHEET_MARGIN_FT, strip_side, strip_ft)
+                                   sg.SHEET_MARGIN_FT, strip_side, strip_ft)
 
         # Colors
         color_plan_bg = Color.FromRgb(0xEF, 0xF6, 0xFF)
@@ -1219,13 +826,17 @@ class CreateRoomPlanWindow(T3WPFWindow):
         self._sheetgen_running = True
         try:
             self._create_plans(sender, e)
-        except (Exception, _SheetGenPending) as ex:
+        except (Exception, sg.SheetGenPending) as ex:
             logger.exception("SheetGen creation interrupted: {}".format(ex))
             TaskDialog.Show("Create Room Plan",
                             "Creation interrupted. Previously committed results remain.\n{}".format(ex))
         finally:
             self._sheetgen_running = False
             self.end_progress()
+
+    def _generator(self, options):
+        """The Revit side of a run (Snippets/sheetgen.py, shared with the MCP tool)."""
+        return sg.RoomSheetGen(doc, options, logger)
 
     def _create_plans(self, sender, e):
         """Create plan views (and optionally lay them out on sheets) for selected rooms."""
@@ -1272,224 +883,35 @@ class CreateRoomPlanWindow(T3WPFWindow):
             TaskDialog.Show("Create Room Plan", "Invalid creation settings: {}".format(ex))
             return
 
-        # Template selections
-        plan_template_name = self.cmb_plan_template.SelectedItem
-        rcp_template_name  = self.cmb_rcp_template.SelectedItem
-        elev_template_name = self.cmb_elev_template.SelectedItem
-        plan_template_id = self._plan_template_map.get(plan_template_name) \
-            if plan_template_name != "<None>" else None
-        rcp_template_id  = self._rcp_template_map.get(rcp_template_name) \
-            if rcp_template_name != "<None>" else None
-        elev_template_id = self._elev_template_map.get(elev_template_name) \
-            if elev_template_name != "<None>" else None
+        def template_id(combo, mapping):
+            name = combo.SelectedItem
+            return mapping.get(name) if name != "<None>" else None
 
-        offset         = self._get_offset()
-        cropbox_visible = bool(self.chk_cropbox_visible.IsChecked)
-        created_count  = 0
-        error_count    = 0
+        strip_side, strip_ft = self._get_strip_config()
+        gen = self._gen = self._generator({
+            'floor': do_floor, 'ceiling': do_ceiling, 'elevations': do_elevations,
+            'floor_type_id': self._floor_plan_type_id,
+            'ceiling_type_id': self._ceiling_plan_type_id,
+            'elevation_type_id': self._elevation_type_id,
+            'floor_template_id': template_id(self.cmb_plan_template, self._plan_template_map),
+            'ceiling_template_id': template_id(self.cmb_rcp_template, self._rcp_template_map),
+            'elevation_template_id': template_id(self.cmb_elev_template, self._elev_template_map),
+            'offset_ft': self._get_offset(),
+            'cropbox_visible': bool(self.chk_cropbox_visible.IsChecked),
+            'strip_side': strip_side, 'strip_ft': strip_ft,
+        })
+        gen.seed_names()
 
-        # Seed name/number uniqueness trackers from what's already in the
-        # document, so re-running this tool on a room that already has
-        # views/sheets auto-suffixes instead of crashing with
-        # "Name must be unique" / "Sheet Number is already in use".
-        self._used_view_names = {}
-        for v in FilteredElementCollector(doc).OfClass(View).WhereElementIsNotElementType().ToElements():
-            self._used_view_names.setdefault(v.ViewType, set()).add(v.Name)
-        self._used_sheet_numbers = set()
-        for sh in FilteredElementCollector(doc).OfClass(ViewSheet).ToElements():
-            p = sh.get_Parameter(DB.BuiltInParameter.SHEET_NUMBER)
-            if p:
-                self._used_sheet_numbers.add(p.AsString())
-        # Re-probe elevation marker capacity each run (model may change)
-        self._resolved_elev_type = None
-
-        # Collect per-room results for sheet layout
-        room_results = []  # list of dicts
-
+        room_results = []
         self.begin_progress(len(selected_rooms), disable=[sender])
         for _sg_idx, room_item in enumerate(selected_rooms):
             if not self.step_progress(_sg_idx, "Processing room {}/{}...".format(_sg_idx + 1, len(selected_rooms))):
                 break
-            room          = room_item.Element
-            room_level_id = room.LevelId
-            room_bbox     = room.get_BoundingBox(None)
-            if room_bbox is None:
-                error_count += 1
-                logger.error(
-                    "Room {} ('{}') has no bounding box - it is most likely "
-                    "unplaced, unenclosed or redundant. Nothing was created "
-                    "for it.".format(room_item.Number, room_item.Name))
-                continue
-
-            new_bbox  = self._offset_bbox(room_bbox, offset)
-
-            # Get quantity to generate for floor plans
-            try:
-                qty = int(room_item.GenQty)
-                if qty < 0:
-                    qty = 0
-            except Exception:
-                qty = 1
-
-            result = {
-                'room_item':    room_item,
-                'floor_plan':   None,
-                'ceiling_plan': None,
-                'elevations':   [],
-            }
-
-            # ── Floor Plan ─────────────────────────────
-            if do_floor and self._floor_plan_type_id and qty > 0:
-                for idx in range(qty):
-                    view_name = self._unique_view_name(
-                        self._build_view_name(room_item, copy_index=idx),
-                        ViewType.FloorPlan)
-                    try:
-                        with _sheetgen_transaction("Create Floor Plan"):
-                            vp = DB.ViewPlan.Create(doc, self._floor_plan_type_id, room_level_id)
-                            vp.CropBoxActive  = True
-                            vp.CropBoxVisible = cropbox_visible
-                            vp.CropBox        = new_bbox
-                            vp.Name           = view_name
-                            if plan_template_id:
-                                vp.ViewTemplateId = plan_template_id
-                        # Use first created floor plan as primary for sheet layout
-                        if result['floor_plan'] is None:
-                            result['floor_plan'] = vp
-                        created_count += 1
-                    except Exception as ex:
-                        error_count += 1
-                        logger.error("Floor plan error for {}: {}".format(view_name, ex))
-
-            # ── Ceiling Plan ────────────────────────────
-            if do_ceiling and self._ceiling_plan_type_id:
-                ceiling_view_name = self._unique_view_name(
-                    self._build_view_name(room_item), ViewType.CeilingPlan)
-                try:
-                    with _sheetgen_transaction("Create Ceiling Plan"):
-                        vp = DB.ViewPlan.Create(doc, self._ceiling_plan_type_id, room_level_id)
-                        vp.CropBoxActive  = True
-                        vp.CropBoxVisible = cropbox_visible
-                        vp.CropBox        = new_bbox
-                        vp.Name           = ceiling_view_name
-                        if rcp_template_id:
-                            vp.ViewTemplateId = rcp_template_id
-                    result['ceiling_plan'] = vp
-                    created_count += 1
-                except Exception as ex:
-                    error_count += 1
-                    logger.error("Ceiling plan error for {}: {}".format(ceiling_view_name, ex))
-
-            # ── Interior Elevations ─────────────────────
-            if do_elevations and self._elevation_type_id:
-                try:
-                    host_plan = self._find_plan_view_for_level(room_level_id)
-                    if host_plan is None:
-                        error_count += 1
-                        logger.error("No floor plan found for level to host elevation marker")
-                    else:
-                        center = room.Location.Point
-                        room_width = room_bbox.Max.X - room_bbox.Min.X
-                        room_depth = room_bbox.Max.Y - room_bbox.Min.Y
-                        max_dim    = max(room_width, room_depth) + offset * 2
-
-                        # A marker only hosts MaximumViewCount views - the
-                        # first-found type may host just 1 ('Building
-                        # Elevation' in Snowdon), making CreateElevation on
-                        # index 1..3 throw "index is occupied or out of
-                        # range". Resolve the most capable type once per run;
-                        # if nothing hosts 4, fall back to 4 single markers
-                        # rotated 90 degrees apart.
-                        elev_type_id, elev_type_name, elev_capacity = \
-                            self._resolve_elevation_type()
-                        use_fallback = elev_capacity < 4
-                        if use_fallback:
-                            logger.warning(
-                                "No elevation type with a 4-view marker in "
-                                "this model (best: '{}' hosts {}). Using 4 "
-                                "single markers rotated 90 degrees apart."
-                                .format(elev_type_name, elev_capacity))
-
-                        with _sheetgen_transaction("Create Interior Elevations"):
-                            scale = host_plan.Scale
-                            if not use_fallback:
-                                marker = ElevationMarker.CreateElevationMarker(
-                                    doc, elev_type_id, center, scale)
-                                doc.Regenerate()
-                                self._log_marker_debug(marker, elev_type_name)
-                                # IsAvailableIndex() is not reliable as a
-                                # pre-filter across Revit versions (2023/2025
-                                # report differently) - attempt CreateElevation
-                                # on each index and let the API reject a slot.
-                                for idx in range(4):
-                                    try:
-                                        with _sheetgen_transaction("Create elevation direction", subtransaction=True):
-                                            ev = self._create_interior_elevation_view(
-                                                marker, host_plan, idx,
-                                                cropbox_visible, max_dim,
-                                                offset, elev_template_id)
-                                            doc.Regenerate()
-                                            self._finalize_elevation_name(ev, room_item)
-                                        result['elevations'].append(ev)
-                                    except Exception as ex:
-                                        error_count += 1
-                                        logger.error(
-                                            "Elevation index {} failed for "
-                                            "room {} [host plan: '{}', type: "
-                                            "'{}', marker capacity: {}]: "
-                                            "{}: {}".format(
-                                                idx, room_item.Number,
-                                                host_plan.Name,
-                                                elev_type_name, elev_capacity,
-                                                type(ex).__name__, ex))
-                            else:
-                                # One marker per direction, hosted at index 0,
-                                # rotated into place about Z at the room center.
-                                z_axis_top = XYZ(center.X, center.Y, center.Z + 1.0)
-                                for i in range(4):
-                                    marker_i = None
-                                    try:
-                                        with _sheetgen_transaction("Create elevation direction", subtransaction=True):
-                                            marker_i = ElevationMarker.CreateElevationMarker(
-                                                doc, elev_type_id, center, scale)
-                                            ev = self._create_interior_elevation_view(
-                                                marker_i, host_plan, 0,
-                                                cropbox_visible, max_dim,
-                                                offset, elev_template_id)
-                                            if i > 0:
-                                                axis = DB.Line.CreateBound(center, z_axis_top)
-                                                ElementTransformUtils.RotateElement(
-                                                    doc, marker_i.Id, axis,
-                                                    i * math.pi / 2.0)
-                                            doc.Regenerate()
-                                            self._finalize_elevation_name(ev, room_item)
-                                        result['elevations'].append(ev)
-                                    except Exception as ex:
-                                        error_count += 1
-                                        logger.error(
-                                            "Fallback elevation {} of 4 failed "
-                                            "for room {} [host plan: '{}', "
-                                            "type: '{}']: {}: {}".format(
-                                                i + 1, room_item.Number,
-                                                host_plan.Name, elev_type_name,
-                                                type(ex).__name__, ex))
-                            logger.info(
-                                "Room {}: {}/4 interior elevations created "
-                                "(type='{}', capacity={}, fallback={})".format(
-                                    room_item.Number,
-                                    len(result['elevations']),
-                                    elev_type_name, elev_capacity,
-                                    "yes" if use_fallback else "no"))
-                            if not result['elevations']:
-                                raise RuntimeError("No interior elevations could be created")
-                        created_count += len(result['elevations'])
-                except Exception as ex:
-                    result['elevations'] = []
-                    error_count += 1
-                    logger.error("Elevation error for room {}: {}".format(
-                        room_item.Number, ex))
-
-            room_results.append(result)
+            result = gen.create_room(room_item)
+            if result is not None:
+                room_results.append(result)
+        created_count = gen.created
+        error_count = gen.errors
 
         # ── Sheet Layout ────────────────────────────────
         sheets_created = 0
@@ -1498,44 +920,31 @@ class CreateRoomPlanWindow(T3WPFWindow):
         self.cmb_generated_sheets.IsEnabled = False
         self.btn_open_sheet.IsEnabled = False
         if do_layout and room_results and not self.is_cancelled:
-            tb_name = self.cmb_titleblock.SelectedItem
-            tb_id   = self._titleblock_map.get(tb_name) if tb_name else None
-            if tb_id:
-                combined = bool(self.rdo_layout_combined.IsChecked)
-                for layout_index, result in enumerate(room_results):
-                    if not self.step_progress(layout_index, "Laying out room {}/{}...".format(layout_index + 1, len(room_results))):
-                        break
-                    try:
-                        sheets = self._layout_views_on_sheets(
-                            result, tb_id, combined
-                        )
-                        sheets_created += len(sheets)
-                        for sh in sheets:
-                            self._generated_sheets.append(sh)
-                    except Exception as ex:
-                        error_count += 1
-                        logger.error("Sheet layout error for {}: {}".format(
-                            result['room_item'].Name, ex))
+            combined = bool(self.rdo_layout_combined.IsChecked)
+            for layout_index, result in enumerate(room_results):
+                if not self.step_progress(layout_index, "Laying out room {}/{}...".format(layout_index + 1, len(room_results))):
+                    break
+                try:
+                    sheets = self._layout_views_on_sheets(result, tb_id, combined)
+                    sheets_created += len(sheets)
+                    self._generated_sheets.extend(sheets)
+                except Exception as ex:
+                    error_count += 1
+                    logger.error("Sheet layout error for {}: {}".format(
+                        result['room_item'].Name, ex))
 
-                if self._generated_sheets:
-                    # Clear and populate the combo box
-                    self.cmb_generated_sheets.Items.Clear()
-                    for sh in self._generated_sheets:
-                        sheet_num = sh.get_Parameter(DB.BuiltInParameter.SHEET_NUMBER)
-                        num_str = sheet_num.AsString() if sheet_num else "???"
-                        self.cmb_generated_sheets.Items.Add("{} - {}".format(num_str, sh.Name))
-                    
-                    # Select first sheet and enable controls
-                    self.cmb_generated_sheets.SelectedIndex = 0
-                    self.cmb_generated_sheets.IsEnabled = True
-                    self.btn_open_sheet.IsEnabled = True
-            else:
-                logger.warning("No title block selected — skipping sheet layout.")
+            if self._generated_sheets:
+                self.cmb_generated_sheets.Items.Clear()
+                for sh in self._generated_sheets:
+                    sheet_num = sh.get_Parameter(DB.BuiltInParameter.SHEET_NUMBER)
+                    num_str = sheet_num.AsString() if sheet_num else "???"
+                    self.cmb_generated_sheets.Items.Add("{} - {}".format(num_str, sh.Name))
+                self.cmb_generated_sheets.SelectedIndex = 0
+                self.cmb_generated_sheets.IsEnabled = True
+                self.btn_open_sheet.IsEnabled = True
 
         # ── Result ─────────────────────────────────────
-        cancelled = self.is_cancelled
-
-        if cancelled:
+        if self.is_cancelled:
             msg = "Cancelled — {} view(s) created.".format(created_count)
         else:
             msg = "{} view(s) created.".format(created_count)
@@ -1545,219 +954,12 @@ class CreateRoomPlanWindow(T3WPFWindow):
             msg += "\n{} error(s) — see output for details.".format(error_count)
 
         self.status_text.Text = msg
+        TaskDialog.Show("Create Room Plan", msg)
         if not do_layout:
-            TaskDialog.Show("Create Room Plan", msg)
-            self.Close()
-        else:
-            # Keep dialog open so user can click Open Selected Sheet
-            TaskDialog.Show("Create Room Plan", msg)
-
-    # ── Sheet helpers ─────────────────────────────────
-    def _get_sheet_rect(self, sheet):
-        """Return (x0, y0, width, height) of the title block on a sheet, in
-        feet. Uses the real bbox origin - title blocks are NOT guaranteed to
-        start at (0,0) (verified: FJX cover page bbox min is (349,-56) mm).
-        Falls back to A1 at the origin."""
-        try:
-            tb_elems = FilteredElementCollector(doc, sheet.Id) \
-                .OfCategory(BuiltInCategory.OST_TitleBlocks) \
-                .ToElements()
-            if tb_elems:
-                bb = tb_elems[0].get_BoundingBox(sheet)
-                if bb:
-                    w = bb.Max.X - bb.Min.X
-                    h = bb.Max.Y - bb.Min.Y
-                    if w > 0 and h > 0:
-                        return (bb.Min.X, bb.Min.Y, w, h)
-        except Exception:
-            pass
-        # Default A1: 841x594 mm = 2.759 x 1.949 ft
-        return (0.0, 0.0, 2.759, 1.949)
-
-    def _build_sheet_number(self, room_item, suffix=""):
-        """Build a sheet number like EPL-101-P or EPL-101-E."""
-        base = "EPL-{}".format(room_item.Number)
-        return "{}-{}".format(base, suffix) if suffix else base
-
-    def _unique_sheet_number(self, base_number):
-        """
-        Return base_number, or base_number with an incrementing "-n" suffix
-        if that sheet number is already in use (e.g. from a previous run of
-        this tool on the same room). Tracks numbers it hands out in
-        self._used_sheet_numbers so repeated calls within the same run
-        don't collide with each other either.
-        """
-        number = base_number
-        i = 2
-        while number in self._used_sheet_numbers:
-            number = "{}-{}".format(base_number, i)
-            i += 1
-        self._used_sheet_numbers.add(number)
-        return number
-
-    def _create_sheet(self, room_item, titleblock_id, name_suffix="", num_suffix=""):
-        """Create a ViewSheet. Returns the sheet element."""
-        sheet_name = self._build_view_name(room_item)
-        if name_suffix:
-            sheet_name = "{} — {}".format(sheet_name, name_suffix)
-        sheet_name = self._unique_view_name(sheet_name, ViewType.DrawingSheet)
-        sheet_num = self._unique_sheet_number(self._build_sheet_number(room_item, num_suffix))
-
-        with _sheetgen_transaction("Create Sheet"):
-            sheet = ViewSheet.Create(doc, titleblock_id)
-            sheet.Name = sheet_name
-            p_num = sheet.get_Parameter(DB.BuiltInParameter.SHEET_NUMBER)
-            if p_num is None or p_num.IsReadOnly:
-                raise RuntimeError("Sheet number is unavailable or read-only")
-            if not p_num.Set(sheet_num):
-                raise RuntimeError("Could not assign sheet number " + sheet_num)
-        return sheet
-
-    def _place_viewport_centered(self, sheet, view_id, cx, cy, usable=None):
-        """
-        Place a viewport at (cx, cy) in sheet coordinates, then nudge it back
-        inside the usable rect (margins + title header strip) using its real
-        paper footprint - so view content can never sit on the title block
-        header, whether the strip is vertical or horizontal.
-        Returns the committed Viewport element; raises on placement failure.
-        """
-        try:
-            with _sheetgen_transaction("Place Viewport"):
-                vp = Viewport.Create(doc, sheet.Id, view_id, XYZ(cx, cy, 0))
-                if vp is None:
-                    raise RuntimeError("Revit did not create a viewport")
-                if usable is not None:
-                    doc.Regenerate()
-                    try:
-                        box = vp.GetBoxOutline()
-                        w_p = box.MaximumPoint.X - box.MinimumPoint.X
-                        h_p = box.MaximumPoint.Y - box.MinimumPoint.Y
-                        bcx = (box.MaximumPoint.X + box.MinimumPoint.X) / 2.0
-                        bcy = (box.MaximumPoint.Y + box.MinimumPoint.Y) / 2.0
-                        nx, ny, fits = self._clamp_center(bcx, bcy, w_p, h_p, usable)
-                        if abs(nx - bcx) > 1e-6 or abs(ny - bcy) > 1e-6:
-                            vp.SetBoxCenter(XYZ(nx, ny, 0))
-                        if not fits:
-                            # Debug-level only (a warning here spams the
-                            # output window on every oversized view) - the
-                            # preview already flags this case with a red
-                            # outline before Create is clicked.
-                            view = doc.GetElement(view_id)
-                            logger.debug(
-                                "Viewport '{}' ({:.0f} x {:.0f} mm on paper) "
-                                "is larger than the usable area of sheet '{}' "
-                                "- reduce the view scale or use a larger "
-                                "title block.".format(
-                                    view.Name if view else view_id,
-                                    MILLIMETERS.from_feet(w_p),
-                                    MILLIMETERS.from_feet(h_p),
-                                    sheet.SheetNumber))
-                    except Exception as ex:
-                        logger.debug("Viewport clamp skipped: {}".format(ex))
-            return vp
-        except Exception as ex:
-            logger.error("Viewport place error: {}".format(ex))
-            raise
-
-    def _layout_combined(self, result, sheet):
-        """
-        Combined layout — plans left, 4 elevations right (2x2 grid), all kept
-        inside the usable rect (margins + title header strip). Slot geometry
-        comes from _slot_centers, the same helper the preview draws with.
-        """
-        x0, y0, w, h = self._get_sheet_rect(sheet)
-        strip_side, strip_ft = self._get_strip_config()
-        usable = self._usable_rect(x0, y0, w, h,
-                                   SHEET_MARGIN_FT, strip_side, strip_ft)
-
-        plan_views = [v for v in [
-            result.get('floor_plan'), result.get('ceiling_plan')
-        ] if v is not None]
-        elev_views = result.get('elevations', [])
-
-        plan_centers, elev_centers = self._slot_centers(
-            usable, len(plan_views), True)
-        for v, center in zip(plan_views, plan_centers):
-            self._place_viewport_centered(sheet, v.Id, center[0], center[1], usable)
-        for ev, center in zip(elev_views[:4], elev_centers):
-            self._place_viewport_centered(sheet, ev.Id, center[0], center[1], usable)
-
-    def _layout_separate(self, result, plan_sheet, elev_sheet):
-        """
-        Separate layout — plans on plan_sheet, elevations on elev_sheet, all
-        kept inside the usable rect (margins + title header strip).
-        """
-        strip_side, strip_ft = self._get_strip_config()
-
-        # ── Plans sheet ──────────────────────────────
-        if plan_sheet:
-            x0, y0, w, h = self._get_sheet_rect(plan_sheet)
-            usable = self._usable_rect(x0, y0, w, h,
-                                       SHEET_MARGIN_FT, strip_side, strip_ft)
-            plan_views = [v for v in [
-                result.get('floor_plan'), result.get('ceiling_plan')
-            ] if v is not None]
-            plan_centers, _unused = self._slot_centers(
-                usable, len(plan_views), False)
-            for v, center in zip(plan_views, plan_centers):
-                self._place_viewport_centered(
-                    plan_sheet, v.Id, center[0], center[1], usable)
-
-        # ── Elevations sheet ──────────────────────────
-        if elev_sheet:
-            x0, y0, w, h = self._get_sheet_rect(elev_sheet)
-            usable = self._usable_rect(x0, y0, w, h,
-                                       SHEET_MARGIN_FT, strip_side, strip_ft)
-            _unused, elev_centers = self._slot_centers(usable, 0, False)
-            for ev, center in zip(result.get('elevations', [])[:4], elev_centers):
-                self._place_viewport_centered(
-                    elev_sheet, ev.Id, center[0], center[1], usable)
+            self.Close()          # with a layout the window stays for Open Selected Sheet
 
     def _layout_views_on_sheets(self, result, titleblock_id, combined):
-        with _sheetgen_transaction("Layout room sheets", group=True):
-            sheets = self._layout_room_sheets(result, titleblock_id, combined)
-        return sheets
-
-    def _layout_room_sheets(self, result, titleblock_id, combined):
-        """
-        Create sheet(s) and place viewports for a single room result.
-        Returns list of created ViewSheet objects.
-        """
-        room_item  = result['room_item']
-        has_plans  = result['floor_plan'] or result['ceiling_plan']
-        has_elevs  = bool(result['elevations'])
-        sheets     = []
-
-        if combined:
-            # One sheet for everything
-            if has_plans or has_elevs:
-                sheet = self._create_sheet(room_item, titleblock_id)
-                self._layout_combined(result, sheet)
-                sheets.append(sheet)
-        else:
-            # Plans on their own sheet
-            if has_plans:
-                p_sheet = self._create_sheet(
-                    room_item, titleblock_id,
-                    name_suffix="Plans", num_suffix="P"
-                )
-                sheets.append(p_sheet)
-            else:
-                p_sheet = None
-
-            # Elevations on their own sheet
-            if has_elevs:
-                e_sheet = self._create_sheet(
-                    room_item, titleblock_id,
-                    name_suffix="Elevations", num_suffix="E"
-                )
-                sheets.append(e_sheet)
-            else:
-                e_sheet = None
-
-            self._layout_separate(result, p_sheet, e_sheet)
-
-        return sheets
+        return self._gen.layout(result, titleblock_id, combined)
 
     # ── Select-all o header cot checkbox ────────────────────────────────
     # toggle_all_rows() nam trong T3WPFWindow: no chay tren grid.Items nen chi

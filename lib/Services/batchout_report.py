@@ -5,6 +5,7 @@ Revit-free; tested by `dev/test_batchout_report.py`.
 """
 
 import csv
+import io
 import os
 from datetime import datetime
 
@@ -113,7 +114,8 @@ def write_report(path, rows, columns=None, fmt=None):
              for row in rows]
     if normalize_format(fmt or os.path.splitext(path)[1].lstrip('.')) == 'CSV':
         # utf-8-sig: Excel needs the BOM to read Vietnamese sheet names.
-        with open(path, 'w', encoding='utf-8-sig', newline='') as f:
+        # io.open: also runs under IronPython (MCP export_sheets).
+        with io.open(path, 'w', encoding='utf-8-sig', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(headers)
             writer.writerows(table)

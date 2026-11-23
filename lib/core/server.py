@@ -25,6 +25,7 @@ from core import mcp_policy
 from core import mcp_prompts
 from core import mcp_wiki
 from core import agent_cursors
+from core import tool_specs
 
 try:
     import queue as _queue_mod            # CPython 3
@@ -426,9 +427,15 @@ try:
                     agent_cursors.before(app, task)
                 except Exception:
                     pass
+                started = time.time()
                 try:
                     task.result = self.server._execute_tool_in_context(
                         task.tool_name, task.arguments, uiapp=app)
+                    # Read the model back (core/write_verify). getattr: a server
+                    # object from before a reload has no read-back.
+                    verify = getattr(self.server, '_verify_write', None) if is_write else None
+                    if verify is not None:
+                        task.result = verify(app, task, started)
                     task.exception = None
                 except Exception as e:
                     task.exception = e
@@ -2880,19 +2887,6 @@ class T3LabAIServer(object):
                     'required': ['name', 'categories']
                 }
             },
-            'room_to_floor': {
-                'name': 'room_to_floor',
-                'description': 'Create a floor matching the boundary of one or more rooms.',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'room_ids': {'type': 'array', 'items': {'type': ['integer', 'string']}, 'description': 'Room element IDs to build floors from'},
-                        'room_id': {'type': 'integer', 'description': 'Single room element ID (alternative to room_ids)'},
-                        'floor_type': {'type': 'string', 'description': 'Floor type name (optional)'}
-                    },
-                    'required': []
-                }
-            },
             'purge_unused': {
                 'name': 'purge_unused',
                 'description': ('Report (and optionally delete) unused family symbols and view templates. '
@@ -3061,6 +3055,8 @@ class T3LabAIServer(object):
                 }
             }
         }
+        # Tools declared once in core/tools/<domain>.py (core/tool_specs.py).
+        self._tools.update(tool_specs.registry_entries())
 
     @property
     def port(self):
@@ -3741,7 +3737,7 @@ class T3LabAIServer(object):
         'bulk_set_parameter', 'select_elements', 'tag_elements', 'create_dimension',
         'create_schedule', 'duplicate_view', 'apply_view_template',
         'create_view_filter', 'place_views_on_sheets', 'export_dwg', 'export_image',
-        'create_project_parameter', 'room_to_floor', 'purge_unused', 'create_workset',
+        'create_project_parameter', 'purge_unused', 'create_workset',
         # FamiGen: propose opens a WPF window (UI thread only); create opens a
         # family document, transacts, saves and may load into the project.
         'famigen_propose_family', 'famigen_create_family',
@@ -3754,7 +3750,7 @@ class T3LabAIServer(object):
         # public registry, but they open/close a TransactionGroup so they must
         # run on the Revit main thread like any other write tool.
         '__begin_action_group', '__end_action_group',
-    ])
+    ]) | tool_specs.names(main_thread=True)
 
     # ── Destructive-action declaration ────────────────────────────────────────
     # The confirmation gate lives in the Assistant UI (it has to block on a
@@ -3783,6 +3779,9 @@ class T3LabAIServer(object):
         for some operations, and the two argument-conditional legacy rules.
         """
         args = arguments or {}
+        spec_says = tool_specs.is_destructive(tool_name, args)
+        if spec_says is not None:
+            return spec_says
         if tool_name in self._DESTRUCTIVE_TOOLS:
             return True
         ops = self._DESTRUCTIVE_OPS.get(tool_name)
@@ -4107,6 +4106,54 @@ class T3LabAIServer(object):
     _ARGUMENT_REDIRECTS = {
         'get_schedule_data': frozenset(['category']),
     }
+
+    def _verify_write(self, app, task, started):
+        """task.result with a read-back of what the write claims
+        (core/write_verify, docs/agents/write-verify.md). Never fails the call."""
+        result = task.result
+        if not isinstance(result, dict):
+            return result
+        try:
+            from core import write_verify
+            doc = self._verify_doc(app, result)
+            if doc is None:
+                return result
+
+            def element(i):
+                try:
+                    return doc.GetElement(make_eid(int(i)))
+                except Exception:
+                    return None
+
+            def name_of(i):
+                e = element(i)
+                try:
+                    return elem_name(e) if e is not None else None
+                except Exception:
+                    return None
+
+            call = getattr(task, 'audit', None)
+            hooked = getattr(self, '_t3lab_audit_doc_changed', None) is not None
+            changes = ((call.added, call.modified, call.deleted)
+                       if call is not None and hooked else None)
+            report = write_verify.verify(task.tool_name, task.arguments, result, started,
+                                         lambda i: element(i) is not None, name_of, changes)
+            return write_verify.annotate(result, report)
+        except Exception:
+            return result
+
+    def _verify_doc(self, app, result):
+        """The document the write ran on: the pinned background one, else the active."""
+        try:
+            if result.get('background_document'):
+                for d in app.Application.Documents:
+                    if d.Title == result.get('document'):
+                        return d
+                return None
+            uidoc = app.ActiveUIDocument
+            return uidoc.Document if uidoc is not None else None
+        except Exception:
+            return None
 
     def _reject_unknown_arguments(self, tool_name, arguments):
         """Error dict when `arguments` carries keys the tool cannot honour.
@@ -4688,7 +4735,11 @@ class T3LabAIServer(object):
         """
         if doc is None or not isinstance(arguments, dict):
             return None
-        for key in self._HANDLE_ARG_KEYS:
+        keys = list(self._HANDLE_ARG_KEYS)
+        spec = tool_specs.get(tool_name)
+        if spec is not None:                       # core/tools: declared per tool
+            keys += [k for k in spec.handle_keys() if k not in keys]
+        for key in keys:
             if key not in arguments:
                 continue
             raw = arguments.get(key)
@@ -5407,6 +5458,10 @@ class T3LabAIServer(object):
                              'group cannot outlive the ExternalEvent that '
                              'opened it. Each tool commits its own '
                              'transaction.')}
+
+        # ── Tools declared in core/tools/<domain>.py ─────────────────────────
+        if tool_specs.get(tool_name) is not None:
+            return tool_specs.run(tool_name, doc, arguments)
 
         # What B4 could not do across several Executes, run_batch does inside
         # ONE: the group opens and closes in this same Execute.
@@ -11325,67 +11380,6 @@ class T3LabAIServer(object):
                             app.SharedParametersFilename = original_sp
                         except Exception:
                             pass
-            except Exception as e:
-                return {'error': str(e), 'tool': tool_name}
-
-        # ── room_to_floor ────────────────────────────────────────────────────
-        elif tool_name == 'room_to_floor':
-            from Autodesk.Revit.DB import (Transaction, ElementId, Floor, FloorType,
-                                           SpatialElementBoundaryOptions, CurveLoop)
-            from System.Collections.Generic import List as NetList
-            try:
-                ids = arguments.get('room_ids') or ([arguments['room_id']] if arguments.get('room_id') else [])
-                if not ids:
-                    return {'error': 'Provide room_id or room_ids.'}
-                ftype_name = arguments.get('floor_type')
-                ftypes = list(FilteredElementCollector(doc).OfClass(FloorType))
-                ftype = None
-                if ftype_name:
-                    for f in ftypes:
-                        if f.Name == ftype_name or ftype_name.lower() in f.Name.lower():
-                            ftype = f; break
-                if ftype is None and ftypes:
-                    ftype = ftypes[0]
-                if ftype is None:
-                    return {'error': 'No floor types available.'}
-
-                bopts = SpatialElementBoundaryOptions()
-                created = []
-                t = Transaction(doc, 'T3Lab AI Room To Floor')
-                t.Start()
-                try:
-                    for rid in ids:
-                        room = doc.GetElement(make_eid(int(rid)))
-                        if room is None:
-                            continue
-                        loops = room.GetBoundarySegments(bopts)
-                        if not loops or loops.Count == 0:
-                            continue
-                        loop = CurveLoop()
-                        for seg in loops[0]:
-                            loop.Append(seg.GetCurve())
-                        level_id = room.LevelId
-                        try:
-                            profile = NetList[CurveLoop]()
-                            profile.Add(loop)
-                            fl = Floor.Create(doc, profile, ftype.Id, level_id)
-                            created.append(eid_value(fl.Id))
-                        except Exception:
-                            # Older Revit fallback (NewFloor) — best effort.
-                            try:
-                                from Autodesk.Revit.DB import CurveArray
-                                ca = CurveArray()
-                                for seg in loops[0]:
-                                    ca.Append(seg.GetCurve())
-                                fl = doc.Create.NewFloor(ca, False)
-                                created.append(eid_value(fl.Id))
-                            except Exception:
-                                pass
-                    t.Commit()
-                except Exception as e:
-                    t.RollBack()
-                    return {'error': str(e), 'tool': tool_name}
-                return {'success': True, 'floors_created': len(created), 'floor_ids': created}
             except Exception as e:
                 return {'error': str(e), 'tool': tool_name}
 

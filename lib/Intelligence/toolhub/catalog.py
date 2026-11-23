@@ -62,12 +62,20 @@ def sync(client):
 
 
 def titles():
+    """Curated titles + those of tools declared in core/tools/ (core/tool_specs.py)."""
+    out = {}
+    try:
+        from core import tool_specs
+        out.update(tool_specs.titles())
+    except Exception:
+        pass
     try:
         with io.open(config.titles_file(), encoding='utf-8') as f:
             data = json.load(f)
     except (IOError, OSError, ValueError):
-        return {}
-    return {k: v for k, v in data.items() if not k.startswith('_')}
+        return out
+    out.update((k, v) for k, v in data.items() if not k.startswith('_'))
+    return out
 
 
 def local_rows(tools=None):

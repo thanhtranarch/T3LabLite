@@ -172,6 +172,9 @@ HUB_TOOL, HUB_PUBLISH_TOOL = 't3lab_hub', 'hub_publish'     # docs/data-hub.md
 # Tools implemented by the bridge itself (multi-instance control lives here —
 # a server inside one Revit process cannot see the other processes). Injected
 # into every tools/list response on top of the server manifest; never cached.
+VERIFY_TOOL = 't3lab_verify'      # exported files on this computer (core/tool_cli.py)
+VERIFY_MAX_FILES = 2000
+
 BRIDGE_TOOLS = [
     {
         'name': 'list_revit_instances',
@@ -223,6 +226,17 @@ BRIDGE_TOOLS = [
          'model': {'type': 'string', 'description': 'Document title, or part of it.'},
          'options': {'type': 'object', 'description': 'Options of the action.'}},
          'required': ['action']}},
+    {'name': VERIFY_TOOL,
+     'description': ('Before saying an export is done: check the files on this computer exist, '
+                     'are not empty and have the right header (PDF, DWG, IFC, RVT, XLSX, '
+                     'images). paths = files, folders or patterns; expect = the count the '
+                     'export reported.'),
+     'inputSchema': {'type': 'object', 'properties': {
+         'paths': {'type': 'array', 'items': {'type': 'string'}},
+         'ext': {'type': 'string', 'description': 'e.g. "pdf,dwg"'},
+         'since_minutes': {'type': 'number'},
+         'expect': {'type': 'integer'}},
+         'required': ['paths']}},
 ]
 
 
@@ -1127,6 +1141,60 @@ def _load_hub_store():
 _hs = _load_hub_store()
 
 
+def _load_tool_cli():
+    """core/tool_cli.py: in-extension import, else the copy deployed next to
+    the bridge (lib/bridge_deploy.py). None = the two features below are off."""
+    try:
+        from core import tool_cli
+        return tool_cli
+    except ImportError:
+        pass
+    try:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tool_cli.py')
+        spec = importlib.util.spec_from_file_location('tool_cli', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+_tc = _load_tool_cli()
+
+
+def _arg_error(name, args):
+    """Missing required arguments, or a name one typo away from a real one, of
+    a Revit tool (cached schema): refused here, so nothing waits on Revit and
+    the answer names the right parameter. None when the call may go on."""
+    if _tc is None:
+        return None
+    schema = _tc.schema_of(_load_cached_tools(), name)
+    problems = _tc.arg_problems(schema, args) if schema else []
+    if not problems:
+        return None
+    return {'error': _tc.problems_text(name, problems), 'error_code': 'bad_arguments',
+            'nothing_ran': True, 'expected_parameters': _tc.params_line(schema)}
+
+
+def _verify_files(args):
+    """t3lab_verify: tool_cli.verify; lists only the files that failed."""
+    if _tc is None:
+        return {'error': 'tool_cli.py is not next to the bridge. Open MCP Control in '
+                         'Revit once: it redeploys the bridge files.',
+                'error_code': 'verify_unavailable'}
+    paths = args.get('paths')
+    paths = [paths] if isinstance(paths, str) else paths
+    if not paths or not all(isinstance(p, str) and p.strip() for p in paths):
+        return {'error': 'paths must be a list of files, folders or patterns.',
+                'error_code': 'bad_arguments'}
+    try:
+        return _tc.verify(paths, exts=args.get('ext') or None, expect=args.get('expect'),
+                          since_min=args.get('since_minutes'), max_files=VERIFY_MAX_FILES)
+    except (TypeError, ValueError) as ex:
+        return {'error': 'Bad option: {}'.format(ex), 'error_code': 'bad_arguments'}
+
+
 def _hub_response(request_id, payload):
     """_tool_response without indentation: hub results are sized for tokens."""
     return {'jsonrpc': '2.0', 'id': request_id,
@@ -1268,6 +1336,12 @@ def _dispatch(request, current, token):
                 return _handle_switch(request, current, token)
             if name == HUB_TOOL:
                 return _handle_hub(request, current, token)
+            args = (request.get('params') or {}).get('arguments') or {}
+            if name == VERIFY_TOOL:
+                return _tool_response(request.get('id'), _verify_files(args))
+            refused = _arg_error(name, args)
+            if refused is not None:
+                return _tool_response(request.get('id'), refused)
             return _forward(request, current, token)
         except Exception as e:
             if _is_conn_refused(e):

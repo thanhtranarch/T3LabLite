@@ -36,14 +36,20 @@ from Autodesk.Revit.DB import (
     Element,
     ElementId,
     ExternalResourceTypes,
+    FailureProcessingResult,
+    FailureSeverity,
     FilteredElementCollector,
     FilteredWorksetCollector,
+    IFailuresPreprocessor,
+    ImportPlacement,
     LinkedFileStatus,
     LinkLoadResultType,
     ModelPathUtils,
     OverrideGraphicSettings,
     RevitLinkInstance,
+    RevitLinkOptions,
     RevitLinkType,
+    Transaction,
     View,
     ViewType,
     WorksetConfiguration,
@@ -486,6 +492,107 @@ def ensure_workset(doc, name):
         return -1
 
 
+# -- LINK A NEW MODEL --------------------------------------------------------
+# BatchLink › Link Models and the `link_models` tool (core/tools/links.py).
+
+# Positioning combo order (BatchLink.xaml) = tool `placement` enum.
+PLACEMENTS = ("origin", "shared", "site", "center")
+
+
+class WarningSwallower(IFailuresPreprocessor):
+    """Suppresses non-fatal warnings (duplicate types, shared coordinates) while linking."""
+    __namespace__ = "T3Lab.LinksWarningSwallower"
+
+    def PreprocessFailures(self, failuresAccessor):
+        fail_list = failuresAccessor.GetFailureMessages()
+        if fail_list.Count == 0:
+            return FailureProcessingResult.Continue
+
+        has_error = False
+        for failure in fail_list:
+            severity = failure.GetSeverity()
+            if severity == FailureSeverity.Warning:
+                failuresAccessor.DeleteWarning(failure)
+            elif severity == FailureSeverity.Error:
+                has_error = True
+                failuresAccessor.ResolveFailure(failure)
+
+        if has_error:
+            return FailureProcessingResult.ProceedWithCommit
+        return FailureProcessingResult.Continue
+
+
+def _import_placement(name):
+    return {"origin": ImportPlacement.Origin, "shared": ImportPlacement.Shared,
+            "site": ImportPlacement.Site,
+            "center": ImportPlacement.Centered}.get(name, ImportPlacement.Origin)
+
+
+def link_one(doc, model_path, label, relative=False, placement="origin", overlay=True,
+             pin=False, workset_for=None):
+    """Link one model in its own transaction (the caller holds the
+    TransactionGroup). model_path: a ModelPath (disk, server or cloud);
+    workset_for(label) -> host workset id or -1, called inside the transaction.
+
+    Returns {'ok', 'status', 'workset_note', 'type_id', 'instance_id'}; status is
+    "Linked", "Invalid Type", the LinkLoadResultType or the error's first line.
+    """
+    out = {'ok': False, 'status': '', 'workset_note': '', 'type_id': -1, 'instance_id': -1}
+    t = Transaction(doc, "Link: {}".format(label))
+    try:
+        t.Start()
+        fail_opts = t.GetFailureHandlingOptions()
+        fail_opts.SetFailuresPreprocessor(WarningSwallower())
+        fail_opts.SetClearAfterRollback(True)
+        t.SetFailureHandlingOptions(fail_opts)
+
+        load_result = RevitLinkType.Create(doc, model_path, RevitLinkOptions(bool(relative)))
+        if not (load_result and (
+                load_result.LoadResult == LinkLoadResultType.LinkLoaded or
+                load_result.LoadResult == LinkLoadResultType.UsedExisting)):
+            t.RollBack()
+            out['status'] = str(load_result.LoadResult) if load_result else "Load Failed"
+            return out
+        link_type_id = load_result.ElementId
+        if link_type_id == ElementId.InvalidElementId:
+            t.RollBack()
+            out['status'] = "Invalid Type"
+            return out
+        link_type = doc.GetElement(link_type_id)
+        if link_type and hasattr(link_type, 'AttachmentType'):
+            try:
+                link_type.AttachmentType = (AttachmentType.Overlay if overlay
+                                            else AttachmentType.Attachment)
+            except Exception:
+                pass
+        instance = RevitLinkInstance.Create(doc, link_type_id, _import_placement(placement))
+        if instance and pin:
+            try:
+                instance.Pinned = True
+            except Exception:
+                pass
+        ws_id = workset_for(label) if workset_for is not None else -1
+        if instance and ws_id >= 0:
+            for element in (instance, link_type):
+                ok, message = set_element_workset(doc, element, ws_id)
+                if not ok:
+                    out['workset_note'] = message
+                    break
+        t.Commit()
+        out.update(ok=True, status="Linked", type_id=eid_int(link_type_id),
+                   instance_id=eid_int(instance.Id) if instance else -1)
+    except Exception as ex:
+        if t.HasStarted() and not t.HasEnded():
+            t.RollBack()
+        out['status'] = str(ex).split("\n")[0] or "Error"
+    return out
+
+
+def user_model_path(file_path):
+    """ModelPath of a .rvt on disk or a server path."""
+    return ModelPathUtils.ConvertUserVisiblePathToModelPath(file_path)
+
+
 # -- WORKSETS OF A LINKED MODEL ----------------------------------------------
 
 class LinkWorkset(object):
@@ -540,6 +647,20 @@ def workset_config_ids(worksets, open_names, closed_names):
         else:
             close_ids.append(ws.workset_id)
     return open_ids, close_ids
+
+
+def get_link_worksets(link_doc):
+    """User worksets of a LOADED linked model: [LinkWorkset], sorted by name."""
+    result = []
+    try:
+        if link_doc is None or not link_doc.IsWorkshared:
+            return result
+        for ws in FilteredWorksetCollector(link_doc).OfKind(WorksetKind.UserWorkset):
+            result.append(LinkWorkset(eid_int_workset(ws.Id), ws.Name, ws.IsOpen, True))
+    except Exception:
+        pass
+    result.sort(key=lambda w: w.name.lower())
+    return result
 
 
 def apply_link_worksets(link_type, open_ids, close_ids):

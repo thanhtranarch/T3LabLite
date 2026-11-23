@@ -563,14 +563,6 @@
    "graphics"
   ]
  },
- "room_to_floor": {
-  "title_vi": "Tạo sàn từ phòng",
-  "keywords": [
-   "sàn",
-   "floor",
-   "phòng"
-  ]
- },
  "rotate_element": {
   "title_vi": "Xoay đối tượng",
   "keywords": [

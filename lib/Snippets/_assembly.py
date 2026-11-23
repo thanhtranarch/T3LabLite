@@ -189,6 +189,18 @@ def filter_assembly_candidates(records, allow_assembly_id=NO_ASSEMBLY):
     return ok, skipped
 
 
+def unsynced_rebar_ids(record, rebar_by_host):
+    """Loose rebar hosted by an AssemblyRecord's members: what Sync rebar adds."""
+    rebar = set(record.rebar_ids)
+    out = []
+    for member in record.members:
+        if member in rebar:
+            continue
+        rows, _ = filter_assembly_candidates(rebar_by_host.get(member, ()))
+        out.extend(row.id for row in rows)
+    return out
+
+
 def _unique_by_id(records):
     seen = set()
     out = []
@@ -613,10 +625,15 @@ def collect_assemblies(doc):
 
 
 def host_records_from_selection(doc, uidoc):
-    """A1: HostRecords for the current selection.
+    """A1: HostRecords for the current selection (see host_records_from_ids)."""
+    return host_records_from_ids(doc, uidoc.Selection.GetElementIds())
 
-    The selection may hold hosts, rebar (-> their host) and AssemblyInstances
-    (-> every member that is a valid host). Order is selection order, unique.
+
+def host_records_from_ids(doc, element_ids):
+    """A1: HostRecords for element ids (ElementId or int).
+
+    The ids may be hosts, rebar (-> their host) and AssemblyInstances
+    (-> every member that is a valid host). Order is input order, unique.
     """
     from Autodesk.Revit.DB import AssemblyInstance
     from Snippets._rebar import host_id_of
@@ -634,8 +651,8 @@ def host_records_from_selection(doc, uidoc):
         seen.add(key)
         out.append(_host_record(doc, element, type_names, valid_host=True))
 
-    for raw in uidoc.Selection.GetElementIds():
-        element = doc.GetElement(raw)
+    for raw in element_ids:
+        element = doc.GetElement(make_eid(eid_value(raw)))
         if element is None:
             continue
         try:

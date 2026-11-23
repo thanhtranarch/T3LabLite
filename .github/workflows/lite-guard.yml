@@ -92,3 +92,26 @@ jobs:
         run: python3 lite_guard/test_mcp_shadowing.py
       - name: Test MCP Control never destroys a config file it cannot read
         run: python3 lite_guard/test_mcp_config_safety.py
+      - name: IronPython gate (the MCP server runs IronPython 2.7; no py3-only code in what it imports)
+        run: python3 lite_guard/audit_ipy_compat.py --quiet
+      - name: Test the IronPython gate itself
+        run: python3 lite_guard/test_audit_ipy_compat.py
+      - name: Test tool specs (one declaration per AI tool reaches the registry, policy, Assistant)
+        run: python3 lite_guard/test_tool_specs.py
+      - name: Test the bridge argument check, t3lab_verify and Lite's policy on spec tools
+        run: python3 lite_guard/test_bridge_contract.py
+      - name: Test the read-back after a model write
+        run: python3 lite_guard/test_write_verify.py
+      - name: Test export_sheets (PDF / DWG / DXF / DGN by sheet set, BatchOut modules)
+        run: python3 lite_guard/test_sheet_export.py
+      - name: Test Batch Link (link step shared with the link_models tool)
+        run: python3 lite_guard/test_batch_link.py
+      - name: Test the AI tools per domain (standards, rebar, views, data, model, create, launch)
+        run: |
+          python3 lite_guard/test_tools_standards_domain.py
+          python3 lite_guard/test_tools_rebar_domain.py
+          python3 lite_guard/test_tools_views_domain.py
+          python3 lite_guard/test_tools_data_domain.py
+          python3 lite_guard/test_tools_model_domain.py
+          python3 lite_guard/test_tools_create_domain.py
+          python3 lite_guard/test_tools_launch.py

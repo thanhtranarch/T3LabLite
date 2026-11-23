@@ -50,17 +50,7 @@ from System.Windows.Media.Imaging import BitmapImage, BitmapCacheOption
 from System import Uri, UriKind, IntPtr
 
 from Autodesk.Revit.DB import (
-    AttachmentType,
     ElementId,
-    ImportPlacement,
-    IFailuresPreprocessor,
-    FailureProcessingResult,
-    FailureSeverity,
-    LinkLoadResultType,
-    ModelPathUtils,
-    RevitLinkInstance,
-    RevitLinkOptions,
-    RevitLinkType,
     SubTransaction,
     Transaction,
     TransactionGroup,
@@ -116,32 +106,6 @@ PRIMARY_LABELS = {
     TAB_WORKSETS: "Apply",
     TAB_DISPLAY: "Apply Display Settings",
 }
-
-
-import uuid
-
-
-class WarningSwallower(IFailuresPreprocessor):
-    """Suppresses non-fatal warnings (duplicate types, shared coordinates) while linking."""
-    __namespace__ = "T3Lab.BatchLink_" + uuid.uuid4().hex[:8]
-
-    def PreprocessFailures(self, failuresAccessor):
-        fail_list = failuresAccessor.GetFailureMessages()
-        if fail_list.Count == 0:
-            return FailureProcessingResult.Continue
-
-        has_error = False
-        for failure in fail_list:
-            severity = failure.GetSeverity()
-            if severity == FailureSeverity.Warning:
-                failuresAccessor.DeleteWarning(failure)
-            elif severity == FailureSeverity.Error:
-                has_error = True
-                failuresAccessor.ResolveFailure(failure)
-
-        if has_error:
-            return FailureProcessingResult.ProceedWithCommit
-        return FailureProcessingResult.Continue
 
 
 # ── ROW ITEMS ────────────────────────────────────────────────────────────────
@@ -1536,18 +1500,10 @@ class BatchLinkDialog(T3WPFWindow):
 
         pin_links = bool(self.chk_pin.IsChecked)
         skip_existing = bool(self.chk_skip_existing.IsChecked)
-
-        placement_map = {
-            0: ImportPlacement.Origin,
-            1: ImportPlacement.Shared,
-            2: ImportPlacement.Site,
-            3: ImportPlacement.Centered,
-        }
-        placement = placement_map.get(self.cb_positioning.SelectedIndex, ImportPlacement.Origin)
-
-        attachment_map = {0: AttachmentType.Overlay, 1: AttachmentType.Attachment}
-        attachment_type = attachment_map.get(self.cb_attachment.SelectedIndex,
-                                             AttachmentType.Overlay)
+        index = self.cb_positioning.SelectedIndex
+        placement = (_links.PLACEMENTS[index] if index is not None
+                     and 0 <= index < len(_links.PLACEMENTS) else "origin")
+        overlay = self.cb_attachment.SelectedIndex != 1
         is_relative = (self.cb_path_type.SelectedIndex == 1)
 
         self._begin_busy("Linking models")
@@ -1579,75 +1535,33 @@ class BatchLinkDialog(T3WPFWindow):
                     skipped_count += 1
                     continue
 
-                t = Transaction(self.doc, "Link: {}".format(item.FileName))
+                path_error = "Load Failed"
                 try:
-                    t.Start()
-                    fail_opts = t.GetFailureHandlingOptions()
-                    fail_opts.SetFailuresPreprocessor(WarningSwallower())
-                    fail_opts.SetClearAfterRollback(True)
-                    t.SetFailureHandlingOptions(fail_opts)
-
                     if cloud:
                         model_path = _cloud.cloud_model_path(
                             item.cloud, catalog.region_for(item.cloud))
-                        link_opts = RevitLinkOptions(False)
                     else:
-                        model_path = ModelPathUtils.ConvertUserVisiblePathToModelPath(
-                            item.full_path)
-                        link_opts = RevitLinkOptions(is_relative)
-                    load_result = RevitLinkType.Create(self.doc, model_path, link_opts)
-
-                    if load_result and (
-                        load_result.LoadResult == LinkLoadResultType.LinkLoaded or
-                        load_result.LoadResult == LinkLoadResultType.UsedExisting
-                    ):
-                        link_type_id = load_result.ElementId
-                        if link_type_id != ElementId.InvalidElementId:
-                            link_type = self.doc.GetElement(link_type_id)
-                            if link_type and hasattr(link_type, 'AttachmentType'):
-                                try:
-                                    link_type.AttachmentType = attachment_type
-                                except Exception:
-                                    pass
-                            instance = RevitLinkInstance.Create(self.doc, link_type_id, placement)
-                            if instance and pin_links:
-                                try:
-                                    instance.Pinned = True
-                                except Exception:
-                                    pass
-                            ws_note = ""
-                            ws_id = self._link_workset_for(item.FileName)
-                            if instance and ws_id >= 0:
-                                for element in (instance, link_type):
-                                    ok, message = _links.set_element_workset(
-                                        self.doc, element, ws_id)
-                                    if not ok:
-                                        ws_note = message
-                                        break
-                            t.Commit()
-                            item.StatusText = ("Linked · workset: " + ws_note)[:24] if ws_note else "Linked"
-                            item.Severity = "Warning" if ws_note else "Success"
-                            success_count += 1
-                            existing_paths.add(norm_path)
-                            existing_names.add(clean_name)
-                            if cloud:
-                                catalog.linked_guids.add(item.cloud.model_guid)
-                        else:
-                            t.RollBack()
-                            item.StatusText = "Invalid Type"
-                            item.Severity = "Danger"
-                            failed_count += 1
-                    else:
-                        t.RollBack()
-                        res_name = str(load_result.LoadResult) if load_result else "Load Failed"
-                        item.StatusText = res_name
-                        item.Severity = "Danger"
-                        failed_count += 1
-
+                        model_path = _links.user_model_path(item.full_path)
                 except Exception as ex:
-                    if t.HasStarted() and not t.HasEnded():
-                        t.RollBack()
-                    err = str(ex).split("\n")[0]
+                    model_path, path_error = None, str(ex).split("\n")[0]
+                if model_path is None:
+                    res = {'ok': False, 'status': path_error, 'workset_note': ''}
+                else:
+                    res = _links.link_one(self.doc, model_path, item.FileName,
+                                          relative=is_relative and not cloud,
+                                          placement=placement, overlay=overlay, pin=pin_links,
+                                          workset_for=self._link_workset_for)
+                if res['ok']:
+                    ws_note = res['workset_note']
+                    item.StatusText = ("Linked · workset: " + ws_note)[:24] if ws_note else "Linked"
+                    item.Severity = "Warning" if ws_note else "Success"
+                    success_count += 1
+                    existing_paths.add(norm_path)
+                    existing_names.add(clean_name)
+                    if cloud:
+                        catalog.linked_guids.add(item.cloud.model_guid)
+                else:
+                    err = res['status']
                     if len(err) > 25:
                         err = err[:22] + "..."
                     item.StatusText = err or "Error"

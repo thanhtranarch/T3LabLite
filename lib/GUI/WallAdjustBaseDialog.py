@@ -12,6 +12,8 @@ import System
 from GUI.WPF_Base import T3WPFWindow, set_items_source
 from Snippets._compat import eid_value
 from Snippets._units import project_length_unit, MILLIMETERS
+# Revit side shared with the rehost_to_level tool (core/tools/model.py).
+from Snippets.wall_tools import adjust_element
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'WallAdjustBase.xaml')
 
@@ -208,48 +210,7 @@ class WallAdjustBaseWindow(T3WPFWindow):
         forms.alert(msg, title="Auto Adjust Base Offset")
 
     def _adjust_element(self, elem, new_level, adjust_base=True):
-        try:
-            if isinstance(elem, Wall):
-                param_lvl = BuiltInParameter.WALL_BASE_CONSTRAINT if adjust_base else BuiltInParameter.WALL_HEIGHT_TYPE
-                param_off = BuiltInParameter.WALL_BASE_OFFSET if adjust_base else BuiltInParameter.WALL_TOP_OFFSET
-            elif isinstance(elem, Floor):
-                param_lvl = BuiltInParameter.LEVEL_PARAM
-                param_off = BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM
-            elif isinstance(elem, FamilyInstance):
-                cat_id = eid_value(elem.Category.Id)
-                if cat_id in (BuiltInCategory.OST_StructuralColumns.value__, BuiltInCategory.OST_Columns.value__):
-                    param_lvl = BuiltInParameter.FAMILY_BASE_LEVEL_PARAM if adjust_base else BuiltInParameter.FAMILY_TOP_LEVEL_PARAM
-                    param_off = BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM if adjust_base else BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM
-                elif cat_id == BuiltInCategory.OST_StructuralFraming.value__:
-                    param_lvl = BuiltInParameter.INSTANCE_REFERENCE_LEVEL_PARAM
-                    param_off = BuiltInParameter.STRUCTURAL_BEAM_END0_ELEVATION
-                else:
-                    return False
-            else:
-                return False
-
-            p_lvl = elem.get_Parameter(param_lvl)
-            p_off = elem.get_Parameter(param_off)
-            if not p_lvl or not p_off or p_lvl.IsReadOnly or p_off.IsReadOnly:
-                return False
-
-            old_lvl_id = p_lvl.AsElementId()
-            if old_lvl_id == ElementId.InvalidElementId:
-                return False
-
-            old_level = self._doc.GetElement(old_lvl_id)
-            if not old_level or not isinstance(old_level, Level):
-                return False
-
-            old_offset = p_off.AsDouble()
-            actual_elevation = old_level.Elevation + old_offset
-            new_offset = actual_elevation - new_level.Elevation
-
-            p_lvl.Set(new_level.Id)
-            p_off.Set(new_offset)
-            return True
-        except Exception:
-            return False
+        return adjust_element(self._doc, elem, new_level, adjust_base)
 
 
 def show_wall_adjust_base(doc, uidoc):

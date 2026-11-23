@@ -110,7 +110,8 @@ def log_exception(tool, context, details):
             os.makedirs(folder)
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
             try:
-                os.replace(path, path + '.1')
+                from Snippets._compat import replace_file
+                replace_file(path, path + '.1')
             except Exception:
                 os.remove(path)
         with io.open(path, 'a', encoding='utf-8') as f:

@@ -71,6 +71,7 @@ python lite_guard/test_compat_replace_file.py
 python lite_guard/test_tool_specs.py
 python lite_guard/test_bridge_contract.py
 python lite_guard/test_write_verify.py
+python lite_guard/test_doc_switch.py
 python lite_guard/test_sheet_export.py
 python lite_guard/test_batch_link.py
 python lite_guard/test_tools_standards_domain.py

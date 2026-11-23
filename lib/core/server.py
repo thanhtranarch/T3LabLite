@@ -626,10 +626,11 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({'error': 'Forbidden origin'}, 403)
             return
 
-        content_length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
-
         try:
+            # A malformed Content-Length or body is a 400, not an exception
+            # in the handler.
+            content_length = int(self.headers.get('Content-Length', 0) or 0)
+            body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
             request = json.loads(body) if body else {}
         except ValueError:      # IronPython 2.7 has no json.JSONDecodeError
             self._send_json({'jsonrpc': '2.0', 'id': None,
@@ -2155,8 +2156,9 @@ class T3LabAIServer(object):
                     'properties': {
                         'code': {
                             'type': 'string',
-                            'description': ('IronPython 2.7 code to execute. Has access to doc, uidoc, app, and the variables '
-                                            '`result` / `output` (a list). Assign your answer to `result` or output.append(...) — '
+                            'description': ('IronPython 2.7 code to execute. Has access to doc, uidoc, app, the variables '
+                                            '`result` / `output` (a list) and the helpers eid_value, make_eid, elem_name, '
+                                            'revit_version (work on every Revit version). Assign your answer to `result` or output.append(...) — '
                                             'do NOT print for display and do NOT show any dialog/window.')
                         },
                         'description': {
@@ -2954,7 +2956,7 @@ class T3LabAIServer(object):
             'list_open_documents': {
                 'name': 'list_open_documents',
                 'description': ('List all documents open in this Revit instance (title, file path, '
-                                'which one is active). Tool calls always target the ACTIVE document '
+                                'which one is active, kind file / cloud / unsaved and can_activate). Tool calls always target the ACTIVE document '
                                 '— use switch_active_document to activate another one.'),
                 'inputSchema': {'type': 'object', 'properties': {}, 'required': []}
             },
@@ -2963,7 +2965,8 @@ class T3LabAIServer(object):
                 'description': ('Activate another project: brings the matched document\'s window to '
                                 'the front so it becomes the ACTIVE document that all tool calls '
                                 'target — the model on screen is the model being edited. Matches an '
-                                'open document by title or file path. '
+                                'open document by title or file path; local files and Autodesk Docs / '
+                                'BIM 360 models switch without a click, a never-saved one cannot. '
                                 'If nothing matches but path_or_title is an existing .rvt file path, '
                                 'the file is OPENED from disk in this Revit window (large models may '
                                 'exceed the 120s tool timeout — the file keeps opening in Revit; '
@@ -3133,15 +3136,24 @@ class T3LabAIServer(object):
                 except Exception:
                     pass
 
+            try:
+                from Snippets.doc_switch import activation
+            except Exception:
+                activation = None
             docs = []
             for d in uiapp.Application.Documents:
                 if d.IsLinked:
                     continue
-                docs.append({
+                entry = {
                     'title': d.Title,
                     'path': d.PathName or '(unsaved)',
                     'is_active': d.Title == active_title,
-                })
+                }
+                if activation is not None:
+                    # can_activate + kind: switch_active_document reaches it
+                    # without a click (file / cloud) or cannot (unsaved).
+                    entry.update(activation(d))
+                docs.append(entry)
             return docs
         except Exception:
             return []
@@ -4919,6 +4931,37 @@ class T3LabAIServer(object):
             _walk(grp, 0)
         return ids, matched, None
 
+    @staticmethod
+    def _as_list(value):
+        """Array argument that may arrive as "id" or "Walls, Floors" (iterating
+        a string gave per-letter errors)."""
+        if value is None or value == '':
+            return []
+        if isinstance(value, (str, type(u''))):
+            return [v.strip() for v in value.split(',') if v.strip()]
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]
+
+    def _bulk_targets(self, doc, arguments):
+        """(elements, error) bulk_set_parameter works on: ids, else category,
+        else every instance."""
+        from Autodesk.Revit.DB import FilteredElementCollector
+        ids = self._as_list(arguments.get('element_ids'))
+        if ids:
+            elements = [doc.GetElement(make_eid(int(i))) for i in ids]
+            return [e for e in elements if e is not None], None
+        bic = None
+        cat = arguments.get('category')
+        if cat:
+            bic, cat, cat_err = self._resolve_bic(cat)
+            if cat_err:
+                return None, cat_err
+        coll = FilteredElementCollector(doc).WhereElementIsNotElementType()
+        if bic is not None:
+            coll = coll.OfCategory(bic)
+        return list(coll), None
+
     def _find_elements(self, doc, arguments):
         """(elements, meta, error) — the shared element finder.
 
@@ -4950,7 +4993,7 @@ class T3LabAIServer(object):
         cat_args = []
         if arguments.get('category'):
             cat_args.append(arguments.get('category'))
-        for extra in (arguments.get('categories') or []):
+        for extra in self._as_list(arguments.get('categories')):
             if extra:
                 cat_args.append(extra)
         bics, cat_names = [], []
@@ -6358,7 +6401,7 @@ class T3LabAIServer(object):
             # Requested fields, validated: an unknown field name silently
             # dropped would look like "this element has no level" rather than
             # "you asked for a field that does not exist".
-            fields = arguments.get('fields')
+            fields = self._as_list(arguments.get('fields'))
             if fields:
                 bad = [f for f in fields if f not in self._FILTER_FIELDS]
                 if bad:
@@ -6370,7 +6413,7 @@ class T3LabAIServer(object):
             else:
                 fields = list(self._FILTER_DEFAULT_FIELDS)
 
-            group_by = arguments.get('group_by') or []
+            group_by = self._as_list(arguments.get('group_by'))
             if group_by:
                 bad = [g for g in group_by if g not in self._GROUP_BY_KEYS]
                 if bad:
@@ -8946,12 +8989,22 @@ class T3LabAIServer(object):
             # Execute directly in this ExternalEvent context (we are already on
             # the Revit main thread here). Also write result to result.json so
             # file-based clients can read it.
+            # _compat helpers in scope: version mistakes (IntegerValue on 2026,
+            # .Value before 2024) were a common send_code failure.
+            try:
+                _rev_year = int(doc.Application.VersionNumber)
+            except Exception:
+                _rev_year = None
             local_ctx = {
                 'doc':    doc,
                 'uidoc':  uidoc,
                 'app':    doc.Application,
                 'result': None,
                 'output': [],
+                'eid_value':     eid_value,
+                'make_eid':      make_eid,
+                'elem_name':     elem_name,
+                'revit_version': _rev_year,
             }
             # Redirect stdout for the duration of the exec: under pyRevit the
             # FIRST print() pops the output window as a dialog over Revit —
@@ -8968,7 +9021,11 @@ class T3LabAIServer(object):
             try:
                 _sys.stdout = _buf
                 try:
-                    exec(code, local_ctx)   # noqa: S102
+                    from core.code_errors import CODE_FILENAME as _CODE_FN
+                    try:
+                        exec(compile(code, _CODE_FN, 'exec'), local_ctx)   # noqa: S102
+                    except SystemExit:
+                        pass    # sys.exit() / script.exit(): end of the script, not of Execute
                 finally:
                     _sys.stdout = _old_stdout
                 printed      = _buf.getvalue().strip()
@@ -9001,6 +9058,13 @@ class T3LabAIServer(object):
                 import traceback
                 tb = traceback.format_exc()
                 err_str = '{}\n{}'.format(e, tb)
+                # The model gets the short form (line, source, hint); the full
+                # traceback goes to the result file.
+                try:
+                    from core.code_errors import summarize as _summarize
+                    short = _summarize(e, code, _sys.exc_info()[2])
+                except Exception:
+                    short = {'error': u'{}'.format(e)}
                 try:
                     from core.file_watcher import RESULT_FILE, RESULT_TXT
                     import json as _json, time as _time
@@ -9012,7 +9076,11 @@ class T3LabAIServer(object):
                         _f.write('ERROR: {}'.format(err_str))
                 except Exception:
                     pass
-                return {'success': False, 'error': err_str}
+                printed = _buf.getvalue().strip()
+                if printed:
+                    short['printed_before_error'] = printed[-2000:]
+                short['success'] = False
+                return short
 
         # ── say_hello ────────────────────────────────────────────────────────
         elif tool_name == 'say_hello':
@@ -10007,6 +10075,7 @@ class T3LabAIServer(object):
         # ── switch_active_document ───────────────────────────────────────────
         elif tool_name == 'switch_active_document':
             try:
+                from Snippets import doc_switch
                 query = (arguments.get('path_or_title') or '').strip()
                 if not query:
                     return {'error': 'path_or_title is required.'}
@@ -10014,38 +10083,11 @@ class T3LabAIServer(object):
                 uiapp = self._get_uiapp(uiapp)
                 open_docs = [d for d in uiapp.Application.Documents if not d.IsLinked]
 
-                def _norm(p):
-                    return os.path.normcase(os.path.normpath(p)) if p else ''
-
-                q_lower = query.lower()
-                q_path  = _norm(query)
-
                 # Match precedence: exact title → exact file path → file name
                 # (with or without .rvt) → unique title substring.
-                target = None
-                for d in open_docs:
-                    if d.Title.lower() == q_lower:
-                        target = d
-                        break
-                if target is None:
-                    for d in open_docs:
-                        if d.PathName and _norm(d.PathName) == q_path:
-                            target = d
-                            break
-                if target is None:
-                    for d in open_docs:
-                        base = os.path.basename(d.PathName) if d.PathName else ''
-                        if base and (base.lower() == q_lower or
-                                     os.path.splitext(base)[0].lower() == q_lower):
-                            target = d
-                            break
-                if target is None:
-                    partial = [d for d in open_docs if q_lower in d.Title.lower()]
-                    if len(partial) == 1:
-                        target = partial[0]
-                    elif len(partial) > 1:
-                        return {'error': 'Ambiguous document "{}" — several open documents match.'.format(query),
-                                'candidates': [d.Title for d in partial]}
+                target, err = doc_switch.match(open_docs, query)
+                if err:
+                    return err
 
                 if target is None:
                     # Not open in this Revit instance — if the query is a real
@@ -10087,19 +10129,17 @@ class T3LabAIServer(object):
 
                 # Activate the document's window — that is what makes it the
                 # target of every tool call (no hidden redirection: what's on
-                # screen is what gets edited). OpenAndActivateDocument takes a
-                # file path, so only saved documents can be activated.
-                path = target.PathName
-                if not path:
-                    return {'error': ('"{}" has never been saved, and Revit\'s API can only '
-                                      'activate documents by file path. Save it, or click its '
-                                      'tab in Revit to activate it manually.').format(target.Title),
-                            'open_documents': [d.Title for d in open_docs]}
-                uiapp.OpenAndActivateDocument(path)
+                # screen is what gets edited). A local file by its path, an
+                # Autodesk Docs / BIM 360 model by its cloud ModelPath; a
+                # never-saved document cannot be activated (doc_switch).
+                ok, kind = doc_switch.activate(uiapp, target)
+                if not ok:
+                    return {'error': kind, 'open_documents': [d.Title for d in open_docs]}
                 return {
                     'success': True,
                     'document': target.Title,
-                    'path': path,
+                    'path': target.PathName,
+                    'kind': kind,
                     'window_activated': True,
                     'note': ('"{}" is now the active document — all tool calls target it. '
                              'Call switch_active_document again to retarget.').format(target.Title),
@@ -10578,22 +10618,9 @@ class T3LabAIServer(object):
                 # wall (the old default of 500 silently stopped there on big
                 # models). An explicit positive limit is still honored.
                 limit  = int(arguments.get('limit', 0) or 0)
-                ids    = arguments.get('element_ids')
-
-                if ids:
-                    elements = [doc.GetElement(make_eid(int(i))) for i in ids]
-                    elements = [e for e in elements if e is not None]
-                else:
-                    cat = arguments.get('category')
-                    bic = None
-                    if cat:
-                        bic, cat, _cat_err = self._resolve_bic(cat)
-                        if _cat_err:
-                            return _cat_err
-                    coll = FilteredElementCollector(doc).WhereElementIsNotElementType()
-                    if bic is not None:
-                        coll = coll.OfCategory(bic)
-                    elements = list(coll)
+                elements, _cat_err = self._bulk_targets(doc, arguments)
+                if _cat_err:
+                    return _cat_err
 
                 modified, skipped, errors = 0, 0, 0
                 t = Transaction(doc, 'T3Lab AI Bulk Set Parameter')
@@ -10944,7 +10971,7 @@ class T3LabAIServer(object):
                 bic = self._bic_map().get(cat)
                 if bic is None:
                     return {'error': 'Unknown category "{}".'.format(cat)}
-                fields = arguments.get('fields') or []
+                fields = self._as_list(arguments.get('fields'))
                 name = arguments.get('name')
 
                 t = Transaction(doc, 'T3Lab AI Create Schedule')

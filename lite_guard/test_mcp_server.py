@@ -792,6 +792,12 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(code, 400)
         self.assertEqual(body['error']['code'], -32700)
 
+    def test_bad_content_length_is_a_parse_error(self):
+        """int(Content-Length) ran outside the try: the handler raised instead."""
+        code, body = self._post(b'{}', headers={'Content-Length': 'abc'})
+        self.assertEqual(code, 400)
+        self.assertEqual(body['error']['code'], -32700)
+
     def test_batch_array_rejected(self):
         code, body = self._post([{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}])
         self.assertEqual(code, 400)
@@ -1049,6 +1055,72 @@ class BridgeProtocolTests(unittest.TestCase):
             'error': {'code': -32601, 'message': 'Method not found'}}
         res = bridge._handle(self._req('prompts/list', modern=False), self.current, 't')
         self.assertEqual(res['result'], {'prompts': []})
+
+
+class ServerArgumentTests(unittest.TestCase):
+    """Tool-level fixes from t3lab_dev: string array arguments, send_code errors."""
+
+    def test_as_list(self):
+        f = srv_mod.T3LabAIServer._as_list
+        self.assertEqual(f('Walls, Floors'), ['Walls', 'Floors'])     # not per letter
+        self.assertEqual(f('Walls'), ['Walls'])
+        self.assertEqual(f(['a', 'b']), ['a', 'b'])
+        self.assertEqual(f(('a',)), ['a'])
+        self.assertEqual(f(12), [12])
+        self.assertEqual((f(None), f('')), ([], []))
+
+    def test_string_arguments_go_through_as_list(self):
+        with open(os.path.join(LIB, 'core', 'server.py'), encoding='utf-8') as f:
+            src = f.read()
+        for raw in ("for extra in (arguments.get('categories') or [])",
+                    "fields = arguments.get('fields')\n",
+                    "group_by = arguments.get('group_by') or []",
+                    "fields = arguments.get('fields') or []"):
+            self.assertNotIn(raw, src)
+        self.assertIn("elements, _cat_err = self._bulk_targets(doc, arguments)", src)
+
+    def _send_code(self, code):
+        import types
+        db = types.ModuleType('Autodesk.Revit.DB')
+        for name in ('FilteredElementCollector', 'ViewSheet', 'BuiltInCategory', 'Level',
+                     'ElementId', 'Transaction', 'ElementLevelFilter'):
+            setattr(db, name, None)
+        app = types.SimpleNamespace(VersionNumber='2025')
+        doc = types.SimpleNamespace(Application=app, Title='M', PathName='')
+        pyrevit = types.ModuleType('pyrevit')
+        pyrevit.revit = types.SimpleNamespace(doc=doc, uidoc=None)
+        names = ('Autodesk', 'Autodesk.Revit', 'Autodesk.Revit.DB', 'pyrevit')
+        saved = dict((n, sys.modules.get(n)) for n in names)
+        autodesk, revit = types.ModuleType('Autodesk'), types.ModuleType('Autodesk.Revit')
+        autodesk.Revit, revit.DB = revit, db
+        sys.modules.update({'Autodesk': autodesk, 'Autodesk.Revit': revit,
+                            'Autodesk.Revit.DB': db, 'pyrevit': pyrevit})
+        try:
+            return _server()._execute_tool_in_context('send_code_to_revit', {'code': code})
+        finally:
+            for n, v in saved.items():
+                if v is None:
+                    sys.modules.pop(n, None)
+                else:
+                    sys.modules[n] = v
+
+    def test_send_code_helpers_in_scope(self):
+        res = self._send_code('result = (revit_version, eid_value is not None, '
+                              'make_eid is not None, elem_name is not None)')
+        self.assertEqual(res, {'success': True, 'result': '(2025, True, True, True)'})
+
+    def test_send_code_error_is_short_and_points_at_the_line(self):
+        res = self._send_code('print("before")\nx = None\nx.Name')
+        self.assertFalse(res['success'])
+        self.assertEqual(res['line'], 3)
+        self.assertEqual(res['source'], 'x.Name')
+        self.assertEqual(res['category'], 'none_result')
+        self.assertEqual(res['printed_before_error'], 'before')
+        self.assertNotIn('Traceback', res['error'])
+
+    def test_send_code_sys_exit_ends_the_script_only(self):
+        res = self._send_code('result = 1\nimport sys\nsys.exit()')
+        self.assertEqual(res, {'success': True, 'result': '1'})
 
 
 class BridgeFailoverTests(unittest.TestCase):

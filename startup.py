@@ -32,6 +32,8 @@ Responsibilities:
  7b. Move pyRevit Routes off the T3Lab MCP ports (lib/routes_guard.py).
   8. Auto-start the MCP server (lib/Services/mcp_service.py). The bridge in
      %APPDATA%/T3LabAI is refreshed in 2c; MCP Control > Connect deploys it.
+ 8b. Write the T3Lab entry into the installed AI apps that lack it
+     (MCPService.auto_connect_clients).
   9. Run the once-a-week update check against GitHub (lib/core/updater.py).
  10. Record session start telemetry (lib/tracking/), after asking for consent.
 
@@ -597,6 +599,16 @@ def main():
         if _auto:
             MCPService.ensure_external_event()
             MCPService.start_server()
+
+        # ─── 8b. Connect the installed AI apps by themselves ───────────────────
+        # Claude Desktop, ChatGPT (Codex), Antigravity: an app without the
+        # T3Lab entry gets it here, so nobody opens MCP Control to click
+        # Connect (owner, 2026-11-23). mcp_paths.json "auto_connect_clients":
+        # false turns it off.
+        for _c in MCPService.auto_connect_clients():
+            _log("MCP auto-connect %s (%s): %s" % (
+                _c['label'], _c['server'],
+                'connected, restart the app' if _c['ok'] else 'skipped, ' + _c['message']))
     except Exception:
         pass
 

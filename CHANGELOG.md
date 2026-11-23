@@ -19,7 +19,12 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Added
+- **AI apps connect by themselves:** when Revit starts, T3Lab writes its entry into Claude Desktop, ChatGPT (Codex) and Antigravity if the app is installed and does not have the entry yet. Nobody has to open MCP Control and click Connect. Restart the AI app once so it loads T3Lab. An app that is not installed gets no file, an entry that is already there is not changed, and your other MCP servers stay. Claude Desktop must be closed when Revit starts (it is tried again at the next start). To turn this off, set `"auto_connect_clients": false` in `%APPDATA%\T3LabAI\mcp_paths.json`.
+- **MCP Control — Update downloads the newest AutoCAD / Civil 3D add-in:** with AutoCAD or Civil 3D picked, **Update** (or **Connect**) on an AI app downloads the latest T3LabCAD package and installs it right away — before, at most once every 10 minutes and without a word when nothing changed. The line under the buttons says what happened: installed, already the latest, or not updated (offline).
+
 ### Fixed
+- **MCP Control — Update failed with "Claude Desktop is running" when nothing had to change:** the add-in is updated and the entry is left as it is.
 - **MCP Control — Connect had no effect on Claude Desktop from the Microsoft Store:** that build keeps its settings in `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude`, not in `%APPDATA%\Claude`, so Connect wrote a file Claude Desktop never reads and still showed "Connected". Connect now writes the file the installed build reads. If you connected before, click **Connect** once more.
 - **MCP Control — the Revit entry disappeared from Claude Desktop:** Claude Desktop saves its settings when it quits, which removed an entry written while it was open. Connect now asks you to quit Claude Desktop first (tray icon → Quit), for Revit as it already did for AutoCAD.
 

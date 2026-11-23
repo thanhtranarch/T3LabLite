@@ -19,6 +19,10 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Fixed
+- **MCP Control — Connect had no effect on Claude Desktop from the Microsoft Store:** that build keeps its settings in `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude`, not in `%APPDATA%\Claude`, so Connect wrote a file Claude Desktop never reads and still showed "Connected". Connect now writes the file the installed build reads. If you connected before, click **Connect** once more.
+- **MCP Control — the Revit entry disappeared from Claude Desktop:** Claude Desktop saves its settings when it quits, which removed an entry written while it was open. Connect now asks you to quit Claude Desktop first (tray icon → Quit), for Revit as it already did for AutoCAD.
+
 ## [2.7.2] - 2026-11-20
 
 ### Fixed

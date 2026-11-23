@@ -52,6 +52,7 @@ python lite_guard/test_cursor_consent.py
 python lite_guard/test_open_timing.py
 python lite_guard/test_lite_user.py
 python lite_guard/test_pyrevit_revit_thread.py
+python lite_guard/test_shared_engine.py
 python lite_guard/test_pyrevit_patch_versions.py
 python lite_guard/test_data_hub.py
 python lite_guard/test_bridge_deploy.py

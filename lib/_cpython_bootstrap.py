@@ -508,10 +508,63 @@ def _patch_pyrevit_forms():
         pass
 
 
+# ─── Another extension in the same engine ───────────────────────────────────
+# T3Lab and T3LabLite run in ONE persistent CPython engine and both ship the
+# packages GUI, Services, core... sys.modules keeps whichever was imported
+# first, so a click in one extension imported the other's modules
+# (2026-11-20: "No module named 'GUI.LLMSettingDialog'"). claim_lib() makes this
+# lib win on every click. Test: lite_guard/test_shared_engine.py.
+_OWN_NAMES = {}
+
+
+def _own_names(lib):
+    """Top-level modules and packages this lib provides (cached per lib)."""
+    names = _OWN_NAMES.get(lib)
+    if names is None:
+        names = set()
+        try:
+            for entry in os.listdir(lib):
+                path = os.path.join(lib, entry)
+                if entry.endswith('.py') and entry != '__init__.py':
+                    names.add(entry[:-3])
+                elif os.path.isfile(os.path.join(path, '__init__.py')):
+                    names.add(entry)
+        except OSError:
+            pass
+        names -= set(getattr(sys, 'stdlib_module_names', ())) | {'pyrevit', 'clr', 'System'}
+        _OWN_NAMES[lib] = names
+    return names
+
+
+def claim_lib(lib_dir=None, modules=None, path=None):
+    """Put `lib_dir` (default: this file's lib) first on sys.path and drop every
+    loaded module sharing a top-level name with it that lives elsewhere.
+    Returns the dropped module names."""
+    lib = os.path.normcase(os.path.abspath(lib_dir or os.path.dirname(os.path.abspath(__file__))))
+    modules = sys.modules if modules is None else modules
+    path = sys.path if path is None else path
+    for entry in [p for p in path if os.path.normcase(os.path.abspath(p or '.')) == lib]:
+        path.remove(entry)
+    path.insert(0, lib)
+    names, prefix, dropped = _own_names(lib), lib + os.sep, []
+    for name in list(modules):
+        if name.split('.')[0] not in names:
+            continue
+        origin = getattr(modules.get(name), '__file__', None)
+        if origin and not os.path.normcase(os.path.abspath(origin)).startswith(prefix):
+            del modules[name]
+            dropped.append(name)
+    return dropped
+
+
 def init_cpython_paths():
     """Ensure pyRevit CPython standard library and C extensions are in sys.path and DLL path."""
     sys.dont_write_bytecode = True
     _timing('run_started')      # opt-in open timing log (lib/open_timing.py)
+    try:
+        claim_lib()
+    except Exception:
+        pass
     engine_dirs = []
     candidates = []
     running = sys.version_info[:2]

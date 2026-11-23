@@ -79,6 +79,8 @@ jobs:
         run: python3 lite_guard/test_open_timing.py
       - name: Test pyrevit.revit is first imported on Revit's thread (no thread imports it)
         run: python3 -W ignore lite_guard/test_pyrevit_revit_thread.py
+      - name: Test T3Lab and T3Lab Lite in one CPython engine (claim_lib, button prelude)
+        run: python3 lite_guard/test_shared_engine.py
       - name: Test the pyRevit reload patch is for pyRevit before 7.0 only
         run: python3 lite_guard/test_pyrevit_patch_versions.py
       - name: Test the Assistant user name (own file, asked once, no built-in name)

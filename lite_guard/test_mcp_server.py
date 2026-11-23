@@ -570,10 +570,12 @@ class ToolCallTests(unittest.TestCase):
         self.s = _server()
         self.calls = []
         self.agents = []
+        self.harness = []
 
-        def fake_execute(name, arguments, confirm=None, agent=None):
+        def fake_execute(name, arguments, confirm=None, agent=None, harness=None):
             self.calls.append((name, arguments, confirm))
             self.agents.append(agent)
+            self.harness.append(harness)
             return {'error': 'boom'} if name == 'create_grid' else {'ok': name}
         self.s._execute_tool = fake_execute
         self.s._external_event = None
@@ -665,6 +667,16 @@ class ToolCallTests(unittest.TestCase):
         self._call('create_level')
         # no name on the call: "AI app", never a guessed app
         self.assertEqual(self.agents, ['codex-mcp-client', 'mcp-client'])
+
+    def test_harness_task_from_the_bridge_reaches_the_task(self):
+        # Agent Cursors name the step and give a chat of a client its own cursor.
+        self.s._handle_tool_call({'name': 'create_level', 'arguments': {}, '_meta': {
+            't3lab/agent': 'claude-desktop', 't3lab/task': 's1/a',
+            't3lab/task_title': 'Fix marks', 't3lab/member': 'claude-desktop/arch'}})
+        self.s._handle_tool_call({'name': 'create_level', 'arguments': {},
+                                  '_meta': {'t3lab/agent': 'codex'}})
+        self.assertEqual(self.harness,
+                         [('s1/a', 'Fix marks', 'claude-desktop/arch'), None])
 
     def test_confirm_can_be_turned_off(self):
         _set_settings(**{mp.CONFIRM_KEY: False})
@@ -794,13 +806,35 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(code, 403)
 
     def test_tools_list_does_not_wait_for_a_running_call(self):
-        # A slow tools/call holds the request lock; tools/list must still answer.
-        with srv_mod._MCP_REQUEST_LOCK:
+        # A slow tools/call holds Revit's slot; tools/list must still answer.
+        with srv_mod._CONDUCTOR.slot(srv_mod._conductor.Ticket()):
             t0 = time.time()
             code, body = self._post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
             self.assertLess(time.time() - t0, 3)
         self.assertEqual(code, 200)
         self.assertGreater(len(body['result']['tools']), 50)
+
+    def test_a_call_that_cannot_start_in_time_never_runs(self):
+        # The harness stamps a wait budget (bridge t3lab/queue_wait_s): behind
+        # a slot that stays busy the call is refused, it never runs late.
+        call = {'jsonrpc': '2.0', 'id': 11, 'method': 'tools/call',
+                'params': {'name': mcp_wiki.TOOL_NAME, 'arguments': {},
+                           '_meta': {'t3lab/agent': 'codex', 't3lab/lane': 'task',
+                                     't3lab/queue_wait_s': 1}}}
+        with srv_mod._CONDUCTOR.slot(srv_mod._conductor.Ticket(agent='claude-desktop')):
+            code, body = self._post(call)
+        payload = json.loads(body['result']['content'][0]['text'])
+        self.assertEqual((code, payload['error_code'], payload['nothing_ran']),
+                         (200, 'revit_busy', True))
+        self.assertEqual(payload['running']['agent'], 'claude-desktop')
+        code, body = self._post(call)                   # free slot: it runs
+        self.assertNotIn('revit_busy', json.dumps(body))
+
+    def test_health_shows_the_queue(self):
+        req = urllib.request.Request('http://127.0.0.1:{}/health'.format(self.port))
+        with urllib.request.urlopen(req, timeout=5) as r:
+            queue = json.loads(r.read())['queue']
+        self.assertEqual((queue['busy'], queue['waiting']), (False, 0))
 
     def test_unknown_method(self):
         code, body = self._post({'jsonrpc': '2.0', 'id': 3, 'method': 'subscriptions/listen'})
@@ -876,7 +910,7 @@ class HttpTests(unittest.TestCase):
                          mcp_wiki.URI_PREFIX + '{page}')
 
     def test_wiki_and_prompts_do_not_wait_for_a_running_call(self):
-        with srv_mod._MCP_REQUEST_LOCK:
+        with srv_mod._CONDUCTOR.slot(srv_mod._conductor.Ticket()):
             t0 = time.time()
             for method in ('server/discover', 'resources/list', 'prompts/list'):
                 code, _body = self._post({'jsonrpc': '2.0', 'id': 10, 'method': method})

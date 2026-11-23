@@ -3001,6 +3001,12 @@ class T3LabAssistantWindow(T3WPFWindow):
                           'description': (u'Install or update skills from a '
                                           u'GitHub repo'),
                           'source': None, 'enabled': True})
+        # /harness → _try_harness_command (the BIM Harness board, docs/harness.md).
+        if u'harness'.startswith(q):
+            items.append({'id': u'harness', 'name': u'Harness',
+                          'description': (u'The task board several AI agents share: '
+                                          u'see it, review a task, open Studio'),
+                          'source': None, 'enabled': True})
         # Tool Hub opens LLMs Setting on its tab instead of inserting a command.
         if u'toolhub'.startswith(q):
             items.append({'id': u'toolhub', 'name': u'Tool Hub',
@@ -3927,6 +3933,10 @@ class T3LabAssistantWindow(T3WPFWindow):
                 return
 
             if not attached and raw and self._commands._try_toolhub_command(raw):
+                return
+
+            # /harness: the shared task board (Intelligence/harness_client.py).
+            if not attached and raw and self._commands._try_harness_command(raw):
                 return
 
             # Pasted URL / UNC / local path → fetched and pushed onto

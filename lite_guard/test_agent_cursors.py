@@ -1158,6 +1158,91 @@ def test_bar_only():
           and 'model' in AC.OPTION_LABELS and groups)
 
 
+def test_harness_hud():
+    """Several agents, one task board (docs/harness.md)."""
+    import json
+    import types
+    print('[harness on the HUD]')
+    check('task text from the bridge stamp',
+          AC.harness_task_text('a1b2c3d4/doors', 'Check  the doors') == 'Task doors · Check the doors')
+    check('no task -> empty', AC.harness_task_text(None, 'x') == '' and
+          AC.harness_task_text('s/k', '') == 'Task k')
+    check('long task title cut', len(AC.harness_task_text('s/k', 'x' * 200)) <= AC.TASK_MAX + 10)
+
+    tag, colour = AC.agent_style('claude-desktop/Arch')
+    check('a chat of a client has its own tag', tag == 'Claude · arch', tag)
+    check('and its own colour', colour != AC.agent_style('claude-desktop')[1]
+          and colour != AC.agent_style('claude-desktop/mep')[1], colour)
+
+    # What core/server.py puts on a _ToolTask from the bridge's stamps.
+    task = types.SimpleNamespace(agent='claude-desktop', member='claude-desktop/arch',
+                                 task_ref='s1/a', task_title='Fix marks', source='mcp',
+                                 tool_name='set_parameter')
+    check('cursor is the harness member', AC._agent_of(task) == 'claude-desktop/arch')
+    check('cursor names the harness task', AC._task_text(task, 'claude-desktop/arch')
+          == 'Task a · Fix marks')
+    AC.narrate('claude-desktop/arch', 'goal', tasks=['one', 'two'])
+    check('the agent\'s own plan step wins', AC._task_text(task, 'claude-desktop/arch')
+          == 'Step 1/2 · one')
+    plain = types.SimpleNamespace(agent='codex', tool_name='x')
+    check('no member, no task -> plain agent', AC._agent_of(plain) == 'codex'
+          and AC._task_text(plain, 'codex') == '')
+
+    folder = tempfile.mkdtemp(prefix='t3board_')
+    old_dir = os.environ.get('T3LAB_HARNESS_DIR')
+    os.environ['T3LAB_HARNESS_DIR'] = folder
+    path = os.path.join(folder, AC.BOARD_FILE)
+    check('no board file -> {}', AC.read_board() == {} and AC.board_rows({}) == [])
+    board = {'format': 'harness-board/1', 'updated': 1.0, 'sessions': [{
+        'session': 'a1b2c3d4', 'goal': 'Audit levels', 'document': 'A.rvt',
+        'counts': {'claimed': 2, 'review': 1, 'done': 1, 'todo': 1, 'failed': 1},
+        'tasks': [
+            {'task': 'r', 'title': 'Count rooms', 'status': 'review', 'owner': 'codex'},
+            {'task': 'd', 'title': 'Old', 'status': 'done', 'owner': 'codex'},
+            {'task': 'a', 'title': 'Fix marks', 'status': 'claimed',
+             'owner': 'claude-desktop/arch', 'document': 'a.RVT'},
+            {'task': 'b', 'title': 'Check links', 'status': 'claimed',
+             'owner': 'console-qa', 'document': 'B.rvt'},
+            {'task': 'f', 'title': 'Purge', 'status': 'failed', 'owner': 'codex'},
+            {'task': 't', 'title': 'Later', 'status': 'todo', 'owner': None}]},
+        {'session': 'empty', 'goal': 'no tasks yet', 'tasks': []}]}
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(board, f)
+    read = AC.read_board()
+    check('board read from board.json', read.get('updated') == 1.0)
+    check('board cached until the file changes', AC.read_board() is read)
+    rows = AC.board_rows(read)
+    check('one HUD block per session with tasks', [r['session'] for r in rows] == ['a1b2c3d4'])
+    check('board summary', rows[0]['summary'] == '2 working · 1 in review · 1 failed · 1/6 done',
+          rows[0]['summary'])
+    check('board rows: working, review, failed; done / todo left out',
+          rows[0]['rows'] == [('current', 'Claude · arch · Fix marks', ''),
+                              ('current', 'Console QA · Check links', 'B.rvt'),
+                              ('review', 'GPT · Count rooms', ''),
+                              ('failed', 'GPT · Purge', '')], rows[0]['rows'])
+    check('board rows capped', AC.board_rows(read, limit=2)[0]['more'] == 2)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('{"updated": 2.0, "sessions": [')           # the bridge is mid-write
+    check('half-written board keeps the last good one', AC.read_board().get('updated') == 1.0)
+    os.remove(path)
+    check('board gone -> {}', AC.read_board() == {})
+    shutil.rmtree(folder, ignore_errors=True)
+    if old_dir is None:
+        os.environ.pop('T3LAB_HARNESS_DIR', None)
+    else:
+        os.environ['T3LAB_HARNESS_DIR'] = old_dir
+
+    with open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8') as f:
+        osrc = f.read()
+    check('the HUD polls board.json every tick', 'self._poll_board()' in osrc
+          and 'board_rows(board)' in osrc)
+    check('the HUD shows the board section', 'full.Children.Add(self._board_panel)' in osrc)
+    with open(os.path.join(LIB, 'core', 'server.py'), encoding='utf-8') as f:
+        ssrc = f.read()
+    check('the server hands the stamps to the task',
+          'task.task_ref, task.task_title, task.member = harness' in ssrc)
+
+
 if __name__ == '__main__':
     try:
         test_extract_ids()
@@ -1180,6 +1265,7 @@ if __name__ == '__main__':
         test_hud_redesign()
         test_stability()
         test_bar_only()
+        test_harness_hud()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

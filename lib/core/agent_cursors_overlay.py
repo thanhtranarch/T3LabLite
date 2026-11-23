@@ -14,10 +14,10 @@ from core.agent_cursors import (
     ACTIONS, BAND_STRIPE, BAR_W, BOX_HOLD_S, COUNT_BAR_W, DWELL_MS, FEED_SHOWN, FEED_SIZE,
     FRESH_HOLD_S, IDLE_HIDE_S, MAX_STOPS, MOVE_MS, OPTION_GROUPS, OPTION_LABELS, REPLAY_SIZE,
     STATES, SUMMARY_S, SWEEP_W, TAG_MAX, action_style, agent_style, ago_text,
-    band_motion, band_rows, band_style, band_wash, bar_tone, classify_action,
+    band_motion, band_rows, band_style, band_wash, bar_tone, board_rows, classify_action,
     cluster_stops, compact_line, count_bar, count_items, describe_call, fill_width,
     footer_text, front_hides, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
-    motion_off, offscreen_markers, on_model, options, place_tags, plan_progress,
+    motion_off, offscreen_markers, on_model, options, place_tags, plan_progress, read_board,
     scan_points, set_enabled, set_hud_offset, set_option, short_text, should_collapse,
     speed_factor, status_text, tour_schedule, union_box)
 
@@ -155,6 +155,8 @@ class _Overlay(object):
         self._owner = owner_hwnd
         self._goals = {}            # agent -> goal banner text
         self._plans = {}            # agent -> {'tasks': [...], 'step': n} (t3lab_narrate)
+        self._board = []            # agent_cursors.board_rows: the harness sessions
+        self._board_seen = None     # board.json 'updated' last drawn
         self._asks = []             # consent questions on the bar: dicts, oldest first
         self._working = {}          # agent -> (started, caption)
         self._waiting = {}          # agent -> caption
@@ -471,6 +473,8 @@ class _Overlay(object):
         col.Children.Add(self._full)
         self._compact = StackPanel()
         col.Children.Add(self._compact)
+        self._board_panel = StackPanel()        # harness sessions and their tasks
+        self._board_panel.Margin = Thickness(0, 6, 0, 0)
         self.hud.Content = self._bar
         self._hook(self.hud, 'MouseEnter', lambda s, e: self._set_hover(True))
         self._hook(self.hud, 'MouseLeave', lambda s, e: self._set_hover(False))
@@ -893,6 +897,10 @@ class _Overlay(object):
                 full.Children.Add(row)
 
         drawn['counts'], drawn['plan'] = drawn.pop('counts_now'), drawn.pop('plan_now')
+
+        # the harness board (docs/harness.md)
+        self._refresh_board()
+        full.Children.Add(self._board_panel)
 
         # footer
         from System.Windows.Controls import Border
@@ -2326,7 +2334,56 @@ class _Overlay(object):
         self.win.Hide()
         self.hud.Hide()
 
+    def _refresh_board(self):
+        """The harness board (every Revit window shows the same one): goal and
+        counts per session, then who holds which task."""
+        from System.Windows import Thickness
+        parent = getattr(self._board_panel, 'Parent', None)
+        if parent is not None:
+            parent.Children.Remove(self._board_panel)     # re-added by _refresh_hud
+        self._board_panel.Children.Clear()
+        for session in self._board:
+            head = u'Harness · {}'.format(session['goal'] or session['session'])
+            if session['document']:
+                head += u' · ' + session['document']
+            line = self._glyph_label('\uE902', head, self._c('warn'), 11)
+            line.ToolTip = u'Session {}'.format(session['session'])
+            self._board_panel.Children.Add(self._row(
+                line, self._text(u'   ' + session['summary'], 10.5, bold=False,
+                                 color=self._c('text2'))))
+            for state, text, document in session['rows']:
+                glyph, tint, tip = {
+                    'current': ('\uE768', self._c('warn'), 'being worked on'),
+                    'review': ('\uE7B3', self._c('info'), 'waiting for review'),
+                    'failed': ('\uE7BA', self._c('bad'), 'failed'),
+                }[state]
+                if document:
+                    text = u'{} · {}'.format(text, document)
+                row = self._glyph_label(glyph, text, tint, 11)
+                row.Margin = Thickness(16, 1, 0, 0)
+                row.ToolTip = tip
+                self._board_panel.Children.Add(row)
+            if session['more']:
+                more = self._text(u'+{} more'.format(session['more']), 10.5, bold=False,
+                                  color=self._c('muted'))
+                more.Margin = Thickness(16, 1, 0, 0)
+                self._board_panel.Children.Add(more)
+
+    def _poll_board(self):
+        """Once a second: redraw the HUD when board.json changed."""
+        board = read_board()
+        seen = board.get('updated')
+        if seen != self._board_seen:
+            self._board_seen = seen
+            self._board = board_rows(board)
+            if self.hud.IsVisible:
+                self._refresh_hud()
+
     def _on_tick(self, sender, e):
+        try:
+            self._poll_board()
+        except Exception:
+            pass
         try:
             now = time.time()
             if self._working and self._status_label is not None:

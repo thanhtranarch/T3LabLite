@@ -1,0 +1,1099 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T3Lab Harness Studio</title>
+<!-- Served by core/harness_studio.py. No external file: Revit machines may be offline.
+     Board text comes from agents: build DOM with textContent only, never innerHTML. -->
+<style>
+:root {
+  --canvas: #F1F1F3; --grid-major: #CFCFD6;
+  --surface: #FFFFFF; --sunken: #F4F4F6; --ink: #18181B; --text: #27272A;
+  --text2: #52525B; --muted: #71717A; --border: #DCDCE0; --border-strong: #A1A1AA;
+  --accent: #EA680C; --accent-fill: #FDF0E6; --accent-ring: rgba(234,104,12,.22);
+  --ok: #22A85C; --ok-fill: #EAF8F0; --ok-text: #157038;
+  --warn: #E0A91B; --warn-fill: #FFF6E6; --warn-text: #8A6308;
+  --bad: #E5484D; --bad-fill: #FDECEC; --bad-text: #C4262B;
+  --run: #3B82F6; --run-fill: #EAF2FE; --run-text: #1D4ED8;
+  --lift: 0 1px 1px rgba(24,24,27,.06), 0 6px 16px -6px rgba(24,24,27,.18);
+  --float: 0 2px 4px rgba(24,24,27,.08), 0 16px 32px -12px rgba(24,24,27,.28);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #161618; --grid-major: #303036;
+    --surface: #232326; --sunken: #1B1B1E; --ink: #FAFAFA; --text: #E4E4E7;
+    --text2: #C4C4CC; --muted: #9A9AA2; --border: #36363C; --border-strong: #5A5A63;
+    --accent: #F5843A; --accent-fill: #3A2617; --accent-ring: rgba(245,132,58,.3);
+    --ok-fill: #17301F; --ok-text: #6FD99B; --warn-fill: #33290F; --warn-text: #F0C65A;
+    --bad-fill: #3A1C1C; --bad-text: #F9A0A0; --run-fill: #172640; --run-text: #8DB8FA;
+    --lift: 0 1px 1px rgba(0,0,0,.4), 0 6px 16px -6px rgba(0,0,0,.6);
+    --float: 0 2px 4px rgba(0,0,0,.4), 0 16px 32px -12px rgba(0,0,0,.7);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: var(--text);
+  background: var(--canvas); display: grid; grid-template-rows: 52px 1fr; overflow: hidden; }
+.mono { font-family: Consolas, "Cascadia Mono", monospace; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); cursor: pointer; white-space: nowrap; font-weight: 600; color: var(--text); }
+button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--sunken); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
+summary:focus-visible, .node:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); filter: brightness(1.08); }
+button.danger { color: var(--bad-text); }
+button.danger:hover:not(:disabled) { background: var(--bad-fill); border-color: var(--bad); }
+button.ghost { border-color: transparent; background: transparent; }
+input, select, textarea { width: 100%; padding: 7px 10px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); }
+input:hover, select:hover, textarea:hover { border-color: var(--border-strong); }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: 3px solid var(--accent-ring); outline-offset: 0; }
+textarea { resize: vertical; min-height: 72px; }
+input[type=checkbox] { width: 16px; height: 16px; margin: 0 8px 0 0; accent-color: var(--accent); outline-offset: 2px; }
+label.field { display: block; margin: 0 0 12px; }
+label.field > span, .label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin: 0 0 4px; }
+label.check { display: flex; align-items: center; margin: 0 0 4px; }
+
+header { display: flex; align-items: center; gap: 8px; padding: 0 16px; background: var(--surface);
+  border-bottom: 1px solid var(--border); min-width: 0; }
+.brand { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--ink);
+  margin-right: 12px; white-space: nowrap; }
+.brand svg { flex: none; }
+header select { width: auto; min-width: 180px; max-width: 340px; font-weight: 600; }
+header .grow { flex: 1; min-width: 8px; }
+#counts { display: flex; align-items: center; gap: 12px; margin-right: 8px; min-width: 0; }
+.meter { display: flex; width: 132px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--sunken);
+  border: 1px solid var(--border); }
+.meter i { display: block; height: 100%; }
+.meter .done { background: var(--ok); } .meter .review { background: var(--warn); }
+.meter .claimed { background: var(--run); } .meter .failed { background: var(--bad); }
+.tally { font-weight: 600; color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px;
+  border-radius: 12px; font-size: 12px; font-weight: 600; background: var(--sunken); color: var(--text2); white-space: nowrap; }
+.chip.claimed { background: var(--run-fill); color: var(--run-text); }
+.chip.review { background: var(--warn-fill); color: var(--warn-text); }
+.chip.done { background: var(--ok-fill); color: var(--ok-text); }
+.chip.failed { background: var(--bad-fill); color: var(--bad-text); }
+.chip.accent { background: var(--accent-fill); color: var(--accent); }
+
+main { display: grid; grid-template-columns: 248px 1fr 360px; min-height: 0; }
+aside { background: var(--surface); overflow-y: auto; padding: 16px; min-height: 0; }
+aside.left { border-right: 1px solid var(--border); }
+aside.right { border-left: 1px solid var(--border); padding: 20px; }
+aside h2 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
+aside h2:not(:first-child) { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
+aside h3 { font-size: 17px; line-height: 1.3; font-weight: 600; color: var(--ink); margin: 0 0 12px; overflow-wrap: anywhere; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row.end { justify-content: flex-end; }
+.row.split { justify-content: space-between; }
+
+.av { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px;
+  border-radius: 8px; color: #fff; font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+.av.s { width: 20px; height: 20px; border-radius: 6px; font-size: 9px; }
+.agent { display: flex; align-items: center; gap: 10px; padding: 8px; margin: 0 -8px; border-radius: 8px; cursor: grab; }
+.agent:hover { background: var(--sunken); }
+.agent .who { flex: 1; min-width: 0; }
+.agent .name { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent .sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent .sub.busy { color: var(--run-text); }
+.agent button { height: 24px; width: 24px; padding: 0; font-size: 15px; font-weight: 400; color: var(--muted); }
+.add { width: 100%; margin-top: 8px; border-style: dashed; color: var(--text2); }
+
+#viewport { position: relative; overflow: hidden; min-width: 0; min-height: 0; cursor: grab; touch-action: none;
+  background-image: radial-gradient(circle, var(--grid-major) 1.2px, transparent 1.6px); }
+#viewport.panning { cursor: grabbing; }
+#world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+#edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; }
+#edges path.line { fill: none; stroke: var(--border-strong); stroke-width: 2; stroke-dasharray: 2 6; stroke-linecap: round; }
+#edges path.line.met { stroke: var(--ok); stroke-dasharray: none; }
+#edges path.line.sel { stroke: var(--accent); stroke-width: 3; }
+#edges path.hit { fill: none; stroke: transparent; stroke-width: 16; cursor: pointer; pointer-events: stroke; }
+#edges path.temp { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; }
+.node { position: absolute; width: 248px; height: 108px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: var(--lift); padding: 12px 14px 12px 18px; cursor: pointer; user-select: none;
+  display: flex; flex-direction: column; justify-content: space-between; }
+.node::before { content: ""; position: absolute; left: 6px; top: 10px; bottom: 10px; width: 4px; border-radius: 2px;
+  background: var(--border-strong); }
+.node:hover { border-color: var(--border-strong); }
+.node.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring), var(--lift); }
+.node.drop { border-color: var(--accent); border-style: dashed; background: var(--accent-fill); }
+.node.claimed::before { background: var(--run); } .node.review::before { background: var(--warn); }
+.node.done::before { background: var(--ok); } .node.failed::before { background: var(--bad); }
+.node.ready::before { background: var(--ink); }
+.node .top { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.node .state { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+.node .state i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+.node.ready .state { color: var(--ink); } .node.claimed .state { color: var(--run-text); }
+.node.review .state { color: var(--warn-text); } .node.done .state { color: var(--ok-text); }
+.node.failed .state { color: var(--bad-text); }
+.node.claimed .state i { animation: beat 1.4s ease-in-out infinite; }
+@keyframes beat { 50% { transform: scale(.55); opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .node.claimed .state i { animation: none; } }
+.node .key { font-family: Consolas, monospace; color: var(--muted); flex: none; }
+.node .title { font-size: 14px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .foot { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); min-width: 0; }
+.node .foot .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .foot .none { color: var(--muted); }
+.node .tag { flex: none; padding: 1px 6px; border-radius: 4px; background: var(--sunken); color: var(--muted); font-size: 11px; font-weight: 600; }
+.port { position: absolute; top: 50%; width: 12px; height: 12px; margin-top: -6px; border-radius: 50%;
+  background: var(--surface); border: 2px solid var(--border-strong); }
+.port.in { left: -7px; } .port.out { right: -7px; cursor: crosshair; transition: transform .12s; }
+.port.out:hover, .node:hover .port.out { border-color: var(--accent); }
+.port.out:hover { background: var(--accent); transform: scale(1.5); }
+.empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; color: var(--muted); text-align: center; padding: 32px; pointer-events: none; }
+.empty button { pointer-events: auto; margin-top: 8px; }
+.empty .big { font-size: 19px; color: var(--ink); font-weight: 600; }
+.zoom { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 2px;
+  padding: 4px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--float); cursor: default; }
+.zoom button { border-color: transparent; height: 30px; }
+.zoom button.sq { width: 30px; padding: 0; font-size: 16px; font-weight: 400; }
+.zoom .sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+.zoom .pct { width: 44px; text-align: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 12px;
+  font-size: 12px; font-weight: 600; background: var(--sunken); color: var(--text2); }
+.pill i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.claimed { background: var(--run-fill); color: var(--run-text); } .pill.review { background: var(--warn-fill); color: var(--warn-text); }
+.pill.done { background: var(--ok-fill); color: var(--ok-text); } .pill.failed { background: var(--bad-fill); color: var(--bad-text); }
+.kv { display: grid; grid-template-columns: 104px 1fr; gap: 8px 12px; margin: 0 0 16px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; color: var(--text); }
+.body { margin: 0 0 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.box, .box { background: var(--sunken); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+pre.box { font: 12.5px/1.5 Consolas, monospace; }
+.card { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin: 0 0 16px; }
+.card.review { border-color: var(--warn); background: var(--warn-fill); }
+.card.review textarea { background: var(--surface); }
+.card .label { color: inherit; }
+.note { padding: 8px 12px; border-radius: 8px; margin: 0 0 8px; background: var(--sunken); overflow-wrap: anywhere; }
+.note .by { font-size: 12px; font-weight: 600; color: var(--text2); }
+.banner { padding: 10px 12px; border-radius: 8px; margin: 0 0 16px; }
+.banner.review { background: var(--warn-fill); color: var(--warn-text); }
+details { margin: 8px 0 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+summary { cursor: pointer; font-weight: 600; color: var(--text2); margin: 0 0 12px; border-radius: 4px; }
+
+dialog { border: 0; border-radius: 14px; padding: 24px; width: min(520px, 92vw);
+  background: var(--surface); color: var(--text); box-shadow: var(--float); }
+dialog::backdrop { background: rgba(24,24,27,.5); }
+dialog h3 { margin: 0 0 16px; font-size: 19px; font-weight: 600; color: var(--ink); }
+dialog .row.end { margin-top: 16px; }
+.flow { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 8px; margin: 0 0 6px; }
+.flow .who { flex: 1; min-width: 0; }
+#toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%); max-width: min(640px, 90vw);
+  padding: 10px 16px; border-radius: 8px; background: var(--ink); color: var(--surface); box-shadow: var(--float);
+  display: none; z-index: 10; font-weight: 600; }
+#toast.bad { background: var(--bad-text); color: #fff; }
+@media (max-width: 1180px) { main { grid-template-columns: 208px 1fr 312px; } .meter { display: none; } }
+
+/* ── Liquid glass: one full-window canvas, every panel a pane floating over it ── */
+:root {
+  --bg: radial-gradient(55% 50% at 12% 8%, #FFD3B5 0, transparent 62%), radial-gradient(50% 50% at 92% 12%, #C9DCFF 0, transparent 62%),
+        radial-gradient(60% 60% at 68% 104%, #E0D0FF 0, transparent 62%), #ECEEF3;
+  --glass: rgba(255,255,255,.52); --glass-strong: rgba(255,255,255,.72); --field: rgba(255,255,255,.55);
+  --edge: rgba(255,255,255,.8); --shine: inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(255,255,255,.3);
+  --sunken: rgba(24,24,27,.055); --border: rgba(24,24,27,.11); --border-strong: rgba(24,24,27,.32);
+  --grid-major: rgba(24,24,27,.13); --blur: blur(22px) saturate(1.7);
+  --lift: 0 1px 2px rgba(24,24,27,.06), 0 10px 24px -10px rgba(24,24,27,.28);
+  --float: 0 2px 6px rgba(24,24,27,.06), 0 24px 48px -18px rgba(24,24,27,.35);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: radial-gradient(55% 50% at 12% 8%, #5A2A10 0, transparent 62%), radial-gradient(50% 50% at 92% 12%, #142B58 0, transparent 62%),
+          radial-gradient(60% 60% at 68% 104%, #2E1D55 0, transparent 62%), #0C0C10;
+    --glass: rgba(34,34,40,.5); --glass-strong: rgba(40,40,46,.68); --field: rgba(255,255,255,.07);
+    --edge: rgba(255,255,255,.14); --shine: inset 0 1px 0 rgba(255,255,255,.18), inset 0 -1px 0 rgba(255,255,255,.04);
+    --sunken: rgba(255,255,255,.07); --border: rgba(255,255,255,.12); --border-strong: rgba(255,255,255,.34);
+    --grid-major: rgba(255,255,255,.12);
+    --lift: 0 1px 2px rgba(0,0,0,.4), 0 10px 24px -10px rgba(0,0,0,.7);
+    --float: 0 2px 6px rgba(0,0,0,.4), 0 24px 48px -18px rgba(0,0,0,.8);
+  }
+}
+body { display: block; background: var(--bg); background-attachment: fixed; }
+header, aside, .zoom, .node, dialog { background: var(--glass); border: 1px solid var(--edge);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: var(--shine), var(--float); }
+#viewport { position: fixed; inset: 0; z-index: 0; }
+header { position: fixed; z-index: 2; top: 12px; left: 12px; right: 12px; height: 52px; padding: 0 10px 0 18px; border-radius: 26px; }
+main { display: block; }
+aside { position: fixed; z-index: 2; top: 76px; bottom: 12px; width: 248px; border-radius: 24px; }
+aside.left { left: 12px; border: 1px solid var(--edge); }
+aside.right { right: 12px; width: 360px; border: 1px solid var(--edge); }
+.zoom { left: calc(50% - 56px); border-radius: 22px; padding: 5px; }
+.empty { padding: 76px 384px 12px 272px; }
+.node { background: var(--glass-strong); border-radius: 18px; box-shadow: var(--shine), var(--lift);
+  -webkit-backdrop-filter: blur(14px) saturate(1.6); backdrop-filter: blur(14px) saturate(1.6); }
+.node:hover { border-color: var(--edge); box-shadow: var(--shine), var(--float); }
+.node.sel { border-color: var(--accent); box-shadow: var(--shine), 0 0 0 3px var(--accent-ring), var(--float); }
+.node::before { left: 7px; top: 14px; bottom: 14px; }
+button { border-radius: 16px; background: var(--field); border-color: var(--border); box-shadow: var(--shine); }
+button.ghost, .zoom button { background: transparent; box-shadow: none; }
+button.primary { background: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,0) 55%), var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 6px 14px -6px var(--accent); }
+button.primary:hover:not(:disabled) { background: linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,0) 55%), var(--accent); }
+input, select, textarea { background: var(--field); border-radius: 12px; }
+select option { background: var(--surface); color: var(--text); }
+.agent { border-radius: 14px; }
+.av { width: 34px; height: 34px; border-radius: 11px; color: #fff;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--hue) 62%, #fff), var(--hue) 62%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.55), inset 0 -1px 0 rgba(0,0,0,.14), 0 4px 10px -4px var(--hue); }
+.av svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.av svg .dot { fill: currentColor; stroke: none; }
+.av.s { width: 20px; height: 20px; border-radius: 7px; box-shadow: inset 0 1px 0 rgba(255,255,255,.5); }
+.av.s svg { width: 13px; height: 13px; stroke-width: 2.1; }
+.seat { position: relative; flex: none; display: inline-flex; }
+.presence { position: absolute; right: -3px; bottom: -3px; width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid var(--surface); background: var(--ok); }
+.presence.busy { background: var(--run); animation: beat 1.4s ease-in-out infinite; }
+.presence.away { background: var(--border-strong); }
+@media (prefers-reduced-motion: reduce) { .presence.busy { animation: none; } }
+.add { background: transparent; box-shadow: none; }
+.card, pre.box, .box, .note, .banner, .flow { border-radius: 14px; }
+.card.review textarea { background: var(--field); }
+.port { background: var(--surface); }
+dialog { border: 1px solid var(--edge); border-radius: 28px; background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(30px) saturate(1.8); backdrop-filter: blur(30px) saturate(1.8); }
+dialog::backdrop { background: rgba(24,24,27,.28); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+#toast { top: 80px; border-radius: 18px; background: rgba(24,24,27,.78); color: #fff;
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: inset 0 1px 0 rgba(255,255,255,.2), var(--float); }
+#toast.bad { background: rgba(196,38,43,.88); }
+@media (max-width: 1180px) { aside { width: 208px; } aside.right { width: 312px; } .empty { padding: 76px 336px 12px 232px; } }
+/* Glass needs the blur to stay readable: without it, or when the person asked for less transparency, go opaque. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  header, aside, .zoom, .node, dialog { background: var(--surface); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  header, aside, .zoom, .node, dialog { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+/* ── Flow: Start → Steps (or Map) → Needs you ── */
+.seg { display: inline-flex; padding: 3px; border-radius: 18px; background: var(--sunken); border: 1px solid var(--border); }
+.seg button { height: 28px; border: 0; background: transparent; box-shadow: none; border-radius: 14px; padding: 0 14px; color: var(--text2); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: var(--lift); }
+.ready { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); white-space: nowrap; }
+.ready i { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.ready.ok i { background: var(--ok); } .ready.off { color: var(--muted); }
+body.mode-steps #world, body.mode-steps .zoom, body.mode-steps #empty { display: none; }
+body:not(.mode-steps) #steps { display: none; }
+body.mode-start aside, body.mode-start #steps, body.mode-start #world, body.mode-start .zoom, body.mode-start #empty,
+body.mode-start .seg, body.mode-start #counts, body.mode-start #btnRun, body.mode-start #ready { display: none; }
+body:not(.mode-start) #start { display: none; }
+#steps, #start { position: fixed; z-index: 2; background: var(--glass); border: 1px solid var(--edge);
+  -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); box-shadow: var(--shine), var(--float); }
+#steps { top: 76px; bottom: 12px; left: 272px; right: 384px; border-radius: 24px; padding: 24px 28px; overflow-y: auto; }
+#steps h1 { font-size: 19px; line-height: 1.3; font-weight: 600; color: var(--ink); margin: 0 0 4px; overflow-wrap: anywhere; }
+.steplist { list-style: none; margin: 20px 0 0; padding: 0; }
+.step { display: grid; grid-template-columns: 32px 1fr auto; align-items: center; gap: 12px; padding: 12px 14px;
+  margin: 0 0 8px; border-radius: 16px; background: var(--glass-strong); border: 1px solid var(--edge);
+  box-shadow: var(--shine), var(--lift); cursor: pointer; }
+.step:hover { box-shadow: var(--shine), var(--float); }
+.step.sel { border-color: var(--accent); box-shadow: var(--shine), 0 0 0 3px var(--accent-ring), var(--lift); }
+.step .no { width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 12px; background: var(--sunken); color: var(--text2); font-variant-numeric: tabular-nums; }
+.step.done .no { background: var(--ok); color: #fff; } .step.claimed .no { background: var(--run); color: #fff; }
+.step.review .no { background: var(--warn); color: #fff; } .step.failed .no { background: var(--bad); color: #fff; }
+.step.ready .no { background: var(--ink); color: var(--surface); }
+.step .t { font-size: 14px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step .s { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+.step .s .st { font-weight: 600; }
+.step.claimed .s .st { color: var(--run-text); } .step.review .s .st { color: var(--warn-text); }
+.step.done .s .st { color: var(--ok-text); } .step.failed .s .st { color: var(--bad-text); } .step.ready .s .st { color: var(--ink); }
+.step .who { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); white-space: nowrap; }
+.addstep { display: flex; gap: 8px; margin-top: 12px; }
+.addstep input { border-radius: 16px; padding: 10px 14px; }
+.inbox-item { border-radius: 16px; padding: 12px; margin: 0 0 10px; background: var(--glass-strong); border: 1px solid var(--edge);
+  box-shadow: var(--shine), var(--lift); }
+.inbox-item.review { border-left: 4px solid var(--warn); } .inbox-item.failed { border-left: 4px solid var(--bad); }
+.inbox-item.approval { border-left: 4px solid var(--accent); }
+.inbox-item .k { font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 2px; }
+.inbox-item .t { font-weight: 600; color: var(--ink); margin-bottom: 6px; overflow-wrap: anywhere; }
+.inbox-item .b { font-size: 12.5px; color: var(--text); margin-bottom: 10px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.calm { text-align: center; padding: 24px 8px; color: var(--muted); }
+.calm b { display: block; font-size: 15px; color: var(--ink); margin-bottom: 4px; }
+.back { border: 0; background: transparent; box-shadow: none; padding: 0; height: auto; color: var(--accent); margin-bottom: 12px; }
+.checks { display: grid; gap: 4px; margin: 0 0 12px; max-height: 160px; overflow-y: auto; }
+#start { top: 50%; left: 50%; transform: translate(-50%, -46%); width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 100px); overflow-y: auto; border-radius: 28px; padding: 32px; }
+#start h1 { font-size: 24px; line-height: 1.25; font-weight: 600; color: var(--ink); margin: 0 0 6px; }
+#start .lead { color: var(--text2); margin: 0 0 20px; }
+#start textarea.goal { font-size: 15px; min-height: 84px; border-radius: 16px; padding: 12px 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.chips button { height: 30px; border-radius: 15px; font-weight: 600; }
+.chips button[aria-pressed="true"] { background: var(--accent-fill); border-color: var(--accent); color: var(--accent); }
+#start .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+#start .actions .primary { height: 38px; padding: 0 22px; font-size: 14px; border-radius: 19px; }
+@media (max-width: 1180px) { #steps { left: 232px; right: 336px; } }
+</style>
+</head>
+<body class="mode-steps">
+<header>
+  <span class="brand">
+    <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><rect width="22" height="22" rx="6" fill="#EA680C"/>
+      <path d="M7 7.5h3.5a2 2 0 0 1 2 2v3a2 2 0 0 0 2 2H15" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+      <circle cx="6.5" cy="7.5" r="1.9" fill="#fff"/><circle cx="15.5" cy="14.5" r="1.9" fill="#fff"/></svg>
+    Harness</span>
+  <select id="jobSel" aria-label="Job"></select>
+  <button id="btnNew">New job</button>
+  <span class="seg" role="group" aria-label="View">
+    <button data-v="steps" aria-pressed="true">Steps</button><button data-v="map" aria-pressed="false">Map</button>
+  </span>
+  <span class="grow"></span>
+  <span id="ready" class="ready"></span>
+  <div id="counts"></div>
+  <button id="btnRun" class="primary">Start agents</button>
+</header>
+<main>
+  <aside class="left" id="left"></aside>
+  <div id="viewport">
+    <div id="world"><svg id="edges"></svg></div>
+    <div class="empty" id="empty"></div>
+    <div class="zoom">
+      <button id="btnAdd" title="Or double-click the canvas">Add step</button>
+      <button id="btnTidy" title="Lay the steps out again by order">Tidy</button>
+      <span class="sep"></span>
+      <button id="zoomOut" class="sq" title="Zoom out" aria-label="Zoom out">&minus;</button>
+      <span class="pct" id="zoomPct">100%</span>
+      <button id="zoomIn" class="sq" title="Zoom in" aria-label="Zoom in">+</button>
+      <button id="zoomFit" title="Show every step">Fit</button>
+    </div>
+  </div>
+  <section id="steps" aria-label="Steps"></section>
+  <aside class="right" id="right"></aside>
+</main>
+<section id="start" aria-label="New job"></section>
+<dialog id="dlg"></dialog>
+<div id="toast" role="status"></div>
+
+<script>
+'use strict';
+const NODE_W = 248, NODE_H = 108, COL = 320, ROW = 140;
+// Plain words: a job (session) is a list of steps (tasks) that agents take.
+const STATUS = {todo: 'Waiting', claimed: 'Working', review: 'Needs your review', done: 'Done', failed: 'Failed'};
+const SVG = 'http://www.w3.org/2000/svg';
+const $ = id => document.getElementById(id);
+
+// The token arrives once in the link the terminal printed; keep it out of the address bar.
+const TOKEN = (() => {
+  const k = new URLSearchParams(location.search).get('k');
+  if (k) { try { sessionStorage.setItem('t3studio.k', k); } catch (e) {} history.replaceState(null, '', '/'); return k; }
+  try { return sessionStorage.getItem('t3studio.k') || ''; } catch (e) { return ''; }
+})();
+
+let S = null, want = null;                           // state, job asked for
+const drawn = {};                                    // what each region last showed
+let sel = null, selEdge = null, dirty = false;       // selected step key / edge / unsaved form
+let view = {x: 40, y: 40, z: 1}, pos = {}, posFor = null;
+let mode = 'steps', starting = false, fitted = false; // steps | map; the Start screen is open
+try { mode = localStorage.getItem('t3studio.mode') === 'map' ? 'map' : 'steps'; } catch (e) {}
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'value' || k === 'checked' || k === 'disabled') el[k] = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat(Infinity)) if (kid != null && kid !== false)
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+function toast(text, bad) {
+  const t = $('toast'); t.textContent = text; t.className = bad ? 'bad' : ''; t.style.display = 'block';
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.style.display = 'none'; }, bad ? 7000 : 2600);
+}
+const HUES = ['#2563EB', '#7C3AED', '#C026D3', '#0D9488', '#B45309', '#4D7C0F', '#0369A1', '#BE123C'];
+const GLYPH = {
+  chat:     ['M5 5.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-6.5L8 20v-3.5H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z'],
+  terminal: ['M4 5h16a1.5 1.5 0 0 1 1.5 1.5v11A1.5 1.5 0 0 1 20 19H4a1.5 1.5 0 0 1-1.5-1.5v-11A1.5 1.5 0 0 1 4 5z', 'M7 10l3 2.5L7 15', 'M12.5 15H17'],
+  code:     ['M9 7l-5 5 5 5', 'M15 7l5 5-5 5'],
+  lift:     ['M4 19c4.5-2.6 11.5-2.6 16 0', 'M12 15.5v-2', 'M7.5 14l-1-1.6', 'M16.5 14l1-1.6', [12, 7.5, 3.2]],
+  pointer:  ['M6 4l12.5 7-5.6 1.3L10.6 18z'],
+  graph:    ['M8.5 8H11a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h.5', [6.5, 8, 2.1], [17.5, 16, 2.1]],
+  person:   ['M5 20c.9-3.9 3.6-6 7-6s6.1 2.1 7 6', [12, 8, 3.6, 'line']],
+  claw:     ['M7 4.5c-2.2 5-1.4 10.4 2.8 15', 'M12 3.5c-1.3 5.8-.4 11.4 2.2 16', 'M17 4.5c1.3 5 .4 9.8-2 13.5'],
+  cloud:    ['M7.5 18.5a4.2 4.2 0 0 1-.4-8.4 5.2 5.2 0 0 1 10-1.3 4.6 4.6 0 0 1-.1 9.7z'],
+  hook:     ['M10 14.2a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2', 'M14 9.8a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2'],
+  plug:     ['M9 3.5V8', 'M15 3.5V8', 'M6 8h12v2.5a6 6 0 0 1-12 0z', 'M12 16.5V21'],
+  robot:    ['M7.5 8.5h9a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3v-4a3 3 0 0 1 3-3z', 'M12 4.5v4', [12, 4, 1.1], [9.3, 13.5, 1.2], [14.7, 13.5, 1.2]],
+};
+const KNOWN = {                                       // agent id -> [glyph, colour]
+  'claude-desktop': ['chat', '#C2410C'], 'claude-code': ['terminal', '#9A3412'], 'codex': ['code', '#0F766E'],
+  'antigravity': ['lift', '#2563EB'], 'cursor': ['pointer', '#52525B'], 't3lab-assistant': ['graph', '#EA680C'],
+  'cli': ['terminal', '#4D7C0F'], 'owner': ['person', '#3F3F46'], 'openclaw': ['claw', '#BE123C'],
+};
+const BY_PLATFORM = {anthropic: 'cloud', command: 'terminal', http: 'hook', mcp: 'plug'};
+function avatar(name, small, platform) {              // same agent, same icon and colour, everywhere
+  const id = String(name).split('/')[0];              // claude-desktop/arch is still Claude Desktop
+  let n = 0; for (const c of id) n = (n * 31 + c.charCodeAt(0)) >>> 0;
+  const [glyph, hue] = KNOWN[id] || KNOWN[platform] || [BY_PLATFORM[platform] || BY_PLATFORM[(S.agents[id] || {}).platform] || 'robot', HUES[n % HUES.length]];
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  for (const part of GLYPH[glyph]) {
+    const el = document.createElementNS(SVG, typeof part === 'string' ? 'path' : 'circle');
+    if (typeof part === 'string') el.setAttribute('d', part);
+    else { el.setAttribute('cx', part[0]); el.setAttribute('cy', part[1]); el.setAttribute('r', part[2]); if (part[3] !== 'line') el.setAttribute('class', 'dot'); }
+    svg.append(el);
+  }
+  return h('span', {class: 'av' + (small ? ' s' : ''), style: '--hue:' + hue, 'aria-hidden': 'true'}, svg);
+}
+function ago(s) { return s < 90 ? Math.round(s) + ' s' : s < 5400 ? Math.round(s / 60) + ' min' : Math.round(s / 3600) + ' h'; }
+const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined
+    ? {headers: {'X-T3Lab-Studio': TOKEN}}
+    : {method: 'POST', headers: {'X-T3Lab-Studio': TOKEN, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  return res.json();
+}
+// One change: post it, say what failed and what to do next, then read the board again.
+async function post(path, action, args, okText) {
+  let out;
+  try { out = await api(path, {action, args}); }
+  catch (e) { toast('Harness is not answering. Click Harness on the Revit ribbon again.', true); return null; }
+  if (out && out.error) { toast(out.error + (out.hint ? ' ' + out.hint : ''), true); await refresh(); return null; }
+  if (okText) toast(okText);
+  await refresh();
+  return out || {};
+}
+const act = (action, args, ok) => post('/api/act', action, Object.assign({session: S && S.session}, args), ok);
+
+async function refresh() {
+  let next;
+  try { next = await api('/api/state' + (want ? '?session=' + encodeURIComponent(want) : '')); }
+  catch (e) { $('counts').replaceChildren(h('span', {class: 'chip failed'}, 'Disconnected')); return; }
+  if (next.error) { $('counts').replaceChildren(h('span', {class: 'chip failed'}, next.error)); return; }
+  S = next;
+  if (!S.board) starting = true;                     // nothing to show: ask what to do
+  render();
+}
+
+// ── Model helpers ───────────────────────────────────────────────────────────
+const tasks = () => (S && S.board && S.board.tasks) || [];
+const taskOf = key => tasks().find(t => t.task === key);
+const isOpen = () => !!(S && S.board && S.board.status === 'open');
+function planFields(t) {
+  return {key: t.task, title: t.title, detail: t.detail || '', depends_on: t.depends_on || [],
+          assignee: t.assignee || '', done_when: t.done_when || '', scope: t.scope || {}};
+}
+function waitsFor(t) {
+  return (t.depends_on || []).filter(d => { const o = taskOf(d); return !o || o.status !== 'done'; });
+}
+function agentNames() {
+  const names = new Set();
+  for (const m of (S.board && S.board.members) || []) if (m.role !== 'lead') names.add(m.member);
+  for (const n of Object.keys(S.agents || {})) names.add(n);
+  for (const t of tasks()) { if (t.assignee) names.add(t.assignee); }
+  return [...names].sort();
+}
+function ordered() {                                  // by dependency depth, then plan order
+  const depth = {}, seen = {};
+  const d = key => {
+    if (key in depth) return depth[key];
+    if (seen[key]) return 0;
+    seen[key] = 1;
+    const t = taskOf(key);
+    depth[key] = t ? Math.max(-1, ...(t.depends_on || []).map(d)) + 1 : 0;
+    return depth[key];
+  };
+  return tasks().map((t, i) => [d(t.task), i, t]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(x => x[2]);
+}
+function numbers() { const n = {}; ordered().forEach((t, i) => { n[t.task] = i + 1; }); return n; }
+function needsYou() {
+  const out = [];
+  for (const a of S.approvals || []) {
+    const key = (a.task || '').split('/')[1];
+    if ((a.task || '').split('/')[0] === S.session || !a.task) out.push({kind: 'approval', a, t: key && taskOf(key)});
+  }
+  if (isOpen()) for (const t of tasks()) if (t.status === 'review' || t.status === 'failed') out.push({kind: t.status, t});
+  return out;
+}
+function launched() { return Object.values(S.agents || {}).filter(c => c.platform !== 'mcp').length; }
+function loadPos() {
+  if (posFor === S.session) return;
+  posFor = S.session; pos = {};
+  try { pos = JSON.parse(localStorage.getItem('t3studio.pos.' + posFor) || '{}'); } catch (e) {}
+}
+function savePos() { try { localStorage.setItem('t3studio.pos.' + posFor, JSON.stringify(pos)); } catch (e) {} }
+function autoLayout(all) {                            // columns by longest dependency chain
+  const depth = {}, seen = {};
+  const d = key => {
+    if (key in depth) return depth[key];
+    if (seen[key]) return 0;
+    seen[key] = 1;
+    const t = taskOf(key);
+    depth[key] = t ? Math.max(-1, ...(t.depends_on || []).map(d)) + 1 : 0;
+    return depth[key];
+  };
+  const rows = {};
+  for (const t of tasks()) {
+    const c = d(t.task);
+    if (!all && pos[t.task]) continue;
+    rows[c] = rows[c] || 0;
+    let y = 40 + rows[c] * ROW;
+    if (!all) while (tasks().some(o => pos[o.task] && Math.abs(pos[o.task][0] - (40 + c * COL)) < NODE_W && Math.abs(pos[o.task][1] - y) < NODE_H)) y += ROW;
+    pos[t.task] = [40 + c * COL, y];
+    rows[c] = Math.round((y - 40) / ROW) + 1;
+  }
+  savePos();
+}
+function applyView() {                               // the grid pans and zooms with the tasks
+  $('world').style.transform = 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.z + ')';
+  const step = 24 * view.z + 'px', vp = $('viewport').style;
+  vp.backgroundSize = step + ' ' + step;
+  vp.backgroundPosition = view.x + 'px ' + view.y + 'px';
+  $('zoomPct').textContent = Math.round(view.z * 100) + '%';
+}
+function fit() {                                      // centre in the area the panes leave free
+  const ts = tasks(); if (!ts.length) { view = {x: 300, y: 120, z: 1}; return applyView(); }
+  const xs = ts.map(t => pos[t.task][0]), ys = ts.map(t => pos[t.task][1]);
+  const w = Math.max(...xs) + NODE_W - Math.min(...xs), hgt = Math.max(...ys) + NODE_H - Math.min(...ys);
+  const vp = $('viewport').getBoundingClientRect();
+  const l = $('left').getBoundingClientRect().right, r = $('right').getBoundingClientRect().left;
+  const top = document.querySelector('header').getBoundingClientRect().bottom, bottom = vp.height - 64;
+  const z = Math.max(.4, Math.min(1, (r - l - 72) / w, (bottom - top - 48) / hgt));
+  view = {z, x: (l + r - w * z) / 2 - Math.min(...xs) * z, y: (top + bottom - hgt * z) / 2 - Math.min(...ys) * z};
+  applyView();
+}
+function toWorld(ev) {
+  const r = $('viewport').getBoundingClientRect();
+  return [(ev.clientX - r.left - view.x) / view.z, (ev.clientY - r.top - view.y) / view.z];
+}
+function curve(x1, y1, x2, y2) {
+  const k = Math.max(40, Math.abs(x2 - x1) / 2);
+  return 'M' + x1 + ' ' + y1 + ' C' + (x1 + k) + ' ' + y1 + ' ' + (x2 - k) + ' ' + y2 + ' ' + x2 + ' ' + y2;
+}
+
+
+// ── Render ──────────────────────────────────────────────────────────────────
+// A region is rebuilt only when what it shows changed: the 1.5 s poll must not
+// take the focus out of a field or drop a drag in progress.
+function region(name, shows, draw, force) {
+  const sig = JSON.stringify(shows);
+  if (!force && drawn[name] === sig) return;
+  drawn[name] = sig; draw();
+}
+const lastSeen = s => s < 60 ? 'active now' : 'seen ' + ago(s) + ' ago';
+function render(force) {
+  document.body.className = starting ? 'mode-start' : 'mode-' + mode;
+  for (const b of document.querySelectorAll('.seg button')) b.setAttribute('aria-pressed', String(b.dataset.v === mode));
+  loadPos();
+  if (sel && !taskOf(sel)) { sel = null; dirty = false; }
+  if (selEdge && !(taskOf(selEdge[1]) && (taskOf(selEdge[1]).depends_on || []).includes(selEdge[0]))) selEdge = null;
+  const b = S.board || {}, open = isOpen(), run = S.run || {};
+  region('header', [S.sessions, S.session, b.counts, tasks().length, S.revit, S.revit_queue, open, run.running, run.stopping,
+                    launched(), needsYou().length, (b.members || []).filter(m => m.role !== 'lead' && m.idle_s < 300).length], renderHeader, force);
+  if (starting) { region('start', [S.flows, S.revit && S.revit.documents, S.sessions.length, starting], renderStart, force); return; }
+  drawn.start = null;
+  region('left', [(b.members || []).map(m => [m.member, m.role, lastSeen(m.idle_s)]), S.agents, S.setup, run, open,
+                  tasks().map(t => [t.status, t.owner])], renderLeft, force);
+  if (mode === 'map') region('canvas', [S.session, tasks(), sel, selEdge, open], renderCanvas, force);
+  else region('steps', [S.session, b.goal, b.document, tasks(), sel, open, agentNames()], renderSteps, force);
+  if (!dirty) region('right', [S.session, sel, selEdge, sel ? taskOf(sel) : [b, S.stats && Math.round(S.stats.wall_s / 60)],
+                               S.approvals, open, agentNames(), tasks().map(t => [t.task, t.status, t.title])], renderRight, force);
+  if (mode === 'map' && !fitted && tasks().length) { fitted = true; fit(); }
+}
+function renderHeader() {
+  const s = $('jobSel');
+  s.replaceChildren(...(S.sessions.length ? S.sessions : [{session: '', goal: 'No job yet', status: ''}]).map(x =>
+    h('option', {value: x.session}, (x.status === 'closed' ? 'Finished: ' : '') + x.goal)));
+  s.value = S.session || '';
+  s.disabled = !S.sessions.length;
+  // Ready check: what the job needs before agents can do anything in Revit.
+  const r = S.revit, active = ((S.board && S.board.members) || []).filter(m => m.role !== 'lead' && m.idle_s < 300).length;
+  const team = active + launched();
+  const ready = $('ready');
+  ready.className = 'ready' + (r && r.ok ? ' ok' : ' off');
+  ready.title = r && r.ok ? 'Open: ' + (r.documents || []).join(', ') : 'Open Revit and start the server in MCP Control, then agents can work.';
+  ready.replaceChildren(h('i'), r == null ? 'Checking Revit…' : r.ok ? 'Revit connected' : 'Revit not found',
+    '  ·  ', team ? plural(team, 'agent') + ' ready' : 'No agent yet');
+  const c = (S.board && S.board.counts) || {}, total = tasks().length, kids = [];
+  if (S.board && !isOpen()) kids.push(h('span', {class: 'chip'}, 'Finished, read only'));
+  const need = needsYou().length;
+  if (need) kids.push(h('span', {class: 'chip review'}, need + ' need' + (need === 1 ? 's' : '') + ' you'));
+  const q = S.revit_queue;
+  if (q && q.busy) kids.push(h('span', {class: 'chip accent', title: 'Revit runs one call at a time'}, (q.agent || 'An agent') + ' is in Revit' + (q.waiting ? ', ' + q.waiting + ' waiting' : '')));
+  if (total) {
+    kids.push(h('span', {class: 'meter', role: 'img', 'aria-label': (c.done || 0) + ' of ' + total + ' steps done'},
+      ['done', 'review', 'claimed', 'failed'].map(k => c[k] ? h('i', {class: k, style: 'width:' + (100 * c[k] / total) + '%', title: c[k] + ' ' + STATUS[k].toLowerCase()}) : null)));
+    kids.push(h('span', {class: 'tally'}, (c.done || 0) + ' of ' + total + ' done'));
+  }
+  $('counts').replaceChildren(...kids);
+  const run = S.run || {}, btn = $('btnRun');
+  btn.style.display = run.running || launched() ? '' : 'none';   // chat apps take steps by themselves
+  btn.textContent = run.running ? (run.stopping ? 'Stopping…' : 'Stop agents') : 'Start agents';
+  btn.className = run.running ? '' : 'primary';
+  btn.disabled = !isOpen() || !!run.stopping;
+  btn.title = run.running ? 'The round in progress finishes first' : 'Start the agents you added (Console, command, webhook); they keep taking steps until the job is done';
+  $('btnAdd').disabled = $('btnTidy').disabled = !isOpen();
+  $('btnNew').textContent = S.sessions.length ? 'New job' : 'Start';
+}
+function renderLeft() {
+  const kids = [h('h2', null, 'Team')];
+  const members = (S.board && S.board.members) || [], reg = S.agents || {};
+  const busy = {}; for (const t of tasks()) if (t.status === 'claimed' && t.owner) busy[t.owner] = t.title;
+  const shown = new Set();
+  const card = (name, sub, working, removable, platform, away) => h('div', {class: 'agent', draggable: isOpen() && mode === 'map' ? 'true' : null,
+      title: mode === 'map' ? 'Drag onto a step to give it to ' + name : name, ondragstart: ev => ev.dataTransfer.setData('text/plain', name)},
+    h('span', {class: 'seat'}, avatar(name, false, platform), h('i', {class: 'presence ' + (working ? 'busy' : away ? 'away' : 'on')})),
+    h('div', {class: 'who'}, h('div', {class: 'name'}, name), h('div', {class: 'sub' + (working ? ' busy' : '')}, sub)),
+    removable && h('button', {class: 'ghost', title: 'Remove this agent', 'aria-label': 'Remove ' + name,
+      onclick: () => confirmBox('Remove agent "' + name + '"?', 'Start agents stops launching it. The steps it finished stay done.', 'Remove',
+        () => post('/api/act', 'agent_remove', {name}, 'Removed agent ' + name))}, '×'));
+  for (const m of members) {
+    shown.add(m.member);
+    const sub = m.role === 'lead' ? (m.member === 'owner' ? 'You, the planner' : 'Plans this job')
+      : busy[m.member] ? 'Working: ' + busy[m.member] : lastSeen(m.idle_s);
+    kids.push(card(m.member === 'owner' ? 'You' : m.member, sub, !!busy[m.member], false, m.member === 'owner' ? 'owner' : m.platform, m.idle_s >= 300));
+  }
+  for (const [name, cfg] of Object.entries(reg)) if (!shown.has(name))
+    kids.push(card(name, ({mcp: 'Connects by itself', anthropic: 'Runs in the Console', command: 'Runs a command', http: 'Calls a webhook'})[cfg.platform] || cfg.platform, false, true, cfg.platform, true));
+  if (kids.length === 1) kids.push(h('p', {class: 'hint'}, 'No agent yet. In Claude, ChatGPT or Antigravity, say "join the T3Lab harness and take a step".'));
+  kids.push(h('button', {class: 'add', onclick: agentDialog}, 'Add agent'));
+  const run = S.run || {};
+  if (run.running || run.ended || (run.log || []).length) {
+    kids.push(h('h2', null, 'Activity'));
+    kids.push(h('p', {class: 'hint'}, run.running ? 'Agents are running (round ' + run.rounds + ').' : 'Stopped: ' + run.ended));
+    for (const item of (run.log || []).slice(-6).reverse())
+      kids.push(h('div', {class: 'note'}, h('div', {class: 'by'}, item.agent + ': ' + (item.status || '')), item.summary || ''));
+  }
+  $('left').replaceChildren(...kids);
+}
+
+// ── Steps (default view) ────────────────────────────────────────────────────
+function renderSteps() {
+  const box = $('steps'), b = S.board || {}, num = numbers();
+  const kids = [h('h1', null, b.goal || ''),
+    h('p', {class: 'hint', style: 'margin:0'}, (b.document ? 'In ' + b.document : 'In the open Revit file') +
+      (b.review_required ? '. You review each step before it counts.' : '.'))];
+  const list = h('ol', {class: 'steplist'});
+  for (const t of ordered()) {
+    const [cls, state] = stateOf(t), who = t.owner || t.assignee;
+    const after = (t.depends_on || []).map(k => num[k]).filter(Boolean);
+    list.append(h('li', {class: 'step ' + cls + (sel === t.task ? ' sel' : ''), tabindex: '0', 'data-key': t.task,
+        'aria-label': 'Step ' + num[t.task] + ', ' + t.title + ', ' + state,
+        onclick: () => select(t.task), onkeydown: ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(t.task); } }},
+      h('span', {class: 'no'}, cls === 'done' ? '✓' : num[t.task]),
+      h('div', {style: 'min-width:0'}, h('div', {class: 't', title: t.title}, t.title),
+        h('div', {class: 's'}, h('span', {class: 'st'}, state),
+          after.length && cls !== 'done' && cls !== 'ready' && !state.startsWith('Waiting for') ? h('span', null, 'after step ' + after.join(', ')) : null,
+          (t.scope && t.scope.write === false) ? h('span', null, 'reads only') : null)),
+      h('span', {class: 'who'}, who ? avatar(who, true, platformOf(who)) : null, who || 'Any agent')));
+  }
+  if (tasks().length) kids.push(list);
+  else kids.push(h('div', {class: 'calm'}, h('b', null, isOpen() ? 'No steps yet' : 'This job had no steps'),
+    isOpen() ? 'Add the first step below. Each step is one thing an agent can finish and you can check.' : ''));
+  if (isOpen()) {
+    const input = h('input', {placeholder: 'Add a step, then press Enter', maxlength: 200, 'aria-label': 'New step'});
+    const add = async () => {
+      const title = input.value.trim(); if (!title) return;
+      const last = ordered().slice(-1)[0];
+      const chain = $('chain') && $('chain').checked && last;
+      const out = await act('plan', {tasks: [{title, depends_on: chain ? [last.task] : []}]}, 'Added a step');
+      if (out) { input.value = ''; setTimeout(() => { const i = $('steps').querySelector('.addstep input'); if (i) i.focus(); }, 0); }
+    };
+    input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } });
+    kids.push(h('div', {class: 'addstep'}, input, h('button', {onclick: add}, 'Add')),
+      h('label', {class: 'check', style: 'margin-top:8px'}, h('input', {type: 'checkbox', id: 'chain', checked: true}), 'Starts after the last step'));
+  }
+  box.replaceChildren(...kids);
+}
+function renderCanvas() {
+  const world = $('world'), svg = $('edges'), ts = tasks();
+  autoLayout(false);
+  for (const el of [...world.querySelectorAll('.node')]) el.remove();
+  svg.replaceChildren();
+  for (const t of ts) for (const d of t.depends_on || []) {
+    if (!pos[d]) continue;
+    const dPath = curve(pos[d][0] + NODE_W, pos[d][1] + NODE_H / 2, pos[t.task][0], pos[t.task][1] + NODE_H / 2);
+    const met = taskOf(d) && taskOf(d).status === 'done';
+    const on = selEdge && selEdge[0] === d && selEdge[1] === t.task;
+    const line = document.createElementNS(SVG, 'path');
+    line.setAttribute('d', dPath); line.setAttribute('class', 'line' + (met ? ' met' : '') + (on ? ' sel' : ''));   // dotted until the dependency is done
+    const hit = document.createElementNS(SVG, 'path');
+    hit.setAttribute('d', dPath); hit.setAttribute('class', 'hit');
+    hit.addEventListener('pointerdown', ev => { ev.stopPropagation(); selEdge = [d, t.task]; sel = null; dirty = false; render(); });
+    svg.append(line, hit);
+  }
+  for (const t of ts) world.append(nodeEl(t));
+  const empty = $('empty');
+  if (!ts.length) empty.replaceChildren(h('div', {class: 'big'}, 'No steps yet'),
+    h('div', null, isOpen() ? 'Double-click the canvas to add a step.' : 'This job had no steps.'));
+  else empty.replaceChildren();
+  applyView();
+}
+function platformOf(name) {
+  if (name === 'owner' || name === 'You') return 'owner';
+  const m = ((S.board && S.board.members) || []).find(x => x.member === name);
+  return (m && m.platform) || (S.agents[name] || {}).platform;
+}
+function stateOf(t) {                                 // [css class, words]: never colour alone
+  if (t.status !== 'todo') return [t.status, STATUS[t.status]];
+  const waits = waitsFor(t), num = numbers();
+  return waits.length ? ['todo', 'Waiting for step ' + waits.map(k => num[k]).join(', ')] : ['ready', 'Ready to start'];
+}
+function select(key) { if (dirty && sel !== key && !confirm('Discard the changes to this step?')) return; sel = key; selEdge = null; dirty = false; render(); }
+function nodeEl(t) {
+  const who = t.owner || t.assignee, [cls, state] = stateOf(t);
+  const el = h('div', {class: 'node ' + cls + (sel === t.task ? ' sel' : ''), tabindex: '0', 'data-key': t.task,
+      style: 'left:' + pos[t.task][0] + 'px;top:' + pos[t.task][1] + 'px',
+      'aria-label': t.title + ', ' + state},
+    h('div', {class: 'top'}, h('span', {class: 'state', title: state}, h('i'), state), h('span', {class: 'key'}, 'Step ' + numbers()[t.task])),
+    h('div', {class: 'title', title: t.title}, t.title),
+    h('div', {class: 'foot'}, who ? avatar(who, true, platformOf(who)) : null,
+      h('span', {class: 't' + (who ? '' : ' none')}, who || 'Any agent'),
+      t.attempts > 1 && h('span', {class: 'tag'}, 'Try ' + t.attempts),
+      h('span', {class: 'tag'}, (t.scope && t.scope.write === false) ? 'Reads' : 'Changes')),
+    h('span', {class: 'port in'}), h('span', {class: 'port out', title: 'Drag to the step that must wait for this one'}));
+  el.addEventListener('pointerdown', ev => nodeDown(ev, t, el));
+  el.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(t.task); } });
+  el.addEventListener('dragover', ev => { if (isOpen() && t.status === 'todo') { ev.preventDefault(); el.classList.add('drop'); } });
+  el.addEventListener('dragleave', () => el.classList.remove('drop'));
+  el.addEventListener('drop', ev => {
+    ev.preventDefault(); el.classList.remove('drop');
+    const name = ev.dataTransfer.getData('text/plain');
+    if (name) act('plan', {tasks: [Object.assign(planFields(t), {assignee: name})]}, name + ' does "' + t.title + '"');
+  });
+  return el;
+}
+
+// ── Canvas interaction ──────────────────────────────────────────────────────
+function nodeDown(ev, t, el) {
+  if (ev.button !== 0) return;
+  ev.stopPropagation();
+  if (ev.target.classList.contains('out')) return linkFrom(ev, t);
+  const start = [ev.clientX, ev.clientY], origin = pos[t.task].slice();
+  let moved = false;
+  const move = e => {
+    const dx = (e.clientX - start[0]) / view.z, dy = (e.clientY - start[1]) / view.z;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    moved = true;
+    pos[t.task] = [origin[0] + dx, origin[1] + dy];
+    el.style.left = pos[t.task][0] + 'px'; el.style.top = pos[t.task][1] + 'px';
+  };
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+    if (moved) { savePos(); render(true); } else select(t.task);
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
+}
+function linkFrom(ev, t) {                            // drag from the out port: "that task waits for this one"
+  if (!isOpen()) return;
+  const temp = document.createElementNS(SVG, 'path'); temp.setAttribute('class', 'temp'); $('edges').append(temp);
+  const x1 = pos[t.task][0] + NODE_W, y1 = pos[t.task][1] + NODE_H / 2;
+  const move = e => { const [x, y] = toWorld(e); temp.setAttribute('d', curve(x1, y1, x, y)); };
+  const up = e => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up); temp.remove();
+    const hit = document.elementFromPoint(e.clientX, e.clientY), node = hit && hit.closest('.node');
+    const target = node && taskOf(node.getAttribute('data-key'));
+    if (!target || target.task === t.task) return;
+    if ((target.depends_on || []).includes(t.task)) return toast('"' + target.title + '" already starts after "' + t.title + '".');
+    if (target.status !== 'todo') return toast('"' + target.title + '" has started; its order can no longer change.', true);
+    act('plan', {tasks: [Object.assign(planFields(target), {depends_on: [...(target.depends_on || []), t.task]})]},
+        '"' + target.title + '" now starts after "' + t.title + '"');
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
+}
+$('viewport').addEventListener('pointerdown', ev => {
+  if (ev.button !== 0 || ev.target.closest('.node, .zoom, .empty button')) return;
+  const start = [ev.clientX, ev.clientY], origin = [view.x, view.y]; let moved = false;
+  $('viewport').classList.add('panning');
+  const move = e => { moved = true; view.x = origin[0] + e.clientX - start[0]; view.y = origin[1] + e.clientY - start[1]; applyView(); };
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+    $('viewport').classList.remove('panning');
+    if (!moved && (sel || selEdge) && !(dirty && !confirm('Discard the changes to this step?'))) { sel = null; selEdge = null; dirty = false; render(); }
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
+});
+$('viewport').addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const r = $('viewport').getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  zoomAt(mx, my, ev.deltaY < 0 ? 1.1 : 1 / 1.1);
+}, {passive: false});
+function zoomAt(mx, my, f) {
+  const z = Math.min(2, Math.max(.3, view.z * f));
+  view.x = mx - (mx - view.x) * z / view.z; view.y = my - (my - view.y) * z / view.z; view.z = z; applyView();
+}
+function zoomBy(f) { const r = $('viewport').getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, f); }
+$('zoomIn').onclick = () => zoomBy(1.2); $('zoomOut').onclick = () => zoomBy(1 / 1.2); $('zoomFit').onclick = fit;
+$('viewport').addEventListener('dblclick', ev => { if (!ev.target.closest('.node, .zoom') && isOpen()) addTask(toWorld(ev)); });
+addEventListener('keydown', ev => {
+  if ((ev.key === 'Delete' || ev.key === 'Backspace') && selEdge && !ev.target.closest('input, textarea, select, dialog')) { ev.preventDefault(); unlink(); }
+});
+async function addTask(at) {
+  const out = await act('plan', {tasks: [{title: 'New step'}]});
+  const key = out && out.planned && out.planned[0];
+  if (!key) return;
+  if (at) { pos[key] = [at[0] - NODE_W / 2, at[1] - NODE_H / 2]; savePos(); }
+  sel = key; selEdge = null; dirty = false; render();
+  const title = $('right').querySelector('label.field input'); if (title) { title.focus(); title.select(); }
+}
+function unlink() {
+  const [from, to] = selEdge, t = taskOf(to);
+  if (t.status !== 'todo') return toast('"' + t.title + '" has started; its order can no longer change.', true);
+  selEdge = null;
+  act('plan', {tasks: [Object.assign(planFields(t), {depends_on: t.depends_on.filter(d => d !== from)})]}, 'Order removed');
+}
+
+
+// ── Right pane: Needs you, or one step ──────────────────────────────────────
+function renderRight() {
+  const box = $('right');
+  if (!S.board) return box.replaceChildren();
+  if (selEdge) return box.replaceChildren(backLink(), h('h2', null, 'Order'),
+    h('p', null, '"' + taskOf(selEdge[1]).title + '" starts after "' + taskOf(selEdge[0]).title + '" is done.'),
+    h('button', {class: 'danger', disabled: !isOpen(), onclick: unlink}, 'Remove this order'));
+  const t = sel && taskOf(sel);
+  box.replaceChildren(...(t ? [backLink()].concat(taskPanel(t)) : inbox().concat(jobPanel())));
+}
+function backLink() {
+  return h('button', {class: 'back', onclick: () => { if (dirty && !confirm('Discard the changes to this step?')) return;
+    sel = null; selEdge = null; dirty = false; render(); }}, '‹ Needs you');
+}
+function approvalButtons(a) {
+  return [h('button', {onclick: () => post('/api/act', 'reject', {approval_id: a.approval_id}, 'Rejected: nothing changed in the model')}, 'Reject'),
+          h('button', {class: 'primary', onclick: () => post('/api/act', 'approve', {approval_id: a.approval_id}, 'Approved: ' + a.tool + ' runs now')}, 'Approve')];
+}
+function inbox() {
+  const items = needsYou(), out = [h('h2', null, 'Needs you')];
+  for (const it of items) {
+    if (it.kind === 'approval') {
+      const a = it.a;
+      out.push(h('div', {class: 'inbox-item approval'}, h('div', {class: 'k'}, 'Change to approve'),
+        h('div', {class: 't'}, it.t ? it.t.title : a.tool),
+        h('div', {class: 'b'}, a.agent + ' wants to run ' + a.tool + ' (' + (a.diff_total == null ? 'no preview' : plural(a.diff_total, 'change')) + ').'),
+        h('div', {class: 'row end'}, approvalButtons(a))));
+    } else if (it.kind === 'review') {
+      const t = it.t, note = h('input', {placeholder: 'Note for the agent (optional)', 'aria-label': 'Review note', oninput: () => { dirty = true; }});
+      out.push(h('div', {class: 'inbox-item review'}, h('div', {class: 'k'}, (t.owner || 'An agent') + ' finished'),
+        h('div', {class: 't'}, t.title), h('div', {class: 'b'}, t.summary || 'No report.'), note,
+        h('div', {class: 'row split', style: 'margin-top:8px'},
+          h('button', {class: 'ghost', onclick: () => select(t.task)}, 'Details'),
+          h('span', {class: 'row'},
+            h('button', {onclick: () => { dirty = false; act('review', {task: t.task, verdict: 'redo', note: note.value}, 'Sent back: an agent does it again'); }}, 'Send back'),
+            h('button', {class: 'primary', onclick: () => { dirty = false; act('review', {task: t.task, verdict: 'accept', note: note.value}, 'Accepted: ' + t.title); }}, 'Accept')))));
+    } else {
+      const t = it.t;
+      out.push(h('div', {class: 'inbox-item failed'}, h('div', {class: 'k'}, 'Failed' + (t.owner ? ' (' + t.owner + ')' : '')),
+        h('div', {class: 't'}, t.title), h('div', {class: 'b'}, t.summary || 'No reason given.'),
+        h('div', {class: 'row split'}, h('button', {class: 'ghost', onclick: () => select(t.task)}, 'Details'),
+          h('button', {class: 'primary', onclick: () => act('retry', {task: t.task}, 'Back in the list: an agent takes it again')}, 'Try again'))));
+    }
+  }
+  if (!items.length) {
+    const c = (S.board && S.board.counts) || {}, total = tasks().length;
+    if (isOpen() && total && c.done === total) out.push(h('div', {class: 'calm'}, h('b', null, 'Every step is done'), 'Finish the job when you are happy with it.',
+      h('div', {style: 'margin-top:12px'}, h('button', {class: 'primary', onclick: finishJob}, 'Finish job'))));
+    else out.push(h('div', {class: 'calm'}, h('b', null, 'Nothing needs you'),
+      !isOpen() ? 'This job is finished.' : total ? 'Agents take the steps that are ready. Reviews and approvals show up here.' : 'Add steps to the list first.'));
+  }
+  return out;
+}
+function finishJob() {
+  const left = tasks().filter(t => t.status !== 'done').length;
+  confirmBox('Finish this job?', left ? plural(left, 'step') + (left === 1 ? ' is' : ' are') + ' not done and will stay unfinished.' : 'Every step is done.',
+    'Finish job', () => act('close', {}, 'Job finished'));
+}
+function jobPanel() {
+  const b = S.board, st = S.stats || {}, out = [h('h2', null, 'About this job')];
+  out.push(h('dl', {class: 'kv'},
+    h('dt', null, 'Revit file'), h('dd', null, b.document || 'The open file'),
+    h('dt', null, 'Planned by'), h('dd', null, b.lead === 'owner' ? 'You' : b.lead),
+    h('dt', null, 'Review'), h('dd', null, b.review_required ? 'You check each step' : 'Steps count when reported'),
+    st.wall_s >= 60 ? h('dt', null, 'Time') : null, st.wall_s >= 60 ? h('dd', null, ago(st.wall_s)) : null));
+  out.push(h('h2', null, 'Notes for every agent'));
+  for (const n of b.notes || []) out.push(h('div', {class: 'note'}, h('div', {class: 'by'}, n.by === 'owner' ? 'You' : n.by), n.text));
+  if (isOpen()) {
+    const note = h('textarea', {rows: 2, placeholder: 'A decision every agent should know, e.g. "Mark format is D<level>-<nn>"', oninput: () => { dirty = true; }});
+    out.push(note, h('div', {class: 'row end', style: 'margin-top:8px'},
+      h('button', {onclick: () => { if (!note.value.trim()) return; dirty = false; act('note', {text: note.value}, 'Note added'); }}, 'Add note')));
+    out.push(h('details', null, h('summary', null, 'More'),
+      h('div', {class: 'row'}, h('button', {onclick: flowsDialog}, 'Save as template'), h('button', {class: 'danger', onclick: finishJob}, 'Finish job'))));
+  }
+  return out;
+}
+const list = v => String(v || '').split(',').map(x => x.trim()).filter(Boolean);
+function field(label, input) { return h('label', {class: 'field'}, h('span', null, label), input); }
+function taskPanel(t) {
+  const edit = isOpen() && t.status === 'todo', sc = t.scope || {}, [cls, state] = stateOf(t);
+  const out = [h('div', {class: 'row split', style: 'margin-bottom:12px'}, h('span', {class: 'pill ' + cls}, h('i'), state),
+    h('span', {class: 'hint', style: 'margin:0'}, 'Step ' + numbers()[t.task]))];
+  for (const a of (S.approvals || []).filter(x => x.task === S.session + '/' + t.task))
+    out.push(h('div', {class: 'inbox-item approval'}, h('div', {class: 'k'}, 'Change to approve'),
+      h('div', {class: 'b'}, a.agent + ' wants to run ' + a.tool + ' (' + (a.diff_total == null ? 'no preview' : plural(a.diff_total, 'change')) + ').'),
+      h('div', {class: 'row end'}, approvalButtons(a))));
+  if (!edit) return out.concat(taskRead(t, sc));
+
+  const mark = () => { dirty = true; };
+  const who = h('select', {onchange: mark}, h('option', {value: ''}, 'Any agent'), agentNames().map(n => h('option', {value: n}, n)));
+  who.value = t.assignee || '';
+  const f = {
+    title: h('input', {value: t.title, oninput: mark, maxlength: 200}),
+    detail: h('textarea', {oninput: mark, rows: 4, placeholder: 'What the agent must do, in plain words'}, t.detail || ''),
+    done: h('input', {value: t.done_when || '', oninput: mark, placeholder: 'How you will check it, e.g. "every door has a mark"'}),
+    write: h('input', {type: 'checkbox', checked: sc.write !== false, onchange: mark}),
+    levels: h('input', {value: (sc.levels || []).join(', '), oninput: mark, placeholder: 'Level 1, Level 2'}),
+    cats: h('input', {value: (sc.categories || []).join(', '), oninput: mark, placeholder: 'Walls, Doors'}),
+    ids: h('input', {class: 'mono', value: (sc.element_ids || []).join(', '), oninput: mark, placeholder: '123456, 123457'}),
+    doc: h('input', {value: sc.document || '', oninput: mark, placeholder: S.board.document || 'The job\'s file'}),
+  };
+  const num = numbers(), others = ordered().filter(o => o.task !== t.task);
+  const after = others.map(o => h('label', {class: 'check'},
+    h('input', {type: 'checkbox', value: o.task, checked: (t.depends_on || []).includes(o.task), onchange: mark}), num[o.task] + '. ' + o.title));
+  const save = () => {
+    const scope = {write: f.write.checked};
+    if (f.doc.value.trim()) scope.document = f.doc.value.trim();
+    for (const [k, el] of [['levels', f.levels], ['categories', f.cats], ['element_ids', f.ids]]) if (list(el.value).length) scope[k] = list(el.value);
+    for (const k of ['views', 'worksets']) if (sc[k]) scope[k] = sc[k];
+    const deps = after.map(l => l.querySelector('input')).filter(i => i.checked).map(i => i.value);
+    dirty = false;
+    act('plan', {tasks: [{key: t.task, title: f.title.value, detail: f.detail.value, done_when: f.done.value,
+      assignee: who.value, depends_on: deps, scope}]}, 'Saved');
+  };
+  const limited = sc.levels || sc.categories || sc.element_ids || sc.document;
+  out.push(field('Step', f.title), field('What to do', f.detail), field('Done when', f.done), field('Who does it', who),
+    h('label', {class: 'check'}, f.write, 'Changes the model'),
+    h('p', {class: 'hint'}, 'Steps that change the same part of the model run one after another. Steps that only read never wait.'));
+  if (others.length) out.push(h('div', {class: 'label'}, 'Starts after'), h('div', {class: 'checks'}, after));
+  out.push(h('details', {open: limited ? true : null}, h('summary', null, 'Only part of the model'),
+      field('Levels', f.levels), field('Categories', f.cats), field('Element IDs', f.ids), field('Revit file', f.doc)),
+    h('div', {class: 'row split'},
+      h('button', {class: 'danger', onclick: () => confirmBox('Delete "' + t.title + '"?', 'The step is removed from the list. Nothing changes in the model.', 'Delete',
+        () => { dirty = false; sel = null; return act('remove', {task: t.task}, 'Step deleted'); })}, 'Delete'),
+      h('button', {class: 'primary', onclick: save}, 'Save')));
+  return out;
+}
+function taskRead(t, sc) {                            // a started step is read, not edited: no dead form
+  const out = [h('h3', null, t.title)];
+  if (isOpen() && t.status === 'review') {
+    const note = h('textarea', {rows: 2, placeholder: 'Note for the agent (optional)', 'aria-label': 'Review note'});
+    out.push(h('div', {class: 'card review'}, h('div', {class: 'label'}, (t.owner || 'The agent') + ' reported'),
+      h('p', {class: 'body', style: 'margin-bottom:12px'}, t.summary || 'No report.'), note,
+      h('div', {class: 'row end', style: 'margin-top:8px'},
+        h('button', {onclick: () => act('review', {task: t.task, verdict: 'redo', note: note.value}, 'Sent back: an agent does it again')}, 'Send back'),
+        h('button', {class: 'primary', onclick: () => act('review', {task: t.task, verdict: 'accept', note: note.value}, 'Accepted: ' + t.title)}, 'Accept'))));
+  } else if (t.summary) out.push(h('div', {class: 'label'}, t.status === 'failed' ? 'Why it failed' : 'Report'), h('div', {class: 'box'}, t.summary));
+  if (isOpen() && t.status === 'failed') out.push(h('div', {class: 'row end', style: 'margin-bottom:16px'},
+    h('button', {class: 'primary', onclick: () => act('retry', {task: t.task}, 'Back in the list: an agent takes it again')}, 'Try again')));
+  if (t.result) out.push(h('details', null, h('summary', null, 'Result data'), h('pre', {class: 'box'}, JSON.stringify(t.result, null, 2))));
+  if (t.detail) out.push(h('div', {class: 'label'}, 'What to do'), h('p', {class: 'body'}, t.detail));
+  const num = numbers();
+  const rows = [['Done when', t.done_when], ['Agent', t.owner || t.assignee], ['Tries', t.attempts > 1 ? t.attempts : ''],
+    ['Model', sc.write === false ? 'Reads only' : 'Changes it'], ['Levels', (sc.levels || []).join(', ')],
+    ['Categories', (sc.categories || []).join(', ')], ['Element IDs', (sc.element_ids || []).join(', ')],
+    ['Revit file', sc.document], ['Starts after', (t.depends_on || []).map(k => 'step ' + num[k]).join(', ')]].filter(r => r[1]);
+  out.push(h('dl', {class: 'kv'}, rows.map(r => [h('dt', null, r[0]), h('dd', null, String(r[1]))])));
+  if (isOpen() && t.status !== 'done') out.push(h('p', {class: 'hint'}, 'A step can be edited only before an agent starts it.'));
+  return out;
+}
+
+// ── Start: one question, a plan, go ─────────────────────────────────────────
+let startFlow = '';
+function renderStart() {
+  const docs = (S.revit && S.revit.documents) || [];
+  const goal = h('textarea', {class: 'goal', placeholder: 'e.g. Check every door on levels 1 and 2 has a mark, and fix the missing ones', maxlength: 1000, 'aria-label': 'What do you want done?'});
+  const doc = docs.length
+    ? h('select', null, docs.map(d => h('option', {value: d}, d)), h('option', {value: ''}, 'Whichever file is active'))
+    : h('input', {placeholder: 'PRJ.rvt (empty: whichever file is active in Revit)'});
+  if (docs.length && S.revit.active) doc.value = S.revit.active;
+  const steps = h('textarea', {rows: 4, placeholder: 'One step per line, e.g.\nList doors without a mark\nFix the marks on Level 1\nFix the marks on Level 2'});
+  const inOrder = h('input', {type: 'checkbox', checked: true});
+  const review = h('input', {type: 'checkbox', checked: true});
+  const excl = h('input', {type: 'checkbox', checked: !!(S.setup && S.setup.exclusive)});
+  const serial = h('input', {type: 'checkbox', checked: (S.setup && S.setup.write_mode) === 'serial'});
+  const stepsBox = h('div', null, field('Steps (you can add them later)', steps), h('label', {class: 'check'}, inOrder, 'Do them in this order'));
+  const chips = h('div', {class: 'chips'});
+  const pick = name => { startFlow = name; for (const b of chips.children) b.setAttribute('aria-pressed', String(b.dataset.f === name)); stepsBox.style.display = name ? 'none' : ''; };
+  chips.append(h('button', {'data-f': '', onclick: () => pick('')}, 'Blank'),
+    (S.flows || []).map(f => h('button', {'data-f': f.name, title: f.goal || '', onclick: () => pick(f.name)}, f.name + ' (' + plural(f.tasks, 'step') + ')')));
+  const go = async ev => {
+    const lines = steps.value.split('\n').map(x => x.trim()).filter(Boolean);
+    if (!goal.value.trim() && !startFlow) { goal.focus(); return toast('Say what you want done first.', true); }
+    ev.target.disabled = true;
+    const args = {goal: goal.value.trim(), revit_document: doc.value.trim(), review: review.checked, exclusive: excl.checked, write_mode: serial.checked ? 'serial' : 'scoped'};
+    const out = startFlow ? await post('/api/flow', 'apply', Object.assign({name: startFlow}, args)) : await post('/api/act', 'open', args);
+    if (out && out.session && !startFlow && lines.length)
+      await post('/api/act', 'plan', {session: out.session, tasks: lines.map((title, i) => ({key: 's' + (i + 1), title,
+        depends_on: inOrder.checked && i ? ['s' + i] : []}))});
+    ev.target.disabled = false;
+    if (out && out.session) { want = out.session; starting = false; sel = null; fitted = false; mode = 'steps'; drawn.steps = null; await refresh(); toast('Job ready: agents can take the steps now'); }
+  };
+  const kids = [h('h1', null, 'What do you want done?'),
+    h('p', {class: 'lead'}, 'Write the goal, list the steps if you know them, and agents take them one by one. You approve the changes.'),
+    goal, h('div', {style: 'height:16px'}), field('Revit file', doc)];
+  if ((S.flows || []).length) kids.push(h('div', {class: 'label'}, 'Start from'), chips);
+  kids.push(stepsBox, h('label', {class: 'check'}, review, 'I review each step before it counts'),
+    h('details', null, h('summary', null, 'Advanced'),
+      h('label', {class: 'check'}, excl, 'Agents need a step to change this file'),
+      h('label', {class: 'check'}, serial, 'Only one step changes the model at a time')),
+    h('div', {class: 'actions'},
+      S.sessions.length ? h('button', {onclick: () => { starting = false; render(true); }}, 'Cancel') : null,
+      h('button', {class: 'primary', onclick: go}, 'Plan it')));
+  $('start').replaceChildren(...kids);
+  pick(startFlow && (S.flows || []).some(f => f.name === startFlow) ? startFlow : '');
+  setTimeout(() => goal.focus(), 0);
+}
+
+// ── Dialogs ─────────────────────────────────────────────────────────────────
+function show(...kids) { const d = $('dlg'); d.replaceChildren(...kids); if (!d.open) d.showModal(); }
+const closeDlg = () => $('dlg').close();
+function confirmBox(title, text, yes, run) {          // Cancel is the default answer
+  show(h('h3', null, title), h('p', null, text), h('div', {class: 'row end'},
+    h('button', {autofocus: true, onclick: closeDlg}, 'Cancel'),
+    h('button', {class: 'danger', onclick: async () => { closeDlg(); await run(); }}, yes)));
+}
+function flowsDialog() {
+  const name = h('input', {placeholder: 'door-audit', maxlength: 40});
+  const rows = (S.flows || []).map(f => h('div', {class: 'flow'},
+    h('div', {class: 'who'}, h('div', null, f.name), h('div', {class: 'hint', style: 'margin:0'}, plural(f.tasks, 'step') + (f.goal ? ': ' + f.goal : ''))),
+    h('button', {disabled: !isOpen(), title: 'Add these steps to this job', onclick: async () => { closeDlg(); await post('/api/flow', 'apply', {name: f.name, session: S.session}, 'Added the steps of ' + f.name); }}, 'Add steps'),
+    h('button', {class: 'danger', onclick: () => confirmBox('Delete template "' + f.name + '"?', 'Jobs already started from it keep their steps.', 'Delete', () => post('/api/flow', 'delete', {name: f.name}, 'Template deleted'))}, 'Delete')));
+  show(h('h3', null, 'Templates'), h('p', {class: 'hint'}, 'A template is a list of steps saved for the next job: what to do, who does it and in which order.'),
+    rows.length ? rows : h('p', {class: 'hint'}, 'No template yet.'),
+    h('div', {class: 'label', style: 'margin-top:16px'}, 'Save this job\'s steps as a template'),
+    h('div', {class: 'row'}, h('div', {style: 'flex:1'}, name),
+      h('button', {disabled: !tasks().length, onclick: async () => { const n = name.value.trim().toLowerCase(); closeDlg(); await post('/api/flow', 'save', {name: n, session: S.session}, 'Saved ' + plural(tasks().length, 'step') + ' as ' + n); }}, 'Save')),
+    h('div', {class: 'row end', style: 'margin-top:16px'}, h('button', {onclick: closeDlg}, 'Done')));
+}
+function agentDialog() {
+  const KINDS = [['command', 'A command on this computer', '{"command": ["claude", "-p", "{prompt}"]}'],
+                 ['anthropic', 'An agent in the Anthropic Console', '{"agent_id": "agent_...", "environment_id": "env_...", "max_usd": 2}'],
+                 ['http', 'A webhook (n8n, Dify, your service)', '{"url": "https://example.com/hook", "token_env": "MY_TOKEN"}'],
+                 ['mcp', 'An AI app that connects by itself', '{}']].filter(k => (S.platforms || []).includes(k[0]));
+  const name = h('input', {placeholder: 'console-qa', maxlength: 40, autofocus: true});
+  const platform = h('select', null, KINDS.map(k => h('option', {value: k[0]}, k[1])));
+  const role = h('select', null, h('option', {value: 'worker'}, 'Does steps'), h('option', {value: 'reviewer'}, 'Reviews steps'));
+  const cfg = h('textarea', {class: 'mono', rows: 4}, KINDS.length ? KINDS[0][2] : '{}');
+  platform.onchange = () => { cfg.value = (KINDS.find(k => k[0] === platform.value) || [, , '{}'])[2]; };
+  const go = async () => {
+    let extra; try { extra = JSON.parse(cfg.value || '{}'); } catch (e) { return toast('Settings is not valid JSON.', true); }
+    closeDlg();
+    await post('/api/act', 'agent_add', {name: name.value.trim().toLowerCase(), config: Object.assign({platform: platform.value, role: role.value}, extra)}, 'Added ' + name.value.trim());
+  };
+  show(h('h3', null, 'Add agent'), field('Name', name), field('Kind', platform), field('Role', role),
+    h('details', null, h('summary', null, 'Settings (no key or token here)'), cfg),
+    h('p', {class: 'hint'}, 'Agents you add read the model and need your approval to change it. Step text and results are sent to where the agent runs.'),
+    h('div', {class: 'row end'}, h('button', {onclick: closeDlg}, 'Cancel'), h('button', {class: 'primary', onclick: go}, 'Add agent')));
+}
+
+// ── Wiring ──────────────────────────────────────────────────────────────────
+$('jobSel').onchange = ev => { want = ev.target.value; sel = null; selEdge = null; dirty = false; fitted = false; starting = false; refresh(); };
+$('btnNew').onclick = () => { starting = true; drawn.start = null; render(); };
+for (const b of document.querySelectorAll('.seg button')) b.onclick = () => {
+  mode = b.dataset.v; try { localStorage.setItem('t3studio.mode', mode); } catch (e) {}
+  drawn.canvas = drawn.steps = null; fitted = false; render(); };
+$('btnAdd').onclick = () => addTask(null);
+$('btnTidy').onclick = () => { pos = {}; autoLayout(true); render(true); fit(); };
+$('btnRun').onclick = () => post('/api/run', S.run && S.run.running ? 'stop' : 'start', {session: S.session});
+refresh();
+setInterval(() => { if (!starting || !S || S.board) refresh(); }, 1500);
+</script>
+</body>
+</html>

@@ -1787,6 +1787,10 @@
                                      Style="{StaticResource T3.Chip}"
                                      Checked="tab_chip_checked" Tag="1"
                                      ToolTip="Port, auto-start, file task watcher and teaching capture"/>
+                        <RadioButton x:Name="chip_tab_harness" Content="Harness" GroupName="mcp_tabs"
+                                     Style="{StaticResource T3.Chip}"
+                                     Checked="tab_chip_checked" Tag="2"
+                                     ToolTip="Tasks several AI agents share on this machine, and the ones waiting for your review"/>
                     </StackPanel>
                     <Button Grid.Column="1" x:Name="refresh_btn" Content="Refresh"
                             Style="{StaticResource T3.Button.Ghost}"
@@ -2192,6 +2196,73 @@
 
                         </StackPanel>
                     </ScrollViewer>
+                </TabItem>
+
+                <!-- ════════ TAB 2: HARNESS ════════
+                     The shared task board (docs/harness.md), read from
+                     board.json. No ScrollViewer: the block holds a DataGrid (rule 11). -->
+                <TabItem>
+                    <Grid Margin="16">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="HARNESS TASKS" Style="{StaticResource T3.Label}" Margin="0,0,0,4"/>
+                        <TextBlock Grid.Row="1" x:Name="harness_summary_label"
+                                   Text="Tasks the AI agents share. A lead agent plans them; workers take them one by one."
+                                   Style="{StaticResource T3.Caption}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+                        <Grid Grid.Row="2">
+                            <DataGrid x:Name="harness_grid" Style="{StaticResource T3.DataGrid}"
+                                      SelectionMode="Single"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      EnableRowVirtualization="True">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="TASK" Width="*" Binding="{Binding title}"/>
+                                    <DataGridTextColumn Header="STATUS" Width="130" Binding="{Binding status_text}"/>
+                                    <DataGridTextColumn Header="AGENT" Width="120" Binding="{Binding owner}"/>
+                                    <DataGridTextColumn Header="DOCUMENT" Width="120" Binding="{Binding document}"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock x:Name="harness_empty" Style="{StaticResource T3.Empty}" IsHitTestVisible="False"
+                                       Text="No harness session is open.&#x0a;Ask your AI app to open one with t3lab_harness, then click Refresh."
+                                       Margin="16,32,16,8" Visibility="Collapsed"/>
+                        </Grid>
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                            <Button x:Name="harness_studio_btn" Content="Open Studio"
+                                    Style="{StaticResource T3.Button.Ghost}"
+                                    Height="28" Padding="12,0" Margin="0,0,8,0"
+                                    ToolTip="Open the board as a canvas in your browser: plan tasks, assign agents, review"/>
+                            <Button x:Name="harness_refresh_btn" Content="Refresh"
+                                    Style="{StaticResource T3.Button.Ghost}"
+                                    Height="28" Padding="12,0" Margin="0,0,8,0"
+                                    ToolTip="Read the task board again"/>
+                            <Button x:Name="harness_redo_btn" Content="Send back"
+                                    Style="{StaticResource T3.Button.Secondary}" IsEnabled="False"
+                                    Height="28" Padding="12,0" Margin="0,0,8,0"
+                                    ToolTip="The selected task goes back to the workers; nothing changes in the model"/>
+                            <Button x:Name="harness_accept_btn" Content="Accept"
+                                    Style="{StaticResource T3.Button.Secondary}" IsEnabled="False"
+                                    Height="28" Padding="12,0"
+                                    ToolTip="Mark the selected task done, so the tasks waiting for it can start"/>
+                        </StackPanel>
+
+                        <Grid Grid.Row="4" Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="harness_status_dot" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                    VerticalAlignment="Top" Margin="0,4,8,0"
+                                    Background="{StaticResource T3.Border}"/>
+                            <TextBlock x:Name="harness_status_label" Grid.Column="1"
+                                       Text="Select a task that waits for review to accept it or send it back."
+                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                        </Grid>
+                    </Grid>
                 </TabItem>
 
             </TabControl>

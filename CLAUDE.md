@@ -55,6 +55,8 @@ python lite_guard/test_pyrevit_revit_thread.py
 python lite_guard/test_pyrevit_patch_versions.py
 python lite_guard/test_data_hub.py
 python lite_guard/test_bridge_deploy.py
+python lite_guard/test_mcp_config_safety.py
+python lite_guard/test_python_installer.py
 python lite_guard/audit_ipy_compat.py --quiet
 python lite_guard/test_audit_ipy_compat.py
 python lite_guard/test_tool_specs.py

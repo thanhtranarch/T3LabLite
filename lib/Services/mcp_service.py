@@ -82,7 +82,7 @@ def _source_bridge_path():
     return os.path.join(lib_dir, 'core', 'bridge.py')
 
 
-def _get_bridge_path():
+def _get_bridge_path(take_ownership=True):
     """
     Bridge path to embed in Claude Desktop / Cursor configs.
 
@@ -92,6 +92,15 @@ def _get_bridge_path():
     re-downloaded or updated. Falls back to the in-extension copy only if
     deployment fails (e.g. APPDATA not writable).
     """
+    if not take_ownership:
+        # Revit startup: a bridge that is already deployed stays its owner's
+        # (T3Lab and T3Lab Lite share the folder); only a first one is deployed.
+        try:
+            existing = os.path.join(_get_paths_module().settings_dir(), 'bridge.py')
+            if os.path.isfile(existing):
+                return existing.replace('\\', '/')
+        except Exception:
+            pass
     deployed, _err = MCPService.deploy_bridge()
     return (deployed or _source_bridge_path()).replace('\\', '/')
 
@@ -158,11 +167,19 @@ def _find_python_executable():
         except Exception:
             pass
 
+    # 3) The private copy T3Lab unpacked itself (Services/python_installer.py).
+    if not found:
+        try:
+            from Services import python_installer
+            found = python_installer.find() or None
+        except Exception:
+            found = None
+
     if found:
         paths.set_setting('python_executable', found)
         return found
 
-    # 3) Give up — return the bare command name and let the OS PATH try.
+    # 4) Give up — return the bare command name and let the OS PATH try.
     # Not cached: it isn't a real resolved path, so nothing to reuse.
     return 'python' if is_windows else 'python3'
 
@@ -407,12 +424,13 @@ def _host_outcome(code, result):
 # differ:
 #
 #   Claude Desktop   claude_desktop_config.json          JSON  "mcpServers"
+#   Claude Code      ~/.claude.json (user scope)         JSON  "mcpServers"
 #   ChatGPT (Codex)  ~/.codex/config.toml                TOML  [mcp_servers.X]
 #   Antigravity      ~/.gemini/antigravity-ide/
 #                        mcp_config.json                 JSON  "mcpServers"
 #
-# Cursor, Windsurf and Claude Code use the same JSON shape as Claude Desktop,
-# so config_snippet(fmt='json') can be pasted into those by hand as well.
+# Cursor and Windsurf use the same JSON shape as Claude Desktop, so
+# config_snippet(fmt='json') can be pasted into those by hand as well.
 #
 # ChatGPT note: the ChatGPT app's own "Connectors" (developer mode) only accept
 # a PUBLIC https MCP endpoint — a local stdio bridge cannot be registered there.
@@ -513,15 +531,56 @@ def _appdata():
     return os.environ.get('APPDATA', os.path.join(_home(), 'AppData', 'Roaming'))
 
 
+def _local_appdata():
+    return os.environ.get('LOCALAPPDATA', os.path.join(_home(), 'AppData', 'Local'))
+
+
+def _claude_msix_candidates():
+    """claude_desktop_config.json of every packaged (Store / MSIX) Claude
+    Desktop on this PC; [] when Claude Desktop is the classic installer."""
+    import glob
+    pattern = os.path.join(_local_appdata(), 'Packages', 'Claude_*', 'LocalCache',
+                           'Roaming', 'Claude')
+    try:
+        return [os.path.join(d, 'claude_desktop_config.json')
+                for d in sorted(glob.glob(pattern)) if os.path.isdir(d)]
+    except Exception:
+        return []
+
+
 def _claude_candidates():
     import platform
     system = platform.system()
     if system == 'Windows':
-        return [os.path.join(_appdata(), 'Claude', 'claude_desktop_config.json')]
+        # The Store / MSIX build reads its own copy of %APPDATA%\Claude: Windows
+        # redirects it to %LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming.
+        # When that copy exists it is the live file and the plain one is dead.
+        return _claude_msix_candidates() + [
+            os.path.join(_appdata(), 'Claude', 'claude_desktop_config.json')]
     if system == 'Darwin':
         return [os.path.join(_home(), 'Library', 'Application Support', 'Claude',
                              'claude_desktop_config.json')]
     return [os.path.join(_home(), '.config', 'Claude', 'claude_desktop_config.json')]
+
+
+def _claude_code_candidates():
+    """Claude Code keeps its user-scope servers ("mcpServers", every project)
+    in ~/.claude.json, or in $CLAUDE_CONFIG_DIR/.claude.json when that is set."""
+    out = []
+    config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
+    if config_dir:
+        out.append(os.path.join(config_dir, '.claude.json'))
+    out.append(os.path.join(_home(), '.claude.json'))
+    return out
+
+
+def _claude_code_installed():
+    """~/.claude.json sits in the home folder, which always exists: Claude
+    Code is here when its file or its ~/.claude folder is."""
+    if any(os.path.isfile(c) for c in _claude_code_candidates()):
+        return True
+    config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
+    return os.path.isdir(config_dir or os.path.join(_home(), '.claude'))
 
 
 def _codex_candidates():
@@ -560,6 +619,13 @@ AI_CLIENTS = [
      'setting': 'claude_desktop_config',
      'candidates': _claude_candidates,
      'agent': 'claude-desktop'},
+    {'key': 'claudecode',
+     'label': 'Claude Code',
+     'fmt': 'json',
+     'setting': 'claude_code_config',
+     'candidates': _claude_code_candidates,
+     'installed': _claude_code_installed,
+     'agent': 'claude-code'},
     {'key': 'chatgpt',
      'label': 'ChatGPT (Codex)',
      'fmt': 'toml',
@@ -582,6 +648,10 @@ def _client_spec(key):
     raise KeyError('Unknown MCP client: {}'.format(key))
 
 
+def _same_path(a, b):
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
 def _resolve_client_path(spec):
     """
     Config path for one client.
@@ -600,6 +670,13 @@ def _resolve_client_path(spec):
         stored = paths.load_settings().get(spec['setting'])
     except Exception:
         paths, stored = None, None
+    # A stored path that is one of the candidates was only remembered by an
+    # earlier look, not typed by the user: a candidate that ranks higher and
+    # exists now (Claude Desktop moved to the Store build) replaces it.
+    if stored and found and not _same_path(stored, found):
+        ranks = [i for i, c in enumerate(candidates) if _same_path(c, stored)]
+        if ranks and candidates.index(found) < ranks[0]:
+            stored = None
     if stored and (os.path.isfile(stored) or not found):
         return stored
     if found:
@@ -665,7 +742,12 @@ def _read_json_config(path):
         raw = f.read().strip()
     if not raw:
         return {}
-    return _json.loads(raw)
+    # Key order survives a rewrite under IronPython 2.7 too (unordered dict).
+    try:
+        from collections import OrderedDict
+        return _json.loads(raw, object_pairs_hook=OrderedDict)
+    except ImportError:
+        return _json.loads(raw)
 
 
 def _write_text(path, text):
@@ -686,6 +768,17 @@ def _json_is_configured(path, name=MCP_SERVER_NAME):
         args = entry.get('args') if isinstance(entry, dict) else None
         return any('{}'.format(a).startswith('--agent=') for a in (args or []))
     return True
+
+
+def _json_entry_is_current(path, python, bridge, port, name=MCP_SERVER_NAME, agent=None):
+    """True when the file already holds exactly the entry Connect would write."""
+    try:
+        config = _read_json_config(path)
+        previous = dict(config['mcpServers'][name])
+    except Exception:
+        return False
+    previous.pop('$typeName', None)
+    return previous == _server_entry(python, bridge, port, name, agent)
 
 
 def _write_json_config(path, python, bridge, port, name=MCP_SERVER_NAME, agent=None):
@@ -1450,24 +1543,34 @@ class MCPService(object):
     last_addin_note = ''
 
     @staticmethod
-    def update_addin(app='autocad'):
+    def update_addin(app='autocad', force=False):
         """
         Bring an installed add-in up to its latest release (Connect). Never
         fatal: the installed copy keeps working offline.
 
+        force: the user clicked one app's Connect / Update, so download now
+        (no _ADDIN_REFRESH_S wait) and always say what happened.
+
         Returns:
-            str: what changed ('' when nothing did, or the check was skipped).
+            str: what changed. Without force, '' when nothing did or the check
+            was skipped.
         """
         spec = _APP_BY_KEY[app]
         last = _addin_refreshed.get(spec[3])
-        if last and time.time() - last[0] < _ADDIN_REFRESH_S:
+        if not force and last and time.time() - last[0] < _ADDIN_REFRESH_S:
             return ''
         ok, msg = MCPService.install_addin(app)
         if not ok:
             _addin_refreshed[spec[3]] = (time.time(), None)
-            return ''
+            return ('Add-in not updated, the installed one is kept: {}'.format(msg)
+                    if force else '')
         result = _addin_refreshed[spec[3]][1]
-        return msg if (result.get('written') or result.get('locked')) else ''
+        if result.get('written') or result.get('locked'):
+            return msg
+        if not force:
+            return ''
+        return 'The T3Lab add-in {} is already the latest.'.format(
+            result.get('version') or '').replace('  ', ' ')
 
     @staticmethod
     def cad_bridge_status():
@@ -1508,15 +1611,21 @@ class MCPService(object):
 
 
     @staticmethod
-    def configure_client(key, port=None, server='revit'):
+    def configure_client(key, port=None, server='revit', fresh_addin=False):
         """
         Write the `server` entry (t3lab-revit / t3lab-autocad) into one
         client's config file.
 
         Creates the file and its directory if absent, merges with existing
         entries, and keeps a one-time `<path>.t3lab-backup` of the original.
-        AutoCAD: refuses when its bridge is not deployed, and refuses Claude
-        Desktop while it runs (it would drop the entry on quit).
+        AutoCAD: refuses when its bridge is not deployed. Every server: refuses
+        Claude Desktop while it runs (it would drop the entry on quit), unless
+        the entry is already there unchanged.
+
+        fresh_addin: True for one app's Connect / Update click (an installed
+        AutoCAD / Civil 3D add-in is downloaded again now, not at most every
+        10 minutes); None is Revit startup: an installed add-in is not
+        downloaded and a deployed Revit bridge keeps its owner.
 
         Returns:
             (success: bool, message: str) — config path on success, error text
@@ -1530,6 +1639,10 @@ class MCPService(object):
 
         try:
             python = _find_python_executable()
+            if fresh_addin is not None and not os.path.isfile(python):
+                # A click on Connect: fetch a Python now (startup does it in
+                # the background, see auto_connect_clients).
+                python = MCPService.install_python()[0] or python
             path   = _resolve_client_path(spec)
             if name in _BRIDGE_SERVERS:
                 port = 0
@@ -1541,23 +1654,33 @@ class MCPService(object):
                     if not ok:
                         return False, msg
                     MCPService.last_addin_note = msg
-                else:
-                    MCPService.last_addin_note = MCPService.update_addin(server)
+                elif fresh_addin is not None:
+                    MCPService.last_addin_note = (
+                        MCPService.update_addin(server, force=True) if fresh_addin
+                        else MCPService.update_addin(server))
                 if not os.path.isfile(bridge):
                     return False, ('{} add-in not installed ({} is missing) — {}'.format(
                         app[1], bridge, app[4]))
-                if key == 'claude' and _claude_desktop_running():
-                    return False, ('Claude Desktop is running and would drop the entry '
-                                   'when it quits — quit it from the tray icon, then Connect again')
             else:
                 if port is None:
                     try:
                         port = _get_server().port
                     except Exception:
                         port = 48884
-                bridge = _get_bridge_path()
+                bridge = (_get_bridge_path() if fresh_addin is not None
+                          else _get_bridge_path(take_ownership=False))
 
+            # Every server, Revit too: Claude Desktop saves its config when it
+            # quits, and that drops an entry written while it ran.
             agent = None if name in _BRIDGE_SERVERS else spec.get('agent')
+            if key == 'claude' and _claude_desktop_running():
+                # Update with nothing to change (the add-in was refreshed
+                # above): the entry Claude Desktop loaded is still right.
+                if _json_entry_is_current(path, python, bridge, port, name, agent):
+                    return True, path
+                return False, ('Claude Desktop is running and would drop the entry '
+                               'when it quits — quit it from the tray icon, then Connect again')
+
             if spec['fmt'] == 'toml':
                 _write_toml_config(path, python, bridge, port, name, agent)
             else:
@@ -1575,11 +1698,117 @@ class MCPService(object):
             list[dict]: key, label, ok, message — one entry per client.
         """
         results = []
-        for spec in AI_CLIENTS:
-            ok, msg = MCPService.configure_client(spec['key'], port=port, server=server)
+        note = ''
+        for i, spec in enumerate(AI_CLIENTS):
+            # One download for the whole round: the first client fetches the
+            # add-in, the others find it fresh.
+            ok, msg = MCPService.configure_client(spec['key'], port=port, server=server,
+                                                  fresh_addin=(i == 0))
+            note = note or MCPService.last_addin_note
             results.append({'key': spec['key'], 'label': spec['label'],
                             'ok': ok, 'message': msg})
+        MCPService.last_addin_note = note
         return results
+
+    # ── Connect by itself (owner, 2026-11-23: nobody configures by hand) ──────
+
+    @staticmethod
+    def auto_connect_enabled():
+        """mcp_paths.json "auto_connect_clients": false turns it off (default on)."""
+        try:
+            return _get_paths_module().load_settings().get('auto_connect_clients') is not False
+        except Exception:
+            return True
+
+    @staticmethod
+    def auto_connect_clients(port=None):
+        """
+        Revit startup: write the T3Lab entry into every AI app installed on
+        this PC that does not have it yet, so nobody clicks Connect.
+
+        Never creates a config for an app that is not installed, never touches
+        an entry that is already there (a second Revit on another port leaves
+        the first one's entry), never downloads an add-in. t3lab-autocad is
+        written too when its add-in is already installed. Everything
+        configure_client refuses (Claude Desktop running, a file that does not
+        parse) is skipped and tried again at the next start.
+
+        With something to connect and no Python 3 for the bridge, nothing is
+        written and the one result carries 'need_python': True -- startup.py
+        then runs install_python() in the background and calls this again.
+
+        Returns:
+            list[dict]: label, server, ok, message -- one per entry written or
+            refused; apps that need nothing are not listed.
+        """
+        out = []
+        if not MCPService.auto_connect_enabled():
+            return out
+        servers = ['revit']
+        if os.path.isfile(_app_bridge_path('autocad')):
+            servers.append('autocad')
+        pending = []
+        for spec in AI_CLIENTS:
+            for server in servers:
+                try:
+                    status = MCPService.client_status(spec['key'], server=server)
+                    if status.get('configured') or status.get('error'):
+                        continue
+                    if 'installed' in spec:
+                        here = spec['installed']()
+                    else:
+                        folder = os.path.dirname(status.get('path') or '')
+                        here = bool(folder) and os.path.isdir(folder)
+                    if here:
+                        pending.append((spec, server))
+                except Exception:
+                    continue
+        if not pending:
+            return out
+        try:
+            has_python = os.path.isfile(_find_python_executable())
+        except Exception:
+            has_python = False
+        if not has_python:
+            return [{'label': 'AI apps', 'server': MCP_SERVER_NAME, 'ok': False,
+                     'need_python': True,
+                     'message': 'no Python 3 found for the MCP bridge'}]
+        note = MCPService.last_addin_note
+        for spec, server in pending:
+            try:
+                ok, msg = MCPService.configure_client(
+                    spec['key'], port=port, server=server, fresh_addin=None)
+            except Exception as ex:
+                ok, msg = False, str(ex)
+            out.append({'label': spec['label'], 'server': SERVERS[server],
+                        'ok': ok, 'message': msg})
+        MCPService.last_addin_note = note
+        return out
+
+    @staticmethod
+    def install_python():
+        """
+        No Python 3 on this PC: unpack the newest official one into
+        %APPDATA%/T3LabAI/python for the bridge (Services/python_installer.py).
+        mcp_paths.json "auto_install_python": false turns it off.
+
+        Returns:
+            (path: str, message: str) -- path is '' when nothing was installed.
+        """
+        try:
+            paths = _get_paths_module()
+            settings = paths.load_settings()
+            if settings.get('auto_install_python') is False:
+                return '', 'Python download is turned off (auto_install_python)'
+            from Services import python_installer
+            if not python_installer.supported():
+                return '', 'Python can only be installed by T3Lab on Windows'
+            exe = python_installer.find() or python_installer.install(
+                source=settings.get('python_package_url'))
+            paths.set_setting('python_executable', exe)
+            return exe, 'Python installed for the MCP bridge: {}'.format(exe)
+        except Exception as ex:
+            return '', 'Python was not installed: {}'.format(ex)
 
     # ── Backwards-compatible Claude Desktop wrappers ──────────────────────────
 

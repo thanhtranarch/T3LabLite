@@ -92,6 +92,8 @@ jobs:
         run: python3 lite_guard/test_mcp_shadowing.py
       - name: Test MCP Control never destroys a config file it cannot read
         run: python3 lite_guard/test_mcp_config_safety.py
+      - name: Test the private Python for the MCP bridge and Claude Code auto-connect
+        run: python3 lite_guard/test_python_installer.py
       - name: IronPython gate (the MCP server runs IronPython 2.7; no py3-only code in what it imports)
         run: python3 lite_guard/audit_ipy_compat.py --quiet
       - name: Test the IronPython gate itself

@@ -55,7 +55,8 @@ except Exception as _svc_err:
 try:
     CLIENTS = [(key, label) for key, label, _fmt in MCPService.clients()]
 except Exception:
-    CLIENTS = [('claude', 'Claude Desktop'), ('chatgpt', 'ChatGPT (Codex)'),
+    CLIENTS = [('claude', 'Claude Desktop'), ('claudecode', 'Claude Code'),
+               ('chatgpt', 'ChatGPT (Codex)'),
                ('antigravity', 'Antigravity')]
 CLIENT_KEYS = [key for key, _label in CLIENTS]
 
@@ -511,7 +512,7 @@ class MCPControlWindow(T3WPFWindow):
             self._doc_label.Text = 'No model open — open one in Revit first'
 
     def _refresh_clients(self):
-        """Refresh every AI app row (Claude Desktop, ChatGPT/Codex, Antigravity)."""
+        """Refresh every AI app row (Claude Desktop, Claude Code, ChatGPT/Codex, Antigravity)."""
         if not HAS_SERVICE:
             for widgets in self._client_widgets.values():
                 self._set_dot(widgets.get('indicator'), 'T3.TextDisabled')
@@ -539,7 +540,8 @@ class MCPControlWindow(T3WPFWindow):
             self._apply_client_row(
                 widgets, status, 'T3Lab' if revit else server_name,
                 'Rewrite the T3Lab entry — use after changing the port' if revit
-                else 'Rewrite the {} entry'.format(server_name),
+                else 'Download and install the newest {} add-in, then rewrite the {} entry'.format(
+                    _label, server_name),
                 enabled=revit or self._addin_installed or self._addin_installable)
         if self._configure_all_btn is not None:
             self._configure_all_btn.IsEnabled = (revit or self._addin_installed
@@ -686,7 +688,7 @@ class MCPControlWindow(T3WPFWindow):
         label = self._client_labels.get(key, key)
         app_label, server_name = self._app_spec()
         ok, msg = MCPService.configure_client(key, port=self._current_port(),
-                                              server=self._app)
+                                              server=self._app, fresh_addin=True)
         self._refresh_addin()
         if ok:
             logger.info('{} configured for {}: {}'.format(key, app_label, msg))
@@ -842,7 +844,8 @@ class MCPControlWindow(T3WPFWindow):
         if self._addin_installed:
             self._set_dot(self._addin_dot, 'T3.Success.Accent')
             label = '{} add-in installed'.format(app_label)
-            hint = '{} {}'.format(found, bridge.get('path') or '')
+            hint = '{} Update below downloads and installs the newest add-in. {}'.format(
+                found, bridge.get('path') or '')
         elif self._addin_installable:
             self._set_dot(self._addin_dot, 'T3.Warning.Accent')
             label = '{} add-in not installed yet'.format(app_label)

@@ -44,10 +44,12 @@ def _write(path, data):
 class _TempHome(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix='t3lab_cfg_')
-        self.env = {k: os.environ.get(k) for k in ('HOME', 'USERPROFILE', 'APPDATA', 'CODEX_HOME')}
+        self.env = {k: os.environ.get(k) for k in ('HOME', 'USERPROFILE', 'APPDATA', 'CODEX_HOME',
+                                                   'CLAUDE_CONFIG_DIR')}
         os.environ['HOME'] = os.environ['USERPROFILE'] = self.dir
         os.environ['APPDATA'] = os.path.join(self.dir, 'AppData')
         os.environ.pop('CODEX_HOME', None)
+        os.environ.pop('CLAUDE_CONFIG_DIR', None)
         self.saved = {n: getattr(M, n) for n in ('_find_python_executable', '_get_bridge_path',
                                                   '_claude_desktop_running')}
         M._find_python_executable = lambda: PY

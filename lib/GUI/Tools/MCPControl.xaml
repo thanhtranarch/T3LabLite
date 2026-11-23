@@ -1890,6 +1890,29 @@
 
                                     <Separator Style="{StaticResource T3.Rule}"/>
 
+                                    <!-- Claude Code -->
+                                    <Grid Margin="12,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="claudecode_cfg_indicator" Grid.Column="0" Width="8" Height="8" CornerRadius="4"
+                                                VerticalAlignment="Top" Margin="0,4,8,0"
+                                                Background="{StaticResource T3.Border}"/>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                                            <TextBlock Text="Claude Code" Style="{StaticResource T3.BodyStrong}"/>
+                                            <TextBlock x:Name="claudecode_cfg_label" Text="Checking..."
+                                                       Style="{StaticResource T3.Caption}" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="2" x:Name="configure_claudecode_btn" Content="Connect"
+                                                Style="{StaticResource T3.Button.Secondary}"
+                                                Height="28" Padding="12,0" VerticalAlignment="Center"
+                                                ToolTip="Add T3Lab to ~/.claude.json, for every project"/>
+                                    </Grid>
+
+                                    <Separator Style="{StaticResource T3.Rule}"/>
+
                                     <!-- ChatGPT (Codex) -->
                                     <Grid Margin="12,8">
                                         <Grid.ColumnDefinitions>

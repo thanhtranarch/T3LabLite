@@ -136,6 +136,13 @@ class ServiceTests(unittest.TestCase):
         make_zip(src)
         AI.install('T3LabCAD', source=src)
         self.assertEqual(M.MCPService.update_addin('autocad'), '')     # unchanged -> no note
+        # One app's Update click: no 10-minute wait, and it always answers.
+        self.assertIn('already the latest', M.MCPService.update_addin('autocad', force=True))
+        make_zip(src, extra={'T3LabCAD/new_tool.json': '{}'})          # a newer release
+        self.assertIn('Installed the T3Lab add-in',
+                      M.MCPService.update_addin('autocad', force=True))
+        os.remove(src)
+        self.assertIn('not updated', M.MCPService.update_addin('autocad', force=True))
 
     def test_only_one_click_apps_are_listed(self):
         keys = [a[0] for a in self.M.MCPService.autodesk_apps()]

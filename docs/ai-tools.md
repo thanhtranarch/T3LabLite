@@ -37,7 +37,8 @@ the read-only list, the Assistant subsets and prompt (`lib/Intelligence/`), the 
 Bridge (`lib/core/bridge.py`, Lite only, edited by hand): `t3lab_verify` checks exported files on
 this computer; a call with a missing required argument, or a name one typo away from a real one, is
 refused before it reaches Revit (`bad_arguments`, "did you mean"). `core/tool_cli.py` deploys next to
-the bridge.
+the bridge. Agents with a shell (Claude Code, Codex) list, read the help of, call and check these
+tools from the command line, and Tool Hub recipes run over MCP (`t3lab_recipe`): `docs/cli.md`.
 
 After a write, the server reads the model back and adds `verified` / `verification` to the result
 (`core/write_verify.py`); `success` is never changed.
@@ -51,8 +52,8 @@ After a write, the server reads the model back and adds `verified` / `verificati
 
 ## Not ported
 
-`t3lab_recipe`, the bridge CLI (`tools` / `help` / `verify` commands), tiers / profiles / approval
-queue: they belong to t3lab_dev's bridge, which Lite does not use. The BIM Harness
+Tiers / profiles / approval queue / turbo / gateway: they belong to t3lab_dev's bridge, which Lite
+does not use. The bridge CLI and `t3lab_recipe` are ported on Lite's path (`docs/cli.md`). The BIM Harness
 (`t3lab_harness`, `bridge.py harness …`) is ported on top of Lite's policy: `docs/harness.md`.
 
 ## Verify in Revit (restart Revit, do not Reload)

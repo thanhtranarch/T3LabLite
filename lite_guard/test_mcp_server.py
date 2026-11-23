@@ -1104,6 +1104,13 @@ class ServerArgumentTests(unittest.TestCase):
                 else:
                     sys.modules[n] = v
 
+    def test_manage_material_is_read_only(self):
+        """Only list / get_element_materials: the Assistant's edit gate must not ask."""
+        tool = _server()._tools['manage_material']
+        self.assertEqual(tool['inputSchema']['properties']['operation']['enum'],
+                         ['list', 'get_element_materials'])
+        self.assertIn('manage_material', READ_ONLY)
+
     def test_send_code_helpers_in_scope(self):
         res = self._send_code('result = (revit_version, eid_value is not None, '
                               'make_eid is not None, elem_name is not None)')

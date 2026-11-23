@@ -116,6 +116,7 @@ def friendly_client(raw):
     for key, name in (('claude-code', 'Claude Code'), ('claude', 'Claude Desktop'),
                       ('codex', 'ChatGPT (Codex)'), ('openai', 'ChatGPT (Codex)'),
                       ('antigravity', 'Antigravity'), ('cursor', 'Cursor'),
+                      ('copilot', 'Copilot'),
                       ('mcp-client', 'AI app')):
         if key in low:
             return name

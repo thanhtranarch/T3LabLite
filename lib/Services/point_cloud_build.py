@@ -14,7 +14,7 @@ import math
 from Services.point_cloud_analysis import (
     DetectedColumn, DetectedFloor, DetectedOpening, DetectedRoof, DetectedStair,
     DetectedWall, mm_to_ft)
-from Snippets._compat import disposing
+from Snippets._compat import clr_namespace, disposing
 
 try:
     import clr
@@ -57,8 +57,7 @@ def _warning_swallower():
                                    FailureSeverity)
 
     class WarningSwallower(IFailuresPreprocessor):
-        # Static namespace: lib/ modules are imported once per engine session.
-        __namespace__ = "T3Lab.PointCloudBuild"
+        __namespace__ = clr_namespace('PointCloudBuild')
 
         def PreprocessFailures(self, failuresAccessor):
             fail_list = failuresAccessor.GetFailureMessages()

@@ -7,7 +7,7 @@ rehost_to_level / cut_wall_openings tools (core/tools/model.py). Revit is
 imported inside functions (IronPython 2.7 server, tests without Revit).
 Test: dev/test_tools_model_domain.py.
 """
-from Snippets._compat import eid_value
+from Snippets._compat import clr_namespace, eid_value
 
 _SWALLOWER = None
 
@@ -20,8 +20,7 @@ def silence_warnings(transaction):
                                        FailureSeverity)
 
         class WallToolWarnings(IFailuresPreprocessor):
-            # Static namespace is safe: lib/ modules load once per engine session.
-            __namespace__ = "T3Lab.WallTools"
+            __namespace__ = clr_namespace('WallTools')
 
             def PreprocessFailures(self, fa):
                 for f in fa.GetFailureMessages():

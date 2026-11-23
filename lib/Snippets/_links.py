@@ -29,6 +29,7 @@ Part of T3Lab Extension.
 import ntpath
 import os
 
+from Snippets._compat import clr_namespace
 from Autodesk.Revit.DB import (
     AttachmentType,
     BuiltInParameter,
@@ -501,7 +502,7 @@ PLACEMENTS = ("origin", "shared", "site", "center")
 
 class WarningSwallower(IFailuresPreprocessor):
     """Suppresses non-fatal warnings (duplicate types, shared coordinates) while linking."""
-    __namespace__ = "T3Lab.LinksWarningSwallower"
+    __namespace__ = clr_namespace('LinksWarningSwallower')
 
     def PreprocessFailures(self, failuresAccessor):
         fail_list = failuresAccessor.GetFailureMessages()

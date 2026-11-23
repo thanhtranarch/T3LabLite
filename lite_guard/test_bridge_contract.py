@@ -151,6 +151,18 @@ check('family transfer without execute_plans: one call per target, error kept as
 FT.execute_plans = staticmethod(lambda s, plans, overwrite_values=False: 'many')
 check('execute_plans used when the module has it', HF._run_plans(FT, 's', [], False) == 'many')
 
+# T3Lab and T3Lab Lite share one CPython engine and both ship these modules: a
+# fixed __namespace__ raises "Duplicate type name" after the other one's click.
+from Snippets._compat import clr_namespace   # noqa: E402
+check('clr_namespace is unique per load',
+      clr_namespace('X').startswith('T3Lab.X_') and clr_namespace('X') != clr_namespace('X'))
+for rel in ('Snippets/finish_floors.py', 'Snippets/wall_tools.py', 'Snippets/_links.py',
+            'Snippets/_auto_dimension.py', 'Services/point_cloud_build.py'):
+    lines = [l.strip() for l in open(os.path.join(LIB, *rel.split('/')), encoding='utf-8')
+             if '__namespace__' in l and '=' in l]
+    check('{}: .NET class namespace is per load'.format(rel),
+          lines and all('clr_namespace(' in l for l in lines), lines)
+
 print('')
 if FAILURES:
     print('{} FAILED: {}'.format(len(FAILURES), ', '.join(FAILURES)))

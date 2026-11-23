@@ -644,6 +644,15 @@ def add_to_assembly_of(doc, host, new_ids):
 # ─── Python 2.7 (IronPython, MCP server) / 3 (CPython, windows) ───
 # dev/audit_ipy_compat.py blocks the raw calls in modules the server can load.
 
+def clr_namespace(name):
+    """`__namespace__` of a .NET interface class in a lib/ module shared with
+    T3Lab Lite: unique per module load. Both extensions run in one CPython
+    engine and claim_lib re-imports the module when the other one was clicked;
+    a fixed name then fails with "Duplicate type name within an assembly"."""
+    import uuid
+    return 'T3Lab.{}_{}'.format(name, uuid.uuid4().hex[:8])
+
+
 def fold(text):
     """Case-insensitive key: str.casefold on CPython 3, lower() on IronPython 2.7."""
     try:

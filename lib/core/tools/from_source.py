@@ -134,7 +134,7 @@ def cad_to_elements(doc, args):
     out = {'cad': {'id': cad['id'], 'name': cad['name']}}
     if op == 'scan':
         rows = layer_rows(layers)
-        out.update(layers=[r for r in rows if r['curves']][:MAX_ROWS],
+        out.update(applied=False, layers=[r for r in rows if r['curves']][:MAX_ROWS],
                    empty_layers=len([r for r in rows if not r['curves']]),
                    levels=[lv['name'] for lv in cr.get_levels(doc)],
                    elements=list(cp.ELEMENTS),

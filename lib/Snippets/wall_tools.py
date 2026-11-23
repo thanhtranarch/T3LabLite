@@ -278,7 +278,9 @@ def execute_openings(doc, walls, sources, categories, method, offset_ft, symbol,
                     opening = doc.Create.NewOpening(w, p0, p1)
                     if opening is not None:
                         new_ids.append(eid_value(opening.Id))
-                    created += 1
+                        created += 1
+                    else:
+                        errors += 1
             except Exception:
                 errors += 1
 

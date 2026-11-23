@@ -31,6 +31,16 @@ try:
 except Exception:   # outside Revit: only the pure half is used
     pass
 
+def _footprint_roof(doc, curves, level, roof_type):
+    """NewFootPrintRoof; its last parameter is `out ModelCurveArray`."""
+    box = getattr(clr, 'Reference', None)
+    if box is not None:                     # IronPython: a StrongBox for the out value
+        return doc.Create.NewFootPrintRoof(curves, level, roof_type, box[DB.ModelCurveArray]())
+    # pythonnet 3 has no clr.Reference: pass a placeholder, get (roof, curves) back.
+    out = doc.Create.NewFootPrintRoof(curves, level, roof_type, DB.ModelCurveArray())
+    return out[0] if isinstance(out, tuple) else out
+
+
 try:
     from pyrevit import script as _script
     logger = _script.get_logger()
@@ -396,10 +406,7 @@ class ElementBuilder(object):
                     p2 = pts[(i + 1) % n]
                     if p1.DistanceTo(p2) > 0.01:
                         ca.Append(Line.CreateBound(p1, p2))
-                # NewFootPrintRoof has an 'out ModelCurveArray' parameter —
-                # IronPython requires a clr.Reference box for it
-                ma_ref = clr.Reference[DB.ModelCurveArray]()
-                roof = self.doc.Create.NewFootPrintRoof(ca, lv, rt, ma_ref)
+                roof = _footprint_roof(self.doc, ca, lv, rt)
                 self._set_offset_from_level(
                     roof, BuiltInParameter.ROOF_LEVEL_OFFSET_PARAM,
                     z_ft - lv.Elevation)

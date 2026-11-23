@@ -1853,14 +1853,9 @@
                             <ComboBox Grid.Column="1" x:Name="view_type_filter" Height="28"
                                       SelectionChanged="filter_by_size" Visibility="Collapsed"
                                       Margin="8,0,0,0" VerticalAlignment="Center">
+                                <!-- The view types are added by BatchOutDialog._fill_view_type_filter
+                                     from the loaded views, with the same labels as the View Type column. -->
                                 <ComboBoxItem Content="All Types" IsSelected="True"/>
-                                <ComboBoxItem Content="FloorPlan"/>
-                                <ComboBoxItem Content="CeilingPlan"/>
-                                <ComboBoxItem Content="Elevation"/>
-                                <ComboBoxItem Content="Section"/>
-                                <ComboBoxItem Content="ThreeD"/>
-                                <ComboBoxItem Content="DraftingView"/>
-                                <ComboBoxItem Content="Schedule"/>
                             </ComboBox>
 
                             <!-- Multi-Select Sheet Set Dropdown -->

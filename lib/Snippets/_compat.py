@@ -656,6 +656,13 @@ def clr_namespace(name):
     return 'T3Lab.{}_{}'.format(name, uuid.uuid4().hex[:8])
 
 
+def committed(transaction):
+    """Commit; False when Revit rolled it back while processing failures, in which
+    case every element the transaction created is gone (its Id is invalid)."""
+    from Autodesk.Revit.DB import TransactionStatus
+    return transaction.Commit() == TransactionStatus.Committed
+
+
 def fold(text):
     """Case-insensitive key: str.casefold on CPython 3, lower() on IronPython 2.7."""
     try:

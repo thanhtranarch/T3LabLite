@@ -79,8 +79,9 @@ DEFAULT_RULES = [
 ]
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class JoinFailuresPreprocessor(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.JoinServiceFailures"
+    __namespace__ = clr_namespace('JoinServiceFailures')
 
     def PreprocessFailures(self, failuresAccessor):
         for f in failuresAccessor.GetFailureMessages():

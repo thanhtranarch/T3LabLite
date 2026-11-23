@@ -180,6 +180,84 @@ check('JSON with accented text (IronPython)', 'ensure_ascii=False' in _src('Snip
       and 'jsonsafe.dumps' in _src('Snippets/xlsx_table.py')
       and 'jsonsafe.dumps(info)' in _src('Snippets/excel_table_revit.py'))
 
+
+# Headless tools: a Revit error rolls back instead of a modal dialog holding Revit.
+from core import revit_failures as RF       # noqa: E402
+
+
+class _Msg(object):
+    def __init__(self, sev, text):
+        self.sev, self.text = sev, text
+
+    def GetSeverity(self):
+        return self.sev
+
+    def GetDescriptionText(self):
+        return self.text
+
+
+class _Opts(object):
+    def SetClearAfterRollback(self, on):
+        self.clear = on
+
+
+class _FA(object):
+    def __init__(self, msgs):
+        self.msgs, self.deleted, self.opts = msgs, [], _Opts()
+
+    def GetFailureMessages(self):
+        return self.msgs
+
+    def DeleteWarning(self, m):
+        self.deleted.append(m.text)
+
+    def GetFailureHandlingOptions(self):
+        return self.opts
+
+    def SetFailureHandlingOptions(self, o):
+        pass
+
+
+class _Args(object):
+    def __init__(self, fa):
+        self.fa, self.result = fa, None
+
+    def GetFailuresAccessor(self):
+        return self.fa
+
+    def SetProcessingResult(self, r):
+        self.result = r
+
+
+fs = RF.FailureSession(rollback_result='ROLLBACK')
+fa = _FA([_Msg('Warning', 'Walls overlap'), _Msg('Error', 'Cannot join')])
+args = _Args(fa)
+fs.on_failures(None, args)
+res = RF.annotate({'success': True}, fs)
+check('failure guard: warning dismissed, error rolled back without a dialog',
+      fa.deleted == ['Walls overlap'] and args.result == 'ROLLBACK' and fa.opts.clear
+      and res['success'] is False and res['revit_failures']['errors_rolled_back'] == ['Cannot join'],
+      res)
+check('handler wraps spec write tools in the guard',
+      'is_write and tool_specs.get(task.tool_name) is not None' in src
+      and 'revit_failures.guard(app)' in src)
+
+# No fixed .NET namespace left in lib/ (core/server.py runs only under IronPython).
+import re as _re                           # noqa: E402
+_pat = _re.compile(r"""__namespace__ *= *["']T3Lab\.[A-Za-z0-9_.]+["'] *($|#)""")
+fixed = []
+for root, _d, files in os.walk(LIB):
+    for name in files:
+        if name.endswith('.py'):
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, LIB)
+            if rel == os.path.join('core', 'server.py'):
+                continue
+            for n, line in enumerate(open(path, encoding='utf-8'), 1):
+                if _pat.search(line):
+                    fixed.append('{}:{}'.format(rel, n))
+check('every lib .NET class namespace is per load (clr_namespace)', not fixed, fixed)
+
 print('')
 if FAILURES:
     print('{} FAILED: {}'.format(len(FAILURES), ', '.join(FAILURES)))

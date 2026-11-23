@@ -226,7 +226,8 @@ def _close_hidden_window(window):
 
 # ─── Extract export params from natural language ──────────────────────────────
 
-SHEET_SET = re.compile(r'(?:sheet\s*set|v/s\s*set|print\s*set|\bset|bộ)\s*'
+# "toàn bộ" means "all", not a set: xuất toàn bộ "G" still filters by prefix G.
+SHEET_SET = re.compile(r'(?:sheet\s*set|v/s\s*set|print\s*set|\bset|(?<!toàn )\bbộ)\s*'
                         r'["“‘\']([^"”’\']+)["”’\']', re.IGNORECASE)
 
 def parse_export_params(raw_text):

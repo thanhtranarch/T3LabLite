@@ -92,7 +92,9 @@ def _update_tables(doc, args):
     out = {'operation': 'update_tables', 'tables': rows[:MAX_ROWS]}
     if args.get('dry_run'):
         for (v, i), row in zip(picked, rows):
-            row['status'] = etr.check_status(doc, i)[0]
+            # A dry run stays local: checking a Google Sheet means downloading it.
+            row['status'] = ('Google Sheet (read on update)' if i.get('gsheet')
+                             else etr.check_status(doc, i)[0])
         out.update(dry_run=True, applied=False)
         return out
     done = []
@@ -160,8 +162,16 @@ def schedule_roundtrip(doc, args):
         sheets = sd.sheet_names_for([n for n, _s in every])
         out = {'operation': op, 'xlsx_path': path,
                'sheets': dict((n, sheets[n]) for n, _s in picked)}
+        exists = os.path.isfile(path)
         if dry:
             out.update(dry_run=True, applied=False)
+            if exists:
+                out['would_overwrite'] = os.path.basename(path)
+            return out
+        if exists and not args.get('overwrite'):
+            # The workbook may hold the person's edits for the round trip.
+            out['error'] = ('{} already exists (it may hold edits for apply). Pass '
+                            'overwrite=true or another xlsx_path.'.format(path))
             return out
         folder = os.path.dirname(path)
         try:
@@ -225,9 +235,11 @@ SPECS = [
             'range': {'type': 'string', 'description': 'table: A1:F20 or a name (default used).'},
             'kind': {'type': 'string', 'enum': list(TABLE_KINDS)},
             'name': {'type': 'string', 'description': 'table / update_tables: view name.'},
+            'overwrite': {'type': 'boolean', 'description': 'export: replace an existing xlsx.'},
             'dry_run': {'type': 'boolean'},
         },
         required=['operation'], effect='write', placement=('modify', 'export'),
+        destructive=lambda args: bool(args.get('overwrite')),
         verify=('self', 'files'),
         title_vi='Xuất, sửa schedule qua Excel; tạo bảng từ Excel',
         keywords=['schedule', 'excel', 'xlsx', 'bảng thống kê', 'xuất excel', 'nhập excel',

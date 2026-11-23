@@ -229,6 +229,8 @@ NON_EXPORTABLE_VIEW_TYPES = _build_non_exportable_view_types()
 
 # DWG "Match Revit display": shared with the MCP / Assistant export (Services/sheet_export.py).
 from Services.sheet_export import _enum_member, apply_revit_display_fidelity  # noqa: E402
+from Services import sheet_export as _sheet_export                           # noqa: E402
+_sheet_export.logger = logger     # DWG option warnings to the pyRevit output, as before
 
 
 def detect_persistent_engine():

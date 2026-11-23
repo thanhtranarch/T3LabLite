@@ -19,10 +19,10 @@ def _warning_swallower():
     if _SWALLOWER is None:
         from Autodesk.Revit.DB import (IFailuresPreprocessor, FailureProcessingResult,
                                        FailureSeverity)
+        from Snippets._compat import clr_namespace
 
         class FinishFloorWarnings(IFailuresPreprocessor):
-            # Static namespace is safe: lib/ modules load once per engine session.
-            __namespace__ = "T3Lab.FinishFloors"
+            __namespace__ = clr_namespace('FinishFloors')
 
             def PreprocessFailures(self, accessor):
                 for failure in accessor.GetFailureMessages():

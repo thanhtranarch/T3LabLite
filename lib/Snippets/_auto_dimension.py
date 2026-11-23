@@ -11,6 +11,7 @@ Test: dev/test_tools_create_domain.py.
 
 import math
 
+from Snippets._compat import clr_namespace
 from Autodesk.Revit.DB import (
     FilteredElementCollector,
     BuiltInCategory,
@@ -57,7 +58,7 @@ SALVAGE_SEEDS = 3
 
 
 class WarningSwallower(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.AutoDimension"
+    __namespace__ = clr_namespace('AutoDimension')
 
     def PreprocessFailures(self, failuresAccessor):
         fail_list = failuresAccessor.GetFailureMessages()

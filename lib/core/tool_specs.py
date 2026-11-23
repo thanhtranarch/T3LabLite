@@ -63,7 +63,7 @@ class ToolSpec(object):
     def missing_requirements(self):
         lib = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return [r for r in self.requires
-                if not os.path.exists(os.path.join(lib, *r.split('/')))]
+                if not os.path.exists(os.path.join(lib, r.replace('/', os.sep)))]
 
     def schema(self):
         return {'type': 'object', 'properties': dict(self.properties),

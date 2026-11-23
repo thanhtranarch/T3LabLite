@@ -224,12 +224,13 @@ class DuplicateTypeNameTests(unittest.TestCase):
 
     def test_handler_type_name_is_unique_per_import(self):
         src = self._read('Services', 'batchout_handler.py')
-        self.assertIn('__namespace__ = "T3Lab.BatchOut_" + uuid.uuid4().hex[:8]', src)
+        self.assertIn("__namespace__ = clr_namespace('BatchOut')", src)
         self.assertNotIn('__namespace__ = "T3Lab.BatchOut"\n', src)
 
     def test_dialog_fallback_never_reuses_the_handler_name(self):
         src = self._read('GUI', 'BatchOutDialog.py')
-        self.assertIn('__namespace__ = "T3Lab.BatchOutFallback_" + uuid.uuid4().hex[:8]', src)
+        # clr_namespace (Snippets/_compat.py) adds a new suffix on every call.
+        self.assertIn("__namespace__ = clr_namespace('BatchOut')", src)
         self.assertNotIn('__namespace__ = "T3Lab.BatchOut"\n', src)
 
     def test_error_dialog_says_run_the_tool_again(self):

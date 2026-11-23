@@ -242,10 +242,49 @@ def test_dialog_attrs_assigned():
           "self._configure_all_btn   = self.FindName('configure_all_btn')" in src)
 
 
+def test_footer_follows_picked_app():
+    """With AutoCAD picked the footer read Revit's state ("Server stopped -
+    Step 1 - start the server", a hidden panel). t3lab_dev 5d7d852."""
+    import ast
+    from types import SimpleNamespace
+    print('[MCP Control footer follows the app picked in Connect]')
+    path = os.path.join(LIB, 'GUI', 'MCPControlDialog.py')
+    with open(path, encoding='utf-8') as f:
+        tree = ast.parse(f.read())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'MCPControlWindow')
+    meth = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == '_refresh_footer']
+    scope = {'HAS_SERVICE': True, 'CLIENT_KEYS': ['claude', 'chatgpt'], 'DEFAULT_PORT': 48884,
+             '_SVC_ERR_MSG': ''}
+    exec(compile(ast.Module(body=meth, type_ignores=[]), path, 'exec'), scope)
+    footer = scope['_refresh_footer']
+
+    def run(app, addin, app_states, revit_states=None, running=False):
+        dots = []
+        win = SimpleNamespace(
+            _app=app, _addin_installed=addin, _app_client_states=app_states,
+            _client_states=revit_states or {}, _server_state={'running': running},
+            _server_error=None, _active_doc_ok=True, _footer_dot=None,
+            _footer_status=SimpleNamespace(Text='', ToolTip=''),
+            _app_spec=lambda: ('AutoCAD', 't3lab-autocad'),
+            _set_dot=lambda dot, tone: dots.append(tone))
+        footer(win)
+        return win._footer_status.Text, dots[-1]
+
+    check('add-in missing is step 1', run('autocad', False, {}) ==
+          ('AutoCAD add-in not installed', 'T3.Warning.Accent'))
+    check('no app connected', run('autocad', True, {'claude': {'configured': False}})[0] ==
+          'No AI app connected')
+    check('ready names the app server', run('autocad', True, {'claude': {'configured': True}}) ==
+          ('Ready · t3lab-autocad', 'T3.Success.Accent'))
+    check('Revit unchanged', run('revit', True, {'claude': {'configured': True}},
+                                 {'claude': {'configured': True}})[0] == 'Server stopped')
+
+
 def main():
     for t in (test_needs_bridge, test_json_keeps_revit_and_others,
               test_desktop_running_guard, test_toml, test_snippets_and_revit_default,
-              test_other_autodesk_apps, test_dialog_attrs_assigned):
+              test_other_autodesk_apps, test_dialog_attrs_assigned,
+              test_footer_follows_picked_app):
         t()
     if FAILURES:
         print('\n{} FAILED: {}'.format(len(FAILURES), ', '.join(FAILURES)))

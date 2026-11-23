@@ -247,6 +247,7 @@ class MCPControlWindow(T3WPFWindow):
         self._server_state  = {}
         self._server_error  = None     # last Start/Stop failure, shown in step 1
         self._client_states = {}
+        self._app_client_states = {}   # the picked app's rows (footer when not Revit)
         self._active_doc_ok = False
         self._auto_start    = True
 
@@ -589,6 +590,7 @@ class MCPControlWindow(T3WPFWindow):
                     status = MCPService.client_status(key, server=self._app)
                 except Exception as ex:
                     status = {'error': str(ex)}
+            self._app_client_states[key] = status
             self._apply_client_row(
                 widgets, status, 'T3Lab' if revit else server_name,
                 'Rewrite the T3Lab entry — use after changing the port' if revit
@@ -657,7 +659,24 @@ class MCPControlWindow(T3WPFWindow):
         connected = sum(1 for s in self._client_states.values() if s.get('configured'))
         error     = state.get('error') or (None if state.get('running') else self._server_error)
 
-        if not HAS_SERVICE:
+        if HAS_SERVICE and self._app != 'revit':
+            # Another Autodesk app: its add-in is Step 1, not the Revit server
+            # (t3lab_dev 5d7d852: with AutoCAD picked it read "Server stopped").
+            app_label, server_name = self._app_spec()
+            states = self._app_client_states
+            done = sum(1 for s in states.values() if s.get('configured'))
+            if not self._addin_installed:
+                tone, text, tip = ('T3.Warning.Accent',
+                                   '{} add-in not installed'.format(app_label),
+                                   'Step 1 — install the T3Lab add-in for {}.'.format(app_label))
+            elif done == 0:
+                tone, text, tip = ('T3.Warning.Accent', 'No AI app connected',
+                                   'Step 2 — connect the AI app you use to {}.'.format(app_label))
+            else:
+                tone, text = 'T3.Success.Accent', 'Ready · {}'.format(server_name)
+                tip = '{} of {} AI apps connected. Restart an app if it was open while you connected it.'.format(
+                    done, len(states) or len(CLIENT_KEYS))
+        elif not HAS_SERVICE:
             tone, text, tip = ('T3.Danger.Accent', 'Service unavailable',
                                'The MCP service failed to load: {}'.format(_SVC_ERR_MSG))
         elif error:

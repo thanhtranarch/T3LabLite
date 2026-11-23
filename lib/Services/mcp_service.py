@@ -105,6 +105,17 @@ def _get_bridge_path(take_ownership=True):
     return (deployed or _source_bridge_path()).replace('\\', '/')
 
 
+def _is_store_stub(path):
+    """The WindowsApps app-execution alias: opens the Microsoft Store unless
+    Python was installed from there. Tried last, never cached."""
+    return '\\windowsapps\\' in (path or '').replace('/', '\\').lower()
+
+
+def _python_version_key(path):
+    m = re.search(r'python(\d)(\d+)', os.path.basename(os.path.dirname(path)).lower())
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
 def _find_python_executable():
     """
     Locate a CPython 3 interpreter to run core/bridge.py.
@@ -125,7 +136,7 @@ def _find_python_executable():
     """
     paths = _get_paths_module()
     cached_path = paths.load_settings().get('python_executable')
-    if cached_path and os.path.isfile(cached_path):
+    if cached_path and os.path.isfile(cached_path) and not _is_store_stub(cached_path):
         return cached_path
 
     is_windows = os.name == 'nt'
@@ -134,10 +145,14 @@ def _find_python_executable():
 
     # 1) Search PATH directories for a real interpreter.
     path_dirs = os.environ.get('PATH', '').split(os.pathsep)
+    stub = None
     for d in path_dirs:
         for name in exe_names:
             candidate = os.path.join(d, name)
             if os.path.isfile(candidate):
+                if _is_store_stub(candidate):
+                    stub = stub or candidate
+                    continue
                 found = candidate
                 break
         if found:
@@ -149,7 +164,6 @@ def _find_python_executable():
         fallback_globs = []
         if is_windows:
             fallback_globs.append(os.path.join(home, 'AppData', 'Local', 'Programs', 'Python', 'Python*', 'python.exe'))
-            fallback_globs.append(os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Microsoft', 'WindowsApps', 'python.exe'))
             fallback_globs.append('C:/Python*/python.exe')
             fallback_globs.append('C:/Program Files/Python*/python.exe')
         else:
@@ -160,7 +174,8 @@ def _find_python_executable():
         try:
             import glob
             for pattern in fallback_globs:
-                matches = sorted(glob.glob(pattern), reverse=True)
+                # Newest first by number: a string sort puts Python39 above Python313.
+                matches = sorted(glob.glob(pattern), key=_python_version_key, reverse=True)
                 if matches:
                     found = matches[0]
                     break
@@ -178,6 +193,8 @@ def _find_python_executable():
     if found:
         paths.set_setting('python_executable', found)
         return found
+    if stub:
+        return stub     # may work (Store Python installed); never cached
 
     # 4) Give up — return the bare command name and let the OS PATH try.
     # Not cached: it isn't a real resolved path, so nothing to reuse.
@@ -842,8 +859,10 @@ def _codex_block(python, bridge, port, name=MCP_SERVER_NAME, agent=None):
     if name in _BRIDGE_SERVERS:
         args = 'args = ["-I", "{}"]\n'.format(_toml_quote(bridge))
     else:
+        # -E: pyRevit's machine-wide PYTHONPATH must not reach the bridge
+        # (same as _server_entry; the Codex entry had none).
         args = 'args = [{}]\n'.format(', '.join('"{}"'.format(_toml_quote(a)) for a in
-                                               [bridge, str(port)] + _agent_args(agent)))
+                                               ['-E', bridge, str(port)] + _agent_args(agent)))
     return (
         '[mcp_servers.{}]\n'.format(name) +
         'type = "stdio"\n' +
@@ -897,10 +916,33 @@ def _read_toml_text(path):
         return f.read()
 
 
+def _toml_other_form(text, name=MCP_SERVER_NAME):
+    """True when `name` is declared other than as a [mcp_servers.<name>]
+    header: a key under [mcp_servers], a dotted key, or an inline
+    `mcp_servers = {...}`. _toml_upsert cannot rewrite those, and appending a
+    table would declare it twice: Codex then rejects the whole file."""
+    key = r'["\']?' + re.escape(name) + r'["\']?'
+    in_servers = False
+    for line in text.splitlines():
+        if _TOML_HEADER_RE.match(line):
+            in_servers = re.match(r'^\s*\[\s*mcp_servers\s*\]', line) is not None
+            continue
+        if in_servers and re.match(r'^\s*' + key + r'\s*[=.]', line):
+            return True
+        if re.match(r'^\s*mcp_servers\s*\.\s*' + key + r'\s*[=.]', line):
+            return True
+        if re.match(r'^\s*mcp_servers\s*=', line) and name in text:
+            return True
+    return False
+
+
 def _toml_is_configured(path, name=MCP_SERVER_NAME):
     section_re = _toml_section_re(name)
+    text = _read_toml_text(path)
+    if _toml_other_form(text, name):
+        return True         # hand-written entry: Connect refuses to add a second one
     inside = found = False
-    for line in _read_toml_text(path).splitlines():
+    for line in text.splitlines():
         if section_re.match(line):
             inside = found = True
             continue
@@ -920,6 +962,11 @@ def _write_toml_config(path, python, bridge, port, name=MCP_SERVER_NAME, agent=N
     except Exception as ex:
         raise ValueError('Could not read {} ({}). Save it as UTF-8, then '
                          'Connect again.'.format(path, ex))
+
+    if _toml_other_form(text, name):
+        raise ValueError('{} already declares {} as a key under [mcp_servers] (not '
+                         'as its own [mcp_servers.{}] table). Remove that entry by '
+                         'hand, then Connect again.'.format(path, name, name))
 
     cfg_dir = os.path.dirname(path)
     if cfg_dir and not os.path.isdir(cfg_dir):
@@ -1426,12 +1473,16 @@ class MCPService(object):
 
         bridge = _get_bridge_path()
 
+        # --agent like Connect writes: without it a pasted entry reads "Not
+        # connected" and auto-connect rewrites it.
         if fmt == 'claude_code':
-            return 'claude mcp add --scope user {} -- "{}" -E "{}" {}'.format(
-                name, _find_python_executable(), bridge, port)
+            return 'claude mcp add --scope user {} -- "{}" -E "{}" {} --agent={}'.format(
+                name, _find_python_executable(), bridge, port,
+                _client_spec('claudecode')['agent'])
         if fmt == 'toml':
             # Codex reads real TOML — Windows backslashes must stay escaped.
-            return _codex_block(_find_python_executable(), bridge, port).rstrip('\n')
+            return _codex_block(_find_python_executable(), bridge, port,
+                                agent=_client_spec('chatgpt')['agent']).rstrip('\n')
 
         python = _find_python_executable().replace('\\', '/')
         # The same entry configure_client() writes (-E and an empty
@@ -1439,7 +1490,8 @@ class MCPService(object):
         # with a JSON encoder: pasted by hand, a raw Windows path such as
         # C:\Users\... was invalid JSON.
         snippet = {'mcpServers': {
-            MCP_SERVER_NAME: _server_entry(python, bridge, port)}}
+            MCP_SERVER_NAME: _server_entry(python, bridge, port,
+                                           agent=_client_spec('claude')['agent'])}}
         from core import jsonsafe
         return jsonsafe.dumps(snippet, indent=2)
 

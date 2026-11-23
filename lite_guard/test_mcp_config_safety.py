@@ -8,6 +8,9 @@ No Revit needed; every file lives in a temp HOME / APPDATA.
     left byte-for-byte unchanged (it used to be replaced by our entry alone).
   - Client paths: opening MCP Control before an AI app exists does not pin a
     path; a pinned path that does not exist yields to the real file.
+  - Codex entry and manual snippets: -E and --agent as Connect writes them;
+    a hand-written TOML key is never declared a second time; Python discovery
+    skips the Microsoft Store alias and sorts Python3xx folders by number.
   - mcp_paths.json: a BOM is read; a file that does not parse is kept as
     .unreadable before it is overwritten.
 
@@ -99,6 +102,103 @@ class ClientConfigTests(_TempHome):
         ok, msg = M.MCPService.configure_client('chatgpt')
         self.assertFalse(ok)
         self.assertEqual(_read(path), original)
+
+
+class CodexAndSnippetTests(_TempHome):
+    """From t3lab_dev 904a169, plus the --agent Lite's is_configured checks."""
+
+    def codex(self):
+        return os.path.join(self.dir, '.codex', 'config.toml')
+
+    def test_codex_entry_isolates_pythonpath(self):
+        ok, msg = M.MCPService.configure_client('chatgpt')
+        self.assertTrue(ok, msg)
+        with open(self.codex(), encoding='utf-8') as f:
+            text = f.read()
+        self.assertIn('args = ["-E", ', text)
+        self.assertIn('"--agent=codex"', text)
+
+    def test_json_snippet_matches_connect(self):
+        data = json.loads(M.MCPService.config_snippet(port=48885))
+        entry = data['mcpServers']['t3lab-revit']
+        self.assertEqual(entry['args'][0], '-E')
+        self.assertEqual(entry['args'][2:], ['48885', '--agent=claude-desktop'])
+        self.assertEqual(entry['env'], {'PYTHONPATH': ''})
+
+    def test_pasted_snippets_read_as_connected(self):
+        """Without --agent a pasted entry read "Not connected" and auto-connect rewrote it."""
+        toml = M.MCPService.config_snippet(port=48885, fmt='toml')
+        self.assertIn('"-E", ', toml)
+        self.assertIn('"--agent=codex"', toml)
+        _write(self.codex(), (toml + '\n').encode('utf-8'))
+        self.assertTrue(M._toml_is_configured(self.codex()))
+        cmd = M.MCPService.config_snippet(port=48885, fmt='claude_code')
+        self.assertTrue(cmd.endswith(' 48885 --agent=claude-code'), cmd)
+
+    def _other_form(self, text):
+        _write(self.codex(), text)
+        self.assertTrue(M._toml_is_configured(self.codex()))
+        ok, msg = M.MCPService.configure_client('chatgpt')
+        self.assertFalse(ok)
+        self.assertEqual(_read(self.codex()), text)
+
+    def test_inline_key_under_mcp_servers_is_not_duplicated(self):
+        self._other_form(b'[mcp_servers]\nt3lab-revit = { command = "py", args = ["b.py"] }\n')
+
+    def test_dotted_key_is_not_duplicated(self):
+        self._other_form(b'mcp_servers.t3lab-revit.command = "py"\n')
+
+    def test_other_servers_under_mcp_servers_still_connect(self):
+        _write(self.codex(), b'[mcp_servers]\nother = { command = "x" }\n')
+        ok, msg = M.MCPService.configure_client('chatgpt')
+        self.assertTrue(ok, msg)
+
+
+class PythonDiscoveryTests(_TempHome):
+    def setUp(self):
+        _TempHome.setUp(self)
+        M._find_python_executable = self.saved['_find_python_executable']
+        self.path = os.environ.get('PATH')
+
+    def tearDown(self):
+        os.environ['PATH'] = self.path
+        _TempHome.tearDown(self)
+
+    def _exe(self, folder):
+        name = 'python.exe' if os.name == 'nt' else 'python3'
+        exe = os.path.join(self.dir, folder, name)
+        _write(exe, b'')
+        return exe
+
+    def test_store_stub_is_skipped_and_never_cached(self):
+        stub = self._exe('WindowsApps')
+        real = self._exe('RealPython')
+        os.environ['PATH'] = os.pathsep.join([os.path.dirname(stub), os.path.dirname(real)])
+        self.assertEqual(M._find_python_executable(), real)
+        # Only the stub on PATH: a real install found elsewhere wins; the
+        # stub may be returned as a last resort but is never cached.
+        os.environ['PATH'] = os.path.dirname(stub)
+        paths.save_settings({})
+        got = M._find_python_executable()
+        if got == stub:
+            self.assertNotIn('python_executable', paths.load_settings())
+        else:
+            self.assertFalse(M._is_store_stub(got), got)
+
+    def test_cached_store_stub_is_not_reused(self):
+        stub = self._exe('WindowsApps')
+        real = self._exe('RealPython')
+        paths.set_setting('python_executable', stub)
+        os.environ['PATH'] = os.path.dirname(real)
+        self.assertEqual(M._find_python_executable(), real)
+
+    def test_version_sort_is_numeric(self):
+        key = M._python_version_key
+        self.assertGreater(key('C:/P/Python313/python.exe'), key('C:/P/Python39/python.exe'))
+
+    def test_store_alias_is_no_fallback_glob(self):
+        with open(M.__file__, encoding='utf-8') as f:
+            self.assertNotIn("'Microsoft', 'WindowsApps', 'python.exe'", f.read())
 
 
 class ClientPathTests(_TempHome):

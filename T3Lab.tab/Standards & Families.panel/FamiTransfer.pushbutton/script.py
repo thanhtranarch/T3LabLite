@@ -29,8 +29,7 @@ import _cpython_bootstrap
 _cpython_bootstrap.init_cpython_paths()
 
 # Not reloaded on purpose: Snippets.family_transfer defines .NET interface
-# classes with a static __namespace__; a second definition in the same
-# persistent engine raises "Duplicate type name within an assembly".
+# classes; every load emits new .NET types into the persistent engine.
 from GUI.FamilyTransferDialog import show_family_transfer
 
 # ── ENTRY POINT ──────────────────────────────────────────────────────────

@@ -113,7 +113,7 @@ python dev/test_icons_t3space.py
 
 5. **.NET Interface Namespaces:**
    - Classes implementing .NET interfaces (`ISelectionFilter`, `IExternalEventHandler`, `IFailuresPreprocessor`) must declare `__namespace__`.
-   - In `lib/`: `__namespace__ = clr_namespace('<Name>')` (`Snippets/_compat.py`, a per-load name). T3Lab and T3Lab Lite share one CPython engine and `claim_lib` re-imports the module, so a fixed name raises `Duplicate type name`. Only `core/server.py` (IronPython only) keeps a fixed one; `lite_guard/test_bridge_contract.py` checks.
+   - In `lib/`: `__namespace__ = clr_namespace('<Name>')` (`Snippets/_compat.py`, a per-load name), never a fixed `"T3Lab.<Name>"`. T3Lab and T3Lab Lite share one CPython engine and `claim_lib` re-imports the module, so a fixed name raises `Duplicate type name`. No exception: `core/server.py` is also imported under CPython (Assistant, `MCPService.ensure_external_event`). `lite_guard/test_bridge_contract.py` checks.
    - In pushbutton `script.py`: dynamic namespace `__namespace__ = "T3Lab.<Name>_" + uuid.uuid4().hex[:8]`.
 
 6. **No Multiple Inheritance with CLR Classes:**

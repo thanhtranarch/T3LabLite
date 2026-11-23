@@ -1070,8 +1070,7 @@ def _warning_swallower():
                                    FailureSeverity)
 
     class SwallowRebarWarnings(IFailuresPreprocessor):
-        # Static namespace is safe: lib/ modules are imported once per engine
-        # session, and the class is built lazily so tests never touch .NET.
+        # Built lazily so tests never touch .NET.
         __namespace__ = clr_namespace('RebarWizard')
 
         def __init__(self):

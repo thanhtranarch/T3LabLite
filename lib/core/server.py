@@ -122,7 +122,7 @@ def _record_mcp_telemetry(tool_name, arguments, result, t_start):
         pass
 
 
-from Snippets._compat import eid_value, make_eid, net_list, elem_name
+from Snippets._compat import clr_namespace, eid_value, make_eid, net_list, elem_name
 try:
     from http.server import HTTPServer, BaseHTTPRequestHandler
     from urllib.parse import urlparse, parse_qs
@@ -341,7 +341,7 @@ try:
     from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
 
     class MCPExternalEventHandler(IExternalEventHandler):
-        __namespace__ = "T3Lab.Server"
+        __namespace__ = clr_namespace('Server')
         def __init__(self, server):
             self.server = server
             self.tasks = _queue_mod.Queue()

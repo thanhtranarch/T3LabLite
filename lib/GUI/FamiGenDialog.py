@@ -536,8 +536,7 @@ class _FamiGenAction(IExternalEventHandler):
     """Runs one queued callable on Revit's API thread for the modeless window.
 
     Only the window the MCP server opens is modeless; its WPF handlers run
-    OUTSIDE Revit API context, so Create Family is queued here. Static
-    `__namespace__` is right: the class lives in lib/ (rule S15).
+    OUTSIDE Revit API context, so Create Family is queued here.
     """
     __namespace__ = clr_namespace('FamiGenAction')
 

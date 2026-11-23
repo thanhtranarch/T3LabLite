@@ -94,9 +94,7 @@ class _ActionHandler(IExternalEventHandler):
     gọi thẳng `Transaction` hay `uidoc.Selection` từ đó là
     "Attempting to access Revit API outside of API context".
 
-    `__namespace__` TĨNH là đúng ở đây vì class nằm trong `lib/` — nó chỉ được
-    định nghĩa một lần cho cả phiên Revit. (Luật S15: namespace động `uuid` chỉ
-    cần khi class sống trong `script.py`, nơi click thứ hai sẽ định nghĩa lại.)
+    `__namespace__` mới mỗi lần nạp module (luật S15: T3Lab chung engine).
     """
 
     __namespace__ = clr_namespace('ManaSelectActionHandler')

@@ -242,7 +242,7 @@ check('handler wraps spec write tools in the guard',
       'is_write and tool_specs.get(task.tool_name) is not None' in src
       and 'revit_failures.guard(app)' in src)
 
-# No fixed .NET namespace left in lib/ (core/server.py runs only under IronPython).
+# No fixed .NET namespace left in lib/ (core/server.py too: the Assistant imports it under CPython).
 import re as _re                           # noqa: E402
 _pat = _re.compile(r"""__namespace__ *= *["']T3Lab\.[A-Za-z0-9_.]+["'] *($|#)""")
 fixed = []
@@ -251,8 +251,6 @@ for root, _d, files in os.walk(LIB):
         if name.endswith('.py'):
             path = os.path.join(root, name)
             rel = os.path.relpath(path, LIB)
-            if rel == os.path.join('core', 'server.py'):
-                continue
             for n, line in enumerate(open(path, encoding='utf-8'), 1):
                 if _pat.search(line):
                     fixed.append('{}:{}'.format(rel, n))

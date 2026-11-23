@@ -1432,8 +1432,7 @@ from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.m
 def assembly_selection_filter():
     """ISelectionFilter that accepts AssemblyInstances only (Pick in model, D8).
 
-    Static namespace is safe here: lib/ modules import once per engine session
-    and the class is built lazily, so tests never touch .NET (S15).
+    Built lazily so tests never touch .NET.
     """
     global _ASSEMBLY_FILTER
     if _ASSEMBLY_FILTER is None:

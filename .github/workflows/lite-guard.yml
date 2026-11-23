@@ -11,7 +11,8 @@
 # and the shared project memory tests (lite_guard/test_memory_hub.py)
 # and the instant small-talk tests (lite_guard/test_assistant_smalltalk.py)
 # and the usage tracking privacy tests (lite_guard/test_tracking_privacy.py)
-# and the FamiGen Studio tests (lite_guard/test_famigen_claude.py, test_famigen_studio.py).
+# and the FamiGen Studio tests (lite_guard/test_famigen_claude.py, test_famigen_studio.py)
+# and the BIM Harness tests (lite_guard/test_harness*.py, test_conductor.py).
 name: Lite guard
 
 on:
@@ -86,6 +87,18 @@ jobs:
         run: python3 lite_guard/test_data_hub.py
       - name: Test the MCP bridge refresh at Revit start
         run: python3 lite_guard/test_bridge_deploy.py
+      - name: Test the BIM Harness (task board, agents, bridge identity and write check, CLI)
+        run: python3 lite_guard/test_harness.py
+      - name: Test Harness Studio (owner seat, flows, runner, local HTTP API)
+        run: python3 lite_guard/test_harness_studio.py
+      - name: Test the conductor (fair Revit queue, wait budget, server wiring)
+        run: python3 lite_guard/test_conductor.py
+      - name: Test the harness in Revit (MCP Control tab, review, Studio launch)
+        run: python3 lite_guard/test_harness_settings.py
+      - name: Test the harness board toasts
+        run: python3 lite_guard/test_harness_notifier.py
+      - name: Test the Assistant's /harness command
+        run: python3 lite_guard/test_harness_client.py
       - name: Test the MCP bridge over stdio (UTF-8, no proxy, junk lines)
         run: python3 lite_guard/test_bridge_stdio.py
       - name: Test MCP code for module imports shadowed inside functions

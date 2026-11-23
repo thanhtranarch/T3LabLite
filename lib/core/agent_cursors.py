@@ -30,6 +30,8 @@ lite_guard/test_agent_cursors_overlay.py.
 
 from __future__ import unicode_literals
 
+import io
+import json
 import numbers
 import os
 import re
@@ -51,6 +53,8 @@ HUD_POS_KEY = 'agent_cursors_hud_pos'   # "dx,dy" DIP from the default spot, per
 NARRATE_MAX = 90            # goal banner text
 PLAN_MAX = 8                # tasks in an agent's plan (t3lab_narrate tasks=[...])
 TASK_MAX = 60               # characters per task
+BOARD_FILE = 'board.json'   # = core/harness_store.py BOARD_FILE (docs/harness.md)
+BOARD_ROWS_MAX = 6          # harness tasks listed on the HUD
 NAME_MAX = 16               # characters of an unknown agent's name on its tag
 TAG_MAX = 36                # characters of "what it does" on a cursor tag
 MAX_CAPTURE = 60            # added / modified ids kept per call (DocumentChanged)
@@ -359,7 +363,9 @@ def pretty_agent(name):
 
 
 def agent_style(agent):
-    """(tag, '#RRGGBB') for a bridge agent id or MCP client name."""
+    """(tag, '#RRGGBB') for a bridge agent id, MCP client name or harness
+    member. A member "claude-desktop/arch" (one chat of a client) is
+    "Claude · arch" in a colour of its own."""
     key = agent_key(agent)
     if key in AGENTS:
         return AGENTS[key]
@@ -368,7 +374,13 @@ def agent_style(agent):
     total = 0
     for ch in key:
         total = (total * 31 + ord(ch)) % 1000003
-    return (pretty_agent(agent), _SPARE[total % len(_SPARE)])
+    color = _SPARE[total % len(_SPARE)]
+    if '/' in key:
+        base, alias = key.split('/', 1)
+        base = agent_key(base)
+        tag = AGENTS[base][0] if base in AGENTS else pretty_agent(base)
+        return (u'{} · {}'.format(tag, alias[:10]), color)
+    return (pretty_agent(agent), color)
 
 
 def action_style(action):
@@ -895,6 +907,89 @@ def current_task(plan):
     if not tasks or not 1 <= step <= len(tasks):
         return ''
     return 'Step {}/{} · {}'.format(step, len(tasks), tasks[step - 1])
+
+
+def harness_task_text(ref, title):
+    """'Task a · Check doors' for a harness task ('<session>/<key>'), else ''."""
+    ref = u'{}'.format(ref or '')
+    if not ref:
+        return ''
+    key = ref.split('/', 1)[-1]
+    title = ' '.join(u'{}'.format(title or '').split())
+    if len(title) > TASK_MAX:
+        title = title[:TASK_MAX - 1] + u'…'
+    return u'Task {} · {}'.format(key, title) if title else u'Task {}'.format(key)
+
+
+def harness_dir():
+    """= core/harness_store.harness_dir (that module is CPython-only)."""
+    override = os.environ.get('T3LAB_HARNESS_DIR')
+    if override:
+        return override
+    base = os.environ.get('APPDATA') or os.path.expanduser('~')
+    return os.path.join(base, 'T3LabAI', 'harness')
+
+
+_board_cache = {'stamp': None, 'board': {}}
+
+
+def read_board(path=None):
+    """The harness board snapshot the bridge writes ({} when there is none).
+    One stat per call; the file is parsed again only when it changed."""
+    path = path or os.path.join(harness_dir(), BOARD_FILE)
+    try:
+        stamp = (path, os.path.getmtime(path), os.path.getsize(path))
+    except (OSError, IOError):
+        _board_cache.update(stamp=None, board={})
+        return {}
+    if stamp != _board_cache['stamp']:
+        try:
+            with io.open(path, encoding='utf-8') as f:
+                board = json.load(f)
+        except (OSError, IOError, ValueError):
+            return _board_cache['board']        # mid-write: keep the last good one
+        _board_cache.update(stamp=stamp, board=board if isinstance(board, dict) else {})
+    return _board_cache['board']
+
+
+_BOARD_STATE = {'claimed': 'current', 'review': 'review', 'failed': 'failed'}
+
+
+def board_rows(board, limit=BOARD_ROWS_MAX):
+    """Open harness sessions for the HUD: [{'session', 'goal', 'document',
+    'summary', 'rows': [(state, text, document)], 'more'}]. rows = the tasks
+    being worked on, waiting for review or failed; `more` = those not shown."""
+    out = []
+    for session in (board or {}).get('sessions') or []:
+        tasks = session.get('tasks') or []
+        if not tasks:
+            continue
+        counts = session.get('counts') or {}
+        parts = []
+        for status, label in (('claimed', 'working'), ('review', 'in review'),
+                              ('failed', 'failed')):
+            if counts.get(status):
+                parts.append(u'{} {}'.format(counts[status], label))
+        parts.append(u'{}/{} done'.format(counts.get('done', 0), len(tasks)))
+        sdoc = session.get('document') or ''
+        rows = []
+        for task in tasks:
+            state = _BOARD_STATE.get(task.get('status'))
+            if not state:
+                continue
+            title = ' '.join(u'{}'.format(task.get('title') or '').split())
+            if len(title) > TASK_MAX:
+                title = title[:TASK_MAX - 1] + u'…'
+            doc = task.get('document') or ''
+            rows.append((state, u'{} · {}'.format(agent_style(task.get('owner') or '?')[0],
+                                                    title),
+                         doc if doc and doc.lower() != sdoc.lower() else ''))
+        rows.sort(key=lambda r: ('current', 'review', 'failed').index(r[0]))
+        out.append({'session': session.get('session') or '',
+                    'goal': clean_goal(session.get('goal')), 'document': sdoc,
+                    'summary': u' · '.join(parts), 'rows': rows[:limit],
+                    'more': max(0, len(rows) - limit)})
+    return out
 
 
 def _short(value, limit=24):
@@ -1622,7 +1717,8 @@ def _tile(app):
 # ─── Entry points (main thread, inside Execute) ───────────────────────────────
 
 def _agent_of(task):
-    agent = getattr(task, 'agent', None)
+    # A harness member (one chat of a client) gets a cursor of its own.
+    agent = getattr(task, 'member', None) or getattr(task, 'agent', None)
     audit = getattr(task, 'audit', None)
     agent = agent or getattr(audit, 'agent', None)
     if agent:
@@ -1726,6 +1822,14 @@ def _plan_of(agent):
     return _session['plans'].get(agent_key(agent) or 'mcp-client') or {}
 
 
+def _task_text(task, agent):
+    """What the cursor names: the agent's own plan step (t3lab_narrate), else
+    the harness task the bridge stamped on the call."""
+    return (current_task(_plan_of(agent))
+            or harness_task_text(getattr(task, 'task_ref', None),
+                                 getattr(task, 'task_title', None)))
+
+
 def _param_value(elem, name):
     """Displayed value of a parameter (or the element's Name), or None."""
     try:
@@ -1800,7 +1904,7 @@ def before(app, task):
                 agent = _agent_of(task)
                 _overlay(_hwnd(app)).call(
                     'working', agent, action, describe_call(tool, args, len(ids)), tool,
-                    geos[active]['rect'], task_text=current_task(_plan_of(agent)),
+                    geos[active]['rect'], task_text=_task_text(task, agent),
                     targets=[b['box'] for b in boxes[:MAX_STOPS]], canvas=union_rect(shown))
             elif _state.get('overlay') is not None:
                 # No view to draw in (no document, a view window too small):
@@ -1808,7 +1912,7 @@ def before(app, task):
                 agent = _agent_of(task)
                 _state['overlay'].call(
                     'working', agent, action, describe_call(tool, args, len(ids)), tool, None,
-                    task_text=current_task(_plan_of(agent)))
+                    task_text=_task_text(task, agent))
         except Exception:
             pass
         name, ok = _param_name(tool, args)
@@ -1840,7 +1944,7 @@ def _done(task, agent, action, tool, failed, args):
         if ov is not None and ov.alive:
             ov.call('done', agent, action, tool, failed, args=args,
                     goal=_session['goals'].get(agent_key(agent) or 'mcp-client', ''),
-                    task_text=current_task(_plan_of(agent)))
+                    task_text=_task_text(task, agent))
     except Exception:
         pass
 
@@ -1922,7 +2026,7 @@ def notify(app, task):
         _sync_theme()
         touched = len(_session['touched'])
         goal = _session['goals'].get(agent_key(agent) or 'mcp-client', '')
-        task_text = current_task(_plan_of(agent))
+        task_text = _task_text(task, agent)
 
         def finish():
             ended = False

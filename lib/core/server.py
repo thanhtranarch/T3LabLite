@@ -25,6 +25,7 @@ from core import mcp_policy
 from core import mcp_prompts
 from core import mcp_wiki
 from core import agent_cursors
+from core import conductor as _conductor
 from core import tool_specs
 
 try:
@@ -202,6 +203,9 @@ class _ToolTask(object):
         self.answered = False       # Allow on the Agent Cursors bar: run when re-queued
         self.ask_rid = ''           # the bar's request id while it asks
         self._caller_gone = False
+        # Harness task the caller holds (bridge t3lab/task, task_title, member):
+        # Agent Cursors name the step and give one chat of a client its own cursor.
+        self.task_ref = self.task_title = self.member = None
 
     def claim(self, who):
         with self._claim_lock:
@@ -377,8 +381,8 @@ try:
                 elif not task.claim('ui'):
                     continue  # read fallback or timeout already consumed it
                 # The task is claimed: from here on every path must set
-                # task.done, or the caller waits 120 s holding
-                # _MCP_REQUEST_LOCK and every other tools/call queues behind.
+                # task.done, or the caller waits 120 s holding the
+                # conductor's slot and every other tools/call queues behind.
                 # (agent_cursors is the module-level import: a local
                 # `from core import agent_cursors` anywhere in this method
                 # makes the name local and these calls raise
@@ -480,7 +484,7 @@ class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     instance scans answer instantly even while a slow tools/call is in
     flight (a single-threaded HTTPServer queues EVERYTHING behind the slow
     request, which made instances flap dead/alive during model loads).
-    /mcp handling itself stays serialized through _MCP_REQUEST_LOCK — the
+    /mcp handling itself stays serialized through _CONDUCTOR — the
     Revit API is not thread-safe, and one-tool-at-a-time per instance is
     exactly what the ExternalEvent architecture assumes."""
     daemon_threads = True
@@ -507,8 +511,10 @@ class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 # Module-level (not instance state): survives pyRevit reloads, where the
 # pre-reload server singleton found via the AppDomain anchor skips __init__
-# entirely.
-_MCP_REQUEST_LOCK = threading.Lock()
+# entirely. The one Revit slot, shared fairly across agents (core/conductor.py,
+# docs/harness.md): a call stamped with a wait budget that cannot start in time
+# gets revit_busy and never runs late.
+_CONDUCTOR = _conductor.Conductor()
 
 # The port range every T3Lab server and bridge.py agree on.
 PORT_MIN = 48884
@@ -589,7 +595,8 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({'status': 'ok', 'pid': os.getpid(),
                              'port': self.server.server_port,
                              'engine': ENGINE_LABEL,
-                             'tools': len(getattr(owner, '_tools', None) or {})})
+                             'tools': len(getattr(owner, '_tools', None) or {}),
+                             'queue': _CONDUCTOR.summary()})
 
         elif path == '/':
             self._send_json({
@@ -638,7 +645,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
     def _handle_mcp_message(self, request):
         """Handle MCP JSON-RPC message.
 
-        tools/call is serialized through _MCP_REQUEST_LOCK: the HTTP server is
+        tools/call is serialized through _CONDUCTOR: the HTTP server is
         threaded (so /health never starves behind a slow call), but tool
         execution must stay one-at-a-time — concurrent Revit API access off
         the main thread can crash Revit natively. initialize / ping /
@@ -671,8 +678,17 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         if request.get('method', '') in mcp_policy.LOCK_FREE_METHODS:
             self._handle_mcp_message_locked(request)
             return
-        with _MCP_REQUEST_LOCK:
+        ticket = _conductor.ticket_for(request)
+        try:
+            _CONDUCTOR.acquire(ticket)
+        except _conductor.Busy as busy:
+            self._send_json({'jsonrpc': '2.0', 'id': request.get('id'),
+                             'result': _conductor.busy_result(busy.info)})
+            return
+        try:
             self._handle_mcp_message_locked(request)
+        finally:
+            _CONDUCTOR.release(ticket)
 
     def _authorized(self, request):
         """Reject anything that doesn't carry the shared-secret token (see
@@ -3317,6 +3333,9 @@ class T3LabAIServer(object):
         # No name on the call: "AI app" on the cursors, never a guessed app
         # (2026-11-17: this default showed Antigravity as Claude).
         agent = (meta.get('t3lab/agent') if isinstance(meta, dict) else None) or 'mcp-client'
+        harness = ((meta.get('t3lab/task'), meta.get('t3lab/task_title'),
+                    meta.get('t3lab/member')) if isinstance(meta, dict) else ())
+        extra = {'harness': harness} if any(harness) else {}
 
         # A tool the machine's toolset hides is refused before anything else,
         # the teaching tools below included (MCP Control > Security).
@@ -3375,7 +3394,7 @@ class T3LabAIServer(object):
                           'tool': tool_name}
             else:
                 result = self._execute_tool(tool_name, arguments,
-                                            confirm=confirm, agent=agent)
+                                            confirm=confirm, agent=agent, **extra)
             self._teach_record_step(tool_name, arguments, result)
             _record_mcp_telemetry(tool_name, arguments, result, t_start)
             return self._tool_call_result(result)
@@ -4374,11 +4393,12 @@ class T3LabAIServer(object):
         except Exception as e:
             return {'error': str(e), 'tool': 'famigen_wait_for_message'}
 
-    def _execute_tool(self, tool_name, arguments, confirm=None, agent=None):
+    def _execute_tool(self, tool_name, arguments, confirm=None, agent=None, harness=None):
         """Execute a Revit tool in a thread-safe manner using External Events.
 
         `confirm` (external MCP calls only, see _external_policy_check) makes
         the UI thread ask the user in a Revit dialog before the tool runs.
+        `harness`: (task ref, title, member) the bridge stamped, for the cursors.
         """
         rejected = self._reject_unknown_arguments(tool_name, arguments)
         if rejected is not None:
@@ -4409,6 +4429,8 @@ class T3LabAIServer(object):
                     'tool': tool_name}
         if self._external_event:
             task = _ToolTask(tool_name, arguments, confirm=confirm, agent=agent)
+            if harness:
+                task.task_ref, task.task_title, task.member = harness
             self._event_handler.tasks.put(task)
             self._external_event.Raise()
 

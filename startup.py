@@ -446,6 +446,18 @@ def install_ribbon_memory():
         return "failed", str(exc)
 
 
+def install_harness_notifier():
+    """Toast when a BIM Harness task waits for review, fails, or the board is
+    done (lib/harness_notifier.py). Returns (state, detail)."""
+    notifier = _load_lib_module("harness_notifier")
+    if notifier is None:
+        return "failed", "lib/harness_notifier.py not found"
+    try:
+        return notifier.install(_revit_handle())
+    except Exception as exc:
+        return "failed", str(exc)
+
+
 def refresh_mcp_bridge():
     """Keep the deployed MCP bridge (%APPDATA%\\T3LabAI\\bridge.py + hub_store.py)
     in step with this extension, so a new bridge tool needs no visit to MCP
@@ -516,6 +528,11 @@ def main():
     if state == "failed":
         _log("Split buttons will not remember the last-used button across "
              "Revit sessions: %s" % detail)
+
+    # ─── 2b'. Harness board: a toast, so nobody has to poll MCP Control ───────
+    state, detail = install_harness_notifier()
+    if state == "failed":
+        _log("No toast for the BIM Harness board: %s" % detail)
 
     # ─── 2c. MCP clients start the deployed bridge, not the one in lib/core ───
     state, detail = refresh_mcp_bridge()

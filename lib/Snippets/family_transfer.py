@@ -275,11 +275,20 @@ def _handler_classes():
             self._values = bool(overwrite_values)
 
         def OnFamilyFound(self, familyInUse, overwriteParameterValues):
-            return (True, self._values)
+            try:                            # IronPython (MCP server): out params are StrongBox
+                overwriteParameterValues.Value = self._values
+                return True
+            except (AttributeError, TypeError):    # pythonnet 3: out values in the tuple
+                return (True, self._values)
 
         def OnSharedFamilyFound(self, sharedFamily, familyInUse, source,
                                 overwriteParameterValues):
-            return (True, FamilySource.Family, self._values)
+            try:
+                source.Value = FamilySource.Family
+                overwriteParameterValues.Value = self._values
+                return True
+            except (AttributeError, TypeError):    # pythonnet 3: out values in the tuple
+                return (True, FamilySource.Family, self._values)
 
     class SwallowWarnings(IFailuresPreprocessor):
         __namespace__ = "T3Lab.FamilyTransfer"

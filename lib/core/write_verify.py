@@ -162,8 +162,8 @@ def verify(tool, args, result, started, exists, name_of=None, changes=None):
     if not isinstance(result, dict) or result.get('error') or result.get('success') is False:
         return None
     args = args if isinstance(args, dict) else {}
-    if args.get('dry_run') or result.get('dry_run'):
-        return None
+    if args.get('dry_run') or result.get('dry_run') or result.get('applied') is False:
+        return None                 # previews and read operations of write tools
     failed, warnings, n = [], [], [0]
 
     def fail(text):

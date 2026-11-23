@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """core/write_verify.py + T3LabAIServer._verify_write: the read-back after a write.
 
-Run:  python lite_guard/test_write_verify.py      (no Revit: the model is a fake)
+Run:  python dev/test_write_verify.py      (no Revit: the model is a fake)
 """
 
 import ast
@@ -73,6 +73,8 @@ print('[skipped]')
 check('error result', run('create_level', {}, {'error': 'x'}) is None)
 check('success False (turbo rollback)', run('create_level', {}, {'success': False}) is None)
 check('dry run', run('set_parameter', {'dry_run': True}, {'dry_run': True, 'diff': []}) is None)
+check('applied=False (a read operation of a write tool) -> no read-back',
+      run('cad_to_elements', {}, {'applied': False, 'layers': []}) is None)
 check('tool without checks', run('select_elements', {}, {'success': True}) is None)
 check('switch_active_document untouched', run('switch_active_document', {}, {'ok': 1}) is None)
 

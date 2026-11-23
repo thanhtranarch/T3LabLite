@@ -17,8 +17,10 @@ tab strip - design: dev/plan/clone-drawing-v2-design.md section 7.
 
 Modal (spec D8). "Open sheet" stores the sheet id and closes the window; the
 pushbutton script activates the sheet once the dialog has returned (R12).
-"Pick in model" hides the window, picks, shows it again. Revit API work lives
-in ``Snippets/_drawing_clone.py``; this module is UI only.
+"Pick in model" hides the window; ``show_clone_drawing`` picks once
+ShowDialog has returned and shows the window MODAL again - never ``Show()``,
+which would leave it modeless outside the Revit API context. Revit API work
+lives in ``Snippets/_drawing_clone.py``; this module is UI only.
 
 Part of T3Lab Extension.
 """
@@ -173,6 +175,7 @@ class CloneDrawingDialog(T3WPFWindow):
         self.doc = doc
         self.uidoc = uidoc
         self.open_sheet_id = None
+        self.pick_requested = False   # set by Pick in model, run by show_clone_drawing
         self._loading = True
         self._busy = False
         self._records = []
@@ -769,26 +772,38 @@ class CloneDrawingDialog(T3WPFWindow):
                        u"Revit selection")
 
     def pick_in_model_clicked(self, sender, e):
-        """Hide -> PickObjects -> Show (spec D8). [NV] G24."""
+        """Hide the window; show_clone_drawing picks and shows it modal again (D8).
+
+        No Show() here: Hide() ends ShowDialog() (WPF DoDialogHide), so the
+        pushbutton command returns, and Show() would bring the window back
+        MODELESS - every later click then runs outside the Revit API context
+        ("Starting a transaction from an external application running outside
+        of API context is not allowed", 2026-10-12).
+        """
         if self._busy:
             return
         if self.uidoc is None:
             self._set_status(u"Pick in model is not available here — tick the targets in the grid.",
                              "Warning")
             return
+        self.pick_requested = True
         try:
             self.Hide()
-        except Exception:
-            pass
+        except Exception as exc:
+            self.pick_requested = False
+            self._set_status(u"Pick in model is not available here (%s) — tick the targets "
+                             u"in the grid." % short_error(exc), "Warning")
+
+    def pick_targets(self):
+        """PickObjects while the window is hidden, between two ShowDialog() calls.
+
+        Runs inside the pushbutton command, so the Revit API context is valid. [NV] G24.
+        """
+        self.pick_requested = False
         try:
             ids, error = dc.pick_assembly_ids(self.doc, self.uidoc)
         except Exception as exc:
             ids, error = [], short_error(exc)
-        finally:
-            try:
-                self.Show()
-            except Exception:
-                pass
         if error:
             self._set_status(u"Pick in model is not available here (%s) — tick the targets "
                              u"in the grid." % error, "Warning")
@@ -929,7 +944,16 @@ class CloneDrawingDialog(T3WPFWindow):
 
 
 def show_clone_drawing(doc, uidoc=None):
-    """Entry point used by the pushbutton. Returns the sheet id to open, or None."""
+    """Entry point used by the pushbutton. Returns the sheet id to open, or None.
+
+    Pick in model hides the window, which ends ShowDialog(); the pick runs here,
+    still inside the command, then the same window is shown modal again.
+    """
     dialog = CloneDrawingDialog(doc, uidoc)
     dialog.ShowDialog()
+    while dialog.pick_requested:
+        try:
+            dialog.pick_targets()
+        finally:
+            dialog.ShowDialog()
     return dialog.open_sheet_id

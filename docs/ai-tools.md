@@ -52,7 +52,8 @@ After a write, the server reads the model back and adds `verified` / `verificati
 ## Not ported
 
 `t3lab_recipe`, the bridge CLI (`tools` / `help` / `verify` commands), tiers / profiles / approval
-queue: they belong to t3lab_dev's bridge, which Lite does not use.
+queue: they belong to t3lab_dev's bridge, which Lite does not use. The BIM Harness
+(`t3lab_harness`, `bridge.py harness …`) is ported on top of Lite's policy: `docs/harness.md`.
 
 ## Verify in Revit (restart Revit, do not Reload)
 

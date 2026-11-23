@@ -12,6 +12,7 @@ the caller got its result.
 The WPF overlay itself needs Revit: NEEDS VERIFICATION there.
 """
 import ast
+import io
 import os
 import re
 import shutil
@@ -432,6 +433,20 @@ def test_visible_work():
               names == ['working', 'done'] and host.calls[0][1][0] == 'codex'
               and host.calls[0][1][4] is None and host.calls[1][1][:4]
               == ('codex', 'read', 'list_open_documents', False), host.calls)
+        # A call with no document open switched Glow off for good: Glow
+        # cannot draw without a document, so notify returns before it.
+        from core import agent_cursors_glow as glow
+        glow_calls = []
+        real = (AC.options, glow.update, glow.stop)
+        AC.options = lambda: dict(real[0](), model=True, glow=True)
+        glow.update = lambda *a, **k: glow_calls.append('update') or False
+        glow.stop = lambda *a, **k: glow_calls.append('stop')
+        try:
+            AC.notify(App(), Call())
+        finally:
+            AC.options, glow.update, glow.stop = real
+        check('no document: Glow is not touched (and not switched off)',
+              glow_calls == [] and AC.options().get('glow') is not False, glow_calls)
         del host.calls[:]
         bad = Call()
         bad.result = {'error': 'boom'}
@@ -1129,6 +1144,9 @@ def test_bar_only():
     before = acsrc.split('def before(app, task):', 1)[1].split('\ndef ', 1)[0]
     check('before: no boxes measured without On model',
           'model and ids and action in' in before and 'elif model and ids:' in before)
+    check('before: no UI walk measured without On model',
+          '_ui_stops(app, tool, args, action, shown) if model else []' in before)
+    check('notify: no UI walk measured without On model', "if not ui and opts['model']:" in notify)
     osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
 
     def body(name):
@@ -1243,6 +1261,76 @@ def test_harness_hud():
           'task.task_ref, task.task_title, task.member = harness' in ssrc)
 
 
+def test_ui_route_and_motion():
+    print('[UI route: the pane a person would use; human-like glide]')
+    cases = (
+        ('create_sheet', {}, 'Project Browser \u203a Sheets', 'before'),
+        ('place_views_on_sheets', {}, 'Project Browser \u203a Sheets', 'before'),
+        ('export_sheets_pdf', {}, 'Project Browser \u203a Sheets', 'before'),
+        ('duplicate_view', {}, 'Project Browser \u203a Views', 'before'),
+        ('create_schedule', {}, 'Project Browser \u203a Schedules/Quantities', 'before'),
+        ('load_family', {}, 'Project Browser \u203a Families', 'before'),
+        ('famigen_create_family', {}, 'Project Browser \u203a Families', 'before'),
+        ('manage_links', {}, 'Project Browser \u203a Revit Links', 'before'),
+        ('set_parameter', {'parameter_name': 'Comments'}, 'Properties \u203a Comments', 'after'),
+        ('bulk_set_parameter', {}, 'Properties', 'after'),
+        ('send_code_to_revit', {'code': 'ViewSheet.Create(doc, tb.Id)'},
+         'Project Browser \u203a Sheets', 'before'),
+    )
+    for tool, args, label, when in cases:
+        got = AC.ui_route(tool, args)
+        check('route ' + tool, [(r['label'], r['when']) for r in got] == [(label, when)], got)
+    for tool in ('place_wall', 'move_elements', 'get_current_view_elements',
+                 'create_view_filter', 'famigen_get_schema', 'create_project_parameter'):
+        check('no pane for ' + tool, AC.ui_route(tool, {}) == [], AC.ui_route(tool, {}))
+    check('code with no API hint: none', AC.ui_route('send_code_to_revit', {'code': 'x = 1'}) == [])
+    check('what the code made picks the pane',
+          AC.ui_route('send_code_to_revit', {'code': 'x = 1'}, categories=['Sheets'])[0]['node']
+          == 'Sheets')
+
+    check('minimum-jerk: still at both ends, half way at the middle',
+          AC.ease_human(0) == 0 and AC.ease_human(1) == 1 and abs(AC.ease_human(0.5) - 0.5) < 1e-9
+          and AC.ease_human(0.1) < 0.1)
+    path = AC.glide_path((0.0, 0.0), (400.0, 0.0))
+    check('glide ends on the target', path[-1][:2] == (400.0, 0.0), path[-1])
+    check('glide arcs sideways, never more than BEND_MAX',
+          0 < max(abs(y) for _x, y, _t in path) <= AC.BEND_MAX / 2.0 + 1e-9)
+    xs = [x for x, _y, _t in path]
+    check('glide moves forward only', xs == sorted(xs))
+    steps = [b - a for a, b in zip([0.0] + xs, xs)]
+    check('slow off the mark, fast mid-way', steps[0] < steps[len(steps) // 2])
+    check('a tiny hop is one step', AC.glide_path((0, 0), (1, 1)) == [(1, 1, 1.0)])
+    frames = AC.motion_keyframes((0.0, 0.0), [(100.0, 0.0, 500, 700), (100.0, 100.0, 1200, 1200)])
+    times = [t for _x, _y, t in frames]
+    check('keyframe times never go back', times == sorted(times), times)
+    check('at each stop on arrival and until it leaves',
+          (100.0, 0.0, 500) in frames and (100.0, 0.0, 700) in frames
+          and frames[-1] == (100.0, 100.0, 1200), frames[-3:])
+
+    est = AC.dock_estimate((0, 0, 1920, 1080), (400, 150, 1900, 1000), ['browser', 'properties'])
+    check('dock estimate: Properties above Project Browser, left of the views',
+          est['properties'][1] < est['browser'][1] and est['browser'][2] < 400, est)
+    check('no gap for a dock: no guess',
+          AC.dock_estimate((0, 0, 1920, 1080), (20, 150, 1900, 1000), ['browser']) == {})
+    check('a closed pane is not guessed',
+          list(AC.dock_estimate((0, 0, 1920, 1080), (400, 150, 1900, 1000), ['browser'])) ==
+          ['browser'])
+    check('click on the row that was found',
+          AC.pane_point((0, 100, 380, 1000), 'Sheets', (30, 400, 120, 418)) == (54, 409))
+    x, y = AC.pane_point((0, 100, 380, 1000), 'Sheets')
+    check('else where Sheets usually is', 0 < x < 380 and 100 < y < 1000)
+
+    src = io.open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
+    before = src[src.index('def before('):src.index('def _changes(')]
+    notify = src[src.index('def notify('):src.index('# \u2500\u2500\u2500 Narration')]
+    check('before(): pane stops go to working() and the canvas covers them',
+          "_ui_stops(app, tool, args, action, shown)" in before
+          and "canvas=union_rect(shown + [st['rect'] for st in ui]), ui=ui" in before)
+    check('notify(): reuses them, or asks what the code made',
+          "getattr(task, '_cursor_ui', None)" in notify and 'sorted(set(made))' in notify
+          and 'ui=ui or []' in notify)
+
+
 if __name__ == '__main__':
     try:
         test_extract_ids()
@@ -1266,6 +1354,7 @@ if __name__ == '__main__':
         test_stability()
         test_bar_only()
         test_harness_hud()
+        test_ui_route_and_motion()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

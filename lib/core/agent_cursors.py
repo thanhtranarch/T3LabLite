@@ -9,6 +9,8 @@ action. Elements a call names are framed while it runs; what it created or
 changed is taken from Revit's DocumentChanged too (code returns no ids) and
 stays highlighted with a chip ("Walls ×3 created"). A call with no element
 scans next to where the cursor last worked.
+Glides arc like a hand on a mouse; ui_route walks the Revit UI first
+(Project Browser > Sheets, Properties) - NEEDS VERIFICATION in Revit.
 The HUD shows what runs now as a block of the action's colour (band_rows),
 lists the last steps and each agent's plan (t3lab_narrate tasks / step):
 while a step runs the cursor names that task, the call goes underneath; a
@@ -44,6 +46,10 @@ BOX_HOLD_S = 3.5            # element boxes stay this long, then fade
 MOVE_MS = 650               # cursor glide (one stop; shorter per stop on a tour)
 MAX_STOPS = 6               # targets the cursor visits one by one per call
 DWELL_MS = 220              # pause + click at each stop
+BEND = 0.12                 # a hop arcs sideways by this share of its length...
+BEND_MAX = 48.0             # ...at most this many px (glide_path)
+GLIDE_SAMPLES = 10          # keyframes per hop along the arc
+PANE_CACHE_S = 4.0          # pane rects (Project Browser, Properties) reused this long
 FEED_SIZE = 5               # last steps listed on the HUD
 REPLAY_SIZE = 20            # steps the HUD can replay
 SUMMARY_S = 20              # idle summary card stays this long
@@ -115,6 +121,8 @@ AGENTS = {
     'chatgpt':         ('GPT', '#10A37F'),
     'antigravity':     ('Antigravity', '#4285F4'),
     'cursor':          ('Cursor', '#7C3AED'),
+    'github-copilot':  ('Copilot', '#24292F'),
+    'windows-copilot': ('Copilot', '#0078D4'),
     'cli':             ('CLI', '#64748B'),
     't3lab-assistant': ('T3Lab Assistant', '#EA680C'),
     'mcp-client':      ('AI app', '#64748B'),      # no name sent at all
@@ -764,6 +772,164 @@ def tour_schedule(points, hop, dwell):
         out.append((x, y, arrive, arrive + dwell))
         t = arrive + dwell
     return out
+
+
+def ease_human(t):
+    """Minimum-jerk profile (10t^3 - 15t^4 + 6t^5): how a hand moves a mouse,
+    slow off the mark, fast mid-way, settling on the target."""
+    t = min(max(t, 0.0), 1.0)
+    return t * t * t * (10.0 - 15.0 * t + 6.0 * t * t)
+
+
+def glide_path(p0, p1, bend=BEND, samples=GLIDE_SAMPLES):
+    """[(x, y, tau)] from p0 to p1 on a gentle arc, tau = share of the hop's
+    time (0..1], spaced by ease_human. bend = sideways offset of the arc's
+    middle as a share of the distance (sign = side), at most BEND_MAX px."""
+    import math
+    (x0, y0), (x1, y1) = p0, p1
+    dx, dy = x1 - x0, y1 - y0
+    dist = math.hypot(dx, dy)
+    if dist < 2.0:
+        return [(x1, y1, 1.0)]
+    off = max(-BEND_MAX, min(BEND_MAX, dist * bend))
+    cx, cy = (x0 + x1) / 2.0 - dy / dist * off, (y0 + y1) / 2.0 + dx / dist * off
+    out = []
+    for k in range(1, samples + 1):
+        tau = k / float(samples)
+        u = ease_human(tau)
+        a, b, c = (1 - u) * (1 - u), 2 * (1 - u) * u, u * u
+        out.append((a * x0 + b * cx + c * x1, a * y0 + b * cy + c * y1, tau))
+    return out
+
+
+def motion_keyframes(start, sched, seed=0):
+    """[(x, y, ms)] for a tour sched [(x, y, arrive_ms, leave_ms)] from
+    `start`: each hop an arc (glide_path, the side alternating), each stop
+    held until it leaves. Linear keyframes between them read as one smooth
+    human motion."""
+    frames = [(start[0], start[1], 0)]
+    pos, t = start, 0
+    for k, (x, y, arrive, leave) in enumerate(sched):
+        bend = BEND if (seed + k) % 2 == 0 else -BEND
+        for px, py, tau in glide_path(pos, (x, y), bend):
+            frames.append((px, py, int(round(t + (arrive - t) * tau))))
+        if leave > arrive:
+            frames.append((x, y, leave))
+        pos, t = (x, y), leave
+    return frames
+
+
+# ─── Revit UI on the way (Project Browser, Properties) ───────────────────────
+# A person creating sheets goes to Project Browser > Sheets first; the cursor
+# does too, then into the model / the opened sheet. Pane rects come from
+# Revit's WPF tree or, failing that, an estimate (_locate_panes).
+PANE_TITLES = (('browser', 'Project Browser'), ('properties', 'Properties'))
+_PANE_TITLE = dict(PANE_TITLES)
+# (token, browser node) in priority order: "place views on sheets" is Sheets.
+_BROWSER_NODES = (
+    ('sheet', 'Sheets'), ('schedule', 'Schedules/Quantities'), ('legend', 'Legends'),
+    ('view', 'Views'), ('family', 'Families'), ('group', 'Groups'), ('link', 'Revit Links'),
+)
+_TOKEN_ALIASES = {
+    'sheets': 'sheet', 'schedules': 'schedule', 'quantities': 'schedule',
+    'takeoff': 'schedule', 'legends': 'legend', 'views': 'view', 'families': 'family',
+    'famigen': 'family', 'groups': 'group', 'links': 'link', 'parameters': 'parameter',
+    'param': 'parameter', 'params': 'parameter', 'properties': 'parameter',
+}
+# Revit API names in send_code_to_revit code -> token.
+_CODE_TOKENS = (
+    (re.compile(r'\bViewSheet\b|OST_Sheets'), 'sheet'),
+    (re.compile(r'\bViewSchedule\b|OST_Schedules'), 'schedule'),
+    (re.compile(r'\b(ViewPlan|ViewSection|View3D|ViewDrafting)\b|\.Duplicate\s*\(\s*ViewDuplicateOption'),
+     'view'),
+    (re.compile(r'\bLoadFamily\w*\s*\(|\bFamilyManager\b'), 'family'),
+    (re.compile(r'\bLookupParameter\s*\(|\bget_Parameter\s*\(|\.Set\s*\('), 'parameter'),
+)
+# A token here means the call is about elements in a view, not the views
+# themselves (get_current_view_elements, create_view_filter).
+_NOT_VIEWS = ('current', 'filter', 'filters', 'element', 'elements', 'crop', 'override')
+# Read-only AI-side FamiGen calls never touch Revit's UI.
+_NOT_FAMILY = ('schema', 'templates', 'validate', 'propose', 'studio')
+
+
+def _tokens(*texts):
+    out = []
+    for text in texts:
+        for word in re.split(r'[^a-z0-9]+', '{}'.format(text or '').lower()):
+            if word:
+                out.append(_TOKEN_ALIASES.get(word, word))
+    return out
+
+
+def ui_route(tool_name, arguments=None, action=None, categories=()):
+    """The Revit UI a person would use for this call, as stops for the cursor:
+    [{'pane', 'title', 'node', 'label', 'when'}] (empty when it is pure
+    model work). when = 'before' the model (Project Browser: pick the sheet /
+    view first) or 'after' it (Properties: select, then edit). categories =
+    what DocumentChanged saw the call add or change ('Sheets'), for code."""
+    args = arguments if isinstance(arguments, dict) else {}
+    name = '{}'.format(tool_name or '').lower()
+    words = _tokens(name, args.get('purpose'), args.get('operation'), *list(categories or ()))
+    code = args.get('code') if name == 'send_code_to_revit' else None
+    if isinstance(code, (str, type(''))):
+        words += [tok for rx, tok in _CODE_TOKENS if rx.search(code)]
+    if 'view' in words and any(w in words for w in _NOT_VIEWS):
+        words = [w for w in words if w != 'view']
+    if 'family' in words and any(w in words for w in _NOT_FAMILY):
+        words = [w for w in words if w != 'family']
+    if 'parameter' in words and 'project' in words:
+        words = [w for w in words if w != 'parameter']     # Manage > Project Parameters
+    for token, node in _BROWSER_NODES:
+        if token in words:
+            return [{'pane': 'browser', 'title': _PANE_TITLE['browser'], 'node': node,
+                     'label': u'{} \u203a {}'.format(_PANE_TITLE['browser'], node),
+                     'when': 'before'}]
+    if 'parameter' in words or 'rename' in words:
+        param = args.get('parameter_name') or args.get('param_name') or args.get('parameter')
+        node = _short(param, 20) if isinstance(param, (str, type(''))) and param else None
+        label = _PANE_TITLE['properties'] + (u' \u203a {}'.format(node) if node else u'')
+        return [{'pane': 'properties', 'title': _PANE_TITLE['properties'], 'node': node,
+                 'label': label, 'when': 'after'}]
+    return []
+
+
+# Where a browser node usually sits, as a share of the pane height, when its
+# row cannot be found (collapsed tree, a non-WPF browser).
+_NODE_SHARE = {'Views': 0.14, 'Legends': 0.24, 'Schedules/Quantities': 0.32,
+               'Sheets': 0.40, 'Families': 0.50, 'Groups': 0.60, 'Revit Links': 0.68}
+
+
+def pane_point(pane_rect, node=None, node_rect=None):
+    """Where the cursor clicks in a pane: the node's row when it was found,
+    else the node's usual height (browser) or the upper part (Properties)."""
+    left, top, right, bottom = pane_rect
+    w, h = right - left, bottom - top
+    if node_rect is not None:
+        return (min(node_rect[0] + 24.0, node_rect[2]), (node_rect[1] + node_rect[3]) / 2.0)
+    share = _NODE_SHARE.get(node, 0.30)
+    return (left + min(70.0, w * 0.35), top + h * share)
+
+
+def dock_estimate(main_rect, mdi_rect, shown, min_gap=120.0):
+    """{pane: rect} guessed from where Revit docks panes by default (left of
+    the views: Properties above, Project Browser below), for the panes Revit
+    says are `shown`; {} when there is no dock-sized gap on either side."""
+    if not main_rect or not mdi_rect or not shown:
+        return {}
+    ml, mt, mr, mb = main_rect
+    vl, vt, vr, vb = mdi_rect
+    if vl - ml >= min_gap:
+        x0, x1 = ml + 4.0, vl - 4.0
+    elif mr - vr >= min_gap:
+        x0, x1 = vr + 4.0, mr - 4.0
+    else:
+        return {}
+    order = [p for p in ('properties', 'browser') if p in shown]
+    if not order:
+        return {}
+    step = (vb - vt) / float(len(order))
+    return dict((pane, (x0, vt + step * k, x1, vt + step * (k + 1)))
+                for k, pane in enumerate(order))
 
 
 def review_points(rect, seed, n=3):
@@ -1873,6 +2039,169 @@ def _hwnd(app):
         return None
 
 
+def _window_rect(hwnd):
+    """Screen rect (px) of a window handle, or None."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        r = wintypes.RECT()
+        h = hwnd.ToInt64() if hasattr(hwnd, 'ToInt64') else int(hwnd)
+        if ctypes.windll.user32.GetWindowRect(ctypes.c_void_p(h), ctypes.byref(r)):
+            return (float(r.left), float(r.top), float(r.right), float(r.bottom))
+    except Exception:
+        pass
+    return None
+
+
+def _element_rect(el):
+    from System.Windows import Point
+    a = el.PointToScreen(Point(0, 0))
+    b = el.PointToScreen(Point(el.ActualWidth, el.ActualHeight))
+    return (min(a.X, b.X), min(a.Y, b.Y), max(a.X, b.X), max(a.Y, b.Y))
+
+
+def _pane_container(title_el, max_w):
+    """The pane round its title text: the first ancestor big enough to hold
+    content (a ribbon "Properties" button never is: too low / too wide)."""
+    from System.Windows import FrameworkElement
+    from System.Windows.Media import VisualTreeHelper
+    el = title_el
+    for _ in range(14):
+        el = VisualTreeHelper.GetParent(el)
+        if el is None:
+            return None
+        if isinstance(el, FrameworkElement) and el.ActualHeight >= 150:
+            return el if 120 <= el.ActualWidth <= max_w else None
+    return None
+
+
+def _wpf_panes(wanted, node, max_w, limit=9000):
+    """{pane: {'rect', 'node_rect'}} found by their title in Revit's WPF trees
+    (docked or floating). Main thread only; best effort."""
+    from System.Windows import PresentationSource, FrameworkElement, Visibility
+    from System.Windows.Controls import TextBlock
+    from System.Windows.Media import VisualTreeHelper, Visual
+    found, titles = {}, [(p, t) for p, t in PANE_TITLES if p in wanted]
+    for src in list(PresentationSource.CurrentSources):
+        try:
+            if not src.Dispatcher.CheckAccess():
+                continue            # the overlay's own windows live on its thread
+            stack = [src.RootVisual]
+        except Exception:
+            continue
+        seen = 0
+        while stack and seen < limit and len(found) < len(titles):
+            el = stack.pop()
+            seen += 1
+            if el is None or (isinstance(el, FrameworkElement)
+                              and el.Visibility != Visibility.Visible):
+                continue
+            if isinstance(el, TextBlock) and el.IsVisible:
+                text = el.Text or ''
+                for pane, title in titles:
+                    if pane in found or not (text == title or text.startswith(title + ' - ')):
+                        continue
+                    box = _pane_container(el, max_w)
+                    if box is not None:
+                        found[pane] = {'rect': _element_rect(box), 'el': box}
+            try:
+                for k in range(VisualTreeHelper.GetChildrenCount(el)):
+                    child = VisualTreeHelper.GetChild(el, k)
+                    if isinstance(child, Visual):
+                        stack.append(child)
+            except Exception:
+                continue
+    browser = found.get('browser')
+    if browser is not None and node:
+        browser['node_rect'] = _node_row(browser.pop('el'), node)
+    for item in found.values():
+        item.pop('el', None)
+    return found
+
+
+def _node_row(container, node, limit=4000):
+    """Screen rect of the visible tree row whose text starts with `node`."""
+    from System.Windows import FrameworkElement, Visibility
+    from System.Windows.Controls import TextBlock
+    from System.Windows.Media import VisualTreeHelper, Visual
+    stack, seen, best = [container], 0, None
+    while stack and seen < limit:
+        el = stack.pop()
+        seen += 1
+        if isinstance(el, FrameworkElement) and el.Visibility != Visibility.Visible:
+            continue
+        if isinstance(el, TextBlock) and el.IsVisible and (el.Text or '').startswith(node):
+            rect = _element_rect(el)
+            if best is None or rect[1] < best[1]:
+                best = rect
+        try:
+            for k in range(VisualTreeHelper.GetChildrenCount(el)):
+                child = VisualTreeHelper.GetChild(el, k)
+                if isinstance(child, Visual):
+                    stack.append(child)
+        except Exception:
+            continue
+    return best
+
+
+def _shown_panes(app, wanted):
+    """Panes Revit says are open (DockablePane.IsShown), or all when unknown."""
+    try:
+        from Autodesk.Revit.UI import DockablePanes
+        ids = {'browser': DockablePanes.BuiltInDockablePanes.ProjectBrowser,
+               'properties': DockablePanes.BuiltInDockablePanes.PropertiesPalette}
+        return [p for p in wanted if app.GetDockablePane(ids[p]).IsShown()]
+    except Exception:
+        return list(wanted)
+
+
+_PANES = {'at': 0.0, 'key': None, 'value': None}
+
+
+def _locate_panes(app, route, mdi_rect):
+    """The route's stops with screen rects and click points (px), cached
+    PANE_CACHE_S; a stop whose pane is closed is dropped. Main thread."""
+    wanted = sorted(set(st['pane'] for st in route))
+    node = next((st['node'] for st in route if st['pane'] == 'browser'), None)
+    main = _window_rect(_hwnd(app))
+    key = (tuple(wanted), node, main, mdi_rect)
+    now = time.time()
+    if _PANES['key'] == key and now - _PANES['at'] < PANE_CACHE_S:
+        panes = _PANES['value']
+    else:
+        shown = _shown_panes(app, wanted)
+        max_w = (main[2] - main[0]) * 0.6 if main else 900.0
+        try:
+            panes = _wpf_panes(shown, node, max_w) if shown else {}
+        except Exception:
+            panes = {}
+        guess = dock_estimate(main, mdi_rect, [p for p in shown if p not in panes])
+        for pane, rect in guess.items():
+            panes[pane] = {'rect': rect, 'estimated': True}
+        _PANES.update(at=now, key=key, value=panes)
+    out = []
+    for st in route:
+        found = panes.get(st['pane'])
+        if found is None:
+            continue
+        stop = dict(st, rect=found['rect'], estimated=bool(found.get('estimated')))
+        stop['point'] = pane_point(found['rect'], st.get('node') if st['pane'] == 'browser'
+                                   else None, found.get('node_rect'))
+        out.append(stop)
+    return out
+
+
+def _ui_stops(app, tool, args, action, shown_rects, categories=()):
+    """ui_route located on screen; [] when there is nothing to walk through."""
+    try:
+        route = ui_route(tool, args, action, categories)
+        if not route or not shown_rects:
+            return []
+        return _locate_panes(app, route, union_rect(shown_rects))
+    except Exception:
+        return []
+
+
 def before(app, task):
     """Ahead of the tool: show the agent working, remember the boxes a delete /
     move will change and the values an edit will overwrite. Never raises;
@@ -1901,11 +2230,15 @@ def before(app, task):
                 elif model and ids:
                     boxes = _boxes(doc, geos[active], ids)
                 shown = [geos[i]['rect'] for i in visible_views([g['rect'] for g in geos], active)]
+                # Project Browser / Properties on the way, like a person would
+                # (on the model only: the bar draws no cursor).
+                ui = task._cursor_ui = _ui_stops(app, tool, args, action, shown) if model else []
                 agent = _agent_of(task)
                 _overlay(_hwnd(app)).call(
                     'working', agent, action, describe_call(tool, args, len(ids)), tool,
                     geos[active]['rect'], task_text=_task_text(task, agent),
-                    targets=[b['box'] for b in boxes[:MAX_STOPS]], canvas=union_rect(shown))
+                    targets=[b['box'] for b in boxes[:MAX_STOPS]],
+                    canvas=union_rect(shown + [st['rect'] for st in ui]), ui=ui)
             elif _state.get('overlay') is not None:
                 # No view to draw in (no document, a view window too small):
                 # the bar, once it is up, still shows the call.
@@ -1980,13 +2313,14 @@ def notify(app, task):
         uidoc = app.ActiveUIDocument
         # What Revit says the call added / modified (code returns no ids).
         call, _session['call'] = _session.get('call'), None
-        fresh, label, touch = [], '', action
+        fresh, label, touch, made = [], '', action, []
         if call and not failed and uidoc is not None:
             added = _real_elements(uidoc.Document, call['added'])
             changed = [] if ids or added else _real_elements(uidoc.Document, call['modified'])
             if added or changed:
                 touch = 'create' if added else 'modify'
-                label = work_label([c for _i, c in added or changed], touch)
+                made = [c for _i, c in added or changed]
+                label = work_label(made, touch)
                 ids = merge_targets(ids, [i for i, _c in added], [i for i, _c in changed])
                 fresh = [i for i, _c in added or changed if i in ids]
             elif action == 'create' and ids:
@@ -2002,6 +2336,10 @@ def notify(app, task):
                     pre = None      # different view now: old boxes do not apply
             if opts['select'] and ids and action != 'delete':
                 _select(uidoc, ids)
+        if uidoc is None:
+            # No document: nothing to draw (finally: done). Before Glow, which
+            # cannot draw without one and would switch itself off for good.
+            return
         tiled = False
         if opts['tile'] and any(new for _v, _n, new in followed):
             if len(list(uidoc.GetOpenUIViews())) >= 2:
@@ -2041,11 +2379,16 @@ def notify(app, task):
                 if (opts['zoom'] and ids and not snap['any_box'] and action != 'delete'
                         and uidoc is not None and _zoom_to(uidoc, ids)):
                     snap = _snapshot(app, ids) or snap
+                ui = getattr(task, '_cursor_ui', None)
+                if not ui and opts['model']:
+                    # Code names no tool: what it made says where a person would go.
+                    ui = _ui_stops(app, tool, args, action,
+                                   [g['rect'] for g in snap['views']], sorted(set(made)))
                 _overlay(_hwnd(app)).call(
                     'show', agent, action, tool, failed, snap, followed, args=args,
                     n_targets=len(ids), changes=changes, clashes=clashes,
                     touched=touched, goal=goal, task_text=task_text,
-                    created=label, fresh=fresh)
+                    created=label, fresh=fresh, ui=ui or [])
                 ended = True
             except Exception:
                 pass

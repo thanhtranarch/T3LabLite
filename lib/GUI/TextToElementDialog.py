@@ -78,8 +78,9 @@ class _CategoryItem(object):
 # SELECTION FILTER
 # =============================================================================
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class TextNoteSelectionFilter(ISelectionFilter):
-    __namespace__ = "T3Lab.TextToElement"
+    __namespace__ = clr_namespace('TextToElement')
     """ISelectionFilter that only allows TextNote elements."""
     def AllowElement(self, element):
         return isinstance(element, TextNote)

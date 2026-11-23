@@ -55,6 +55,14 @@ def _crop_readback(view, data, f):
         lost.append('crop region not active')
     if f['crop_visible'] and bool(view.CropBoxVisible) != bool(data.is_visible):
         lost.append('crop region visibility')
+    if f['shape'] and data.is_shaped and data.curve_loops:
+        # sync_crop_to_view skips a shape Revit calls invalid for this view.
+        try:
+            shaped = view.GetCropRegionShapeManager().ShapeSet
+        except Exception:
+            shaped = None
+        if shaped is False:
+            lost.append('crop shape not applied (not valid in this view)')
     return lost
 
 

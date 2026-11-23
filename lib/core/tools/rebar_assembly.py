@@ -227,7 +227,9 @@ def create_cast_units(doc, args):
                                   include_rebar=args.get('include_rebar') is not False)
     creatable = [p for p in plans if p.host_ids]
     prefix, start, step, digits = series or ('', 1, 1, 3)
-    names = asm.series_names(len(creatable), prefix, start, step, digits) if series else []
+    # batch_create names only with a prefix (empty = Revit's own names), so the plan too.
+    names = asm.series_names(len(creatable), prefix, start, step, digits) \
+        if series and prefix else []
     rows, n = [], 0
     for p in plans:
         row = {'hosts': p.host_ids or [p.naming_host_id], 'label': p.label,
@@ -466,6 +468,8 @@ def clone_drawing(doc, args):
                'detail': o.detail if o.status != 'ok' else dc.outcome_summary(o)}
         if o.sheet_number:
             row['sheet'] = o.sheet_number
+        if o.deleted:
+            row['deleted_annotations'] = o.deleted
         fails = [t for lvl, t in o.log if lvl == dc.LEVEL_FAILED]
         if fails:
             row['failed'] = fails[:5]
@@ -477,12 +481,16 @@ def clone_drawing(doc, args):
         have = len(after.get(o.assembly_id, ([], []))[0])
         if o.status == 'ok' and o.views_created and have < o.views_created:
             lost.append('{}: {} of {} views'.format(o.mark, have, o.views_created))
-    out.update(applied=totals['ok'] > 0, success=totals['ok'] > 0, totals=totals,
-               targets=result[:MAX_ROWS], summary=dc.tally_text(outcomes))
+    # replace_annotations deletes in its own committed step before cloning.
+    out.update(applied=totals['ok'] > 0 or totals['deleted'] > 0, success=totals['ok'] > 0,
+               totals=totals, targets=result[:MAX_ROWS], summary=dc.tally_text(outcomes))
     if lost:
         out['not_in_model_after'] = lost
     if not totals['ok']:
         out['error'] = 'Nothing was cloned; see targets for the reason per assembly.'
+        if totals['deleted']:
+            out['error'] += (' {} annotation(s) were deleted before the failure; Undo in Revit '
+                             'brings them back (one step).'.format(totals['deleted']))
     return out
 
 

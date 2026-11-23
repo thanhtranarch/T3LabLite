@@ -429,8 +429,16 @@ try:
                     pass
                 started = time.time()
                 try:
-                    task.result = self.server._execute_tool_in_context(
-                        task.tool_name, task.arguments, uiapp=app)
+                    if is_write and tool_specs.get(task.tool_name) is not None:
+                        # Headless tool: a Revit error rolls back, never a dialog.
+                        from core import revit_failures
+                        with revit_failures.guard(app) as session:
+                            task.result = self.server._execute_tool_in_context(
+                                task.tool_name, task.arguments, uiapp=app)
+                        revit_failures.annotate(task.result, session)
+                    else:
+                        task.result = self.server._execute_tool_in_context(
+                            task.tool_name, task.arguments, uiapp=app)
                     # Read the model back (core/write_verify). getattr: a server
                     # object from before a reload has no read-back.
                     verify = getattr(self.server, '_verify_write', None) if is_write else None

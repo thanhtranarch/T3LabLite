@@ -370,8 +370,9 @@ _T = _TypeCache()
 # EXTERNAL EVENT HANDLER
 # ==================================================
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class LocationManagerHandler(IExternalEventHandler):
-    __namespace__ = "T3Lab.ManaLoca"
+    __namespace__ = clr_namespace('ManaLoca')
 
     def __init__(self, window):
         self.window             = window

@@ -53,9 +53,10 @@ class RunResult(object):
 _WARNINGS = {"count": 0}
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class CADToElementsWarnings(DB.IFailuresPreprocessor):
     """Dismiss Revit WARNINGS raised while creating; errors are left alone."""
-    __namespace__ = "T3Lab.CADToElementsWarnings"
+    __namespace__ = clr_namespace('CADToElementsWarnings')
 
     def PreprocessFailures(self, failuresAccessor):
         try:

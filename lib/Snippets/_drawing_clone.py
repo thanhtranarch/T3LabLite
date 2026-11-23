@@ -1428,6 +1428,7 @@ def read_source(doc, assembly, views_index=None):
 _ASSEMBLY_FILTER = None
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 def assembly_selection_filter():
     """ISelectionFilter that accepts AssemblyInstances only (Pick in model, D8).
 
@@ -1440,7 +1441,7 @@ def assembly_selection_filter():
         from Autodesk.Revit.UI.Selection import ISelectionFilter
 
         class AssemblyFilter(ISelectionFilter):
-            __namespace__ = "T3Lab.CloneDrawing"
+            __namespace__ = clr_namespace('CloneDrawing')
 
             def AllowElement(self, element):
                 return isinstance(element, AssemblyInstance)

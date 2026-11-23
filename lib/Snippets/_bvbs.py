@@ -116,7 +116,10 @@ def ascii_text(text):
         if ch in _ASCII_TWINS:
             out.append(_ASCII_TWINS[ch])
             continue
-        decomposed = unicodedata.normalize("NFKD", ch)
+        try:
+            decomposed = unicodedata.normalize("NFKD", ch)
+        except Exception:                  # IronPython: half of a non-BMP pair (emoji)
+            decomposed = "?"
         stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
         if not stripped:
             continue                       # a bare combining mark

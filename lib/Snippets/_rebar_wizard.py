@@ -1060,6 +1060,7 @@ def default_hook_name(hook_names):
 _HANDLERS = None
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 def _warning_swallower():
     """IFailuresPreprocessor that dismisses warnings and counts them (lazy, once)."""
     global _HANDLERS
@@ -1071,7 +1072,7 @@ def _warning_swallower():
     class SwallowRebarWarnings(IFailuresPreprocessor):
         # Static namespace is safe: lib/ modules are imported once per engine
         # session, and the class is built lazily so tests never touch .NET.
-        __namespace__ = "T3Lab.RebarWizard"
+        __namespace__ = clr_namespace('RebarWizard')
 
         def __init__(self):
             self.dismissed = 0
@@ -1099,7 +1100,7 @@ def host_filter():
                                   _bic("OST_StructuralFoundation")) if c is not None)
 
         class HostFilter(ISelectionFilter):
-            __namespace__ = "T3Lab.RebarWizard"
+            __namespace__ = clr_namespace('RebarWizard')
 
             def AllowElement(self, element):
                 return _category_int(element) in allowed

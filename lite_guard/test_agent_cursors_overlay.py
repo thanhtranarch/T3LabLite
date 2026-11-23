@@ -725,7 +725,7 @@ def test_effect_switches():
         top = ov.canvas.Children._items
         cur = ov._cursors['claude-desktop']
         groups = [n for n in top if kind(n) == 'Canvas' and n is not cur['group']]
-        return {'lines': [n for n in top if kind(n) == 'Line'],
+        return {'lines': [n for n in top if kind(n) in ('Line', 'Polyline')],
                 'rings': [n for n in top if kind(n) == 'Ellipse'],
                 'chips': [n for n in top if kind(n) == 'Border'],
                 'badges': [c for g in groups for c in g.Children._items if kind(c) == 'Border'],
@@ -902,6 +902,65 @@ def test_ironpython_syntax():
               'from __future__ import unicode_literals' in head)
 
 
+def test_ui_route_sheets():
+    print('[create sheets: Project Browser > Sheets, then into the new sheet]')
+    AC.set_speed('calm')
+    ov = new_overlay()
+    pane = {'pane': 'browser', 'title': 'Project Browser', 'node': 'Sheets',
+            'label': 'Project Browser \u203a Sheets', 'when': 'before',
+            'rect': (0.0, 50.0, 95.0, 850.0), 'point': (40.0, 370.0), 'estimated': False}
+    ov.working('claude-desktop', 'create', 'Creating sheet', 'create_sheet', RECT,
+               canvas=AC.union_rect([RECT, pane['rect']]), ui=[pane])
+    cur = ov._cursors['claude-desktop']
+    (px, py), _b = ov._ui_local(pane)
+    held = ov._focus.get('claude-desktop') or []
+    check('while it runs the pane is marked "Project Browser > Sheets"',
+          any('Project Browser \u203a Sheets' in texts(g) for g in held), len(held))
+    xs, ys = frames(moves(cur['tx'], MOVE_X)), frames(moves(cur['tx'], MOVE_Y))
+    check('the cursor goes to the Sheets row', abs(xs[-1] - px) < 1e-6 and abs(ys[-1] - py) < 1e-6,
+          (xs[-1], ys[-1], px, py))
+    sx, sy = xs[0], ys[0]
+    mid = len(xs) // 2
+    # distance of the middle frame from the straight line start -> end
+    dx, dy = px - sx, py - sy
+    off = abs(dy * (xs[mid] - sx) - dx * (ys[mid] - sy)) / max(1e-9, (dx * dx + dy * dy) ** 0.5)
+    check('on an arc, not a straight line', len(xs) > 8 and off > 2.0, (len(xs), off))
+    check('and clicks there', moves(cur['press'], SCALE_X) is not None)
+
+    cur['tx'].X, cur['tx'].Y = px, py        # the glide arrived (the stand-in never animates)
+    ov.show('claude-desktop', 'create', 'create_sheet', False, snap(),
+            followed=[(9, 'A101 - Plan', True)], created='Sheets \u00d71 created', fresh=[555],
+            ui=[pane])
+    top = ov.canvas.Children._items
+    check('"Sheets x1 created" is named at the browser row',
+          any('Sheets \u00d71 created' in texts(n) for n in top))
+    a = ov._local(RECT)
+    xs = frames(moves(cur['tx'], MOVE_X))
+    check('then into the sheet it opened', abs(xs[-1] - (a[0] + a[2]) / 2.0) < 1e-6
+          and abs(xs[0] - px) < 1e-6, (xs[0], xs[-1]))
+    check('the step keeps its route for Replay', ov._history[-1][15] == [pane])
+
+    ov.working('claude-desktop', 'read', 'Listing sheets', 'revit_list_sheets', RECT,
+               canvas=AC.union_rect([RECT, pane['rect']]), ui=[pane])
+    cur['tx'].X, cur['tx'].Y = px, py
+    ov.show('claude-desktop', 'read', 'revit_list_sheets', False, snap(), ui=[pane])
+    xs = frames(moves(cur['tx'], MOVE_X))
+    check('nothing to open: it stays on the browser and clicks again', abs(xs[-1] - px) < 1e-6)
+
+    props = dict(pane, pane='properties', node='Comments', label='Properties \u203a Comments',
+                 when='after', point=(40.0, 200.0))
+    box = {'id': 5, 'box': (500.0, 400.0, 560.0, 440.0), 'size': '1200 x 300', 'label': ''}
+    ov.working('codex', 'modify', 'Setting Comments', 'set_parameter', RECT,
+               canvas=AC.union_rect([RECT, props['rect']]), targets=[box['box']], ui=[props])
+    xs = frames(moves(ov._cursors['codex']['tx'], MOVE_X))
+    (qx, _qy), _b = ov._ui_local(props)
+    b = ov._local(box['box'])
+    check('an edit: the element first, then Properties',
+          abs(xs[-1] - qx) < 1e-6 and any(abs(x - (b[0] + b[2]) / 2.0) < 1e-6 for x in xs))
+    ov.show('claude-desktop', 'create', 'create_sheet', True, snap(), ui=[pane])
+    check('a failed call with a route still ends on the bar', 'claude-desktop' not in ov._working)
+
+
 if __name__ == '__main__':
     try:
         test_running_band()
@@ -914,6 +973,7 @@ if __name__ == '__main__':
         test_call_always_ends()
         test_bar_only()
         test_effect_switches()
+        test_ui_route_sheets()
         test_settings_window()
         test_ironpython_syntax()
     finally:

@@ -33,6 +33,7 @@ from __future__ import unicode_literals
 
 import io
 import json
+from core import jsonsafe
 import os
 import re
 import time
@@ -751,11 +752,7 @@ def build_context_file(folder, out_subdir=DEFAULT_OUT_SUBDIR,
             'overview': overview,
             'entries': fresh,
         }
-        # ensure_ascii=True + decode: json.dumps returns bytes-str on py2,
-        # and io.open(encoding=...) demands unicode (same as knowledge_store)
-        payload = json.dumps(meta, ensure_ascii=True, indent=1)
-        if isinstance(payload, bytes):
-            payload = payload.decode('ascii')
+        payload = jsonsafe.dumps(meta, indent=1)
         with io.open(os.path.join(out_dir, INDEX_NAME), 'w',
                      encoding='utf-8', newline='\n') as f:
             f.write(payload)

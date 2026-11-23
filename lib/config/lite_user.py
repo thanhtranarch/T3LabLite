@@ -21,6 +21,7 @@ from __future__ import unicode_literals
 import datetime
 import io
 import json
+from core import jsonsafe
 import os
 
 FILE_NAME = 't3lablite_user.json'
@@ -57,9 +58,7 @@ def _write(data):
         if not os.path.isdir(_dir()):
             os.makedirs(_dir())
         data['updated_at'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        text = json.dumps(data, indent=2, ensure_ascii=True)
-        if isinstance(text, bytes):
-            text = text.decode('ascii')
+        text = jsonsafe.dumps(data, indent=2)
         with io.open(path(), 'w', encoding='utf-8') as f:
             f.write(text)
         return True

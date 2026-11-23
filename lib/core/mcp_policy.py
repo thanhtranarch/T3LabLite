@@ -260,7 +260,7 @@ def header_mismatch(request, header_version):
 def discover_result(instructions=None, info=None):
     """server/discover result (before finish_result adds resultType/_meta)."""
     result = {'supportedVersions': list(SUPPORTED_PROTOCOLS),
-              'capabilities': json.loads(json.dumps(SERVER_CAPABILITIES))}
+              'capabilities': json.loads(json.dumps(SERVER_CAPABILITIES, ensure_ascii=False))}
     if instructions:
         result['instructions'] = instructions
     if info:
@@ -271,7 +271,7 @@ def discover_result(instructions=None, info=None):
 def initialize_result(requested, instructions=None, info=None):
     """initialize result for a legacy client."""
     result = {'protocolVersion': negotiate_protocol(requested),
-              'capabilities': json.loads(json.dumps(SERVER_CAPABILITIES)),
+              'capabilities': json.loads(json.dumps(SERVER_CAPABILITIES, ensure_ascii=False)),
               'serverInfo': info or server_info()}
     if instructions:
         result['instructions'] = instructions

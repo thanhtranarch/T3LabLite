@@ -92,5 +92,5 @@ def dumps(obj, **kwargs):
     …); any `ensure_ascii` passed in is ignored — ASCII output is the point.
     Always returns `unicode`, ready for `io.open(..., encoding='utf-8')`.
     """
-    kwargs['ensure_ascii'] = False
-    return escape(json.dumps(coerce(obj), **kwargs))
+    kwargs.pop('ensure_ascii', None)
+    return escape(json.dumps(coerce(obj), ensure_ascii=False, **kwargs))

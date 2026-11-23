@@ -16,6 +16,7 @@ __title__   = "T3Lab Assistant"
 
 import io
 import json
+from core import jsonsafe
 import re
 import os
 import sys
@@ -234,9 +235,7 @@ def save_learned_patterns(patterns):
         # UnicodeEncodeError mid-write under IronPython 2.7 as soon as a
         # pattern carries Vietnamese, truncating the file to 0 bytes
         # (same failure class as the chat-history/tool_registry bug).
-        data = json.dumps({'patterns': patterns}, ensure_ascii=True, indent=2)
-        if isinstance(data, bytes):
-            data = data.decode('ascii')
+        data = jsonsafe.dumps({'patterns': patterns}, indent=2)
         with io.open(path, 'w', encoding='utf-8') as f:
             f.write(data)
     except Exception:

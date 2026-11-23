@@ -51,6 +51,7 @@ __title__ = "Drawing Clone"
 
 import io
 import json
+from core import jsonsafe
 import math
 import os
 import time
@@ -440,7 +441,7 @@ def save_presets(path, presets, last):
         if folder and not os.path.isdir(folder):
             os.makedirs(folder)
         with io.open(path, "w", encoding="utf-8") as handle:
-            handle.write(u"%s" % json.dumps(payload, indent=2, sort_keys=True))
+            handle.write(jsonsafe.dumps(payload, indent=2, sort_keys=True))
     except (IOError, OSError, TypeError, ValueError) as exc:
         return short_error(exc)
     return None

@@ -20,6 +20,7 @@ from __future__ import unicode_literals
 
 import io
 import json
+from core import jsonsafe
 import os
 import threading
 import time
@@ -156,7 +157,7 @@ def save_settings(data):
                         f.write(bad)
                 except Exception:
                     pass
-            text = json.dumps(data, indent=2)
+            text = jsonsafe.dumps(data, indent=2)
             if not isinstance(text, bytes):
                 text = text.encode('utf-8')
             atomic_write(path, text)

@@ -16,6 +16,7 @@ __title__   = "Settings"
 import io
 import os
 import json
+from core import jsonsafe
 
 from config import secret_store as secrets
 
@@ -290,7 +291,7 @@ class T3LabAISettings(object):
     def save_settings(self):
         """Save settings to file.
 
-        Uses ensure_ascii=True + io.open(utf-8) so non-ASCII values
+        Uses core.jsonsafe (ASCII) + io.open(utf-8) so non-ASCII values
         (Vietnamese usernames, unicode paths) never break the dump
         under IronPython 2.7.
 
@@ -300,9 +301,7 @@ class T3LabAISettings(object):
         if not self._load_ok:
             return False
         try:
-            payload = json.dumps(self._settings, indent=2, ensure_ascii=True)
-            if isinstance(payload, bytes):
-                payload = payload.decode('ascii')
+            payload = jsonsafe.dumps(self._settings, indent=2)
             with io.open(self._settings_file, 'w', encoding='utf-8') as f:
                 f.write(payload)
             return True

@@ -98,6 +98,8 @@ jobs:
         run: python3 lite_guard/audit_ipy_compat.py --quiet
       - name: Test the IronPython gate itself
         run: python3 lite_guard/test_audit_ipy_compat.py
+      - name: Test replace_file (old file survives a failed move, IronPython branch simulated)
+        run: python3 lite_guard/test_compat_replace_file.py
       - name: Test tool specs (one declaration per AI tool reaches the registry, policy, Assistant)
         run: python3 lite_guard/test_tool_specs.py
       - name: Test the bridge argument check, t3lab_verify and Lite's policy on spec tools

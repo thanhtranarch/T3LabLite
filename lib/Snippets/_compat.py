@@ -665,11 +665,43 @@ def fold(text):
 
 
 def replace_file(src, dst):
-    """os.replace (atomic on CPython 3); IronPython 2.7 has none: remove, rename."""
+    """Move src over dst; a failed move leaves dst as it was and raises.
+
+    CPython 3: os.replace. IronPython 2.7 has none: .NET File.Replace / File.Move,
+    else dst -> dst.t3bak, src -> dst, drop the backup (put back on failure).
+    Test: lite_guard/test_compat_replace_file.py.
+    """
     import os
     rep = getattr(os, 'replace', None)
     if rep is not None:
         return rep(src, dst)
-    if os.path.exists(dst):
-        os.remove(dst)
-    os.rename(src, dst)
+    try:
+        from System.IO import File
+    except ImportError:
+        File = None
+    if File is not None:
+        try:
+            if os.path.exists(dst):
+                File.Replace(src, dst, None)
+            else:
+                File.Move(src, dst)
+            return None
+        except Exception:
+            pass                    # e.g. another volume: the rename path below
+    if not os.path.exists(dst):
+        os.rename(src, dst)
+        return None
+    bak = dst + '.t3bak'
+    if os.path.exists(bak):
+        os.remove(bak)
+    os.rename(dst, bak)
+    try:
+        os.rename(src, dst)
+    except Exception:
+        os.rename(bak, dst)
+        raise
+    try:
+        os.remove(bak)
+    except EnvironmentError:
+        pass
+    return None

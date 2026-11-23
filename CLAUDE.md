@@ -55,6 +55,12 @@ python lite_guard/test_pyrevit_revit_thread.py
 python lite_guard/test_pyrevit_patch_versions.py
 python lite_guard/test_data_hub.py
 python lite_guard/test_bridge_deploy.py
+python lite_guard/test_harness.py
+python lite_guard/test_harness_studio.py
+python lite_guard/test_conductor.py
+python lite_guard/test_harness_settings.py
+python lite_guard/test_harness_notifier.py
+python lite_guard/test_harness_client.py
 python lite_guard/test_mcp_config_safety.py
 python lite_guard/test_python_installer.py
 python lite_guard/audit_ipy_compat.py --quiet
@@ -118,6 +124,7 @@ python dev/test_icons_t3space.py
    - pyRevit 6.5.5 calls `PythonEngine.Initialize()` without `BeginAllowThreads()` (verified 2026-10-04 in the pyRevit + pythonnet source), so Revit's main thread holds the GIL whenever no CPython code runs. A CPython thread only gets the GIL while a `#! python3` tool is executing — pythonnet drops it during each .NET call, e.g. a modal `ShowDialog`. Releasing it ourselves is not an option: pyRevit's `CPythonEngine.Start` touches Python objects outside `Py.GIL()`.
    - The T3Lab Assistant dock pane is the one CPython exception: `lib/GUI/AssistantPaneControl.py` runs a 20 ms `DispatcherTimer` "GIL pump" (`Thread.Sleep(0)`, a .NET call, so pythonnet releases the GIL) while the pane content is mounted. The pane itself is registered by `startup.py` through `lib/assistant_pane.py` (IronPython) because Revit only accepts `RegisterDockablePane` while it starts. Test: `python dev/test_assistant_pane.py`.
    - Anything else that must keep running after a tool returns (servers, listeners) runs in IronPython. The MCP HTTP server is hosted by `lib/core/mcp_ipy_host.py`; `MCPService.start_server()` / `stop_server()` route there from CPython, and `core.server.T3LabAIServer.start_server()` refuses to bind under CPython inside Revit. Test: `python dev/test_mcp_host_engine.py`.
+   - BIM Harness (`docs/harness.md`, ported from t3lab_dev 2026-11-23, not run in Revit): `t3lab_harness` is one task board for several AI agents on one model (lead plans, workers `next` / `report`, lead or the person reviews). `lib/core/harness_store.py` (SQLite) / `harness_agents.py` / `harness_studio.py` run in the bridge process only and the server never imports them; everything in Revit (HUD, MCP Control > Harness, `lib/harness_notifier.py` toast, `/harness`) reads `board.json`. The bridge names each app (`--agent`, `CLIENT_AGENTS`) and refuses a member's write outside its task before Revit; it grants nothing (no tiers / profiles / approval queue in Lite), launched agents only read. The server's `/mcp` slot is `lib/core/conductor.py` (fair queue, `revit_busy` after the harness's 45 s wait budget). Tests: `lite_guard/test_harness*.py`, `test_conductor.py`.
    - Same for the ribbon: every `.splitbutton` (e.g. `PDFMarkup.splitbutton` — Bluebeam Status · T3Lab PDF Markup) keeps its last-used button across Revit restarts through `lib/ribbon_memory.py`, installed by `startup.py` (IronPython): saved on `ApplicationClosing` to `%APPDATA%\T3LabAI\ribbon_state.json`, put back on the first `Idling` (startup scripts run before pyRevit 6.5.5 builds the ribbon). Test: `python lite_guard/test_ribbon_memory.py`.
 
 9. **Frozen ribbon icons — never touch (owner's request, 2026-10-09):**

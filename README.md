@@ -324,6 +324,17 @@ rating", "what changed since the last publish".
 
 Details: [docs/data-hub.md](docs/data-hub.md).
 
+### BIM Harness (several AI apps on one model)
+
+Claude, ChatGPT (Codex) and Antigravity can share one task board for the
+open model: one app plans the tasks, the others take them one by one and
+report, and you accept or send back what they did. MCP tool `t3lab_harness`;
+ribbon **Support > Harness** opens the board in your browser (Harness
+Studio); MCP Control has a **Harness** tab. The board only coordinates: an
+app that holds no task (or works outside it) cannot change the model, and
+every call still meets the MCP Control security settings. Not tested in
+Revit yet. Details: [docs/harness.md](docs/harness.md).
+
 ### Slow tool opens
 
 To see where the time goes when a tool opens, turn on the timing log

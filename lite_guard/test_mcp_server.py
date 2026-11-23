@@ -15,7 +15,8 @@ reach:
     tools/list filtering, tools/call blocking, run_batch validation
   - core/bridge.py: re-reading the token after a 401; both protocol eras
     (initialize / MCP 2026-07-28 server/discover + per-request _meta)
-    answered with Revit closed; cached resources/prompts lists
+    answered with Revit closed; cached resources/prompts lists; a delivered
+    tools/call is never re-sent to another Revit window
   - MCP 2026-07-28 on the server: version errors, header mismatch,
     resultType / serverInfo / cache hints, stateless requests
   - core/mcp_wiki.py resources and core/mcp_prompts.py prompts
@@ -1048,6 +1049,74 @@ class BridgeProtocolTests(unittest.TestCase):
             'error': {'code': -32601, 'message': 'Method not found'}}
         res = bridge._handle(self._req('prompts/list', modern=False), self.current, 't')
         self.assertEqual(res['result'], {'prompts': []})
+
+
+class BridgeFailoverTests(unittest.TestCase):
+    """A tools/call that was delivered (timeout / reset) is never re-sent to
+    another Revit window: a write would run on another model (dev 1590845)."""
+
+    def setUp(self):
+        self.saved = (bridge._post_mcp, bridge._alive_ports, bridge._port_alive,
+                      bridge._ensure_alive_target)
+        self.sent = []
+
+        def send(port, request, token, timeout=None):
+            self.sent.append(port)
+            if port == 1:
+                raise urllib.error.URLError(TimeoutError('timed out'))
+            return {'jsonrpc': '2.0', 'id': 1, 'result': {}}
+        bridge._post_mcp = send
+        bridge._alive_ports = lambda *a, **k: [1, 2]
+        bridge._port_alive = lambda *a, **k: False
+        bridge._ensure_alive_target = lambda current: None
+
+    def tearDown(self):
+        (bridge._post_mcp, bridge._alive_ports, bridge._port_alive,
+         bridge._ensure_alive_target) = self.saved
+
+    def test_delivered_write_is_not_resent(self):
+        current = {'port': 1}
+        with self.assertRaises(Exception):
+            bridge._forward({'method': 'tools/call', 'params': {'name': 'delete_element'}},
+                            current, '')
+        self.assertEqual(self.sent, [1])
+        self.assertEqual(current['port'], 1)
+
+    def test_refused_call_still_fails_over(self):
+        def refuse_1(port, request, token, timeout=None):
+            self.sent.append(port)
+            if port == 1:
+                raise ConnectionRefusedError()
+            return {'jsonrpc': '2.0', 'id': 1, 'result': {}}
+        bridge._post_mcp = refuse_1
+        current = {'port': 1}
+        bridge._forward({'method': 'tools/call', 'params': {'name': 'x'}}, current, '')
+        self.assertEqual((self.sent, current['port']), ([1, 2], 2))
+
+    def test_read_of_a_dead_port_still_fails_over(self):
+        bridge._forward({'method': 'tools/list'}, {'port': 1}, '')
+        self.assertEqual(self.sent, [1, 2])
+
+    def test_revit_down_is_retryable(self):
+        payload = json.loads(bridge._revit_down_response(1)['result']['content'][0]['text'])
+        self.assertEqual((payload['error_code'], payload['retryable']),
+                         ('revit_unavailable', True))
+
+    def test_instances_mark_a_busy_window(self):
+        saved = (bridge._fetch_documents, bridge._health_info)
+        try:
+            bridge._fetch_documents = lambda port, token: (
+                None if port == 2 else [{'title': 'A', 'path': 'a', 'is_active': True}])
+            bridge._health_info = lambda port, timeout=None: {'pid': 10 + port}
+            res = bridge._handle_instances({'id': 1}, {'port': 1}, '')
+        finally:
+            bridge._fetch_documents, bridge._health_info = saved
+        inst = json.loads(res['result']['content'][0]['text'])['instances']
+        self.assertEqual([i['pid'] for i in inst], [11, 12])
+        self.assertEqual(inst[0]['active_document'], 'A')
+        self.assertNotIn('busy', inst[0])
+        self.assertTrue(inst[1]['busy'])
+        self.assertEqual(inst[1]['documents'], [])
 
 
 class BridgeOverHttpTests(unittest.TestCase):

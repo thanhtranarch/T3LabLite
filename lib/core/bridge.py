@@ -534,9 +534,9 @@ def _cap_result(response):
 BRIDGE_AGENT = 't3lab-bridge'      # = core.agent_cursors.BRIDGE_AGENT
 
 
-def _documents_on(port, token):
-    """list_open_documents on one instance; [] on any failure (including
-    instances still running an older build without the tool)."""
+def _fetch_documents(port, token):
+    """list_open_documents on one instance; None when it did not answer
+    (busy, closed, or an older build without the tool)."""
     try:
         resp = _post_mcp(port, {
             'jsonrpc': '2.0', 'id': 'bridge-list',
@@ -546,17 +546,24 @@ def _documents_on(port, token):
             'params': {'name': 'list_open_documents', 'arguments': {},
                        '_meta': {'t3lab/agent': BRIDGE_AGENT}},
         }, token, timeout=10)
-        return (_tool_payload(resp) or {}).get('documents', []) or []
+        docs = (_tool_payload(resp) or {}).get('documents')
+        return docs if isinstance(docs, list) else None
     except Exception:
-        return []
+        return None
 
 
-def _documents_map(ports, token):
+def _documents_on(port, token):
+    """list_open_documents on one instance; [] on any failure."""
+    return _fetch_documents(port, token) or []
+
+
+def _documents_map(ports, token, raw=False):
     """{port: [docs]} across instances, probed in parallel so one busy
-    Revit (single-threaded server mid-tool) can't stall the whole fan-out."""
+    Revit (single-threaded server mid-tool) can't stall the whole fan-out.
+    raw=True keeps None for an instance that did not answer."""
+    fetch = _fetch_documents if raw else _documents_on
     with ThreadPoolExecutor(max_workers=max(len(ports), 1)) as pool:
-        return dict(zip(ports, pool.map(
-            lambda p: _documents_on(p, token), ports)))
+        return dict(zip(ports, pool.map(lambda p: fetch(p, token), ports)))
 
 
 def _match_tier(doc, query):
@@ -609,18 +616,24 @@ def _ensure_alive_target(current):
 def _forward(request, current, token, timeout=CALL_TIMEOUT):
     """Forward to the current instance; fail over to another alive instance
     when the current one is gone — connection refused (that Revit was
-    closed) or no longer answering /health (hung socket, foreign server on
-    the port). Errors from a still-healthy instance (HTTP 500, a long tool
-    call timing out) are NOT retried elsewhere — re-running the call on a
-    different instance would target the wrong document."""
+    closed), or, for anything but a tools/call, no longer answering /health
+    (hung socket, foreign server on the port). Errors from a still-healthy
+    instance (HTTP 500, a long tool call timing out) are NOT retried
+    elsewhere — re-running the call on a different instance would target the
+    wrong document."""
     _ensure_alive_target(current)
+    first = current['port']
     try:
-        return _post_mcp(current['port'], request, token, timeout)
+        return _post_mcp(first, request, token, timeout)
     except Exception as e:
-        if not _is_conn_refused(e) and _port_alive(current['port']):
-            raise
+        if not _is_conn_refused(e):
+            # Delivered (reset / timeout after sending): a tools/call may have
+            # run, so re-sending it to another Revit would run it on another
+            # document (t3lab_dev 1590845). Only reads of a dead port fail over.
+            if request.get('method') == 'tools/call' or _port_alive(first):
+                raise
         for port in _alive_ports():
-            if port != current['port']:
+            if port != first:
                 resp = _post_mcp(port, request, token, timeout)
                 current['port'] = port
                 return resp
@@ -996,18 +1009,26 @@ def _handle_instances(request, current, token):
     if not ports:
         return _revit_down_response(rid)
 
-    docs_map = _documents_map(ports, token)
+    docs_map = _documents_map(ports, token, raw=True)
+    with ThreadPoolExecutor(max_workers=len(ports)) as pool:
+        health = dict(zip(ports, pool.map(_health_info, ports)))
     instances = []
     for port in ports:
-        docs = docs_map.get(port, [])
-        instances.append({
+        docs = docs_map.get(port)
+        entry = {
             'port': port,
+            'pid': (health.get(port) or {}).get('pid'),
             'is_current': port == current['port'],
             'active_document': next(
-                (d.get('title') for d in docs if d.get('is_active')), None),
+                (d.get('title') for d in docs or [] if d.get('is_active')), None),
             'documents': [{'title': d.get('title'), 'path': d.get('path')}
-                          for d in docs],
-        })
+                          for d in docs or []],
+        }
+        if docs is None:
+            entry['busy'] = True
+            entry['note'] = ('Did not list its documents in time — most likely busy '
+                             'running a tool. Retry shortly.')
+        instances.append(entry)
 
     payload = {
         'instances': instances,
@@ -1085,6 +1106,7 @@ def _handle_switch_instance(request, current, token):
 
 def _revit_down_response(request_id):
     return _tool_response(request_id, {
+        'error_code': 'revit_unavailable', 'retryable': True,
         'error': 'Revit is not reachable — no T3Lab MCP server found on '
                  'ports {}-{}.'.format(PORT_MIN, PORT_MAX),
         'hint': ('Start Revit and make sure the T3Lab server is running '

@@ -129,13 +129,14 @@ def _remove_task(token):
 
 # ── Revit binding ─────────────────────────────────────────────────────────────
 HAS_REVIT_UI = False
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 try:
     import clr
     clr.AddReference('RevitAPIUI')
     from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
 
     class _ApiContextHandler(IExternalEventHandler):
-        __namespace__ = "T3Lab.Services"
+        __namespace__ = clr_namespace('Services')
         """Drains the task queue inside Revit's API context."""
 
         def Execute(self, app):

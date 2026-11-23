@@ -23,6 +23,8 @@ from __future__ import unicode_literals
 
 # ─── Tool subsets (validated against tool_schema.ESSENTIAL_TOOL_NAMES) ───────
 
+from core import tool_specs as _specs     # tools declared in core/tools/<domain>.py
+
 READ_TOOLS = frozenset([
     "check_bad_geometry", "manage_material",
     "get_revit_context", "revit_get_project_info", "revit_get_active_view",
@@ -36,6 +38,7 @@ READ_TOOLS = frozenset([
     "get_material_quantities",
     "list_open_documents", "switch_active_document",
 ])
+READ_TOOLS = READ_TOOLS | _specs.names(placement='read')
 
 MODIFY_TOOLS = frozenset([
     "set_parameter", "bulk_set_parameter", "rename_element",
@@ -64,6 +67,7 @@ MODIFY_TOOLS = frozenset([
     "create_workset", "set_element_workset",
     "create_project_parameter",                      # project setup
 ])
+MODIFY_TOOLS = MODIFY_TOOLS | _specs.names(placement='modify')
 
 EXPORT_TOOLS = frozenset([
     "export_sheets_pdf", "export_dwg", "export_image", "export_model",
@@ -71,6 +75,7 @@ EXPORT_TOOLS = frozenset([
     # reads like one to the keyword stage too.
     "export_room_data",
 ])
+EXPORT_TOOLS = EXPORT_TOOLS | _specs.names(placement='export')
 
 ACTION_TOOLS = READ_TOOLS | MODIFY_TOOLS | EXPORT_TOOLS
 
@@ -80,12 +85,13 @@ MULTIDOC_TOOLS = READ_TOOLS | frozenset([
     "open_document", "close_document", "list_recent_documents",
     "export_room_data", "manage_document",
 ])
+MULTIDOC_TOOLS = MULTIDOC_TOOLS | _specs.names(placement='multidoc')
 
 # Geometry creation (image-to-model / text-to-model workflows).
 MODELING_TOOLS = READ_TOOLS | frozenset([
     "create_level", "create_grid", "place_wall",
     "create_line_based_element", "create_point_based_element",
-    "create_surface_based_element", "create_room", "room_to_floor",
+    "create_surface_based_element", "create_room",
     "create_dimension", "create_text_note", "load_family",
     "join_geometry", "move_elements", "copy_elements", "rotate_element",
     "delete_element", "select_elements",
@@ -99,6 +105,7 @@ MODELING_TOOLS = READ_TOOLS | frozenset([
     "famigen_get_studio_state", "famigen_validate_family", "famigen_patch_family",
     "famigen_list_templates",
 ])
+MODELING_TOOLS = MODELING_TOOLS | _specs.names(placement='modeling')
 
 # Model QA / audit: read everything, highlight problems visually.
 QA_TOOLS = READ_TOOLS | frozenset([
@@ -108,6 +115,7 @@ QA_TOOLS = READ_TOOLS | frozenset([
     # so a QA turn must be able to look for it.
     "check_bad_geometry", "manage_links", "manage_material",
 ])
+QA_TOOLS = QA_TOOLS | _specs.names(placement='qa')
 
 
 # Cloud answer ceilings (Claude / OpenAI / Gemini / DeepSeek / Custom).

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Assistant commands — the deterministic, no-LLM chat commands _route_input
-tries first: /memory + "remember ...", /train, /toolhub, /skills (incl.
+tries first: /memory + "remember ...", /train, /toolhub, /harness, /skills (incl.
 "install skill from <repo link>").
 
 Methods of T3LabAssistantWindow, moved here by composition (a CLR-derived
@@ -417,6 +417,20 @@ class AssistantCommands(object):
             return True
         except Exception as ex:
             logger.debug('_try_toolhub_command error: {}'.format(ex))
+            return False
+
+    def _try_harness_command(self, raw):
+        """`/harness …` (Intelligence.harness_client). WORKER THREAD: the
+        bridge CLI runs as a child process."""
+        try:
+            from Intelligence import harness_client
+            reply = harness_client.handle(raw)
+            if reply is None:
+                return False
+            self.win._post_bot(reply, _ICON_INFO, _ICON_SLATE)
+            return True
+        except Exception as ex:
+            logger.debug('_try_harness_command error: {}'.format(ex))
             return False
 
     def _try_skills_command(self, raw):

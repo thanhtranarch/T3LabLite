@@ -27,6 +27,7 @@ certificate store. Tested by dev/test_excel_table.py (no network needed).
 Author: Tran Tien Thanh
 """
 
+import io
 import json
 import os
 import re
@@ -52,7 +53,7 @@ NOT_SHARED = ("Google answered with its sign-in page: the sheet is private. In G
 def _read_gsheet_file(path):
     """Google Drive for desktop '.gsheet' shortcut -> its URL / doc id."""
     try:
-        with open(path, encoding='utf-8') as fh:
+        with io.open(path, encoding='utf-8') as fh:
             data = json.load(fh)
     except (IOError, OSError, ValueError):
         raise GSheetError("Cannot read the Google Drive shortcut {}.".format(
@@ -172,5 +173,6 @@ def download(text, folder=None, fetch=None):
     tmp = path + '.part'
     with open(tmp, 'wb') as fh:
         fh.write(data)
-    os.replace(tmp, path)
+    from Snippets._compat import replace_file      # IronPython 2.7: no os.replace
+    replace_file(tmp, path)
     return path, src

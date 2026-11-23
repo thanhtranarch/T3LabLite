@@ -5,7 +5,7 @@ import os
 import sys
 
 from pyrevit import revit, script
-from Snippets._compat import eid_value, disposing
+from Snippets._compat import eid_value, disposing, fold
 from Snippets._host import get_revit_version
 
 try:
@@ -27,8 +27,6 @@ try:
         Transaction,
         TransactionStatus,
         WorksetTable,
-        DeleteWorksetSettings,
-        DeleteWorksetOption,
         View3D,
         ViewFamilyType,
         ViewFamily,
@@ -36,8 +34,12 @@ try:
     )
 except Exception:
     FilteredElementCollector = FilteredWorksetCollector = Workset = WorksetKind = None
-    Transaction = TransactionStatus = WorksetTable = DeleteWorksetSettings = DeleteWorksetOption = None
+    Transaction = TransactionStatus = WorksetTable = None
     View3D = ViewFamilyType = ViewFamily = WorksetVisibility = None
+try:        # Revit 2022.1+: alone, so 2022.0 keeps every other workset operation
+    from Autodesk.Revit.DB import DeleteWorksetSettings, DeleteWorksetOption
+except Exception:
+    DeleteWorksetSettings = DeleteWorksetOption = None
 
 logger = script.get_logger()
 REVIT_VERSION = get_revit_version()
@@ -155,12 +157,16 @@ def get_active_workset_id(doc):
         return None
 
 
+# (levels and grids workset, default user workset) of enable_worksharing().
+WORKSHARING_WORKSETS = ("_SHARED LEVELS & GRIDS", "_ARCHITECT")
+
+
 def enable_worksharing(doc):
     """Enable worksharing with default workset names."""
     if not doc:
         return False
     try:
-        doc.EnableWorksharing("_SHARED LEVELS & GRIDS", "_ARCHITECT")
+        doc.EnableWorksharing(WORKSHARING_WORKSETS[0], WORKSHARING_WORKSETS[1])
         return True
     except Exception as e:
         logger.error("Failed to enable worksharing: {}".format(e))
@@ -219,6 +225,11 @@ def _get_3d_view_type_id(doc):
     )
 
 
+def existing_3d_view_names(doc):
+    """Names of every 3D view; a workset view is skipped when its name is taken."""
+    return set(v.Name for v in FilteredElementCollector(doc).OfClass(View3D).ToElements())
+
+
 def create_workset_views(doc):
     """Create one 3D isometric view per user workset, isolating visibility to that workset."""
     if not doc or not doc.IsWorkshared:
@@ -232,7 +243,7 @@ def create_workset_views(doc):
     if not worksets:
         return None, None, "No user worksets found."
 
-    existing = set(v.Name for v in FilteredElementCollector(doc).OfClass(View3D).ToElements())
+    existing = existing_3d_view_names(doc)
     created, skipped = [], []
 
     t = Transaction(doc, "T3Lab: Create Workset Views")
@@ -279,7 +290,7 @@ def workset_blocking_owner(doc, workset):
         me = (doc.Application.Username or "").strip()
     except Exception:
         me = ""
-    if me and owner.casefold() == me.casefold():
+    if me and fold(owner) == fold(me):
         return ""
     return owner
 
@@ -322,6 +333,9 @@ def rename_workset(doc, workset_id, new_name):
 def delete_workset(doc, ws_to_delete, ws_to_reassign=None):
     """Delete a user workset, moving its elements into another workset or deleting them."""
     t = None
+    if DeleteWorksetSettings is None:
+        return False, ("This Revit version cannot delete worksets through the API "
+                       "(Revit 2022.1 or newer): delete it in Manage > Worksets.")
     try:
         ws_all = get_user_worksets(doc)
         ws_del = next((w for w in ws_all if w.Name == ws_to_delete), None)

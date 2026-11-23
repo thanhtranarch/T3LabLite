@@ -25,6 +25,8 @@ from core import mcp_policy
 from core import mcp_prompts
 from core import mcp_wiki
 from core import agent_cursors
+from core import conductor as _conductor
+from core import tool_specs
 
 try:
     import queue as _queue_mod            # CPython 3
@@ -201,6 +203,9 @@ class _ToolTask(object):
         self.answered = False       # Allow on the Agent Cursors bar: run when re-queued
         self.ask_rid = ''           # the bar's request id while it asks
         self._caller_gone = False
+        # Harness task the caller holds (bridge t3lab/task, task_title, member):
+        # Agent Cursors name the step and give one chat of a client its own cursor.
+        self.task_ref = self.task_title = self.member = None
 
     def claim(self, who):
         with self._claim_lock:
@@ -376,8 +381,8 @@ try:
                 elif not task.claim('ui'):
                     continue  # read fallback or timeout already consumed it
                 # The task is claimed: from here on every path must set
-                # task.done, or the caller waits 120 s holding
-                # _MCP_REQUEST_LOCK and every other tools/call queues behind.
+                # task.done, or the caller waits 120 s holding the
+                # conductor's slot and every other tools/call queues behind.
                 # (agent_cursors is the module-level import: a local
                 # `from core import agent_cursors` anywhere in this method
                 # makes the name local and these calls raise
@@ -426,9 +431,23 @@ try:
                     agent_cursors.before(app, task)
                 except Exception:
                     pass
+                started = time.time()
                 try:
-                    task.result = self.server._execute_tool_in_context(
-                        task.tool_name, task.arguments, uiapp=app)
+                    if is_write and tool_specs.get(task.tool_name) is not None:
+                        # Headless tool: a Revit error rolls back, never a dialog.
+                        from core import revit_failures
+                        with revit_failures.guard(app) as session:
+                            task.result = self.server._execute_tool_in_context(
+                                task.tool_name, task.arguments, uiapp=app)
+                        revit_failures.annotate(task.result, session)
+                    else:
+                        task.result = self.server._execute_tool_in_context(
+                            task.tool_name, task.arguments, uiapp=app)
+                    # Read the model back (core/write_verify). getattr: a server
+                    # object from before a reload has no read-back.
+                    verify = getattr(self.server, '_verify_write', None) if is_write else None
+                    if verify is not None:
+                        task.result = verify(app, task, started)
                     task.exception = None
                 except Exception as e:
                     task.exception = e
@@ -465,7 +484,7 @@ class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     instance scans answer instantly even while a slow tools/call is in
     flight (a single-threaded HTTPServer queues EVERYTHING behind the slow
     request, which made instances flap dead/alive during model loads).
-    /mcp handling itself stays serialized through _MCP_REQUEST_LOCK — the
+    /mcp handling itself stays serialized through _CONDUCTOR — the
     Revit API is not thread-safe, and one-tool-at-a-time per instance is
     exactly what the ExternalEvent architecture assumes."""
     daemon_threads = True
@@ -492,8 +511,10 @@ class _ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 # Module-level (not instance state): survives pyRevit reloads, where the
 # pre-reload server singleton found via the AppDomain anchor skips __init__
-# entirely.
-_MCP_REQUEST_LOCK = threading.Lock()
+# entirely. The one Revit slot, shared fairly across agents (core/conductor.py,
+# docs/harness.md): a call stamped with a wait budget that cannot start in time
+# gets revit_busy and never runs late.
+_CONDUCTOR = _conductor.Conductor()
 
 # The port range every T3Lab server and bridge.py agree on.
 PORT_MIN = 48884
@@ -574,7 +595,8 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({'status': 'ok', 'pid': os.getpid(),
                              'port': self.server.server_port,
                              'engine': ENGINE_LABEL,
-                             'tools': len(getattr(owner, '_tools', None) or {})})
+                             'tools': len(getattr(owner, '_tools', None) or {}),
+                             'queue': _CONDUCTOR.summary()})
 
         elif path == '/':
             self._send_json({
@@ -604,10 +626,11 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({'error': 'Forbidden origin'}, 403)
             return
 
-        content_length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
-
         try:
+            # A malformed Content-Length or body is a 400, not an exception
+            # in the handler.
+            content_length = int(self.headers.get('Content-Length', 0) or 0)
+            body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
             request = json.loads(body) if body else {}
         except ValueError:      # IronPython 2.7 has no json.JSONDecodeError
             self._send_json({'jsonrpc': '2.0', 'id': None,
@@ -623,7 +646,7 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
     def _handle_mcp_message(self, request):
         """Handle MCP JSON-RPC message.
 
-        tools/call is serialized through _MCP_REQUEST_LOCK: the HTTP server is
+        tools/call is serialized through _CONDUCTOR: the HTTP server is
         threaded (so /health never starves behind a slow call), but tool
         execution must stay one-at-a-time — concurrent Revit API access off
         the main thread can crash Revit natively. initialize / ping /
@@ -656,8 +679,17 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
         if request.get('method', '') in mcp_policy.LOCK_FREE_METHODS:
             self._handle_mcp_message_locked(request)
             return
-        with _MCP_REQUEST_LOCK:
+        ticket = _conductor.ticket_for(request)
+        try:
+            _CONDUCTOR.acquire(ticket)
+        except _conductor.Busy as busy:
+            self._send_json({'jsonrpc': '2.0', 'id': request.get('id'),
+                             'result': _conductor.busy_result(busy.info)})
+            return
+        try:
             self._handle_mcp_message_locked(request)
+        finally:
+            _CONDUCTOR.release(ticket)
 
     def _authorized(self, request):
         """Reject anything that doesn't carry the shared-secret token (see
@@ -2124,8 +2156,9 @@ class T3LabAIServer(object):
                     'properties': {
                         'code': {
                             'type': 'string',
-                            'description': ('IronPython 2.7 code to execute. Has access to doc, uidoc, app, and the variables '
-                                            '`result` / `output` (a list). Assign your answer to `result` or output.append(...) — '
+                            'description': ('IronPython 2.7 code to execute. Has access to doc, uidoc, app, the variables '
+                                            '`result` / `output` (a list) and the helpers eid_value, make_eid, elem_name, '
+                                            'revit_version (work on every Revit version). Assign your answer to `result` or output.append(...) — '
                                             'do NOT print for display and do NOT show any dialog/window.')
                         },
                         'description': {
@@ -2880,19 +2913,6 @@ class T3LabAIServer(object):
                     'required': ['name', 'categories']
                 }
             },
-            'room_to_floor': {
-                'name': 'room_to_floor',
-                'description': 'Create a floor matching the boundary of one or more rooms.',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'room_ids': {'type': 'array', 'items': {'type': ['integer', 'string']}, 'description': 'Room element IDs to build floors from'},
-                        'room_id': {'type': 'integer', 'description': 'Single room element ID (alternative to room_ids)'},
-                        'floor_type': {'type': 'string', 'description': 'Floor type name (optional)'}
-                    },
-                    'required': []
-                }
-            },
             'purge_unused': {
                 'name': 'purge_unused',
                 'description': ('Report (and optionally delete) unused family symbols and view templates. '
@@ -2936,7 +2956,7 @@ class T3LabAIServer(object):
             'list_open_documents': {
                 'name': 'list_open_documents',
                 'description': ('List all documents open in this Revit instance (title, file path, '
-                                'which one is active). Tool calls always target the ACTIVE document '
+                                'which one is active, kind file / cloud / unsaved and can_activate). Tool calls always target the ACTIVE document '
                                 '— use switch_active_document to activate another one.'),
                 'inputSchema': {'type': 'object', 'properties': {}, 'required': []}
             },
@@ -2945,7 +2965,8 @@ class T3LabAIServer(object):
                 'description': ('Activate another project: brings the matched document\'s window to '
                                 'the front so it becomes the ACTIVE document that all tool calls '
                                 'target — the model on screen is the model being edited. Matches an '
-                                'open document by title or file path. '
+                                'open document by title or file path; local files and Autodesk Docs / '
+                                'BIM 360 models switch without a click, a never-saved one cannot. '
                                 'If nothing matches but path_or_title is an existing .rvt file path, '
                                 'the file is OPENED from disk in this Revit window (large models may '
                                 'exceed the 120s tool timeout — the file keeps opening in Revit; '
@@ -3061,6 +3082,8 @@ class T3LabAIServer(object):
                 }
             }
         }
+        # Tools declared once in core/tools/<domain>.py (core/tool_specs.py).
+        self._tools.update(tool_specs.registry_entries())
 
     @property
     def port(self):
@@ -3113,15 +3136,24 @@ class T3LabAIServer(object):
                 except Exception:
                     pass
 
+            try:
+                from Snippets.doc_switch import activation
+            except Exception:
+                activation = None
             docs = []
             for d in uiapp.Application.Documents:
                 if d.IsLinked:
                     continue
-                docs.append({
+                entry = {
                     'title': d.Title,
                     'path': d.PathName or '(unsaved)',
                     'is_active': d.Title == active_title,
-                })
+                }
+                if activation is not None:
+                    # can_activate + kind: switch_active_document reaches it
+                    # without a click (file / cloud) or cannot (unsaved).
+                    entry.update(activation(d))
+                docs.append(entry)
             return docs
         except Exception:
             return []
@@ -3313,6 +3345,9 @@ class T3LabAIServer(object):
         # No name on the call: "AI app" on the cursors, never a guessed app
         # (2026-11-17: this default showed Antigravity as Claude).
         agent = (meta.get('t3lab/agent') if isinstance(meta, dict) else None) or 'mcp-client'
+        harness = ((meta.get('t3lab/task'), meta.get('t3lab/task_title'),
+                    meta.get('t3lab/member')) if isinstance(meta, dict) else ())
+        extra = {'harness': harness} if any(harness) else {}
 
         # A tool the machine's toolset hides is refused before anything else,
         # the teaching tools below included (MCP Control > Security).
@@ -3371,7 +3406,7 @@ class T3LabAIServer(object):
                           'tool': tool_name}
             else:
                 result = self._execute_tool(tool_name, arguments,
-                                            confirm=confirm, agent=agent)
+                                            confirm=confirm, agent=agent, **extra)
             self._teach_record_step(tool_name, arguments, result)
             _record_mcp_telemetry(tool_name, arguments, result, t_start)
             return self._tool_call_result(result)
@@ -3741,7 +3776,7 @@ class T3LabAIServer(object):
         'bulk_set_parameter', 'select_elements', 'tag_elements', 'create_dimension',
         'create_schedule', 'duplicate_view', 'apply_view_template',
         'create_view_filter', 'place_views_on_sheets', 'export_dwg', 'export_image',
-        'create_project_parameter', 'room_to_floor', 'purge_unused', 'create_workset',
+        'create_project_parameter', 'purge_unused', 'create_workset',
         # FamiGen: propose opens a WPF window (UI thread only); create opens a
         # family document, transacts, saves and may load into the project.
         'famigen_propose_family', 'famigen_create_family',
@@ -3754,7 +3789,7 @@ class T3LabAIServer(object):
         # public registry, but they open/close a TransactionGroup so they must
         # run on the Revit main thread like any other write tool.
         '__begin_action_group', '__end_action_group',
-    ])
+    ]) | tool_specs.names(main_thread=True)
 
     # ── Destructive-action declaration ────────────────────────────────────────
     # The confirmation gate lives in the Assistant UI (it has to block on a
@@ -3783,6 +3818,9 @@ class T3LabAIServer(object):
         for some operations, and the two argument-conditional legacy rules.
         """
         args = arguments or {}
+        spec_says = tool_specs.is_destructive(tool_name, args)
+        if spec_says is not None:
+            return spec_says
         if tool_name in self._DESTRUCTIVE_TOOLS:
             return True
         ops = self._DESTRUCTIVE_OPS.get(tool_name)
@@ -4108,6 +4146,54 @@ class T3LabAIServer(object):
         'get_schedule_data': frozenset(['category']),
     }
 
+    def _verify_write(self, app, task, started):
+        """task.result with a read-back of what the write claims
+        (core/write_verify, docs/agents/write-verify.md). Never fails the call."""
+        result = task.result
+        if not isinstance(result, dict):
+            return result
+        try:
+            from core import write_verify
+            doc = self._verify_doc(app, result)
+            if doc is None:
+                return result
+
+            def element(i):
+                try:
+                    return doc.GetElement(make_eid(int(i)))
+                except Exception:
+                    return None
+
+            def name_of(i):
+                e = element(i)
+                try:
+                    return elem_name(e) if e is not None else None
+                except Exception:
+                    return None
+
+            call = getattr(task, 'audit', None)
+            hooked = getattr(self, '_t3lab_audit_doc_changed', None) is not None
+            changes = ((call.added, call.modified, call.deleted)
+                       if call is not None and hooked else None)
+            report = write_verify.verify(task.tool_name, task.arguments, result, started,
+                                         lambda i: element(i) is not None, name_of, changes)
+            return write_verify.annotate(result, report)
+        except Exception:
+            return result
+
+    def _verify_doc(self, app, result):
+        """The document the write ran on: the pinned background one, else the active."""
+        try:
+            if result.get('background_document'):
+                for d in app.Application.Documents:
+                    if d.Title == result.get('document'):
+                        return d
+                return None
+            uidoc = app.ActiveUIDocument
+            return uidoc.Document if uidoc is not None else None
+        except Exception:
+            return None
+
     def _reject_unknown_arguments(self, tool_name, arguments):
         """Error dict when `arguments` carries keys the tool cannot honour.
 
@@ -4319,11 +4405,12 @@ class T3LabAIServer(object):
         except Exception as e:
             return {'error': str(e), 'tool': 'famigen_wait_for_message'}
 
-    def _execute_tool(self, tool_name, arguments, confirm=None, agent=None):
+    def _execute_tool(self, tool_name, arguments, confirm=None, agent=None, harness=None):
         """Execute a Revit tool in a thread-safe manner using External Events.
 
         `confirm` (external MCP calls only, see _external_policy_check) makes
         the UI thread ask the user in a Revit dialog before the tool runs.
+        `harness`: (task ref, title, member) the bridge stamped, for the cursors.
         """
         rejected = self._reject_unknown_arguments(tool_name, arguments)
         if rejected is not None:
@@ -4354,6 +4441,8 @@ class T3LabAIServer(object):
                     'tool': tool_name}
         if self._external_event:
             task = _ToolTask(tool_name, arguments, confirm=confirm, agent=agent)
+            if harness:
+                task.task_ref, task.task_title, task.member = harness
             self._event_handler.tasks.put(task)
             self._external_event.Raise()
 
@@ -4688,7 +4777,11 @@ class T3LabAIServer(object):
         """
         if doc is None or not isinstance(arguments, dict):
             return None
-        for key in self._HANDLE_ARG_KEYS:
+        keys = list(self._HANDLE_ARG_KEYS)
+        spec = tool_specs.get(tool_name)
+        if spec is not None:                       # core/tools: declared per tool
+            keys += [k for k in spec.handle_keys() if k not in keys]
+        for key in keys:
             if key not in arguments:
                 continue
             raw = arguments.get(key)
@@ -4838,6 +4931,37 @@ class T3LabAIServer(object):
             _walk(grp, 0)
         return ids, matched, None
 
+    @staticmethod
+    def _as_list(value):
+        """Array argument that may arrive as "id" or "Walls, Floors" (iterating
+        a string gave per-letter errors)."""
+        if value is None or value == '':
+            return []
+        if isinstance(value, (str, type(u''))):
+            return [v.strip() for v in value.split(',') if v.strip()]
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]
+
+    def _bulk_targets(self, doc, arguments):
+        """(elements, error) bulk_set_parameter works on: ids, else category,
+        else every instance."""
+        from Autodesk.Revit.DB import FilteredElementCollector
+        ids = self._as_list(arguments.get('element_ids'))
+        if ids:
+            elements = [doc.GetElement(make_eid(int(i))) for i in ids]
+            return [e for e in elements if e is not None], None
+        bic = None
+        cat = arguments.get('category')
+        if cat:
+            bic, cat, cat_err = self._resolve_bic(cat)
+            if cat_err:
+                return None, cat_err
+        coll = FilteredElementCollector(doc).WhereElementIsNotElementType()
+        if bic is not None:
+            coll = coll.OfCategory(bic)
+        return list(coll), None
+
     def _find_elements(self, doc, arguments):
         """(elements, meta, error) — the shared element finder.
 
@@ -4869,7 +4993,7 @@ class T3LabAIServer(object):
         cat_args = []
         if arguments.get('category'):
             cat_args.append(arguments.get('category'))
-        for extra in (arguments.get('categories') or []):
+        for extra in self._as_list(arguments.get('categories')):
             if extra:
                 cat_args.append(extra)
         bics, cat_names = [], []
@@ -5407,6 +5531,10 @@ class T3LabAIServer(object):
                              'group cannot outlive the ExternalEvent that '
                              'opened it. Each tool commits its own '
                              'transaction.')}
+
+        # ── Tools declared in core/tools/<domain>.py ─────────────────────────
+        if tool_specs.get(tool_name) is not None:
+            return tool_specs.run(tool_name, doc, arguments)
 
         # What B4 could not do across several Executes, run_batch does inside
         # ONE: the group opens and closes in this same Execute.
@@ -6273,7 +6401,7 @@ class T3LabAIServer(object):
             # Requested fields, validated: an unknown field name silently
             # dropped would look like "this element has no level" rather than
             # "you asked for a field that does not exist".
-            fields = arguments.get('fields')
+            fields = self._as_list(arguments.get('fields'))
             if fields:
                 bad = [f for f in fields if f not in self._FILTER_FIELDS]
                 if bad:
@@ -6285,7 +6413,7 @@ class T3LabAIServer(object):
             else:
                 fields = list(self._FILTER_DEFAULT_FIELDS)
 
-            group_by = arguments.get('group_by') or []
+            group_by = self._as_list(arguments.get('group_by'))
             if group_by:
                 bad = [g for g in group_by if g not in self._GROUP_BY_KEYS]
                 if bad:
@@ -8806,7 +8934,7 @@ class T3LabAIServer(object):
             }
             out_path = _stored_data_file(doc.PathName, doc.Title, 'project_data.json')
             with open(out_path, 'w') as f:
-                _json.dump(data, f, indent=2)
+                f.write(jsonsafe.dumps(data, indent=2))
             return {'success': True, 'file': out_path, 'data': data}
 
         # ── store_room_data ──────────────────────────────────────────────────
@@ -8833,7 +8961,7 @@ class T3LabAIServer(object):
                     pass
             out_path = _stored_data_file(doc.PathName, doc.Title, 'room_data.json')
             with open(out_path, 'w') as f:
-                _json.dump({'rooms': rooms_out}, f, indent=2)
+                f.write(jsonsafe.dumps({'rooms': rooms_out}, indent=2))
             return {'success': True, 'file': out_path, 'room_count': len(rooms_out)}
 
         # ── query_stored_data ────────────────────────────────────────────────
@@ -8861,12 +8989,22 @@ class T3LabAIServer(object):
             # Execute directly in this ExternalEvent context (we are already on
             # the Revit main thread here). Also write result to result.json so
             # file-based clients can read it.
+            # _compat helpers in scope: version mistakes (IntegerValue on 2026,
+            # .Value before 2024) were a common send_code failure.
+            try:
+                _rev_year = int(doc.Application.VersionNumber)
+            except Exception:
+                _rev_year = None
             local_ctx = {
                 'doc':    doc,
                 'uidoc':  uidoc,
                 'app':    doc.Application,
                 'result': None,
                 'output': [],
+                'eid_value':     eid_value,
+                'make_eid':      make_eid,
+                'elem_name':     elem_name,
+                'revit_version': _rev_year,
             }
             # Redirect stdout for the duration of the exec: under pyRevit the
             # FIRST print() pops the output window as a dialog over Revit —
@@ -8883,7 +9021,11 @@ class T3LabAIServer(object):
             try:
                 _sys.stdout = _buf
                 try:
-                    exec(code, local_ctx)   # noqa: S102
+                    from core.code_errors import CODE_FILENAME as _CODE_FN
+                    try:
+                        exec(compile(code, _CODE_FN, 'exec'), local_ctx)   # noqa: S102
+                    except SystemExit:
+                        pass    # sys.exit() / script.exit(): end of the script, not of Execute
                 finally:
                     _sys.stdout = _old_stdout
                 printed      = _buf.getvalue().strip()
@@ -8906,7 +9048,7 @@ class T3LabAIServer(object):
                     _res = {'task_id': 'mcp', 'status': 'success', 'output': out_str,
                             'error': '', 'timestamp': _time.time()}
                     with open(RESULT_FILE, 'w') as _f:
-                        _json.dump(_res, _f, indent=2)
+                        _f.write(jsonsafe.dumps(_res, indent=2))
                     with open(RESULT_TXT, 'w') as _f:
                         _f.write(out_str)
                 except Exception:
@@ -8916,18 +9058,29 @@ class T3LabAIServer(object):
                 import traceback
                 tb = traceback.format_exc()
                 err_str = '{}\n{}'.format(e, tb)
+                # The model gets the short form (line, source, hint); the full
+                # traceback goes to the result file.
+                try:
+                    from core.code_errors import summarize as _summarize
+                    short = _summarize(e, code, _sys.exc_info()[2])
+                except Exception:
+                    short = {'error': u'{}'.format(e)}
                 try:
                     from core.file_watcher import RESULT_FILE, RESULT_TXT
                     import json as _json, time as _time
                     _res = {'task_id': 'mcp', 'status': 'error', 'output': '',
                             'error': err_str, 'timestamp': _time.time()}
                     with open(RESULT_FILE, 'w') as _f:
-                        _json.dump(_res, _f, indent=2)
+                        _f.write(jsonsafe.dumps(_res, indent=2))
                     with open(RESULT_TXT, 'w') as _f:
                         _f.write('ERROR: {}'.format(err_str))
                 except Exception:
                     pass
-                return {'success': False, 'error': err_str}
+                printed = _buf.getvalue().strip()
+                if printed:
+                    short['printed_before_error'] = printed[-2000:]
+                short['success'] = False
+                return short
 
         # ── say_hello ────────────────────────────────────────────────────────
         elif tool_name == 'say_hello':
@@ -9922,6 +10075,7 @@ class T3LabAIServer(object):
         # ── switch_active_document ───────────────────────────────────────────
         elif tool_name == 'switch_active_document':
             try:
+                from Snippets import doc_switch
                 query = (arguments.get('path_or_title') or '').strip()
                 if not query:
                     return {'error': 'path_or_title is required.'}
@@ -9929,38 +10083,11 @@ class T3LabAIServer(object):
                 uiapp = self._get_uiapp(uiapp)
                 open_docs = [d for d in uiapp.Application.Documents if not d.IsLinked]
 
-                def _norm(p):
-                    return os.path.normcase(os.path.normpath(p)) if p else ''
-
-                q_lower = query.lower()
-                q_path  = _norm(query)
-
                 # Match precedence: exact title → exact file path → file name
                 # (with or without .rvt) → unique title substring.
-                target = None
-                for d in open_docs:
-                    if d.Title.lower() == q_lower:
-                        target = d
-                        break
-                if target is None:
-                    for d in open_docs:
-                        if d.PathName and _norm(d.PathName) == q_path:
-                            target = d
-                            break
-                if target is None:
-                    for d in open_docs:
-                        base = os.path.basename(d.PathName) if d.PathName else ''
-                        if base and (base.lower() == q_lower or
-                                     os.path.splitext(base)[0].lower() == q_lower):
-                            target = d
-                            break
-                if target is None:
-                    partial = [d for d in open_docs if q_lower in d.Title.lower()]
-                    if len(partial) == 1:
-                        target = partial[0]
-                    elif len(partial) > 1:
-                        return {'error': 'Ambiguous document "{}" — several open documents match.'.format(query),
-                                'candidates': [d.Title for d in partial]}
+                target, err = doc_switch.match(open_docs, query)
+                if err:
+                    return err
 
                 if target is None:
                     # Not open in this Revit instance — if the query is a real
@@ -10002,19 +10129,17 @@ class T3LabAIServer(object):
 
                 # Activate the document's window — that is what makes it the
                 # target of every tool call (no hidden redirection: what's on
-                # screen is what gets edited). OpenAndActivateDocument takes a
-                # file path, so only saved documents can be activated.
-                path = target.PathName
-                if not path:
-                    return {'error': ('"{}" has never been saved, and Revit\'s API can only '
-                                      'activate documents by file path. Save it, or click its '
-                                      'tab in Revit to activate it manually.').format(target.Title),
-                            'open_documents': [d.Title for d in open_docs]}
-                uiapp.OpenAndActivateDocument(path)
+                # screen is what gets edited). A local file by its path, an
+                # Autodesk Docs / BIM 360 model by its cloud ModelPath; a
+                # never-saved document cannot be activated (doc_switch).
+                ok, kind = doc_switch.activate(uiapp, target)
+                if not ok:
+                    return {'error': kind, 'open_documents': [d.Title for d in open_docs]}
                 return {
                     'success': True,
                     'document': target.Title,
-                    'path': path,
+                    'path': target.PathName,
+                    'kind': kind,
                     'window_activated': True,
                     'note': ('"{}" is now the active document — all tool calls target it. '
                              'Call switch_active_document again to retarget.').format(target.Title),
@@ -10493,22 +10618,9 @@ class T3LabAIServer(object):
                 # wall (the old default of 500 silently stopped there on big
                 # models). An explicit positive limit is still honored.
                 limit  = int(arguments.get('limit', 0) or 0)
-                ids    = arguments.get('element_ids')
-
-                if ids:
-                    elements = [doc.GetElement(make_eid(int(i))) for i in ids]
-                    elements = [e for e in elements if e is not None]
-                else:
-                    cat = arguments.get('category')
-                    bic = None
-                    if cat:
-                        bic, cat, _cat_err = self._resolve_bic(cat)
-                        if _cat_err:
-                            return _cat_err
-                    coll = FilteredElementCollector(doc).WhereElementIsNotElementType()
-                    if bic is not None:
-                        coll = coll.OfCategory(bic)
-                    elements = list(coll)
+                elements, _cat_err = self._bulk_targets(doc, arguments)
+                if _cat_err:
+                    return _cat_err
 
                 modified, skipped, errors = 0, 0, 0
                 t = Transaction(doc, 'T3Lab AI Bulk Set Parameter')
@@ -10859,7 +10971,7 @@ class T3LabAIServer(object):
                 bic = self._bic_map().get(cat)
                 if bic is None:
                     return {'error': 'Unknown category "{}".'.format(cat)}
-                fields = arguments.get('fields') or []
+                fields = self._as_list(arguments.get('fields'))
                 name = arguments.get('name')
 
                 t = Transaction(doc, 'T3Lab AI Create Schedule')
@@ -11325,67 +11437,6 @@ class T3LabAIServer(object):
                             app.SharedParametersFilename = original_sp
                         except Exception:
                             pass
-            except Exception as e:
-                return {'error': str(e), 'tool': tool_name}
-
-        # ── room_to_floor ────────────────────────────────────────────────────
-        elif tool_name == 'room_to_floor':
-            from Autodesk.Revit.DB import (Transaction, ElementId, Floor, FloorType,
-                                           SpatialElementBoundaryOptions, CurveLoop)
-            from System.Collections.Generic import List as NetList
-            try:
-                ids = arguments.get('room_ids') or ([arguments['room_id']] if arguments.get('room_id') else [])
-                if not ids:
-                    return {'error': 'Provide room_id or room_ids.'}
-                ftype_name = arguments.get('floor_type')
-                ftypes = list(FilteredElementCollector(doc).OfClass(FloorType))
-                ftype = None
-                if ftype_name:
-                    for f in ftypes:
-                        if f.Name == ftype_name or ftype_name.lower() in f.Name.lower():
-                            ftype = f; break
-                if ftype is None and ftypes:
-                    ftype = ftypes[0]
-                if ftype is None:
-                    return {'error': 'No floor types available.'}
-
-                bopts = SpatialElementBoundaryOptions()
-                created = []
-                t = Transaction(doc, 'T3Lab AI Room To Floor')
-                t.Start()
-                try:
-                    for rid in ids:
-                        room = doc.GetElement(make_eid(int(rid)))
-                        if room is None:
-                            continue
-                        loops = room.GetBoundarySegments(bopts)
-                        if not loops or loops.Count == 0:
-                            continue
-                        loop = CurveLoop()
-                        for seg in loops[0]:
-                            loop.Append(seg.GetCurve())
-                        level_id = room.LevelId
-                        try:
-                            profile = NetList[CurveLoop]()
-                            profile.Add(loop)
-                            fl = Floor.Create(doc, profile, ftype.Id, level_id)
-                            created.append(eid_value(fl.Id))
-                        except Exception:
-                            # Older Revit fallback (NewFloor) — best effort.
-                            try:
-                                from Autodesk.Revit.DB import CurveArray
-                                ca = CurveArray()
-                                for seg in loops[0]:
-                                    ca.Append(seg.GetCurve())
-                                fl = doc.Create.NewFloor(ca, False)
-                                created.append(eid_value(fl.Id))
-                            except Exception:
-                                pass
-                    t.Commit()
-                except Exception as e:
-                    t.RollBack()
-                    return {'error': str(e), 'tool': tool_name}
-                return {'success': True, 'floors_created': len(created), 'floor_ids': created}
             except Exception as e:
                 return {'error': str(e), 'tool': tool_name}
 

@@ -7,7 +7,6 @@ import json
 
 from pyrevit import revit, forms, script
 from GUI.WPF_Base import T3WPFWindow, to_items_source
-from Snippets._host import get_revit_version
 from Snippets._compat import make_eid, eid_value, net_list
 from Snippets._units import project_length_unit
 
@@ -19,179 +18,20 @@ clr.AddReference('WindowsBase')
 clr.AddReference('System')
 
 from System.Windows import WindowState
-from System.Collections.Generic import List
 from Autodesk.Revit.DB import (
-    Transaction,
-    TransactionGroup,
     FilteredElementCollector,
     BuiltInCategory,
     FloorType,
-    SpatialElementBoundaryOptions,
-    SpatialElementBoundaryLocation,
-    CurveLoop,
-    CurveArray,
-    IFailuresPreprocessor,
-    FailureProcessingResult,
-    BuiltInParameter,
-    Floor,
     ElementId,
 )
 from Autodesk.Revit.UI import TaskDialog
-from Snippets._compat import disposing
+# Revit side shared with the room_to_floor tool (core/tools/model.py).
+from Snippets.finish_floors import FloorGenerator
 
 XAML_FILE = os.path.join(os.path.dirname(__file__), 'Tools', 'RoomToFloor.xaml')
 logger = script.get_logger()
-REVIT_VERSION = get_revit_version()
-
-
-import uuid
-# The pushbutton script importlib.reload()s this module on every click; a
-# fixed __namespace__ would define the same .NET type twice and raise
-# "Duplicate type name within an assembly" (rule S15).
-_NS_SUFFIX = uuid.uuid4().hex[:8]
-
-
-class FloorsCreationWarningSwallower(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.RoomToFloor_" + _NS_SUFFIX
-
-    def PreprocessFailures(self, failuresAccessor):
-        failList = failuresAccessor.GetFailureMessages()
-        for failure in failList:
-            failuresAccessor.DeleteWarning(failure)
-        return FailureProcessingResult.Continue
-
-
-class FloorGenerator(object):
-    def __init__(self, doc):
-        self.doc = doc
-
-    def generate_floors(self, room_elements, floor_type, offset_mm=0.0, is_structural=False, use_finish=True,
-                        progress_callback=None, cancel_check=None):
-        offset_ft = offset_mm / 304.8
-        is_structural_bool = bool(is_structural) if is_structural is not None else False
-        created_count = 0
-        error_count = 0
-        new_floors = []
-
-        with disposing(TransactionGroup(self.doc, "T3Lab: Room to Floor")) as tg:
-            tg.Start()
-            total = len(room_elements)
-            for idx, room in enumerate(room_elements):
-                if cancel_check and cancel_check():
-                    break
-                if progress_callback:
-                    progress_callback(idx, total)
-                floor = self._create_one_floor(room, floor_type, offset_ft, is_structural_bool, use_finish)
-                if floor:
-                    new_floors.append(floor)
-                    created_count += 1
-                else:
-                    error_count += 1
-            tg.Assimilate()
-
-        return new_floors, created_count, error_count
-
-    def _create_one_floor(self, room, floor_type, offset_ft, is_structural_bool, use_finish):
-        """Create a floor for a single room in its own Transaction. Returns floor or None."""
-        try:
-            area_param = room.get_Parameter(BuiltInParameter.ROOM_AREA)
-            if not area_param or not area_param.AsDouble():
-                return None
-
-            level_id = room.LevelId
-            level = self.doc.GetElement(level_id)
-            if not level:
-                return None
-
-            opt = SpatialElementBoundaryOptions()
-            opt.SpatialElementBoundaryLocation = (
-                SpatialElementBoundaryLocation.Finish if use_finish
-                else SpatialElementBoundaryLocation.Center
-            )
-
-            room_boundaries = room.GetBoundarySegments(opt)
-            if not room_boundaries:
-                return None
-
-            new_floor = None
-
-            if REVIT_VERSION >= 2022:
-                with disposing(Transaction(self.doc, "T3Lab: Create Floor")) as t:
-                    t.Start()
-                    profile = List[CurveLoop]()
-                    for loop in room_boundaries:
-                        curve_loop = CurveLoop()
-                        for seg in loop:
-                            curve = seg.GetCurve()
-                            if curve:
-                                curve_loop.Append(curve)
-                        if not curve_loop.IsOpen():
-                            profile.Add(curve_loop)
-
-                    if not profile.Count:
-                        return None
-
-                    new_floor = Floor.Create(self.doc, profile, floor_type.Id, level_id)
-
-                    if new_floor:
-                        if abs(offset_ft) > 0.0001:
-                            param = new_floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)
-                            if param:
-                                param.Set(offset_ft)
-                        if is_structural_bool:
-                            struct_param = new_floor.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)
-                            if struct_param:
-                                struct_param.Set(1)
-
-                    failOpt = t.GetFailureHandlingOptions()
-                    failOpt.SetFailuresPreprocessor(FloorsCreationWarningSwallower())
-                    t.SetFailureHandlingOptions(failOpt)
-                    t.Commit()
-
-            else:
-                floor_shape = room_boundaries[0]
-                openings = list(room_boundaries)[1:] if len(room_boundaries) > 1 else []
-
-                with disposing(Transaction(self.doc, "T3Lab: Create Floor")) as t:
-                    t.Start()
-                    curve_array = CurveArray()
-                    for seg in floor_shape:
-                        curve = seg.GetCurve()
-                        if curve:
-                            curve_array.Append(curve)
-
-                    new_floor = self.doc.Create.NewFloor(curve_array, floor_type, level, is_structural_bool)
-
-                    if new_floor and abs(offset_ft) > 0.0001:
-                        param = new_floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)
-                        if param:
-                            param.Set(offset_ft)
-
-                    failOpt = t.GetFailureHandlingOptions()
-                    failOpt.SetFailuresPreprocessor(FloorsCreationWarningSwallower())
-                    t.SetFailureHandlingOptions(failOpt)
-                    t.Commit()
-
-                if new_floor and openings:
-                    with disposing(Transaction(self.doc, "T3Lab: Create Floor Openings")) as t2:
-                        t2.Start()
-                        for opening in openings:
-                            try:
-                                opening_curve = CurveArray()
-                                for seg in opening:
-                                    curve = seg.GetCurve()
-                                    if curve:
-                                        opening_curve.Append(curve)
-                                self.doc.Create.NewOpening(new_floor, opening_curve, True)
-                            except Exception:
-                                pass
-                        t2.Commit()
-
-            return new_floor
-
-        except Exception as ex:
-            logger.debug("Error creating floor for room: {}".format(ex))
-            return None
+import Snippets.finish_floors as _finish_floors       # noqa: E402
+_finish_floors._log = logger      # per-room / per-door errors to the pyRevit output
 
 
 class RoomItem(object):

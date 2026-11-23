@@ -45,6 +45,7 @@ def _wanted():
         return False
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 def _server_class():
     if _state['cls'] is not None:
         return _state['cls']
@@ -54,7 +55,7 @@ def _server_class():
     from Autodesk.Revit.DB.DirectContext3D import IDirectContext3DServer
 
     class _GlowServer(IDirectContext3DServer):
-        __namespace__ = 'T3Lab.AgentCursorsGlow'
+        __namespace__ = clr_namespace('AgentCursorsGlow')
 
         def GetServerId(self):
             return Guid(_SERVER_GUID)

@@ -11,15 +11,16 @@ import sys
 import time
 
 from core.agent_cursors import (
-    ACTIONS, BAND_STRIPE, BAR_W, BOX_HOLD_S, COUNT_BAR_W, DWELL_MS, FEED_SHOWN, FEED_SIZE,
-    FRESH_HOLD_S, IDLE_HIDE_S, MAX_STOPS, MOVE_MS, OPTION_GROUPS, OPTION_LABELS, REPLAY_SIZE,
-    STATES, SUMMARY_S, SWEEP_W, TAG_MAX, action_style, agent_style, ago_text,
-    band_motion, band_rows, band_style, band_wash, bar_tone, classify_action,
+    ACTIONS, BAND_STRIPE, BAR_W, BEND, BOX_HOLD_S, COUNT_BAR_W, DWELL_MS, FEED_SHOWN,
+    FEED_SIZE, FRESH_HOLD_S, IDLE_HIDE_S, MAX_STOPS, MOVE_MS, OPTION_GROUPS, OPTION_LABELS,
+    REPLAY_SIZE, STATES, SUMMARY_S, SWEEP_W, TAG_MAX, action_style, agent_style, ago_text,
+    band_motion, band_rows, band_style, band_wash, bar_tone, board_rows, classify_action,
     cluster_stops, compact_line, count_bar, count_items, describe_call, fill_width,
-    footer_text, front_hides, hop_ms, hud_offset, hud_palette, hud_place, hud_state,
-    motion_off, offscreen_markers, on_model, options, place_tags, plan_progress,
-    scan_points, set_enabled, set_hud_offset, set_option, short_text, should_collapse,
-    speed_factor, status_text, tour_schedule, union_box)
+    footer_text, front_hides, glide_path, hop_ms, hud_offset, hud_palette, hud_place,
+    hud_state, motion_keyframes, motion_off, offscreen_markers, on_model, options,
+    place_tags, plan_progress, read_board, scan_points, set_enabled, set_hud_offset,
+    set_option, short_text, should_collapse, speed_factor, status_text, tour_schedule,
+    union_box, union_rect)
 
 
 class OverlayHost(object):
@@ -155,6 +156,8 @@ class _Overlay(object):
         self._owner = owner_hwnd
         self._goals = {}            # agent -> goal banner text
         self._plans = {}            # agent -> {'tasks': [...], 'step': n} (t3lab_narrate)
+        self._board = []            # agent_cursors.board_rows: the harness sessions
+        self._board_seen = None     # board.json 'updated' last drawn
         self._asks = []             # consent questions on the bar: dicts, oldest first
         self._working = {}          # agent -> (started, caption)
         self._waiting = {}          # agent -> caption
@@ -471,6 +474,8 @@ class _Overlay(object):
         col.Children.Add(self._full)
         self._compact = StackPanel()
         col.Children.Add(self._compact)
+        self._board_panel = StackPanel()        # harness sessions and their tasks
+        self._board_panel.Margin = Thickness(0, 6, 0, 0)
         self.hud.Content = self._bar
         self._hook(self.hud, 'MouseEnter', lambda s, e: self._set_hover(True))
         self._hook(self.hud, 'MouseLeave', lambda s, e: self._set_hover(False))
@@ -893,6 +898,10 @@ class _Overlay(object):
                 full.Children.Add(row)
 
         drawn['counts'], drawn['plan'] = drawn.pop('counts_now'), drawn.pop('plan_now')
+
+        # the harness board (docs/harness.md)
+        self._refresh_board()
+        full.Children.Add(self._board_panel)
 
         # footer
         from System.Windows.Controls import Border
@@ -1351,36 +1360,38 @@ class _Overlay(object):
             anim.RepeatBehavior = RepeatBehavior.Forever
             pill.BeginAnimation(_opacity_property(), anim)
 
-    def _tour(self, cur, sched, shake=False):
-        """Glide through sched [(x, y, arrive_ms, leave_ms)] on one keyframe
-        path per axis (a second BeginAnimation would cancel the first); a
-        failed call ends with a shake."""
+    def _tour(self, cur, sched, shake=False, seed=0):
+        """Glide through sched [(x, y, arrive_ms, leave_ms)] like a hand on a
+        mouse: each hop a gentle arc on a minimum-jerk profile
+        (motion_keyframes), one keyframe path per axis (a second
+        BeginAnimation would cancel the first); a failed call ends with a shake."""
         from System import TimeSpan
         from System.Windows.Media import TranslateTransform
         from System.Windows.Media.Animation import (
-            DoubleAnimationUsingKeyFrames, EasingDoubleKeyFrame, LinearDoubleKeyFrame,
-            KeyTime, CubicEase, EasingMode)
-        ease = CubicEase()
-        ease.EasingMode = EasingMode.EaseInOut
+            DoubleAnimationUsingKeyFrames, LinearDoubleKeyFrame, KeyTime)
 
         def at(ms):
             return KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(ms))
-        try:
-            start = (float(cur['tx'].X), float(cur['tx'].Y))   # where it is mid-tour
-        except Exception:
-            start = (cur['x'], cur['y'])
+        start = self._at(cur)
+        path = motion_keyframes(start, sched, seed)
         for axis, prop in ((0, TranslateTransform.XProperty), (1, TranslateTransform.YProperty)):
             anim = DoubleAnimationUsingKeyFrames()
-            anim.KeyFrames.Add(LinearDoubleKeyFrame(start[axis], at(0)))
-            for stop in sched:
-                anim.KeyFrames.Add(EasingDoubleKeyFrame(stop[axis], at(stop[2]), ease))
-                anim.KeyFrames.Add(LinearDoubleKeyFrame(stop[axis], at(stop[3])))
+            for frame in path:
+                anim.KeyFrames.Add(LinearDoubleKeyFrame(frame[axis], at(frame[2])))
             if shake and axis == 0:
                 end, t = sched[-1][0], sched[-1][3]
                 for dx, dt in ((-6, 60), (6, 120), (-4, 180), (0, 240)):
                     anim.KeyFrames.Add(LinearDoubleKeyFrame(end + dx, at(t + dt)))
             cur['tx'].BeginAnimation(prop, anim)
         cur['x'], cur['y'] = sched[-1][0], sched[-1][1]
+
+    @staticmethod
+    def _at(cur):
+        """Where the cursor is now, mid-glide included."""
+        try:
+            return (float(cur['tx'].X), float(cur['tx'].Y))
+        except Exception:
+            return (cur['x'], cur['y'])
 
     def _press(self, cur, times):
         """Squeeze the arrow at each arrival: the agent clicks."""
@@ -1393,14 +1404,20 @@ class _Overlay(object):
 
     # ── effects ──────────────────────────────────────────────────────────────
 
-    def _trail(self, x0, y0, x1, y1, color):
-        """Dashed path from where the cursor was to where it goes."""
-        from System.Windows.Media import DoubleCollection
-        from System.Windows.Shapes import Line
+    def _trail(self, x0, y0, x1, y1, color, bend=BEND):
+        """Dashed path from where the cursor was to where it goes, on the
+        same arc the cursor takes (glide_path)."""
+        from System.Windows import Point
+        from System.Windows.Media import DoubleCollection, PointCollection
+        from System.Windows.Shapes import Polyline
         if abs(x1 - x0) + abs(y1 - y0) < 24:
             return
-        line = Line()
-        line.X1, line.Y1, line.X2, line.Y2 = x0, y0, x1, y1
+        line = Polyline()
+        pts = PointCollection()
+        pts.Add(Point(x0, y0))
+        for x, y, _tau in glide_path((x0, y0), (x1, y1), bend):
+            pts.Add(Point(x, y))
+        line.Points = pts
         line.Stroke = self._brush(color, 170)
         line.StrokeThickness = 1.5
         dash = DoubleCollection()
@@ -1508,6 +1525,60 @@ class _Overlay(object):
             line.BeginAnimation(_opacity_property(), self._anim(
                 ((0.0, at - 120), (1.0, at), (1.0, end + hold_ms), (0.0, end + hold_ms + 600)),
                 self._remover(line)))
+
+    _PANE_GLYPH = {'browser': '\uE8FD', 'properties': '\uE713'}    # BulletedList, Setting
+
+    def _ui_local(self, stop):
+        """(click point, pane rect) of a UI stop in canvas DIP."""
+        s, (ox, oy) = self._dpi(), self._origin
+        px, py = stop['point']
+        return ((px - ox) / s, (py - oy) / s), self._local(stop['rect'])
+
+    def _pane_mark(self, stop, color):
+        """A pane the agent works through: dashed frame, its name and node
+        ("Project Browser > Sheets") and the row it clicks, in one group."""
+        from System.Windows import Thickness
+        from System.Windows.Controls import Canvas
+        (px, py), b = self._ui_local(stop)
+        group = Canvas()
+        group.Opacity = 0
+        group.Children.Add(self._frame(b[0] + 1, b[1] + 1, b[2] - 1, b[3] - 1, color,
+                                       dashed=True, thickness=1.5, fill_alpha=10))
+        if stop['pane'] == 'browser' or stop.get('node'):
+            group.Children.Add(self._frame(b[0] + 4, py - 10, b[2] - 4, py + 10, color,
+                                           thickness=0, fill_alpha=46))
+        chip = self._pill(self._glyph_label(self._PANE_GLYPH.get(stop['pane'], '\uE8FD'),
+                                            stop['label'], '#FFFFFF', 10), color)
+        chip.Padding = Thickness(6, 2, 6, 2)
+        Canvas.SetLeft(chip, b[0] + 6)
+        Canvas.SetTop(chip, b[1] + 6)
+        group.Children.Add(chip)
+        self.canvas.Children.Insert(0, group)
+        return group
+
+    def _hold_pane(self, agent, stop, color, delay_ms):
+        """The pane stays marked while the call runs (cleared by _clear_focus)."""
+        group = self._pane_mark(stop, color)
+        group.BeginAnimation(_opacity_property(), self._anim(
+            ((0.0, delay_ms), (1.0, delay_ms + 180))))
+        self._focus.setdefault(agent, []).append(group)
+
+    def _draw_pane(self, stop, color, delay_ms, hold_ms):
+        group = self._pane_mark(stop, color)
+        self._pulse(group, delay_ms, hold_ms, self._remover(group))
+
+    def _ui_schedule(self, kinds, points):
+        """tour_schedule with a longer stop on a pane (a person reads the
+        browser before clicking) than on an element."""
+        f, reduce = speed_factor(), self._reduce()
+        hop = 1 if reduce else int(hop_ms(len(points)) * f)
+        out, t = [], 0
+        for kind, (x, y) in zip(kinds, points):
+            dwell = 0 if reduce else int((DWELL_MS * 2 if kind == 'ui' else DWELL_MS) * f)
+            arrive = t + hop
+            out.append((x, y, arrive, arrive + dwell))
+            t = arrive + dwell
+        return out
 
     def _draw_box(self, x0, y0, x1, y1, size, action, delay_ms, fresh=False):
         """One target box with the action's effect; `size` is the badge text
@@ -1711,7 +1782,7 @@ class _Overlay(object):
         self._timer.Start()
 
     def working(self, agent, action, caption, tool_name, rect, task_text='',
-                targets=(), canvas=None):
+                targets=(), canvas=None, ui=()):
         """A call has started: spin, say "Working", count the seconds. With a
         plan, the cursor names the current task and the call goes underneath.
         targets = screen boxes of the elements the call names: framed until
@@ -1727,31 +1798,57 @@ class _Overlay(object):
             self._bar_only()            # the default: the bar, nothing on the model
         elif rect is not None:
             try:
-                self._draw_working(agent, action, caption, rect, targets, canvas)
+                self._draw_working(agent, action, caption, rect, targets, canvas, ui)
             except Exception:
                 pass            # the drawing is decoration: the bar still says Working
         self._last = time.time()
         self._show_hud(rect)
 
-    def _draw_working(self, agent, action, caption, rect, targets, canvas):
-        """The running call on the model: its cursor, the frames round what it
-        names, the path to the first."""
+    def _draw_working(self, agent, action, caption, rect, targets, canvas, ui=()):
+        """The running call: its cursor, then the way a person would do it:
+        the pane first (Project Browser > Sheets), the first element it names
+        (framed until it ends), then Properties for an edit."""
         if canvas or not self.win.IsVisible or self._origin == (0.0, 0.0):
             self._place(canvas or rect)
         cur = self._cursor(agent, action)
         self._cursor_state(cur, 'working', caption)
         self._wake(cur)
         self._clear_focus(agent)
+        acolor = action_style(action)[2]
+        kinds, points, panes = [], [], []
+        for st in ui:
+            if st.get('when') == 'before':
+                kinds.append('ui')
+                points.append(self._ui_local(st)[0])
+                panes.append((len(points) - 1, st))
         if targets:
-            acolor = action_style(action)[2]
             boxes = [self._local(b) for b in targets]
             for b in boxes:
                 self._draw_focus(agent, b, acolor)
-            point = ((boxes[0][0] + boxes[0][2]) / 2.0, (boxes[0][1] + boxes[0][3]) / 2.0)
+            kinds.append('box')
+            points.append(((boxes[0][0] + boxes[0][2]) / 2.0, (boxes[0][1] + boxes[0][3]) / 2.0))
+        for st in ui:
+            if st.get('when') == 'after':
+                kinds.append('ui')
+                points.append(self._ui_local(st)[0])
+                panes.append((len(points) - 1, st))
+        if points:
             reduce = self._reduce()
+            sched = self._ui_schedule(kinds, points)
+            seed = self._actions
+            for k, st in panes:
+                self._hold_pane(agent, st, acolor, sched[k][2])
+            start = self._at(cur)
             if not reduce and self._effects()['trail']:
-                self._trail(cur['x'], cur['y'], point[0], point[1], acolor)
-            self._tour(cur, tour_schedule([point], 1 if reduce else int(hop_ms(1) * speed_factor()), 0))
+                self._trail(start[0], start[1], points[0][0], points[0][1], acolor,
+                            BEND if seed % 2 == 0 else -BEND)
+            self._tour(cur, sched, seed=seed)
+            clicks = [sched[k][2] for k, _st in panes]
+            if clicks and not reduce:
+                self._press(cur, clicks)
+                if self._effects()['ripple']:
+                    for k, _st in panes:
+                        self._ripple(sched[k][0], sched[k][1], acolor, sched[k][2], size=28)
         self._layout_tags(agent)
 
     def waiting(self, agent, tool_name, caption, on):
@@ -1932,7 +2029,7 @@ class _Overlay(object):
 
     def show(self, agent, action, tool_name, failed, snap, followed=(),
              args=None, n_targets=0, changes=(), clashes=(), touched=0, goal='',
-             record=True, task_text='', created='', fresh=()):
+             record=True, task_text='', created='', fresh=(), ui=()):
         """created = 'Walls ×3 created' (agent_cursors.work_label), fresh =
         the ids it is about: those boxes stay highlighted longer. record =
         False is a replayed step: it is drawn, not counted or listed again."""
@@ -1941,7 +2038,7 @@ class _Overlay(object):
             self._stop_replay()         # a live call wins over a replay
             self._history.append((agent, action, tool_name, failed, _light(snap), list(followed),
                                   args, n_targets, list(changes), list(clashes), touched, goal,
-                                  task_text, created, list(fresh)))
+                                  task_text, created, list(fresh), list(ui)))
             del self._history[:-REPLAY_SIZE]
         self._touched = touched or self._touched
         if goal and agent not in self._goals:
@@ -1957,7 +2054,7 @@ class _Overlay(object):
         if self._model():
             try:
                 self._draw_step(agent, action, failed, snap, followed, n_targets, changes,
-                                clashes, created, fresh, caption, label, acolor)
+                                clashes, created, fresh, caption, label, acolor, ui)
             except Exception:
                 self._clear_focus(agent)    # decoration: the bar still gets the step
         else:
@@ -2019,9 +2116,11 @@ class _Overlay(object):
             return False
 
     def _draw_step(self, agent, action, failed, snap, followed, n_targets, changes,
-                   clashes, created, fresh, caption, label, acolor):
-        """The step on the model (On model): cursor tour, boxes, effects."""
-        self._place(snap['rect'])
+                   clashes, created, fresh, caption, label, acolor, ui=()):
+        """The step on the model (On model): cursor tour (through the pane a
+        person would use first, then the model), boxes, effects."""
+        self._place(union_rect([snap['rect']] + [st['rect'] for st in ui]) if ui
+                    else snap['rect'])
         f = speed_factor()
         reduce = self._reduce()
         fx = self._effects()
@@ -2054,8 +2153,23 @@ class _Overlay(object):
                       {'label': text, 'size': text, 'fresh': bool(fresh_boxes)})] + [
                 st for st in stops if st[1] != 'box']
         active_local = self._local(snap['active']['rect'])
+        # The pane the call goes through (Project Browser > Sheets), unless
+        # the cursor already stands there from working().
+        here = self._at(cur)
+        head = [st for st in ui if st.get('when') == 'before']
+        head_pts = [self._ui_local(st)[0] for st in head]
+        if head_pts and abs(head_pts[0][0] - here[0]) + abs(head_pts[0][1] - here[1]) < 30:
+            head, head_pts = head[1:], head_pts[1:]
         if stops:
             points = [st[0] for st in stops[:MAX_STOPS]]
+        elif ui and followed:
+            # The view it opened (a new sheet): into it, as a double-click would.
+            points = [((active_local[0] + active_local[2]) / 2.0,
+                       (active_local[1] + active_local[3]) / 2.0)]
+        elif ui:
+            points = []
+            if not head_pts:        # already there: it clicks again as the call lands
+                head, head_pts = [ui[0]], [self._ui_local(ui[0])[0]]
         else:
             # Nothing to point at (a read, a list, a review): a small scan
             # next to where this cursor last worked, not across the view.
@@ -2063,8 +2177,13 @@ class _Overlay(object):
             n = 1 if failed or reduce else (3 if action in ('read', 'view', 'export', 'code') else 2)
             points = scan_points((cur['x'], cur['y']), active_local,
                                  self._actions * 31 + slot * 7 + 1, n)
-        hop = 1 if reduce else int(hop_ms(len(points)) * f)
-        sched = tour_schedule(points, hop, 0 if reduce else int(DWELL_MS * f))
+        all_pts = head_pts + points
+        sched = self._ui_schedule(['ui'] * len(head_pts) + ['box'] * len(points), all_pts)
+        ui_sched, sched_all = sched[:len(head_pts)], sched
+        sched = sched[len(head_pts):] or sched_all[-1:]     # the model part of the tour
+        hold = int(FRESH_HOLD_S * 1000 * f)
+        for (x, y, arrive, _leave), st in zip(ui_sched, head):
+            self._draw_pane(st, acolor, arrive, hold)
         change_by_id = dict(changes)
         clash_ids = dict(clashes)
         for k, (_pt, kind, b, item) in enumerate(stops):
@@ -2083,22 +2202,30 @@ class _Overlay(object):
             self._draw_ghost(self._local(old['box']), self._local(new['box']),
                              acolor, sched[0][2])
         self._draw_offscreen(active_local, snap.get('offscreen') or (), acolor)
+        if created and ui and not fresh_boxes and not failed and fx['labels']:
+            # Sheets / views have no box in the model: name them at the row
+            # of the browser they were made in ("Sheets ×3 created").
+            (px, py), b = self._ui_local(ui[0])
+            arrive = (ui_sched[0] if ui_sched else sched_all[-1])[2]
+            self._draw_label((b[0] + 4, py - 10, b[2] - 4, py + 10), created, action,
+                             arrive, hold)
         if created and fresh_boxes and not failed:
             # What the call made or changed, named once above it; it stays.
-            hold = int(FRESH_HOLD_S * 1000 * f)
             if fx['labels']:
                 self._draw_label(union_box(fresh_boxes), created, action, sched[-1][2], hold)
             if not reduce and fx['trail'] and len(fresh_boxes) > 1 and len(stops) == len(boxes) > 1:
                 self._build_trail(sched, acolor, hold)
+        seed = self._actions
         if not reduce and fx['trail']:
-            self._trail(cur['x'], cur['y'], points[0][0], points[0][1], acolor)
-        self._tour(cur, sched, shake=failed and not reduce)
+            self._trail(here[0], here[1], all_pts[0][0], all_pts[0][1], acolor,
+                        BEND if seed % 2 == 0 else -BEND)
+        self._tour(cur, sched_all, shake=failed and not reduce, seed=seed)
         self._layout_tags(agent)
         if not reduce and fx['ripple']:
             ring = '#DC2626' if failed else acolor
-            for x, y, arrive, _leave in sched:
+            for x, y, arrive, _leave in sched_all:
                 self._ripple(x, y, ring, arrive)
-            self._press(cur, [st[2] for st in sched])
+            self._press(cur, [st[2] for st in sched_all])
         self._wake(cur)
 
     def _log_step(self, agent, action, tool_name, failed, caption, detail, changes, clashes,
@@ -2222,7 +2349,7 @@ class _Overlay(object):
             self.show(rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], args=rec[6],
                       n_targets=rec[7], changes=rec[8], clashes=rec[9], touched=rec[10],
                       goal=rec[11], record=False, task_text=rec[12], created=rec[13],
-                      fresh=rec[14])
+                      fresh=rec[14], ui=rec[15])
         except Exception:
             self._stop_replay()
 
@@ -2326,7 +2453,56 @@ class _Overlay(object):
         self.win.Hide()
         self.hud.Hide()
 
+    def _refresh_board(self):
+        """The harness board (every Revit window shows the same one): goal and
+        counts per session, then who holds which task."""
+        from System.Windows import Thickness
+        parent = getattr(self._board_panel, 'Parent', None)
+        if parent is not None:
+            parent.Children.Remove(self._board_panel)     # re-added by _refresh_hud
+        self._board_panel.Children.Clear()
+        for session in self._board:
+            head = u'Harness · {}'.format(session['goal'] or session['session'])
+            if session['document']:
+                head += u' · ' + session['document']
+            line = self._glyph_label('\uE902', head, self._c('warn'), 11)
+            line.ToolTip = u'Session {}'.format(session['session'])
+            self._board_panel.Children.Add(self._row(
+                line, self._text(u'   ' + session['summary'], 10.5, bold=False,
+                                 color=self._c('text2'))))
+            for state, text, document in session['rows']:
+                glyph, tint, tip = {
+                    'current': ('\uE768', self._c('warn'), 'being worked on'),
+                    'review': ('\uE7B3', self._c('info'), 'waiting for review'),
+                    'failed': ('\uE7BA', self._c('bad'), 'failed'),
+                }[state]
+                if document:
+                    text = u'{} · {}'.format(text, document)
+                row = self._glyph_label(glyph, text, tint, 11)
+                row.Margin = Thickness(16, 1, 0, 0)
+                row.ToolTip = tip
+                self._board_panel.Children.Add(row)
+            if session['more']:
+                more = self._text(u'+{} more'.format(session['more']), 10.5, bold=False,
+                                  color=self._c('muted'))
+                more.Margin = Thickness(16, 1, 0, 0)
+                self._board_panel.Children.Add(more)
+
+    def _poll_board(self):
+        """Once a second: redraw the HUD when board.json changed."""
+        board = read_board()
+        seen = board.get('updated')
+        if seen != self._board_seen:
+            self._board_seen = seen
+            self._board = board_rows(board)
+            if self.hud.IsVisible:
+                self._refresh_hud()
+
     def _on_tick(self, sender, e):
+        try:
+            self._poll_board()
+        except Exception:
+            pass
         try:
             now = time.time()
             if self._working and self._status_label is not None:

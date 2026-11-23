@@ -34,6 +34,7 @@ weights of the generated line styles.
 Author: Tran Tien Thanh
 """
 
+import io
 import json
 import os
 import time
@@ -148,15 +149,16 @@ def _doc_key(doc):
 
 def _fallback_load():
     try:
-        with open(_fallback_path(), encoding='utf-8') as fh:
+        with io.open(_fallback_path(), encoding='utf-8') as fh:
             return json.load(fh)
     except (IOError, OSError, ValueError):
         return {}
 
 
 def _fallback_save(data):
-    with open(_fallback_path(), 'w', encoding='utf-8') as fh:
-        json.dump(data, fh, indent=1)
+    from core import jsonsafe               # ASCII JSON that IronPython can write too
+    with io.open(_fallback_path(), 'w', encoding='utf-8') as fh:
+        fh.write(jsonsafe.dumps(data, indent=1))
 
 
 def storage_note():
@@ -197,7 +199,8 @@ def get_link(view, fallback=None):
 def set_link(view, info):
     """Store `info` on `view` (call inside a transaction)."""
     global _ES_BROKEN
-    text = json.dumps(info)
+    from core import jsonsafe               # "Tài liệu" paths under IronPython
+    text = jsonsafe.dumps(info)
     if not _ES_BROKEN:
         try:
             _es_set(view, text)

@@ -43,6 +43,8 @@ python lite_guard/test_ribbon_memory.py
 python lite_guard/test_batchout_refs.py
 python lite_guard/test_batchout_pdf24.py
 python lite_guard/test_batchout_sheet_sets.py
+python lite_guard/test_batchout_selection.py
+python lite_guard/test_clone_drawing_import.py
 python lite_guard/test_mcp_cad_clients.py
 python lite_guard/test_addin_installer.py
 python lite_guard/test_routes_guard.py
@@ -52,11 +54,36 @@ python lite_guard/test_cursor_consent.py
 python lite_guard/test_open_timing.py
 python lite_guard/test_lite_user.py
 python lite_guard/test_pyrevit_revit_thread.py
+python lite_guard/test_shared_engine.py
 python lite_guard/test_pyrevit_patch_versions.py
 python lite_guard/test_data_hub.py
 python lite_guard/test_bridge_deploy.py
+python lite_guard/test_harness.py
+python lite_guard/test_harness_studio.py
+python lite_guard/test_conductor.py
+python lite_guard/test_harness_settings.py
+python lite_guard/test_harness_notifier.py
+python lite_guard/test_harness_client.py
 python lite_guard/test_mcp_config_safety.py
 python lite_guard/test_python_installer.py
+python lite_guard/audit_ipy_compat.py --quiet
+python lite_guard/test_audit_ipy_compat.py
+python lite_guard/test_compat_replace_file.py
+python lite_guard/test_tool_specs.py
+python lite_guard/test_bridge_contract.py
+python lite_guard/test_tool_cli.py
+python lite_guard/test_bridge_recipes.py
+python lite_guard/test_write_verify.py
+python lite_guard/test_doc_switch.py
+python lite_guard/test_sheet_export.py
+python lite_guard/test_batch_link.py
+python lite_guard/test_tools_standards_domain.py
+python lite_guard/test_tools_rebar_domain.py
+python lite_guard/test_tools_views_domain.py
+python lite_guard/test_tools_data_domain.py
+python lite_guard/test_tools_model_domain.py
+python lite_guard/test_tools_create_domain.py
+python lite_guard/test_tools_launch.py
 python dev/test_icons_t3space.py
 ```
 
@@ -86,7 +113,7 @@ python dev/test_icons_t3space.py
 
 5. **.NET Interface Namespaces:**
    - Classes implementing .NET interfaces (`ISelectionFilter`, `IExternalEventHandler`, `IFailuresPreprocessor`) must declare `__namespace__`.
-   - In `lib/`: static namespace `__namespace__ = "T3Lab.<UniqueName>"`.
+   - In `lib/`: `__namespace__ = clr_namespace('<Name>')` (`Snippets/_compat.py`, a per-load name). T3Lab and T3Lab Lite share one CPython engine and `claim_lib` re-imports the module, so a fixed name raises `Duplicate type name`. Only `core/server.py` (IronPython only) keeps a fixed one; `lite_guard/test_bridge_contract.py` checks.
    - In pushbutton `script.py`: dynamic namespace `__namespace__ = "T3Lab.<Name>_" + uuid.uuid4().hex[:8]`.
 
 6. **No Multiple Inheritance with CLR Classes:**
@@ -103,8 +130,14 @@ python dev/test_icons_t3space.py
    - pyRevit 6.5.5 calls `PythonEngine.Initialize()` without `BeginAllowThreads()` (verified 2026-10-04 in the pyRevit + pythonnet source), so Revit's main thread holds the GIL whenever no CPython code runs. A CPython thread only gets the GIL while a `#! python3` tool is executing — pythonnet drops it during each .NET call, e.g. a modal `ShowDialog`. Releasing it ourselves is not an option: pyRevit's `CPythonEngine.Start` touches Python objects outside `Py.GIL()`.
    - The T3Lab Assistant dock pane is the one CPython exception: `lib/GUI/AssistantPaneControl.py` runs a 20 ms `DispatcherTimer` "GIL pump" (`Thread.Sleep(0)`, a .NET call, so pythonnet releases the GIL) while the pane content is mounted. The pane itself is registered by `startup.py` through `lib/assistant_pane.py` (IronPython) because Revit only accepts `RegisterDockablePane` while it starts. Test: `python dev/test_assistant_pane.py`.
    - Anything else that must keep running after a tool returns (servers, listeners) runs in IronPython. The MCP HTTP server is hosted by `lib/core/mcp_ipy_host.py`; `MCPService.start_server()` / `stop_server()` route there from CPython, and `core.server.T3LabAIServer.start_server()` refuses to bind under CPython inside Revit. Test: `python dev/test_mcp_host_engine.py`.
+   - BIM Harness (`docs/harness.md`, ported from t3lab_dev 2026-11-23, not run in Revit): `t3lab_harness` is one task board for several AI agents on one model (lead plans, workers `next` / `report`, lead or the person reviews). `lib/core/harness_store.py` (SQLite) / `harness_agents.py` / `harness_studio.py` run in the bridge process only and the server never imports them; everything in Revit (HUD, MCP Control > Harness, `lib/harness_notifier.py` toast, `/harness`) reads `board.json`. The bridge names each app (`--agent`, `CLIENT_AGENTS`) and refuses a member's write outside its task before Revit; it grants nothing (no tiers / profiles / approval queue in Lite), launched agents only read. The server's `/mcp` slot is `lib/core/conductor.py` (fair queue, `revit_busy` after the harness's 45 s wait budget). Tests: `lite_guard/test_harness*.py`, `test_conductor.py`.
    - Same for the ribbon: every `.splitbutton` (e.g. `PDFMarkup.splitbutton` — Bluebeam Status · T3Lab PDF Markup) keeps its last-used button across Revit restarts through `lib/ribbon_memory.py`, installed by `startup.py` (IronPython): saved on `ApplicationClosing` to `%APPDATA%\T3LabAI\ribbon_state.json`, put back on the first `Idling` (startup scripts run before pyRevit 6.5.5 builds the ribbon). Test: `python lite_guard/test_ribbon_memory.py`.
 
 9. **Frozen ribbon icons — never touch (owner's request, 2026-10-09):**
    - The 3 cloud-link icons (`Autodesk Forma.urlbutton`, `Autodesk Health.urlbutton`, `Bluebeam Status.urlbutton` in `Support.panel/CloudLinks.stack`, Bluebeam inside `PDFMarkup.splitbutton` since 2026-10-12 — moved with its bytes unchanged) and the `T3LabAssistant.pushbutton` icon stay exactly as they are — no edit, redraw, restyle, new variant or deletion, including during a full icon redesign.
    - Enforced by `dev/audit_icons.py` against the sha256 lock in `dev/icons/frozen_icons.json` (P0 on any change); `dev/build_icons.py` skips them through `iconlib.EXEMPT_BUNDLES`. Only the owner can lift the lock.
+
+10. **A new AI tool = one `ToolSpec` in `lib/core/tools/<domain>.py`** (`docs/ai-tools.md`):
+   - It feeds the MCP registry, dispatch, `_WRITE_TOOLS`, confirmation (`is_destructive` -> `core/mcp_policy.py`), the read-only list, Assistant subsets, read-back and titles. Never hand-add the tool to those lists. Test: `python lite_guard/test_tool_specs.py`.
+   - Agents with a shell reach it through the bridge CLI (`bridge.py tools / help / call / verify`, `docs/cli.md`); a CLI call and every `t3lab_recipe` step take the MCP `tools/call` path (`_answer`), never a shortcut.
+   - The MCP server runs IronPython 2.7, so every module it can import must pass `python lite_guard/audit_ipy_compat.py --quiet`. Use `Snippets._compat.fold` / `replace_file`, `io.open` and `core.jsonsafe.dumps`; no f-strings.

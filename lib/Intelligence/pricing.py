@@ -3,8 +3,8 @@
 USD estimate of one model call from its token usage.
 
 Prices are Anthropic first-party list prices per million tokens
-(input, output, cache read, cache write) as of 2026-10 — checked against
-the Claude API docs at that date. They are keyed by MODEL FAMILY SUBSTRING
+(input, output, cache read, cache write) as of 2026-11 — checked against
+the Claude API pricing reference at that date. They are keyed by MODEL FAMILY SUBSTRING
 (the provider resolves model ids live from /v1/models, so there is no
 hardcoded id anywhere else to key on); the first matching row wins, most
 specific first. An unknown model, or a local one, estimates to None —
@@ -21,14 +21,19 @@ __author__ = "Tran Tien Thanh"
 __title__ = "Model Pricing"
 
 # (family substring, input, output, cache_read, cache_write) — USD per MTok.
-# Cache read ≈ 10% of input, cache write ≈ 125% of input (Anthropic rule).
+# Cache write = 125% of input (5-minute TTL). Cache read is 10% of input
+# except where a row says otherwise.
 PRICES = (
+    ("fable-5-2",   8.00, 40.00, 0.20, 10.00),   # cache read 0.025x
+    ("mythos-5-2",  8.00, 40.00, 0.20, 10.00),
+    ("fable-5-1",  10.00, 50.00, 0.25, 12.50),   # cache read 0.025x
+    ("mythos-5-1", 10.00, 50.00, 0.25, 12.50),
     ("fable-5",    10.00, 50.00, 1.00, 12.50),
     ("mythos-5",   10.00, 50.00, 1.00, 12.50),
-    ("opus-5-5",    4.00, 20.00, 0.20,  5.00),   # cache reads $0.20 (2026-11)
+    ("opus-5-5",    4.00, 20.00, 0.20,  5.00),   # cache read 0.05x
     ("opus-5",      5.00, 25.00, 0.50,  6.25),
     ("opus-4",      5.00, 25.00, 0.50,  6.25),   # 4.6 / 4.7 / 4.8 / 4.5
-    ("sonnet-5-5",  2.00, 10.00, 0.10,  2.50),   # cache reads $0.10 (2026-11)
+    ("sonnet-5-5",  2.00, 10.00, 0.10,  2.50),   # cache read 0.05x
     ("sonnet-5",    2.00, 10.00, 0.20,  2.50),
     ("sonnet-4",    3.00, 15.00, 0.30,  3.75),   # 4.6 / 4.5
     ("haiku-5-5",   0.10,  0.50, 0.01,  0.125),

@@ -72,7 +72,8 @@ def direct_export(batchout_mod, config, progress_cb=None, cancel_check=None):
 
     Args:
         batchout_mod : The loaded BatchOut script module (from _load_script).
-        config       : dict with format, filter, folder, combine.
+        config       : dict with format, filter, folder, combine, sheet_set
+                       (a saved Revit sheet set; filter then narrows it).
         progress_cb  : optional callable(message: str) for progress updates.
         cancel_check : optional callable returning True to stop before the next
                        export call. Existing output files are never removed.
@@ -97,6 +98,11 @@ def direct_export(batchout_mod, config, progress_cb=None, cancel_check=None):
 
         # Configure selections and format
         _apply_sheet_filter(window, filter_kw)
+        if config.get('sheet_set'):
+            problem = _apply_sheet_set(window, config['sheet_set'])
+            if problem:
+                _notify(progress_cb, problem)
+                return False, 0, problem
         _apply_format(window, fmt, combine)
 
         # Collect selected sheets
@@ -220,6 +226,10 @@ def _close_hidden_window(window):
 
 # ─── Extract export params from natural language ──────────────────────────────
 
+# "toàn bộ" means "all", not a set: xuất toàn bộ "G" still filters by prefix G.
+SHEET_SET = re.compile(r'(?:sheet\s*set|v/s\s*set|print\s*set|\bset|(?<!toàn )\bbộ)\s*'
+                        r'["“‘\']([^"”’\']+)["”’\']', re.IGNORECASE)
+
 def parse_export_params(raw_text):
     """Heuristically extract format and filter from a natural-language string.
 
@@ -236,6 +246,11 @@ def parse_export_params(raw_text):
             break
 
     # Detect sheet prefix filter
+    # Pattern 0: a quoted Revit sheet set name: set "A - Plans" / bộ “Kiến trúc”
+    m = SHEET_SET.search(raw_text)
+    if m:
+        return {'format': fmt, 'filter': '', 'sheet_set': m.group(1).strip()}
+
     # Pattern 1: "G sheet" / "G sheets" / "G-sheet"
     m = re.search(r'\b([A-Z])\s*[-–]?\s*(?:sheet|tờ|bản vẽ)', raw_text, re.IGNORECASE)
     if m:
@@ -286,6 +301,25 @@ def _apply_sheet_filter(window, filter_kw):
         window.update_selection_count()
     except Exception:
         pass
+
+
+def _apply_sheet_set(window, name):
+    """Keep only the selected sheets that are in Revit sheet set `name`; an error
+    text when the set does not exist."""
+    from Services import sheet_export
+    ids, _views = sheet_export.set_member_ids(window.doc, name)
+    if ids is None:
+        names = [s['name'] for s in sheet_export.sheet_sets(window.doc)]
+        return "No sheet set '{}' in this model. Sheet sets: {}.".format(
+            name, ', '.join(names) or 'none')
+    ids = set(ids)
+    for item in window.all_sheets:
+        try:
+            keep = sheet_export._eid(item.Sheet.Id) in ids
+        except Exception:
+            keep = False
+        item.IsSelected = bool(item.IsSelected and keep)
+    return None
 
 
 def _apply_format(window, fmt, combine=False):

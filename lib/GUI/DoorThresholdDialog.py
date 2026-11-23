@@ -6,7 +6,6 @@ import sys
 
 from pyrevit import revit, forms, script
 from GUI.WPF_Base import T3WPFWindow, to_items_source
-from Snippets._host import get_revit_version
 from Snippets._compat import eid_value, net_list
 from Snippets._units import project_length_unit
 
@@ -18,49 +17,21 @@ clr.AddReference('WindowsBase')
 clr.AddReference('System')
 
 from System.Windows import WindowState
-from System.Collections.Generic import List
 from Autodesk.Revit.DB import (
-    Transaction,
     FilteredElementCollector,
     BuiltInCategory,
     FloorType,
-    CurveLoop,
-    IFailuresPreprocessor,
-    FailureProcessingResult,
     BuiltInParameter,
-    Floor,
     ElementId,
-    XYZ,
-    Line,
-    HostObjectUtils,
-    ShellLayerType,
-    Wall,
 )
 from Autodesk.Revit.UI import TaskDialog
-from Snippets._compat import disposing
+# Revit side shared with the create_door_thresholds tool (core/tools/model.py).
+from Snippets.finish_floors import ThresholdGenerator
 
 XAML_FILE = os.path.join(os.path.dirname(__file__), 'Tools', 'DoorThreshold.xaml')
 logger = script.get_logger()
-
-MM_TO_FT = 1.0 / 304.8
-REVIT_VERSION = get_revit_version()
-
-
-import uuid
-# The pushbutton script importlib.reload()s this module on every click; a
-# fixed __namespace__ would define the same .NET type twice and raise
-# "Duplicate type name within an assembly" (rule S15).
-_NS_SUFFIX = uuid.uuid4().hex[:8]
-
-
-class ThresholdCreationWarningSwallower(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.DoorThreshold_" + _NS_SUFFIX
-
-    def PreprocessFailures(self, failuresAccessor):
-        failList = failuresAccessor.GetFailureMessages()
-        for failure in failList:
-            failuresAccessor.DeleteWarning(failure)
-        return FailureProcessingResult.Continue
+import Snippets.finish_floors as _finish_floors       # noqa: E402
+_finish_floors._log = logger      # per-room / per-door errors to the pyRevit output
 
 
 class DoorItem(object):
@@ -85,186 +56,6 @@ class DoorItem(object):
             self.Level = level.Name if (level and level.Name) else ""
         except Exception:
             self.Level = ""
-
-
-def _get_wall_thickness_at_point(wall, point):
-    """Measure the actual wall thickness at a given point by projecting it
-    onto the wall's exterior and interior side faces."""
-    try:
-        if not isinstance(wall, Wall):
-            return None
-
-        ext_refs = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Exterior)
-        int_refs = HostObjectUtils.GetSideFaces(wall, ShellLayerType.Interior)
-        if not ext_refs or not int_refs or ext_refs.Count == 0 or int_refs.Count == 0:
-            return None
-
-        ext_face = wall.GetGeometryObjectFromReference(ext_refs[0])
-        int_face = wall.GetGeometryObjectFromReference(int_refs[0])
-        if not ext_face or not int_face:
-            return None
-
-        ext_proj = ext_face.Project(point)
-        int_proj = int_face.Project(point)
-        if not ext_proj or not int_proj:
-            return None
-
-        thickness = ext_proj.XYZPoint.DistanceTo(int_proj.XYZPoint)
-        if thickness > 0.001:
-            return thickness
-    except Exception:
-        pass
-    return None
-
-
-def _get_door_width_ft(door):
-    """Get the door's actual width in feet, trying parameters first and
-    falling back to measuring the instance's bounding box along its HandOrientation axis."""
-    for param in (
-        lambda: door.get_Parameter(BuiltInParameter.DOOR_WIDTH),
-        lambda: door.Symbol.get_Parameter(BuiltInParameter.FAMILY_WIDTH_PARAM),
-        lambda: door.LookupParameter("Width"),
-        lambda: door.Symbol.LookupParameter("Width"),
-    ):
-        try:
-            p = param()
-            if p and p.AsDouble() > 0.001:
-                return p.AsDouble()
-        except Exception:
-            pass
-
-    try:
-        bbox = door.get_BoundingBox(None)
-        if bbox:
-            v = door.HandOrientation
-            corners = [
-                XYZ(bbox.Min.X, bbox.Min.Y, bbox.Min.Z),
-                XYZ(bbox.Max.X, bbox.Min.Y, bbox.Min.Z),
-                XYZ(bbox.Min.X, bbox.Max.Y, bbox.Min.Z),
-                XYZ(bbox.Max.X, bbox.Max.Y, bbox.Min.Z),
-            ]
-            projections = [c.DotProduct(v) for c in corners]
-            width = max(projections) - min(projections)
-            if width > 0.001:
-                return width
-    except Exception:
-        pass
-
-    return 900 * MM_TO_FT
-
-
-class ThresholdGenerator(object):
-    def __init__(self, doc, unit=None):
-        self.doc = doc
-        # Unit the error list is written in (the project's length unit).
-        self.unit = unit or project_length_unit(doc)
-
-    def generate_thresholds(self, doors, floor_type, offset_mm):
-        offset_ft = offset_mm * MM_TO_FT
-
-        created_count = 0
-        error_count = 0
-        new_floors = []
-        error_messages = []
-
-        with disposing(Transaction(self.doc, "T3Lab: Door Threshold")) as t:
-            t.Start()
-            failOpt = t.GetFailureHandlingOptions()
-            failOpt.SetFailuresPreprocessor(ThresholdCreationWarningSwallower())
-            t.SetFailureHandlingOptions(failOpt)
-
-            for door in doors:
-                mark_param = door.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)
-                door_label = "Door {}".format(mark_param.AsString() if (mark_param and mark_param.AsString()) else eid_value(door.Id))
-                try:
-                    level_id = door.LevelId
-                    level = self.doc.GetElement(level_id)
-                    if not level:
-                        error_count += 1
-                        error_messages.append("{}: no level found".format(door_label))
-                        continue
-                    z = level.Elevation
-
-                    w = _get_door_width_ft(door)
-
-                    loc = door.Location
-                    if not loc:
-                        error_count += 1
-                        error_messages.append("{}: no location point".format(door_label))
-                        continue
-
-                    p = XYZ(loc.Point.X, loc.Point.Y, z)
-
-                    wall = door.Host
-                    if wall:
-                        thickness = _get_wall_thickness_at_point(wall, p)
-                        if thickness is None:
-                            thickness = wall.Width
-                    else:
-                        thickness = 150 * MM_TO_FT
-
-                    v = door.HandOrientation
-                    u = door.FacingOrientation
-
-                    half_w = w / 2.0
-                    half_d = thickness / 2.0
-
-                    if half_w < 0.001 or half_d < 0.001:
-                        error_count += 1
-                        error_messages.append(
-                            "{}: invalid size (width {}, wall thickness {})".format(
-                                door_label, self.unit.show(w),
-                                self.unit.show(thickness)))
-                        continue
-
-                    p1 = p - v * half_w - u * half_d
-                    p2 = p + v * half_w - u * half_d
-                    p3 = p + v * half_w + u * half_d
-                    p4 = p - v * half_w + u * half_d
-
-                    c1 = Line.CreateBound(p1, p2)
-                    c2 = Line.CreateBound(p2, p3)
-                    c3 = Line.CreateBound(p3, p4)
-                    c4 = Line.CreateBound(p4, p1)
-
-                    loop = CurveLoop()
-                    loop.Append(c1)
-                    loop.Append(c2)
-                    loop.Append(c3)
-                    loop.Append(c4)
-
-                    new_floor = None
-
-                    if REVIT_VERSION >= 2022:
-                        profile = List[CurveLoop]()
-                        profile.Add(loop)
-                        new_floor = Floor.Create(self.doc, profile, floor_type.Id, level_id)
-                    else:
-                        from Autodesk.Revit.DB import CurveArray
-                        curve_array = CurveArray()
-                        curve_array.Append(c1)
-                        curve_array.Append(c2)
-                        curve_array.Append(c3)
-                        curve_array.Append(c4)
-                        new_floor = self.doc.Create.NewFloor(curve_array, floor_type, level, False)
-
-                    if new_floor:
-                        if abs(offset_ft) > 0.0001:
-                            param = new_floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)
-                            if param:
-                                param.Set(offset_ft)
-
-                        new_floors.append(new_floor)
-                        created_count += 1
-
-                except Exception as ex:
-                    logger.error("Error creating threshold for {}: {}".format(door_label, ex))
-                    error_messages.append("{}: {}".format(door_label, ex))
-                    error_count += 1
-
-            t.Commit()
-
-        return new_floors, created_count, error_count, error_messages
 
 
 class DoorThresholdWindow(T3WPFWindow):

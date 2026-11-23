@@ -1,5 +1,6 @@
 """Revit operations owned by ManaViews (no WPF dependencies)."""
 from pyrevit import DB
+from Snippets._compat import fold
 
 
 def _write(doc, label, action):
@@ -72,11 +73,11 @@ def rename_template(doc, template, new_name):
 def duplicate_views(doc, elements):
     """One transaction per element: rejected copies leave no orphan views."""
     succeeded = failed = 0
-    names = {v.Name.casefold() for v in DB.FilteredElementCollector(doc).OfClass(DB.View)}
+    names = {fold(v.Name) for v in DB.FilteredElementCollector(doc).OfClass(DB.View)}
     for element in elements:
         base = element.Name + " - Copy"
         name, index = base, 2
-        while name.casefold() in names:
+        while fold(name) in names:
             name = "{} {}".format(base, index)
             index += 1
         try:
@@ -87,7 +88,7 @@ def duplicate_views(doc, elements):
                 new_view = doc.GetElement(element.Duplicate(option))
                 new_view.Name = name
             _write(doc, "Duplicate view", duplicate)
-            names.add(name.casefold())
+            names.add(fold(name))
             succeeded += 1
         except Exception:
             failed += 1

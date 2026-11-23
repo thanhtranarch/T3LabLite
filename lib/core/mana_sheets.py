@@ -1,6 +1,7 @@
 """Revit operations owned by ManaSheets; callers supply staged fields only."""
 import uuid
 from pyrevit import DB
+from Snippets._compat import fold
 
 
 PARAMETERS = {
@@ -63,15 +64,15 @@ def validate_renumber(doc, pairs):
     targets = ["" if number is None else str(number).strip() for _, number in pairs]
     if any(not number for number in targets):
         raise ValueError("Sheet numbers cannot be empty")
-    if len({number.casefold() for number in targets}) != len(targets):
+    if len({fold(number) for number in targets}) != len(targets):
         raise ValueError("Preview contains duplicate sheet numbers")
     ids = {sheet.Id for sheet, _ in pairs}
     if len(ids) != len(pairs):
         raise ValueError("A sheet appears more than once")
-    others = {sheet.SheetNumber.casefold()
+    others = {fold(sheet.SheetNumber)
               for sheet in DB.FilteredElementCollector(doc).OfClass(DB.ViewSheet)
               if sheet.Id not in ids}
-    if any(number.casefold() in others for number in targets):
+    if any(fold(number) in others for number in targets):
         raise ValueError("A preview number belongs to an unselected sheet")
     return [(sheet, number) for (sheet, _), number in zip(pairs, targets)]
 

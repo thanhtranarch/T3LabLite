@@ -39,6 +39,7 @@ Part of T3Lab Extension.
 __author__ = "Tran Tien Thanh"
 __title__ = "Rebar Wizard"
 
+import io
 import json
 import math
 import os
@@ -50,6 +51,7 @@ from Snippets._compat import (
     eid_value,
     elem_name,
     make_eid,
+    replace_file,
     short_error,
     to_feet,
     to_mm,
@@ -690,7 +692,7 @@ def load_presets(path):
     old preset file never breaks the window.
     """
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with io.open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (IOError, OSError, ValueError):
         return {}
@@ -713,9 +715,10 @@ def save_presets(path, presets):
         folder = os.path.dirname(path)
         if folder and not os.path.isdir(folder):
             os.makedirs(folder)
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(presets, handle, indent=2, sort_keys=True, ensure_ascii=False)
-        os.replace(tmp, path)
+        with io.open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(u"%s" % json.dumps(presets, indent=2, sort_keys=True,
+                                            ensure_ascii=False))
+        replace_file(tmp, path)
         return None
     except (IOError, OSError, TypeError, ValueError) as exc:
         try:
@@ -1057,6 +1060,7 @@ def default_hook_name(hook_names):
 _HANDLERS = None
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 def _warning_swallower():
     """IFailuresPreprocessor that dismisses warnings and counts them (lazy, once)."""
     global _HANDLERS
@@ -1068,7 +1072,7 @@ def _warning_swallower():
     class SwallowRebarWarnings(IFailuresPreprocessor):
         # Static namespace is safe: lib/ modules are imported once per engine
         # session, and the class is built lazily so tests never touch .NET.
-        __namespace__ = "T3Lab.RebarWizard"
+        __namespace__ = clr_namespace('RebarWizard')
 
         def __init__(self):
             self.dismissed = 0
@@ -1096,7 +1100,7 @@ def host_filter():
                                   _bic("OST_StructuralFoundation")) if c is not None)
 
         class HostFilter(ISelectionFilter):
-            __namespace__ = "T3Lab.RebarWizard"
+            __namespace__ = clr_namespace('RebarWizard')
 
             def AllowElement(self, element):
                 return _category_int(element) in allowed

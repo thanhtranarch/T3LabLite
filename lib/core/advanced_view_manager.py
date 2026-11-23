@@ -991,10 +991,10 @@ def apply_excel_updates(doc, updates, all_view_items):
                             if success:
                                 custom_param_updates += 1
                         else:
-                            if param_name not in [e[0] for e in custom_param_errors]:
+                            if param_name not in [err[0] for err in custom_param_errors]:
                                 custom_param_errors.append((param_name, "Parameter not found"))
                     except Exception as e:
-                        if param_name not in [e[0] for e in custom_param_errors]:
+                        if param_name not in [err[0] for err in custom_param_errors]:
                             custom_param_errors.append((param_name, str(e)))
             
             # Update crop box
@@ -1211,7 +1211,7 @@ def read_xlsx(filepath):
         
         if text.startswith('\xef\xbb\xbf'):
             text = text[3:]
-        if text.startswith('\ufeff'):
+        if text.startswith(u'\ufeff'):
             text = text[1:]
         
         cleaned = []

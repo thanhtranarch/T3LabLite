@@ -22,7 +22,7 @@ pair the user rejected — not the intent everywhere, and not the skill
 everywhere. One bad answer is evidence about one route, and a feedback loop
 that over-generalizes does more damage than no loop at all.
 
-Pure Python, guarded imports, CPython-3 testable. Same ensure_ascii + io.open
+Pure Python, guarded imports, CPython-3 testable. Same core.jsonsafe + io.open
 write discipline as every other JSON writer here.
 
 Author: Tran Tien Thanh
@@ -34,6 +34,7 @@ __title__  = "Feedback"
 
 import io
 import json
+from core import jsonsafe
 import os
 import threading
 
@@ -87,9 +88,7 @@ def save(data):
     """Persist the store. Best-effort; never raises."""
     global _cache
     try:
-        payload = json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True)
-        if isinstance(payload, bytes):
-            payload = payload.decode('ascii')
+        payload = jsonsafe.dumps(data, indent=2, sort_keys=True)
         with io.open(_feedback_file(), 'w', encoding='utf-8') as f:
             f.write(payload)
         with _lock:

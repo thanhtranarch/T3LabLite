@@ -157,11 +157,17 @@ def parse_number(text, default, minimum=None, maximum=None):
     return value, True
 
 
+def _half_up(x):
+    """round() that agrees on both engines: CPython 3 rounds a .5 tie to even,
+    IronPython 2.7 away from zero (125 mm at a 50 mm step: 100 vs 150)."""
+    return math.floor(x + 0.5)
+
+
 def round_to(value, step):
     """Round to the nearest multiple of `step` (step <= 0 -> plain round)."""
     if not step or step <= 0:
-        return int(round(value))
-    return int(round(value / float(step)) * step)
+        return int(_half_up(value))
+    return int(_half_up(value / float(step)) * step)
 
 
 def seg_length(s):
@@ -846,7 +852,7 @@ def snap(value_ft, step_ft):
     whole mm, so a 1/2" step keeps a 16" column at exactly 16"."""
     if not step_ft or step_ft <= 0:
         return value_ft
-    return round(value_ft / step_ft) * step_ft
+    return _half_up(value_ft / step_ft) * step_ft
 
 
 def footprint_size(fp, step_ft):

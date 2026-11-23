@@ -86,6 +86,7 @@ def _save_settings(data):
         pass
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class _ActionHandler(IExternalEventHandler):
     """Chạy một callable trên thread API của Revit.
 
@@ -98,7 +99,7 @@ class _ActionHandler(IExternalEventHandler):
     cần khi class sống trong `script.py`, nơi click thứ hai sẽ định nghĩa lại.)
     """
 
-    __namespace__ = "T3Lab.ManaSelectActionHandler"
+    __namespace__ = clr_namespace('ManaSelectActionHandler')
 
     def __init__(self, owner=None):
         self._action = None

@@ -15,7 +15,8 @@ reach:
     tools/list filtering, tools/call blocking, run_batch validation
   - core/bridge.py: re-reading the token after a 401; both protocol eras
     (initialize / MCP 2026-07-28 server/discover + per-request _meta)
-    answered with Revit closed; cached resources/prompts lists
+    answered with Revit closed; cached resources/prompts lists; a delivered
+    tools/call is never re-sent to another Revit window
   - MCP 2026-07-28 on the server: version errors, header mismatch,
     resultType / serverInfo / cache hints, stateless requests
   - core/mcp_wiki.py resources and core/mcp_prompts.py prompts
@@ -570,10 +571,12 @@ class ToolCallTests(unittest.TestCase):
         self.s = _server()
         self.calls = []
         self.agents = []
+        self.harness = []
 
-        def fake_execute(name, arguments, confirm=None, agent=None):
+        def fake_execute(name, arguments, confirm=None, agent=None, harness=None):
             self.calls.append((name, arguments, confirm))
             self.agents.append(agent)
+            self.harness.append(harness)
             return {'error': 'boom'} if name == 'create_grid' else {'ok': name}
         self.s._execute_tool = fake_execute
         self.s._external_event = None
@@ -665,6 +668,16 @@ class ToolCallTests(unittest.TestCase):
         self._call('create_level')
         # no name on the call: "AI app", never a guessed app
         self.assertEqual(self.agents, ['codex-mcp-client', 'mcp-client'])
+
+    def test_harness_task_from_the_bridge_reaches_the_task(self):
+        # Agent Cursors name the step and give a chat of a client its own cursor.
+        self.s._handle_tool_call({'name': 'create_level', 'arguments': {}, '_meta': {
+            't3lab/agent': 'claude-desktop', 't3lab/task': 's1/a',
+            't3lab/task_title': 'Fix marks', 't3lab/member': 'claude-desktop/arch'}})
+        self.s._handle_tool_call({'name': 'create_level', 'arguments': {},
+                                  '_meta': {'t3lab/agent': 'codex'}})
+        self.assertEqual(self.harness,
+                         [('s1/a', 'Fix marks', 'claude-desktop/arch'), None])
 
     def test_confirm_can_be_turned_off(self):
         _set_settings(**{mp.CONFIRM_KEY: False})
@@ -779,6 +792,12 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(code, 400)
         self.assertEqual(body['error']['code'], -32700)
 
+    def test_bad_content_length_is_a_parse_error(self):
+        """int(Content-Length) ran outside the try: the handler raised instead."""
+        code, body = self._post(b'{}', headers={'Content-Length': 'abc'})
+        self.assertEqual(code, 400)
+        self.assertEqual(body['error']['code'], -32700)
+
     def test_batch_array_rejected(self):
         code, body = self._post([{'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}])
         self.assertEqual(code, 400)
@@ -794,13 +813,35 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(code, 403)
 
     def test_tools_list_does_not_wait_for_a_running_call(self):
-        # A slow tools/call holds the request lock; tools/list must still answer.
-        with srv_mod._MCP_REQUEST_LOCK:
+        # A slow tools/call holds Revit's slot; tools/list must still answer.
+        with srv_mod._CONDUCTOR.slot(srv_mod._conductor.Ticket()):
             t0 = time.time()
             code, body = self._post({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
             self.assertLess(time.time() - t0, 3)
         self.assertEqual(code, 200)
         self.assertGreater(len(body['result']['tools']), 50)
+
+    def test_a_call_that_cannot_start_in_time_never_runs(self):
+        # The harness stamps a wait budget (bridge t3lab/queue_wait_s): behind
+        # a slot that stays busy the call is refused, it never runs late.
+        call = {'jsonrpc': '2.0', 'id': 11, 'method': 'tools/call',
+                'params': {'name': mcp_wiki.TOOL_NAME, 'arguments': {},
+                           '_meta': {'t3lab/agent': 'codex', 't3lab/lane': 'task',
+                                     't3lab/queue_wait_s': 1}}}
+        with srv_mod._CONDUCTOR.slot(srv_mod._conductor.Ticket(agent='claude-desktop')):
+            code, body = self._post(call)
+        payload = json.loads(body['result']['content'][0]['text'])
+        self.assertEqual((code, payload['error_code'], payload['nothing_ran']),
+                         (200, 'revit_busy', True))
+        self.assertEqual(payload['running']['agent'], 'claude-desktop')
+        code, body = self._post(call)                   # free slot: it runs
+        self.assertNotIn('revit_busy', json.dumps(body))
+
+    def test_health_shows_the_queue(self):
+        req = urllib.request.Request('http://127.0.0.1:{}/health'.format(self.port))
+        with urllib.request.urlopen(req, timeout=5) as r:
+            queue = json.loads(r.read())['queue']
+        self.assertEqual((queue['busy'], queue['waiting']), (False, 0))
 
     def test_unknown_method(self):
         code, body = self._post({'jsonrpc': '2.0', 'id': 3, 'method': 'subscriptions/listen'})
@@ -876,7 +917,7 @@ class HttpTests(unittest.TestCase):
                          mcp_wiki.URI_PREFIX + '{page}')
 
     def test_wiki_and_prompts_do_not_wait_for_a_running_call(self):
-        with srv_mod._MCP_REQUEST_LOCK:
+        with srv_mod._CONDUCTOR.slot(srv_mod._conductor.Ticket()):
             t0 = time.time()
             for method in ('server/discover', 'resources/list', 'prompts/list'):
                 code, _body = self._post({'jsonrpc': '2.0', 'id': 10, 'method': method})
@@ -1014,6 +1055,147 @@ class BridgeProtocolTests(unittest.TestCase):
             'error': {'code': -32601, 'message': 'Method not found'}}
         res = bridge._handle(self._req('prompts/list', modern=False), self.current, 't')
         self.assertEqual(res['result'], {'prompts': []})
+
+
+class ServerArgumentTests(unittest.TestCase):
+    """Tool-level fixes from t3lab_dev: string array arguments, send_code errors."""
+
+    def test_as_list(self):
+        f = srv_mod.T3LabAIServer._as_list
+        self.assertEqual(f('Walls, Floors'), ['Walls', 'Floors'])     # not per letter
+        self.assertEqual(f('Walls'), ['Walls'])
+        self.assertEqual(f(['a', 'b']), ['a', 'b'])
+        self.assertEqual(f(('a',)), ['a'])
+        self.assertEqual(f(12), [12])
+        self.assertEqual((f(None), f('')), ([], []))
+
+    def test_string_arguments_go_through_as_list(self):
+        with open(os.path.join(LIB, 'core', 'server.py'), encoding='utf-8') as f:
+            src = f.read()
+        for raw in ("for extra in (arguments.get('categories') or [])",
+                    "fields = arguments.get('fields')\n",
+                    "group_by = arguments.get('group_by') or []",
+                    "fields = arguments.get('fields') or []"):
+            self.assertNotIn(raw, src)
+        self.assertIn("elements, _cat_err = self._bulk_targets(doc, arguments)", src)
+
+    def _send_code(self, code):
+        import types
+        db = types.ModuleType('Autodesk.Revit.DB')
+        for name in ('FilteredElementCollector', 'ViewSheet', 'BuiltInCategory', 'Level',
+                     'ElementId', 'Transaction', 'ElementLevelFilter'):
+            setattr(db, name, None)
+        app = types.SimpleNamespace(VersionNumber='2025')
+        doc = types.SimpleNamespace(Application=app, Title='M', PathName='')
+        pyrevit = types.ModuleType('pyrevit')
+        pyrevit.revit = types.SimpleNamespace(doc=doc, uidoc=None)
+        names = ('Autodesk', 'Autodesk.Revit', 'Autodesk.Revit.DB', 'pyrevit')
+        saved = dict((n, sys.modules.get(n)) for n in names)
+        autodesk, revit = types.ModuleType('Autodesk'), types.ModuleType('Autodesk.Revit')
+        autodesk.Revit, revit.DB = revit, db
+        sys.modules.update({'Autodesk': autodesk, 'Autodesk.Revit': revit,
+                            'Autodesk.Revit.DB': db, 'pyrevit': pyrevit})
+        try:
+            return _server()._execute_tool_in_context('send_code_to_revit', {'code': code})
+        finally:
+            for n, v in saved.items():
+                if v is None:
+                    sys.modules.pop(n, None)
+                else:
+                    sys.modules[n] = v
+
+    def test_manage_material_is_read_only(self):
+        """Only list / get_element_materials: the Assistant's edit gate must not ask."""
+        tool = _server()._tools['manage_material']
+        self.assertEqual(tool['inputSchema']['properties']['operation']['enum'],
+                         ['list', 'get_element_materials'])
+        self.assertIn('manage_material', READ_ONLY)
+
+    def test_send_code_helpers_in_scope(self):
+        res = self._send_code('result = (revit_version, eid_value is not None, '
+                              'make_eid is not None, elem_name is not None)')
+        self.assertEqual(res, {'success': True, 'result': '(2025, True, True, True)'})
+
+    def test_send_code_error_is_short_and_points_at_the_line(self):
+        res = self._send_code('print("before")\nx = None\nx.Name')
+        self.assertFalse(res['success'])
+        self.assertEqual(res['line'], 3)
+        self.assertEqual(res['source'], 'x.Name')
+        self.assertEqual(res['category'], 'none_result')
+        self.assertEqual(res['printed_before_error'], 'before')
+        self.assertNotIn('Traceback', res['error'])
+
+    def test_send_code_sys_exit_ends_the_script_only(self):
+        res = self._send_code('result = 1\nimport sys\nsys.exit()')
+        self.assertEqual(res, {'success': True, 'result': '1'})
+
+
+class BridgeFailoverTests(unittest.TestCase):
+    """A tools/call that was delivered (timeout / reset) is never re-sent to
+    another Revit window: a write would run on another model (dev 1590845)."""
+
+    def setUp(self):
+        self.saved = (bridge._post_mcp, bridge._alive_ports, bridge._port_alive,
+                      bridge._ensure_alive_target)
+        self.sent = []
+
+        def send(port, request, token, timeout=None):
+            self.sent.append(port)
+            if port == 1:
+                raise urllib.error.URLError(TimeoutError('timed out'))
+            return {'jsonrpc': '2.0', 'id': 1, 'result': {}}
+        bridge._post_mcp = send
+        bridge._alive_ports = lambda *a, **k: [1, 2]
+        bridge._port_alive = lambda *a, **k: False
+        bridge._ensure_alive_target = lambda current: None
+
+    def tearDown(self):
+        (bridge._post_mcp, bridge._alive_ports, bridge._port_alive,
+         bridge._ensure_alive_target) = self.saved
+
+    def test_delivered_write_is_not_resent(self):
+        current = {'port': 1}
+        with self.assertRaises(Exception):
+            bridge._forward({'method': 'tools/call', 'params': {'name': 'delete_element'}},
+                            current, '')
+        self.assertEqual(self.sent, [1])
+        self.assertEqual(current['port'], 1)
+
+    def test_refused_call_still_fails_over(self):
+        def refuse_1(port, request, token, timeout=None):
+            self.sent.append(port)
+            if port == 1:
+                raise ConnectionRefusedError()
+            return {'jsonrpc': '2.0', 'id': 1, 'result': {}}
+        bridge._post_mcp = refuse_1
+        current = {'port': 1}
+        bridge._forward({'method': 'tools/call', 'params': {'name': 'x'}}, current, '')
+        self.assertEqual((self.sent, current['port']), ([1, 2], 2))
+
+    def test_read_of_a_dead_port_still_fails_over(self):
+        bridge._forward({'method': 'tools/list'}, {'port': 1}, '')
+        self.assertEqual(self.sent, [1, 2])
+
+    def test_revit_down_is_retryable(self):
+        payload = json.loads(bridge._revit_down_response(1)['result']['content'][0]['text'])
+        self.assertEqual((payload['error_code'], payload['retryable']),
+                         ('revit_unavailable', True))
+
+    def test_instances_mark_a_busy_window(self):
+        saved = (bridge._fetch_documents, bridge._health_info)
+        try:
+            bridge._fetch_documents = lambda port, token: (
+                None if port == 2 else [{'title': 'A', 'path': 'a', 'is_active': True}])
+            bridge._health_info = lambda port, timeout=None: {'pid': 10 + port}
+            res = bridge._handle_instances({'id': 1}, {'port': 1}, '')
+        finally:
+            bridge._fetch_documents, bridge._health_info = saved
+        inst = json.loads(res['result']['content'][0]['text'])['instances']
+        self.assertEqual([i['pid'] for i in inst], [11, 12])
+        self.assertEqual(inst[0]['active_document'], 'A')
+        self.assertNotIn('busy', inst[0])
+        self.assertTrue(inst[1]['busy'])
+        self.assertEqual(inst[1]['documents'], [])
 
 
 class BridgeOverHttpTests(unittest.TestCase):

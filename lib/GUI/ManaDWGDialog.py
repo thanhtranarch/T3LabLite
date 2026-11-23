@@ -6,7 +6,6 @@ import sys
 
 from pyrevit import revit, forms, script
 from GUI.WPF_Base import T3WPFWindow, to_items_source
-from Snippets._compat import eid_value
 
 try:
     from GUI import RevitTheme as _theme
@@ -21,107 +20,19 @@ clr.AddReference('System')
 
 from System.Windows import WindowState, LogicalTreeHelper
 from System.Windows.Media import VisualTreeHelper
-from Autodesk.Revit.DB import (
-    FilteredElementCollector,
-    ImportInstance,
-    Transaction,
-    ElementId,
-    View,
-)
+from Autodesk.Revit.DB import Transaction
+
+from Snippets import _cad_imports
+from Snippets._cad_imports import (DWGItem, collect_dwg_items, delete_cad_items,
+                                   resolve_dwg_view)
 
 XAML_FILE = os.path.join(os.path.dirname(__file__), 'Tools', 'DWGManagement.xaml')
 logger = script.get_logger()
+_cad_imports.logger = logger     # warnings to the pyRevit output, as before
 
 FILTER_ALL     = "All"
 FILTER_IMPORTS = "Imports Only"
 FILTER_LINKS   = "Links Only"
-
-
-class DWGItem(object):
-    """View-model for one CAD import or CAD link instance."""
-    def __init__(self, instance, link_type, is_link, name, view_names, file_path, owner_view_id=None):
-        self.Instance   = instance
-        self.LinkType   = link_type
-        self.IsLink     = is_link
-        self.DWGType    = "Link" if is_link else "Import"
-        self.Name       = name
-        self.ViewNames  = view_names
-        self.OwnerViewId = owner_view_id
-        self.ViewCount  = 1
-        self.FilePath   = file_path
-        self.IsSelected = False
-
-
-def collect_dwg_items(document):
-    """Return a list of DWGItem for all ImportInstance elements in the document."""
-    items = []
-    if not document:
-        return items
-    try:
-        instances = FilteredElementCollector(document)\
-            .OfClass(ImportInstance)\
-            .ToElements()
-    except Exception as ex:
-        logger.warning("Could not collect ImportInstances: {}".format(ex))
-        return items
-
-    for inst in instances:
-        try:
-            is_link   = inst.IsLinked
-            type_id   = inst.GetTypeId()
-            link_type = document.GetElement(type_id) if type_id != ElementId.InvalidElementId else None
-
-            if link_type is not None:
-                try:
-                    name = link_type.Name
-                except Exception:
-                    name = "Unknown"
-            else:
-                try:
-                    name = inst.Name
-                except Exception:
-                    name = "Unknown"
-
-            file_path = ""
-            if is_link and link_type is not None:
-                try:
-                    ext_ref = link_type.GetExternalFileReference()
-                    if ext_ref is not None:
-                        file_path = str(ext_ref.GetAbsolutePath())
-                except Exception:
-                    pass
-
-            owner_view_id = None
-            try:
-                owner_view_id = inst.OwnerViewId
-                if owner_view_id == ElementId.InvalidElementId:
-                    view_names = "All Views (3D)"
-                else:
-                    view_elem  = document.GetElement(owner_view_id)
-                    view_names = view_elem.Name if view_elem is not None else "Unknown View"
-            except Exception:
-                view_names = "Unknown View"
-
-            items.append(DWGItem(inst, link_type, is_link, name, view_names, file_path, owner_view_id))
-
-        except Exception as item_ex:
-            logger.warning("Skipped one ImportInstance: {}".format(item_ex))
-
-    return items
-
-
-def resolve_dwg_view(document, view_id):
-    """Resolve only the stored owner view, never a possibly ambiguous view name."""
-    if document is None or not document.IsValidObject:
-        raise ValueError("The Revit document is no longer available.")
-    if view_id is None or view_id == ElementId.InvalidElementId:
-        raise ValueError("This CAD item has no specific owner view (All Views / 3D).")
-    view = document.GetElement(view_id)
-    if view is None or not isinstance(view, View) or not view.IsValidObject:
-        raise ValueError("The owner view no longer exists. Refresh the CAD list.")
-    if view.IsTemplate:
-        raise ValueError("View templates cannot be opened.")
-    return view
 
 
 def request_dwg_view(document, view_id):
@@ -357,10 +268,13 @@ class DWGManagementWindow(T3WPFWindow):
         if count > 10:
             names += "\n  ... and {} more".format(count - 10)
 
+        pinned = sum(1 for i in selected_items if i.Instance is not None and i.Instance.Pinned)
+        pinned_note = "{} pinned item(s) will be unpinned and deleted.\n\n".format(pinned) if pinned else ""
+
         confirmed = forms.alert(
-            "Delete {} CAD item(s)?\n\n{}\n\n"
+            "Delete {} CAD item(s)?\n\n{}\n\n{}"
             "For CAD Links, the link type will also be removed if no other views reference it.\n\n"
-            "This action cannot be undone.".format(count, names),
+            "This action cannot be undone.".format(count, names, pinned_note),
             title="Confirm Delete",
             yes=True,
             cancel=True
@@ -369,38 +283,29 @@ class DWGManagementWindow(T3WPFWindow):
         if not confirmed:
             return
 
-        instance_ids  = list(set(i.Instance.Id for i in selected_items if i.Instance is not None))
-        link_type_ids = list(set(i.LinkType.Id for i in selected_items if i.IsLink and i.LinkType is not None))
-
-        t = Transaction(self._doc, "T3Lab: Delete CAD Items")
-        t.Start()
         try:
-            for eid in instance_ids:
-                try:
-                    self._doc.Delete(eid)
-                except Exception as del_ex:
-                    logger.warning("Could not delete element {}: {}".format(eid_value(eid), del_ex))
-
-            remaining = list(FilteredElementCollector(self._doc).OfClass(ImportInstance).ToElements())
-            for type_id in link_type_ids:
-                still_used = any(
-                    eid_value(inst.GetTypeId()) == eid_value(type_id)
-                    for inst in remaining
-                )
-                if not still_used:
-                    try:
-                        self._doc.Delete(type_id)
-                    except Exception:
-                        pass
-
-            t.Commit()
-
+            deleted, failures = delete_cad_items(self._doc, selected_items)
         except Exception as ex:
-            t.RollBack()
-            forms.alert("Delete operation failed:\n{}".format(ex), title="Delete Error")
+            forms.alert(
+                "Nothing was deleted: {}\n\n"
+                "Check that no other user has these items borrowed, then try again.".format(ex),
+                title="Delete Error"
+            )
             return
 
         self._load_data()
+        self.StatusText.Text = "Deleted {} of {} CAD item(s)   |   {}".format(deleted, count, self.StatusText.Text)
+
+        if failures:
+            lines = "\n".join("  - {}: {}".format(name, reason) for name, reason in failures[:10])
+            if len(failures) > 10:
+                lines += "\n  ... and {} more".format(len(failures) - 10)
+            forms.alert(
+                "Deleted {} of {} CAD item(s). {} could not be deleted and stay in the model:\n\n{}\n\n"
+                "Check that no other user has them borrowed, then try again.".format(
+                    deleted, count, len(failures), lines),
+                title="Delete"
+            )
 
     def minimize_button_clicked(self, sender, e):
         self.WindowState = WindowState.Minimized

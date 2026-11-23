@@ -31,7 +31,7 @@ import re
 import threading
 import time
 
-from core import jsonsafe
+from core import jsonsafe, tool_cli
 from Intelligence.llm_provider import CancelToken
 from Intelligence.tool_schema import (LAUNCHER_TOOL_NAME, MEMORY_TOOL_NAME,
                                       PAST_CHATS_TOOL_NAME, RECALL_TOOL_NAME,
@@ -194,37 +194,22 @@ def _param_hint(tools, name):
     """Compact 'expected parameters' line for `name`, or u''.
 
     Reads Anthropic (`input_schema`) and OpenAI/Ollama (`function.parameters`)
-    shapes.
+    shapes (core/tool_cli.schema_of).
     """
-    schema = None
-    for t in tools or []:
-        if not isinstance(t, dict):
-            continue
-        if t.get("name") == name and isinstance(t.get("input_schema"), dict):
-            schema = t["input_schema"]
-            break
-        fn = t.get("function")
-        if isinstance(fn, dict) and fn.get("name") == name \
-                and isinstance(fn.get("parameters"), dict):
-            schema = fn["parameters"]
-            break
-    if not isinstance(schema, dict):
-        return u""
-    props = schema.get("properties") or {}
-    if not isinstance(props, dict) or not props:
-        return u""
-    required = set(schema.get("required") or [])
-    parts = []
-    for pname in list(props.keys())[:12]:
-        pspec = props[pname] if isinstance(props[pname], dict) else {}
-        bits = [u"{}".format(pspec.get("type") or u"any")]
-        if pspec.get("enum"):
-            vals = u"|".join(u"{}".format(v) for v in list(pspec["enum"])[:8])
-            bits.append(u"enum: " + vals)
-        parts.append(u"{} ({}, {})".format(
-            pname, u"required" if pname in required else u"optional",
-            u", ".join(bits)))
-    return u"Expected parameters for `{}`: {}".format(name, u"; ".join(parts))
+    schema = tool_cli.schema_of(tools, name)
+    line = tool_cli.params_line(schema, limit=12) if schema else u""
+    return u"Expected parameters for `{}`: {}".format(name, line) if line else u""
+
+
+def _arg_refusal(tools, name, args):
+    """Missing required / near-miss argument names, refused before the call
+    crosses into Revit (same contract as the MCP bridge: core/tool_cli)."""
+    schema = tool_cli.schema_of(tools, name)
+    problems = tool_cli.arg_problems(schema, args) if schema else []
+    if not problems:
+        return None
+    return {"error": tool_cli.problems_text(name, problems), "nothing_ran": True,
+            "expected_parameters": _param_hint(tools, name)}
 
 
 # ─── Phantom tool calls ────────────────────────────────────────────────────────
@@ -812,6 +797,8 @@ class AgentLoop(object):
                 break
             if _call_key(name, tc.get("args") or {}) in done:
                 break
+            if _arg_refusal(self._tools, name, tc.get("args") or {}):
+                break
             idxs.append(i)
         return idxs if len(idxs) > 1 else []
 
@@ -1098,6 +1085,12 @@ class AgentLoop(object):
                                  u"final answer.".format(name)})
                     continue
 
+                # Bad arguments never reach Revit: no crossing, no tool card.
+                refusal = _arg_refusal(self._tools, name, args)
+                if refusal:
+                    results.append(refusal)
+                    continue
+
                 self._emit("on_tool_start", name, args, iteration)
                 t0 = time.time()
                 if _idx in prefetched:
@@ -1295,11 +1288,23 @@ def build_agent_system_prompt(revit_context=u"", local=False, lang="auto"):
     must match what the UI renders.
     """
     language = {'vi': _LANG_VI, 'en': _LANG_EN}.get(lang, _LANG_AUTO)
-    prompt = _AGENT_PROMPT.format(language=language)
+    prompt = _AGENT_PROMPT.format(language=language) + _spec_tools_block()
     if local:
         prompt += u"\n" + _LOCAL_GENERAL_FEWSHOT
         prompt += teacher_exemplar_block()
     return prompt
+
+
+def _spec_tools_block():
+    """Operation tools declared in core/tools/<domain>.py (same every turn)."""
+    try:
+        from core import tool_specs
+        lines = tool_specs.prompt_lines()
+    except Exception:
+        return u""
+    if not lines:
+        return u""
+    return u"\n\nT3Lab domain tools (operation values):\n" + u"\n".join(lines)
 
 
 # ─── Portable teacher exemplars (few-shot distilled from teaching) ───────────────

@@ -167,6 +167,7 @@ def _install_fakes():
 
     compat = types.ModuleType('Snippets._compat')
     compat.disposing = _disposing
+    compat.fold = lambda text: text.casefold()
     snippets = types.ModuleType('Snippets')
     snippets._compat = compat
     snippets.__path__ = []

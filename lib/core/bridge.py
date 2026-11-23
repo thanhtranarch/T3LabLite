@@ -56,11 +56,21 @@ on top of the in-Revit server's manifest):
                              in it (the by-document form delegates to the
                              cross-instance switch_active_document handling,
                              so the target window is activated too).
+  - t3lab_harness         -> the BIM Harness task board shared by several AI
+                             apps (docs/harness.md); `bridge.py harness ...` is
+                             its CLI and Harness Studio.
+  - t3lab_recipe          -> Tool Hub team recipes; every step is one tools/call.
+
+CLI for agents with a shell (docs/cli.md): `bridge.py tools | help | call |
+instances | verify | skill`. A CLI call takes the same path as an MCP
+tools/call (_answer).
 """
 
 import sys
 import os
 import json
+import re
+import time
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -71,7 +81,7 @@ from concurrent.futures import ThreadPoolExecutor
 # and Revit would look "not reachable". Never use a proxy for it.
 _LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-BRIDGE_VERSION = '2.7.0'
+BRIDGE_VERSION = '2.8.0'
 
 PORT_MIN, PORT_MAX = 48884, 48894
 PROBE_TIMEOUT = 1.0    # /health probe per port (run in parallel)
@@ -172,6 +182,9 @@ HUB_TOOL, HUB_PUBLISH_TOOL = 't3lab_hub', 'hub_publish'     # docs/data-hub.md
 # Tools implemented by the bridge itself (multi-instance control lives here —
 # a server inside one Revit process cannot see the other processes). Injected
 # into every tools/list response on top of the server manifest; never cached.
+VERIFY_TOOL = 't3lab_verify'      # exported files on this computer (core/tool_cli.py)
+VERIFY_MAX_FILES = 2000
+
 BRIDGE_TOOLS = [
     {
         'name': 'list_revit_instances',
@@ -223,6 +236,17 @@ BRIDGE_TOOLS = [
          'model': {'type': 'string', 'description': 'Document title, or part of it.'},
          'options': {'type': 'object', 'description': 'Options of the action.'}},
          'required': ['action']}},
+    {'name': VERIFY_TOOL,
+     'description': ('Before saying an export is done: check the files on this computer exist, '
+                     'are not empty and have the right header (PDF, DWG, IFC, RVT, XLSX, '
+                     'images). paths = files, folders or patterns; expect = the count the '
+                     'export reported.'),
+     'inputSchema': {'type': 'object', 'properties': {
+         'paths': {'type': 'array', 'items': {'type': 'string'}},
+         'ext': {'type': 'string', 'description': 'e.g. "pdf,dwg"'},
+         'since_minutes': {'type': 'number'},
+         'expect': {'type': 'integer'}},
+         'required': ['paths']}},
 ]
 
 
@@ -364,6 +388,19 @@ def _port_alive(port, timeout=PROBE_TIMEOUT):
         return False
 
 
+def _health_info(port, timeout=PROBE_TIMEOUT):
+    """GET /health as a dict; None when no T3Lab server answers."""
+    try:
+        req = urllib.request.Request('http://127.0.0.1:{}/health'.format(port))
+        with _LOCAL.open(req, timeout=timeout) as r:
+            if r.status != 200:
+                return None
+            info = json.loads(r.read().decode('utf-8'))
+            return info if isinstance(info, dict) else {}
+    except Exception:
+        return None
+
+
 def _alive_ports():
     """Probe the whole port range in parallel; ~PROBE_TIMEOUT total."""
     ports = range(PORT_MIN, PORT_MAX + 1)
@@ -377,6 +414,24 @@ def _tool_payload(response):
         return json.loads(response['result']['content'][0]['text'])
     except Exception:
         return None
+
+
+def _call_failure(response, payload):
+    """Error text of a tools/call answer ('' when it succeeded): a JSON-RPC
+    error, isError, or a payload with `error`."""
+    if not isinstance(response, dict):
+        return 'no answer'
+    if response.get('error'):
+        return '{}'.format((response['error'] or {}).get('message') or 'error')
+    if isinstance(payload, dict) and payload.get('error'):
+        return '{}'.format(payload['error'])
+    result = response.get('result')
+    if isinstance(result, dict) and result.get('isError'):
+        try:
+            return '{}'.format(result['content'][0]['text'])[:500] or 'tool error'
+        except Exception:
+            return 'tool error'
+    return ''
 
 
 def _tool_response(request_id, payload):
@@ -502,9 +557,9 @@ def _cap_result(response):
 BRIDGE_AGENT = 't3lab-bridge'      # = core.agent_cursors.BRIDGE_AGENT
 
 
-def _documents_on(port, token):
-    """list_open_documents on one instance; [] on any failure (including
-    instances still running an older build without the tool)."""
+def _fetch_documents(port, token):
+    """list_open_documents on one instance; None when it did not answer
+    (busy, closed, or an older build without the tool)."""
     try:
         resp = _post_mcp(port, {
             'jsonrpc': '2.0', 'id': 'bridge-list',
@@ -514,17 +569,24 @@ def _documents_on(port, token):
             'params': {'name': 'list_open_documents', 'arguments': {},
                        '_meta': {'t3lab/agent': BRIDGE_AGENT}},
         }, token, timeout=10)
-        return (_tool_payload(resp) or {}).get('documents', []) or []
+        docs = (_tool_payload(resp) or {}).get('documents')
+        return docs if isinstance(docs, list) else None
     except Exception:
-        return []
+        return None
 
 
-def _documents_map(ports, token):
+def _documents_on(port, token):
+    """list_open_documents on one instance; [] on any failure."""
+    return _fetch_documents(port, token) or []
+
+
+def _documents_map(ports, token, raw=False):
     """{port: [docs]} across instances, probed in parallel so one busy
-    Revit (single-threaded server mid-tool) can't stall the whole fan-out."""
+    Revit (single-threaded server mid-tool) can't stall the whole fan-out.
+    raw=True keeps None for an instance that did not answer."""
+    fetch = _fetch_documents if raw else _documents_on
     with ThreadPoolExecutor(max_workers=max(len(ports), 1)) as pool:
-        return dict(zip(ports, pool.map(
-            lambda p: _documents_on(p, token), ports)))
+        return dict(zip(ports, pool.map(lambda p: fetch(p, token), ports)))
 
 
 def _match_tier(doc, query):
@@ -577,18 +639,24 @@ def _ensure_alive_target(current):
 def _forward(request, current, token, timeout=CALL_TIMEOUT):
     """Forward to the current instance; fail over to another alive instance
     when the current one is gone — connection refused (that Revit was
-    closed) or no longer answering /health (hung socket, foreign server on
-    the port). Errors from a still-healthy instance (HTTP 500, a long tool
-    call timing out) are NOT retried elsewhere — re-running the call on a
-    different instance would target the wrong document."""
+    closed), or, for anything but a tools/call, no longer answering /health
+    (hung socket, foreign server on the port). Errors from a still-healthy
+    instance (HTTP 500, a long tool call timing out) are NOT retried
+    elsewhere — re-running the call on a different instance would target the
+    wrong document."""
     _ensure_alive_target(current)
+    first = current['port']
     try:
-        return _post_mcp(current['port'], request, token, timeout)
+        return _post_mcp(first, request, token, timeout)
     except Exception as e:
-        if not _is_conn_refused(e) and _port_alive(current['port']):
-            raise
+        if not _is_conn_refused(e):
+            # Delivered (reset / timeout after sending): a tools/call may have
+            # run, so re-sending it to another Revit would run it on another
+            # document (t3lab_dev 1590845). Only reads of a dead port fail over.
+            if request.get('method') == 'tools/call' or _port_alive(first):
+                raise
         for port in _alive_ports():
-            if port != current['port']:
+            if port != first:
                 resp = _post_mcp(port, request, token, timeout)
                 current['port'] = port
                 return resp
@@ -936,7 +1004,13 @@ def _handle_tools_list(request, current, token):
     except Exception:
         tools = _load_cached_tools()
     return {'jsonrpc': '2.0', 'id': request.get('id'),
-            'result': {'tools': _annotate_large_results(tools + BRIDGE_TOOLS)}}
+            'result': {'tools': _annotate_large_results(_with_bridge_tools(tools))}}
+
+
+def _with_bridge_tools(tools):
+    """Server tools + the bridge's own, as tools/list shows them."""
+    return (list(tools) + BRIDGE_TOOLS + ([HARNESS_TOOL_DEF] if _hb is not None else [])
+            + ([RECIPE_TOOL_DEF] if _recipe_rows() else []))
 
 
 def _annotate_large_results(tools):
@@ -963,18 +1037,26 @@ def _handle_instances(request, current, token):
     if not ports:
         return _revit_down_response(rid)
 
-    docs_map = _documents_map(ports, token)
+    docs_map = _documents_map(ports, token, raw=True)
+    with ThreadPoolExecutor(max_workers=len(ports)) as pool:
+        health = dict(zip(ports, pool.map(_health_info, ports)))
     instances = []
     for port in ports:
-        docs = docs_map.get(port, [])
-        instances.append({
+        docs = docs_map.get(port)
+        entry = {
             'port': port,
+            'pid': (health.get(port) or {}).get('pid'),
             'is_current': port == current['port'],
             'active_document': next(
-                (d.get('title') for d in docs if d.get('is_active')), None),
+                (d.get('title') for d in docs or [] if d.get('is_active')), None),
             'documents': [{'title': d.get('title'), 'path': d.get('path')}
-                          for d in docs],
-        })
+                          for d in docs or []],
+        }
+        if docs is None:
+            entry['busy'] = True
+            entry['note'] = ('Did not list its documents in time — most likely busy '
+                             'running a tool. Retry shortly.')
+        instances.append(entry)
 
     payload = {
         'instances': instances,
@@ -1052,6 +1134,7 @@ def _handle_switch_instance(request, current, token):
 
 def _revit_down_response(request_id):
     return _tool_response(request_id, {
+        'error_code': 'revit_unavailable', 'retryable': True,
         'error': 'Revit is not reachable — no T3Lab MCP server found on '
                  'ports {}-{}.'.format(PORT_MIN, PORT_MAX),
         'hint': ('Start Revit and make sure the T3Lab server is running '
@@ -1125,6 +1208,162 @@ def _load_hub_store():
 
 
 _hs = _load_hub_store()
+
+
+def _load_tool_cli():
+    """core/tool_cli.py: in-extension import, else the copy deployed next to
+    the bridge (lib/bridge_deploy.py). None = the two features below are off."""
+    try:
+        from core import tool_cli
+        return tool_cli
+    except ImportError:
+        pass
+    try:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tool_cli.py')
+        spec = importlib.util.spec_from_file_location('tool_cli', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+_tc = _load_tool_cli()
+
+
+def _arg_error(name, args):
+    """Missing required arguments, or a name one typo away from a real one, of
+    a Revit tool (cached schema): refused here, so nothing waits on Revit and
+    the answer names the right parameter. None when the call may go on."""
+    if _tc is None:
+        return None
+    schema = _tc.schema_of(_load_cached_tools(), name)
+    problems = _tc.arg_problems(schema, args) if schema else []
+    if not problems:
+        return None
+    return {'error': _tc.problems_text(name, problems), 'error_code': 'bad_arguments',
+            'nothing_ran': True, 'expected_parameters': _tc.params_line(schema)}
+
+
+def _verify_files(args):
+    """t3lab_verify: tool_cli.verify; lists only the files that failed."""
+    if _tc is None:
+        return {'error': 'tool_cli.py is not next to the bridge. Open MCP Control in '
+                         'Revit once: it redeploys the bridge files.',
+                'error_code': 'verify_unavailable'}
+    paths = args.get('paths')
+    paths = [paths] if isinstance(paths, str) else paths
+    if not paths or not all(isinstance(p, str) and p.strip() for p in paths):
+        return {'error': 'paths must be a list of files, folders or patterns.',
+                'error_code': 'bad_arguments'}
+    try:
+        return _tc.verify(paths, exts=args.get('ext') or None, expect=args.get('expect'),
+                          since_min=args.get('since_minutes'), max_files=VERIFY_MAX_FILES)
+    except (TypeError, ValueError) as ex:
+        return {'error': 'Bad option: {}'.format(ex), 'error_code': 'bad_arguments'}
+
+
+# ─── Tool Hub recipes (Intelligence/toolhub/recipes.py, same file as t3lab_dev) ───
+RECIPE_TOOL = 't3lab_recipe'
+# Listed only while the catalog holds a published recipe: Lite lists every bridge
+# tool (no toolsets here), so an empty catalog costs no tokens. Callable either way.
+RECIPE_TOOL_DEF = {
+    'name': RECIPE_TOOL,
+    'description': ('Team recipes (reviewed tool sequences from Tool Hub): list, show the '
+                    'steps, or run one with its inputs. A recipe that changes the model runs '
+                    'only with confirm=true, after the person saw the steps; each step is '
+                    'checked and confirmed in Revit like a direct call.'),
+    'inputSchema': {'type': 'object', 'properties': {
+        'action': {'type': 'string', 'enum': ['list', 'show', 'run']},
+        'slug': {'type': 'string'},
+        'inputs': {'type': 'object'},
+        'confirm': {'type': 'boolean'}},
+        'required': ['action']}}
+
+
+def _load_recipes():
+    """recipes.py by path (stdlib only): deployed next to the bridge as
+    toolhub_recipes.py, else the in-extension file. None = feature off."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, 'toolhub_recipes.py'),
+                 os.path.join(here, '..', 'Intelligence', 'toolhub', 'recipes.py')):
+        if not os.path.isfile(path):
+            continue
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('toolhub_recipes', path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        except Exception:
+            return None
+    return None
+
+
+_rc = _load_recipes()
+
+
+def _recipe_rows():
+    """{slug: row} of published recipes whose payload matches its review hash,
+    from the Assistant's Tool Hub cache (%APPDATA%/T3LabAI/toolhub/catalog.json)."""
+    if _rc is None:
+        return {}
+    try:
+        with open(os.path.join(_data_dir(), 'toolhub', 'catalog.json'), encoding='utf-8') as f:
+            rows = (json.load(f) or {}).get('rows') or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return dict((s, r) for s, r in rows.items()
+                if isinstance(r, dict) and r.get('kind') == 'recipe'
+                and r.get('status') == 'published' and _rc.verified_payload(r) is not None)
+
+
+def _run_recipe_tool(args, current, token):
+    """t3lab_recipe: list | show | run. Each step goes through _answer, so the
+    argument check, the harness write check and Revit's policy see it."""
+    if _rc is None:
+        return _hub_error('Tool Hub recipes are not next to the bridge.', 'recipes_unavailable',
+                          hint='Restart Revit (it refreshes the bridge files), then the AI app.')
+    rows = _recipe_rows()
+    action = '{}'.format(args.get('action') or 'list').lower()
+    if action == 'list':
+        return {'recipes': [dict(slug=s, name=r.get('name'), title_vi=r.get('title_vi'),
+                                 description=r.get('description'),
+                                 changes_model=bool(_rc.verified_payload(r).get('is_write', True)))
+                            for s, r in sorted(rows.items())],
+                'note': 'The signed-in T3Lab Assistant syncs the catalog; empty = nothing '
+                        'synced yet.'}
+    row = rows.get(args.get('slug') or '')
+    if row is None:
+        return _hub_error('No published recipe "{}".'.format(args.get('slug') or ''),
+                          'recipe_not_found', recipes=sorted(rows))
+    payload = _rc.verified_payload(row)
+    steps = ((payload.get('plan') or {}).get('steps')) or []
+    if action == 'show':
+        return {'slug': row.get('slug'), 'name': row.get('name'),
+                'changes_model': bool(payload.get('is_write', True)),
+                'inputs_schema': payload.get('inputs_schema'),
+                'steps': [{'tool': s.get('tool'), 'args': s.get('args')} for s in steps]}
+    if action != 'run':
+        return _hub_error('action must be list, show or run.', 'bad_arguments')
+    if payload.get('is_write', True) and args.get('confirm') is not True:
+        return _hub_error('This recipe changes the model ({} steps: {}). Show the steps to the '
+                          'person, then run again with confirm=true.'.format(
+                              len(steps), ', '.join(s.get('tool') or '?' for s in steps)),
+                          'confirmation_required', nothing_ran=True)
+
+    def execute(tool, arguments):
+        if tool == RECIPE_TOOL:
+            return {'error': 'A recipe step cannot call {}.'.format(tool)}
+        resp = _answer(_call_request(1, tool, arguments), current, token)
+        result = _tool_payload(resp)
+        if isinstance(result, dict):
+            return result
+        failed = _call_failure(resp, result)
+        return {'error': failed} if failed else {'result': result}
+
+    return _rc.run(row, args.get('inputs') or {}, execute)
 
 
 def _hub_response(request_id, payload):
@@ -1225,6 +1464,776 @@ def _hub_cli(argv):
     return 1 if isinstance(out, dict) and out.get('error') else 0
 
 
+# ─── BIM Harness (docs/harness.md) ───
+# One task board for several AI agents on one model (core/harness_store.py),
+# agents launched from other platforms (core/harness_agents.py) and the board
+# as a page in the browser (core/harness_studio.py); all deployed next to this
+# file. Coordination only: it grants nothing. Every Revit call still meets the
+# server's own policy (core/mcp_policy.py: read-only mode, toolsets, the
+# confirmation of destructive calls in Revit).
+HARNESS_TOOL = 't3lab_harness'
+# Stamped on a forwarded tools/call: the task the caller holds ("<session>/<key>")
+# and its title name the step on Agent Cursors; the member is one chat of a client.
+TASK_META, TASK_TITLE_META, MEMBER_META = 't3lab/task', 't3lab/task_title', 't3lab/member'
+# Queue order + wait budget at the server (core/conductor.py). Sent only while
+# the harness is in use, so a machine without it queues as before.
+LANE_META, QUEUE_WAIT_META = 't3lab/lane', 't3lab/queue_wait_s'
+QUEUE_WAIT_S = 45       # under the usual 60 s client timeout: refused, never run late
+HARNESS_WAIT_MAX_S = 50
+UNNAMED_AGENT = 'mcp-client'        # = core.agent_cursors 'AI app'
+# clientInfo.name -> board identity when no --agent names the app. Only the
+# label: it decides nothing about what the caller may do in Revit.
+CLIENT_AGENTS = {
+    'claude-ai': 'claude-desktop', 'claude-code': 'claude-code',
+    'codex-mcp-client': 'codex', 'codex': 'codex', 'openai-codex': 'codex',
+    'antigravity': 'antigravity', 'antigravity-ide': 'antigravity',
+    'gemini-cli-mcp-client': 'antigravity',
+    'cursor-vscode': 'cursor', 'cursor': 'cursor',
+}
+# Clients with a person watching: they may open sessions and register / launch
+# agents. A launched agent (harness_agents) needs a name outside this list.
+HUMAN_AGENTS = ('claude-desktop', 'claude-code', 't3lab-assistant', 'codex', 'antigravity',
+                'cursor', 'github-copilot', 'windows-copilot', 'cli', UNNAMED_AGENT)
+# Bridge tools that never change the model.
+_BRIDGE_LOCAL = ('list_revit_instances', 'switch_revit_instance', 'list_open_documents',
+                 'switch_active_document', HUB_TOOL, VERIFY_TOOL, HARNESS_TOOL)
+_HARNESS_PERSON_ONLY = ('agents', 'agent_add', 'agent_remove', 'run', 'flow_save',
+                        'flow_delete')
+
+
+def _load_companion(name):
+    """A module deployed next to bridge.py (in-extension: core.<name>), or None."""
+    try:
+        import importlib
+        return importlib.import_module('core.' + name)
+    except ImportError:
+        pass
+    try:        # by path, so `python -E/-I` finds it too
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), name + '.py')
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+_hb = _load_companion('harness_store')       # None without sqlite3: the tool is not listed
+_ha = _load_companion('harness_agents')
+_hst = _load_companion('harness_studio')
+
+HARNESS_TOOL_DEF = {
+    'name': HARNESS_TOOL,
+    'description': ('Task board shared by several AI agents on one model: a lead plans, '
+                    'workers take tasks; saved step templates and agents. action=help lists '
+                    'the actions and their options.'),
+    'inputSchema': {'type': 'object', 'properties': {
+        'action': {'type': 'string'},
+        'task': {'type': 'string'},
+        'options': {'type': 'object'}},
+        'required': ['action']}}
+# Returned by action=help, so the tool definition itself stays small.
+HARNESS_HELP = {
+    'lead': {'open': ('goal, revit_document (title of the file), review (default true), '
+                      'exclusive, write_mode=scoped|serial -> session'),
+             'plan': 'tasks=[{key, title, detail, depends_on, assignee, done_when, scope}]',
+             'review': 'task, verdict=accept|redo, note',
+             'remove': 'task (todo, nothing depends on it)',
+             'retry': 'task (failed)', 'close': ''},
+    'worker': {'join': 'role=worker|reviewer',
+               'next': ('claims your next ready task, or says what it waits for; '
+                        'wait_s (max 50) holds the call until one is ready'),
+               'report': 'task, status=progress|done|failed, summary, result'},
+    'templates': {'flows': 'list saved step templates', 'flow_get': 'name',
+                  'flow_save': 'name, session: save the session\'s steps (person-facing client)',
+                  'flow_apply': ('name; with session: add its steps there, else open a new '
+                                 'session (goal, revit_document) with them'),
+                  'flow_delete': 'name'},
+    'agents': {'agents': 'saved agents + the t3lab_call relay tool',
+               'agent_add': ('name, config={platform: command|anthropic|http|mcp, role, ...}: '
+                             'saved in harness/agents.json (person-facing client)'),
+               'agent_remove': 'name'},
+    'anyone': {'note': 'text, task', 'status': 'task (one task in full)',
+               'stats': 'times and attempts of the session'},
+    'scope': ('write (default true), document, categories, levels, views, worksets, '
+              'element_ids. Tasks writing the same scope run one after another; '
+              'write=false never waits. While you hold a task the bridge refuses '
+              'writes to another document, outside element_ids, or under write=false '
+              '(scope_denied / scope_claimed); a member without a task cannot write.'),
+    'modes': ('setup shows the master agent (the only one that opens sessions) and the '
+              'defaults. exclusive: every agent but the lead needs a task to change the '
+              'session\'s documents, joined or not (harness_managed). write_mode=serial: '
+              'one write task per document at a time.'),
+    'notes': ['session may be omitted while one session is open.',
+              'Several chats of one client: pass as="<name>" on every call.',
+              'The board coordinates; it grants no permission. Each Revit call still '
+              'meets T3Lab\'s MCP policy and the confirmation in Revit.'],
+}
+
+
+def _agent_id(current):
+    """Board identity of this bridge's caller: --agent, a known clientInfo name
+    mapped (CLIENT_AGENTS), the app that launched us, else 'mcp-client'."""
+    client = '{}'.format(current.get('client') or '').strip().lower()[:40]
+    return CLIENT_AGENTS.get(client, client) or UNNAMED_AGENT
+
+
+def _harness_member(agent, args):
+    """agent, or agent/<as> when one client runs several chats (one bridge)."""
+    alias = re.sub(r'[^a-z0-9._-]', '', '{}'.format(args.get('as') or '').lower())[:24]
+    return '{}/{}'.format(agent, alias) if alias else agent
+
+
+def _harness_board():
+    """board.json ({} without the harness or on any error); cached by mtime."""
+    if _hb is None:
+        return {}
+    try:
+        return _hb.read_board()
+    except Exception:
+        return {}
+
+
+def _harness_task(agent, board=None):
+    """The one task `agent` holds on the board, or None."""
+    if _hb is None:
+        return None
+    try:
+        return _hb.task_of(agent, _harness_board() if board is None else board)
+    except Exception:
+        return None
+
+
+def _cached_tool(name):
+    for tool in _load_cached_tools():
+        if isinstance(tool, dict) and tool.get('name') == name:
+            return tool
+    return None
+
+
+def _is_read_tool(name):
+    """True when the server's tools/list marks `name` read-only. Unknown counts
+    as a write: the harness check then applies, nothing else changes."""
+    if name in _BRIDGE_LOCAL:
+        return True
+    tool = _cached_tool(name)
+    return bool(tool and (tool.get('annotations') or {}).get('readOnlyHint'))
+
+
+def _has_dry_run(name):
+    tool = _cached_tool(name) or {}
+    return 'dry_run' in ((tool.get('inputSchema') or {}).get('properties') or {})
+
+
+def _harness_target_document(current, token):
+    """Title of the active document of the Revit window the call goes to ('' unknown)."""
+    try:
+        docs = _documents_on(current['port'], token)
+        return next((d.get('title') for d in docs if d.get('is_active')), '') or ''
+    except Exception:
+        return ''
+
+
+def _harness_write_error(name, current, arguments, token):
+    """Refusal of a model-changing call outside the caller's harness task
+    (harness_store.write_refusal), or None. Reads, dry runs and machines with no
+    open session pass; any failure to read the board lets the call through."""
+    if _hb is None or _is_read_tool(name):
+        return None
+    if arguments.get('dry_run') is True and _has_dry_run(name):
+        return None
+    try:
+        if not (_harness_board().get('sessions') or []):
+            return None
+        refusal = _hb.Harness().write_refusal(_agent_id(current),
+                                              _harness_target_document(current, token),
+                                              _hb.call_element_ids(arguments))
+    except Exception:
+        return None
+    if refusal and refusal.get('hint'):
+        # Lite pins no document per call: another file means another active one.
+        refusal['hint'] = (refusal['hint']
+                           .replace('pass revit_document for another file',
+                                    'switch_active_document to another file')
+                           .replace('for another file pass revit_document',
+                                    'for another file use switch_active_document'))
+    return refusal
+
+
+def _queue_wait_s():
+    try:
+        return max(1, int(os.environ.get('T3LAB_QUEUE_WAIT_S') or QUEUE_WAIT_S))
+    except ValueError:
+        return QUEUE_WAIT_S
+
+
+def _lane(agent, task, board):
+    """Server queue class: lead (session lead / master), task (holds a task),
+    person (a person watches), auto (autonomous, no task)."""
+    if board.get('master') == agent or any(
+            _hb.is_member(s.get('lead') or '', agent) for s in board.get('sessions') or []):
+        return 'lead'
+    if task:
+        return 'task'
+    return 'person' if agent in HUMAN_AGENTS else 'auto'
+
+
+def _stamp_harness(request, current):
+    """Copy of a tools/call with the harness stamps (task, lane, wait budget),
+    or the request itself when the harness is not in use on this machine."""
+    board = _harness_board()
+    if _hb is None or not (board.get('sessions') or board.get('master')):
+        return request
+    agent = _agent_id(current)
+    task = _harness_task(agent, board)
+    params = dict(request.get('params') or {})
+    meta = dict(params['_meta']) if isinstance(params.get('_meta'), dict) else {}
+    meta[LANE_META] = _lane(agent, task, board)
+    meta[QUEUE_WAIT_META] = _queue_wait_s()
+    if task:
+        meta[TASK_META] = '{}/{}'.format(task['session'], task['task'])
+        meta[TASK_TITLE_META] = task.get('title') or ''
+        if task.get('member') and task['member'] != agent:
+            meta[MEMBER_META] = task['member']
+    params['_meta'] = meta
+    return dict(request, params=params)
+
+
+def _revit_queue(current):
+    """Who holds this Revit window's MCP slot, how many wait (server /health)."""
+    try:
+        return (_health_info(int(current['port'])) or {}).get('queue')
+    except Exception:
+        return None
+
+
+def _harness_next(board, member, session, wait_s, sleep=time.sleep):
+    """next, held open until a task is ready (long poll): nothing here can wake
+    a chat client, so a worker's one call is its wake-up."""
+    try:
+        wait_s = max(0.0, min(float(wait_s or 0), HARNESS_WAIT_MAX_S))
+    except (TypeError, ValueError):
+        wait_s = 0.0
+    deadline = time.time() + wait_s
+    while True:
+        out = board.next(member, session)
+        if out.get('task') or out.get('all_done') or time.time() >= deadline:
+            return out
+        sleep(2)
+
+
+def _call_request(rid, name, arguments):
+    return {'jsonrpc': '2.0', 'id': rid, 'method': 'tools/call',
+            'params': {'name': name, 'arguments': arguments}}
+
+
+def _harness_call_tool_for(current, token):
+    """call_tool_for(name) for the runner: one Revit tool as that launched
+    agent. Lite has no approval queue, so an agent nobody watches only reads."""
+    def call_tool_for(name):
+        caller = {'port': current['port'], 'validated': current.get('validated'),
+                  'client': name, 'agent_explicit': True, 'transport': 'runner'}
+
+        def call_tool(tool, arguments):
+            if not _load_cached_tools():
+                _handle_tools_list({'jsonrpc': '2.0', 'id': 'cache', 'method': 'tools/list'},
+                                   caller, token)
+            if not _is_read_tool(tool):
+                return _hub_error(
+                    'A launched agent only reads in T3Lab Lite ({} changes the model and Lite '
+                    'has no approval queue). Nothing ran.'.format(tool), 'tool_denied',
+                    nothing_ran=True,
+                    hint='Report what should change; a person-facing app (Claude, Codex) '
+                         'takes the write task.')
+            resp = _handle(_call_request(1, tool, arguments if isinstance(arguments, dict)
+                                         else {}), caller, token)
+            payload = _tool_payload(resp)
+            return payload if payload is not None else resp
+        return call_tool
+    return call_tool_for
+
+
+def _handle_harness(request, current, token):
+    rid = request.get('id')
+    args = dict((request.get('params') or {}).get('arguments') or {})
+    options = args.pop('options', None)
+    if isinstance(options, dict):           # options may also be passed flat
+        args = dict(options, **args)
+    if _hb is None:
+        return _hub_response(rid, _hub_error(
+            'The harness is not installed next to the bridge (harness_store.py, sqlite3).',
+            'harness_unavailable',
+            hint='Restart Revit (it refreshes the bridge files), then the AI app.'))
+    action = '{}'.format(args.get('action') or 'status').lower()
+    agent = _agent_id(current)
+    member = _harness_member(agent, args)
+    session = args.get('session')
+    human = agent in HUMAN_AGENTS
+    cli = current.get('transport') == 'cli'
+    try:
+        setup = _hb.load_config()
+    except Exception:
+        setup = {'master': '', 'exclusive': False, 'write_mode': 'scoped'}
+    # Opening a session, adding or launching agents starts other agents' work
+    # (and, for cloud platforms, spend): a person's client only. The agent the
+    # owner named master may open sessions even when nobody watches it.
+    if ((action in _HARNESS_PERSON_ONLY and not human)
+            or ((action == 'open' or (action == 'flow_apply' and not session))
+                and not human and agent != setup['master'])):
+        return _hub_response(rid, _hub_error(
+            'action={} needs a client with a person present{}.'.format(
+                action, ', or the master agent' if action == 'open' else ''),
+            'role_denied', nothing_ran=True))
+    # owner=true: the person at the machine (MCP Control, Studio, CLI), no seat needed.
+    as_owner = args.get('owner') is True and human and cli
+    try:
+        board = _hb.Harness()
+        if action == 'help':
+            out = HARNESS_HELP
+        elif action == 'setup':
+            changes = dict((k, args[k]) for k in ('master', 'exclusive', 'write_mode')
+                           if k in args)
+            if changes and not cli:
+                # Who leads is the owner's decision, made at the machine.
+                return _hub_response(rid, _hub_error(
+                    'The setup is changed from a terminal on this machine.', 'use_cli',
+                    nothing_ran=True, setup=setup,
+                    hint='python bridge.py harness setup --master=claude-desktop'))
+            out = {'setup': _hb.save_config(**changes) if changes else setup,
+                   'you': agent, 'write_modes': list(_hb.WRITE_MODES)}
+            if changes:
+                board.publish()             # board.json carries the master for the UI
+        elif action == 'open':
+            out = board.open(member, args.get('goal'), args.get('revit_document') or '',
+                             args.get('review', True) is not False, agent,
+                             args.get('exclusive'), args.get('write_mode'), agent=agent,
+                             as_owner=as_owner)
+        elif action == 'join':
+            out = board.join(member, args.get('role') or 'worker', session, agent)
+        elif action == 'plan':
+            out = board.plan(member, args.get('tasks'), session, as_owner=as_owner)
+        elif action == 'remove':
+            out = board.remove(member, args.get('task'), session, as_owner=as_owner)
+        elif action == 'next':
+            out = _harness_next(board, member, session, args.get('wait_s'))
+        elif action == 'report':
+            out = board.report(member, args.get('task'), args.get('status') or 'done',
+                               args.get('summary'), args.get('result'), session)
+        elif action == 'review':
+            out = board.review(member, args.get('task'), args.get('verdict'),
+                               args.get('note') or '', session, as_owner=as_owner)
+        elif action == 'retry':
+            out = board.retry(member, args.get('task'), session, as_owner=as_owner)
+        elif action == 'note':
+            out = board.note(member, args.get('text'), args.get('task'), session,
+                             as_owner=as_owner)
+        elif action == 'status':
+            out = board.status(session, member, args.get('task'))
+            queue = _revit_queue(current)
+            if queue:
+                out['revit_queue'] = queue
+        elif action == 'stats':
+            out = board.stats(session, member)
+        elif action == 'close':
+            out = board.close(member, session, as_owner=as_owner)
+        elif action in ('flows', 'flow_get', 'flow_save', 'flow_apply', 'flow_delete'):
+            if _hst is None:
+                return _hub_response(rid, _hub_error(
+                    'harness_studio.py is not next to the bridge.', 'harness_unavailable'))
+            out = _harness_flow(board, action, args, member, session, agent, as_owner)
+        elif _ha is None:
+            return _hub_response(rid, _hub_error(
+                'harness_agents.py is not next to the bridge.', 'harness_unavailable'))
+        elif action == 'agents':
+            out = {'agents': _ha.load(board.root), 'platforms': list(_ha.PLATFORMS),
+                   'relay_tool': _ha.RELAY_TOOL_DEF}
+        elif action == 'agent_add':
+            out = _ha.add(board.root, args.get('name'), args.get('config'), HUMAN_AGENTS)
+        elif action == 'agent_remove':
+            out = _ha.remove(board.root, args.get('name'))
+        elif action == 'run' and not cli:
+            # A round can take minutes per agent: not inside a chat's tool call.
+            return _hub_response(rid, _hub_error(
+                'Launch agents from a terminal, not from a chat.', 'use_cli',
+                nothing_ran=True, hint='python bridge.py harness run --loop'))
+        elif action == 'run':
+            out = {'ran': _ha.run_once(board, board.root,
+                                       _harness_call_tool_for(current, token),
+                                       session, args.get('name'),
+                                       parallel=args.get('parallel'))}
+        else:
+            return _hub_response(rid, _hub_error(
+                'Unknown harness action "{}".'.format(action), 'bad_arguments',
+                actions=['help', 'setup', 'open', 'join', 'plan', 'remove', 'next', 'report',
+                         'review', 'retry', 'flows', 'flow_get', 'flow_save', 'flow_apply',
+                         'flow_delete', 'note', 'status', 'stats', 'close', 'agents',
+                         'agent_add', 'agent_remove', 'run']))
+    except (_hb.HarnessError, getattr(_ha, 'AgentError', _hb.HarnessError),
+            getattr(_hst, 'StudioError', _hb.HarnessError)) as ex:
+        return _hub_response(rid, ex.payload)
+    return _hub_response(rid, out)
+
+
+def _harness_flow(board, action, args, member, session, agent, as_owner):
+    """Step templates (harness/flows/*.json, shared with Harness Studio)."""
+    if action == 'flows':
+        return {'flows': _hst.list_flows(board.root)}
+    if action == 'flow_get':
+        return _hst.load_flow(board.root, args.get('name'))
+    if action == 'flow_delete':
+        return _hst.delete_flow(board.root, args.get('name'))
+    if action == 'flow_save':
+        status = board.status(session, member, full=True)
+        return _hst.save_flow(board.root, args.get('name'), args.get('goal') or status.get('goal'),
+                              status.get('tasks'))
+    flow = _hst.load_flow(board.root, args.get('name'))         # flow_apply
+    if not session:
+        opened = board.open(member, args.get('goal') or flow.get('goal') or flow['name'],
+                            args.get('revit_document') or '',
+                            args.get('review', True) is not False, agent,
+                            args.get('exclusive'), args.get('write_mode'), agent=agent,
+                            as_owner=as_owner)
+        session = opened['session']
+    return dict(board.plan(member, flow['tasks'], session, as_owner=as_owner), session=session)
+
+
+def _say(text):
+    sys.stdout.write('{}\n'.format(text))
+    sys.stdout.flush()
+
+
+def _cli_value(rest, flag, default=''):
+    for arg in rest:
+        if arg.startswith('--{}='.format(flag)):
+            return arg.split('=', 1)[1]
+    return default
+
+
+def _cli_json(rest):
+    """--json '{...}' / --json=... / --json-file=path (PowerShell 5 strips the
+    quotes of inline JSON); '{}' when none is given."""
+    for i, arg in enumerate(rest):
+        if arg == '--json' and i + 1 < len(rest):
+            return rest[i + 1]
+        if arg.startswith('--json='):
+            return arg.split('=', 1)[1]
+        if arg.startswith('--json-file='):
+            try:
+                with open(arg.split('=', 1)[1], encoding='utf-8-sig') as f:
+                    return f.read()
+            except OSError:
+                return 'unreadable'             # reported as "not valid JSON"
+    return '{}'
+
+
+CLI_AGENT = 'cli'       # in HUMAN_AGENTS: the person at this terminal
+
+
+def _cli_current(rest):
+    """`current` of a CLI run: --agent= / T3LAB_AGENT names the caller, else
+    'cli'; transport cli (the harness lets it act as owner, change the setup)."""
+    try:
+        port = int(_cli_value(rest, 'port') or PORT_MIN)
+    except ValueError:
+        port = PORT_MIN
+    agent = (_cli_value(rest, 'agent') or os.environ.get('T3LAB_AGENT', '')).strip()
+    return {'port': port, 'client': (agent or CLI_AGENT)[:40], 'agent_explicit': True,
+            'transport': 'cli'}
+
+
+def _harness_cli(argv):
+    """bridge.py harness <action> [--json '{...}'] [--session=<id>] [--agent=<id>]
+    [--port=N]: the board from a terminal, as the person at this machine
+    (agent 'cli', transport cli). setup --master= --exclusive= --write-mode=;
+    run --loop; studio [--studio-port=N] [--no-open] [--idle-exit=<minutes>]."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    text = _cli_json(argv)
+    positional = [a for a in argv if not a.startswith('--') and a != text]
+    try:
+        args = json.loads(text)
+    except ValueError:
+        args = None
+    if not isinstance(args, dict):
+        _say(json.dumps(_hub_error('--json is not a valid JSON object.', 'bad_arguments')))
+        return 2
+    args['action'] = (positional or ['status'])[0]
+    session = _cli_value(argv, 'session')
+    if session:
+        args['session'] = session
+    if args['action'] == 'setup':
+        if any(a.startswith('--master=') for a in argv):
+            args['master'] = _cli_value(argv, 'master')
+        exclusive = _cli_value(argv, 'exclusive').lower()
+        if exclusive:
+            args['exclusive'] = exclusive in ('1', 'on', 'true', 'yes')
+        mode = _cli_value(argv, 'write-mode')
+        if mode:
+            args['write_mode'] = mode
+    current = _cli_current(argv)
+    token = _read_token()
+    if args['action'] == 'studio':
+        return _harness_studio(argv, current, token)
+    if args['action'] == 'run' and '--loop' in argv:
+        return _harness_loop(args, current, token)
+    out = _tool_payload(_handle(_call_request(1, HARNESS_TOOL, args), current, token))
+    _say(json.dumps(out, ensure_ascii=False, indent=2))
+    if isinstance(out, dict) and out.get('error'):
+        return 2 if out.get('error_code') == 'bad_arguments' else 1
+    return 0
+
+
+def _harness_studio(rest, current, token):
+    """harness studio: the board as a canvas in the browser, 127.0.0.1 only,
+    acting as this CLI (the person at the machine)."""
+    if _hst is None or _hb is None:
+        _say(json.dumps(_hub_error('harness_studio.py is not next to the bridge.',
+                                   'harness_unavailable',
+                                   hint='Restart Revit: it refreshes the bridge files.')))
+        return 1
+
+    def gateway(tool, arguments):
+        if tool not in (HARNESS_TOOL, 'list_revit_instances'):
+            return _hub_error('Studio only calls the harness and instance tools '
+                              '(T3Lab Lite has no approval queue).', 'bad_arguments')
+        resp = _handle(_call_request(1, tool, arguments), current, token)
+        payload = _tool_payload(resp)
+        return payload if payload is not None else resp
+
+    port = _cli_value(rest, 'studio-port')
+    idle = _cli_value(rest, 'idle-exit')
+    return _hst.serve(_hb, _ha, gateway, HARNESS_TOOL, 't3lab_approval',
+                      port=int(port) if port else None, open_browser='--no-open' not in rest,
+                      approvals=lambda: [], say=_say,
+                      idle_exit_min=float(idle) if idle else None)
+
+
+def _harness_loop(args, current, token, sleep=time.sleep, max_idle_rounds=30):
+    """harness run --loop: rounds until every task is done, or nothing moved
+    for max_idle_rounds (tasks waiting on a review)."""
+    idle = 0
+    while idle < max_idle_rounds:
+        payload = _tool_payload(_handle(_call_request(1, HARNESS_TOOL, args), current, token))
+        _say(json.dumps(payload, ensure_ascii=False))
+        ran = payload.get('ran') if isinstance(payload, dict) else None
+        if not isinstance(ran, list) or not ran:
+            return 1
+        if all(r.get('all_done') for r in ran):
+            return 0
+        idle = 0 if any(r.get('task') for r in ran) else idle + 1
+        if idle:
+            sleep(20)
+    return 1
+
+
+# ─── CLI for agents with a shell (docs/cli.md; pattern from HKUDS/CLI-Anything,
+# ideas only): discover with tools / help, call with typed flags, lean output,
+# verify exported files. A call is one tools/call through _answer, as from an AI app.
+CLI_COMMANDS = ('call', 'instances', 'tools', 'help', 'verify', 'skill')
+# Lines of tool_cli.SKILL_MD (shared with t3lab_dev, unchanged) about dev-only
+# features -> Lite's text. lite_guard/test_tool_cli.py fails when one stops matching.
+SKILL_LITE = (
+    ('- `B capabilities` - your tier, skills, the open documents.\n',
+     '- `B call list_open_documents` - the models open in this Revit window.\n'),
+    ('- Pin the document on edits: `--revit_document="<title>"`.\n',
+     '- Edits go to the active model: `B call switch_active_document '
+     '--path_or_title="<title>"` first.\n'),
+    ('- Cut results carry `result_id`: `B call t3lab_result --result_id=<id> --key=<list> '
+     '--offset=<n>`,\n  or `--action=export --format=csv` to write the whole list to a file '
+     'instead of reading it.\n',
+     '- Very long lists are shortened to fit: filter the query instead of paging.\n'),
+)
+
+
+def _cli_positional(rest):
+    """Words after the command that are not flags (nor the value of --json)."""
+    out, skip = [], False
+    for arg in rest:
+        if skip:
+            skip = False
+        elif arg == '--json':
+            skip = True
+        elif not arg.startswith('--'):
+            out.append(arg)
+    return out
+
+
+def _cli_render(out, rest):
+    """--out=pretty (default) | compact | tsv, --pick=a,b on lists of rows."""
+    if _tc is None:
+        return json.dumps(out, ensure_ascii=False, indent=2)
+    fields = _cli_value(rest, 'pick')
+    if fields:
+        out = _tc.pick(out, fields.split(','))
+    return _tc.render(out, _cli_value(rest, 'out', 'pretty').lower())
+
+
+def _cli_manifest(current, token, refresh=False):
+    """Every tool tools/list shows: the cache (Revit may be closed) + the
+    bridge's; live tools/list when asked or when nothing is cached."""
+    if refresh or not _load_cached_tools():
+        _handle_tools_list({'jsonrpc': '2.0', 'id': 'cli', 'method': 'tools/list'},
+                           current, token)
+    return [t for t in _with_bridge_tools(_load_cached_tools()) if isinstance(t, dict)]
+
+
+def _cli_flags(name, rest, args, current, token):
+    """Merge --param=value flags into args (typed by the schema); an error
+    payload when a flag or the merged arguments break the contract."""
+    if _tc is None:
+        return None
+    schema = _tc.schema_of(_cli_manifest(current, token), name)
+    flags, errors = _tc.parse_flags(rest, schema or {})
+    args.update(flags)
+    if schema is None:
+        return None
+    problems = _tc.arg_problems(schema, args)
+    seen = set((p['kind'], p['param']) for p in problems)
+    problems += [p for p in _tc.arg_problems(schema, flags, strict=True)
+                 if p['kind'] == 'unknown' and ('unknown', p['param']) not in seen]
+    if not errors and not problems:
+        return None
+    text = _tc.problems_text(name, problems) if problems else 'Nothing ran.'
+    return _hub_error('; '.join(errors + [text]) if errors else text, 'bad_arguments',
+                      nothing_ran=True, expected_parameters=_tc.params_line(schema),
+                      hint='bridge.py help {}'.format(name))
+
+
+def _cli_unavailable():
+    _say(json.dumps(_hub_error('tool_cli.py is not next to the bridge.', 'cli_unavailable',
+                               hint='Restart Revit: it refreshes the bridge files.')))
+    return 1
+
+
+def _discover_cmd(cmd, positional, rest, current, token):
+    """tools [words] [--limit=N] [--refresh] | help <tool>."""
+    if _tc is None:
+        return _cli_unavailable()
+    tools = _cli_manifest(current, token, refresh='--refresh' in rest)
+    if cmd == 'tools':
+        limit = _cli_value(rest, 'limit', '15')
+        found = _tc.search(tools, ' '.join(positional), int(limit) if limit.isdigit() else 15)
+        if not _load_cached_tools():
+            found['note'] = ('Bridge tools only: open Revit with T3Lab once, then the Revit '
+                             'tools are listed too (also while Revit is closed).')
+        _say(_cli_render(found, rest))
+        return 0
+    name = (positional or [''])[0]
+    tool = next((t for t in tools if t.get('name') == name), None)
+    if tool is None:
+        near = _tc.search(tools, name.replace('_', ' '), 5)
+        _say(json.dumps(_hub_error('No tool "{}".'.format(name), 'unknown_tool',
+                                   candidates=near.get('tools') if isinstance(
+                                       near.get('tools'), list) else []),
+                        ensure_ascii=False, indent=2))
+        return 2
+    _say(_tc.help_text(tool))
+    return 0
+
+
+def _verify_cmd(rest):
+    """verify <file|folder|pattern>... [--ext=pdf,dwg] [--since=<min>]
+    [--expect=<n>] [--min-bytes=<n>]: exit 0 only when every file passes."""
+    if _tc is None:
+        return _cli_unavailable()
+    paths = _cli_positional(rest)
+    if not paths:
+        _say('usage: bridge.py verify <file|folder|pattern>... [--ext=pdf] [--since=30] '
+             '[--expect=N]')
+        return 2
+    try:
+        since, expect = _cli_value(rest, 'since'), _cli_value(rest, 'expect')
+        report = _tc.verify(paths, exts=_cli_value(rest, 'ext') or None,
+                            expect=int(expect) if expect else None,
+                            since_min=float(since) if since else None,
+                            min_bytes=int(_cli_value(rest, 'min-bytes', '1') or 1),
+                            max_files=VERIFY_MAX_FILES)
+    except ValueError:
+        _say(json.dumps(_hub_error('--since / --expect / --min-bytes must be numbers.',
+                                   'bad_arguments')))
+        return 2
+    _say(_cli_render(report, rest))
+    return 0 if report['ok'] else 1
+
+
+def _skill_md():
+    """tool_cli.SKILL_MD with its dev-only lines replaced (SKILL_LITE)."""
+    text = _tc.SKILL_MD
+    for old, new in SKILL_LITE:
+        text = text.replace(old, new)
+    return text
+
+
+def _skill_cmd(rest):
+    """skill: print the t3lab-cli SKILL.md; --install=<skills dir> writes
+    <dir>/t3lab-cli/SKILL.md (tool_cli.write_skill's layout, Lite's text)."""
+    if _tc is None:
+        return _cli_unavailable()
+    folder = _cli_value(rest, 'install')
+    if not folder:
+        _say(_skill_md())
+        return 0
+    try:
+        target = os.path.join(folder, _tc.SKILL_NAME)
+        os.makedirs(target, exist_ok=True)
+        path = os.path.join(target, 'SKILL.md')
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(_skill_md())
+    except OSError as ex:
+        _say(json.dumps(_hub_error('Cannot write the skill: {}'.format(ex), 'io_error')))
+        return 1
+    _say(json.dumps({'installed': path}, ensure_ascii=False))
+    return 0
+
+
+def _cli(argv):
+    """bridge.py <command> ...: one tools/call through _answer, output on stdout.
+    Exit 0 ok, 1 tool / Revit error, 2 bad syntax or arguments (nothing ran)."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    cmd, rest = argv[0], argv[1:]
+    if cmd == 'verify':
+        return _verify_cmd(rest)
+    if cmd == 'skill':
+        return _skill_cmd(rest)
+    positional = _cli_positional(rest)
+    current = _cli_current(rest)
+    token = _read_token()
+    if cmd in ('tools', 'help'):
+        return _discover_cmd(cmd, positional, rest, current, token)
+    if cmd == 'instances':
+        name, args = 'list_revit_instances', {}
+    else:                                           # call
+        if not positional:
+            _say('usage: bridge.py call <tool> [--param=value ...] [--json \'{...}\'] '
+                 '[--agent=..]   (bridge.py help <tool>)')
+            return 2
+        try:
+            args = json.loads(_cli_json(rest))
+        except ValueError:
+            args = None
+        if not isinstance(args, dict):
+            _say(json.dumps(_hub_error('--json is not a valid JSON object.', 'bad_arguments')))
+            return 2
+        name = positional[0]
+        refused = _cli_flags(name, rest, args, current, token)
+        if refused:
+            _say(_cli_render(refused, rest))
+            return 2
+    resp = _answer(_call_request(1, name, args), current, token)
+    payload = _tool_payload(resp)
+    out = payload if payload is not None else resp
+    _say(_cli_render(out, rest))
+    if not _call_failure(resp, payload):
+        return 0
+    return 2 if isinstance(out, dict) and out.get('error_code') == 'bad_arguments' else 1
+
+
 def _handle(request, current, token):
     """One request -> response. Modern requests (version in params._meta)
     are checked here and their results get the modern fields."""
@@ -1234,6 +2243,21 @@ def _handle(request, current, token):
     response = _dispatch(request, current, token)
     if declared is not None:
         response = _finish_modern(response, request.get('method'))
+    return response
+
+
+def _answer(request, current, token):
+    """What stdio sends back for one request: handled, errors as JSON-RPC
+    errors, result capped. The CLI and recipe steps use it too."""
+    try:
+        response = _handle(request, current, token)
+    except Exception as e:
+        response = _rpc_error(request.get('id'),
+                              'T3Lab Revit server connection failed: {}'.format(e))
+    try:
+        response = _cap_result(response)
+    except Exception:
+        pass          # a guard failure must never eat the response itself
     return response
 
 
@@ -1268,7 +2292,19 @@ def _dispatch(request, current, token):
                 return _handle_switch(request, current, token)
             if name == HUB_TOOL:
                 return _handle_hub(request, current, token)
-            return _forward(request, current, token)
+            if name == HARNESS_TOOL:
+                return _handle_harness(request, current, token)
+            args = (request.get('params') or {}).get('arguments') or {}
+            if name == VERIFY_TOOL:
+                return _tool_response(request.get('id'), _verify_files(args))
+            if name == RECIPE_TOOL:
+                return _tool_response(request.get('id'),
+                                      _run_recipe_tool(args, current, token))
+            refused = (_arg_error(name, args)
+                       or _harness_write_error(name, current, args, token))
+            if refused is not None:
+                return _tool_response(request.get('id'), refused)
+            return _forward(_stamp_harness(request, current), current, token)
         except Exception as e:
             if _is_conn_refused(e):
                 return _revit_down_response(request.get('id'))
@@ -1286,6 +2322,10 @@ def _dispatch(request, current, token):
 def main():
     if sys.argv[1:2] == ['hub']:
         sys.exit(_hub_cli(sys.argv[2:]))
+    if sys.argv[1:2] == ['harness']:
+        sys.exit(_harness_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] in CLI_COMMANDS:
+        sys.exit(_cli(sys.argv[1:]))
     port = PORT_MIN
     # Read port from arguments if provided
     for arg in sys.argv[1:]:
@@ -1338,18 +2378,7 @@ def main():
         if not isinstance(request, dict) or 'id' not in request:
             continue
 
-        try:
-            response = _handle(request, current, token)
-        except Exception as e:
-            response = _rpc_error(
-                request.get('id'),
-                f"T3Lab Revit server connection failed: {str(e)}")
-
-        try:
-            response = _cap_result(response)
-        except Exception:
-            pass          # a guard failure must never eat the response itself
-
+        response = _answer(request, current, token)
         sys.stdout.write(json.dumps(response) + '\n')
         sys.stdout.flush()
 

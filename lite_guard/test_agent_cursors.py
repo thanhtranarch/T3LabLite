@@ -12,6 +12,7 @@ the caller got its result.
 The WPF overlay itself needs Revit: NEEDS VERIFICATION there.
 """
 import ast
+import io
 import os
 import re
 import shutil
@@ -432,6 +433,20 @@ def test_visible_work():
               names == ['working', 'done'] and host.calls[0][1][0] == 'codex'
               and host.calls[0][1][4] is None and host.calls[1][1][:4]
               == ('codex', 'read', 'list_open_documents', False), host.calls)
+        # A call with no document open switched Glow off for good: Glow
+        # cannot draw without a document, so notify returns before it.
+        from core import agent_cursors_glow as glow
+        glow_calls = []
+        real = (AC.options, glow.update, glow.stop)
+        AC.options = lambda: dict(real[0](), model=True, glow=True)
+        glow.update = lambda *a, **k: glow_calls.append('update') or False
+        glow.stop = lambda *a, **k: glow_calls.append('stop')
+        try:
+            AC.notify(App(), Call())
+        finally:
+            AC.options, glow.update, glow.stop = real
+        check('no document: Glow is not touched (and not switched off)',
+              glow_calls == [] and AC.options().get('glow') is not False, glow_calls)
         del host.calls[:]
         bad = Call()
         bad.result = {'error': 'boom'}
@@ -1129,6 +1144,9 @@ def test_bar_only():
     before = acsrc.split('def before(app, task):', 1)[1].split('\ndef ', 1)[0]
     check('before: no boxes measured without On model',
           'model and ids and action in' in before and 'elif model and ids:' in before)
+    check('before: no UI walk measured without On model',
+          '_ui_stops(app, tool, args, action, shown) if model else []' in before)
+    check('notify: no UI walk measured without On model', "if not ui and opts['model']:" in notify)
     osrc = open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8').read()
 
     def body(name):
@@ -1158,6 +1176,161 @@ def test_bar_only():
           and 'model' in AC.OPTION_LABELS and groups)
 
 
+def test_harness_hud():
+    """Several agents, one task board (docs/harness.md)."""
+    import json
+    import types
+    print('[harness on the HUD]')
+    check('task text from the bridge stamp',
+          AC.harness_task_text('a1b2c3d4/doors', 'Check  the doors') == 'Task doors · Check the doors')
+    check('no task -> empty', AC.harness_task_text(None, 'x') == '' and
+          AC.harness_task_text('s/k', '') == 'Task k')
+    check('long task title cut', len(AC.harness_task_text('s/k', 'x' * 200)) <= AC.TASK_MAX + 10)
+
+    tag, colour = AC.agent_style('claude-desktop/Arch')
+    check('a chat of a client has its own tag', tag == 'Claude · arch', tag)
+    check('and its own colour', colour != AC.agent_style('claude-desktop')[1]
+          and colour != AC.agent_style('claude-desktop/mep')[1], colour)
+
+    # What core/server.py puts on a _ToolTask from the bridge's stamps.
+    task = types.SimpleNamespace(agent='claude-desktop', member='claude-desktop/arch',
+                                 task_ref='s1/a', task_title='Fix marks', source='mcp',
+                                 tool_name='set_parameter')
+    check('cursor is the harness member', AC._agent_of(task) == 'claude-desktop/arch')
+    check('cursor names the harness task', AC._task_text(task, 'claude-desktop/arch')
+          == 'Task a · Fix marks')
+    AC.narrate('claude-desktop/arch', 'goal', tasks=['one', 'two'])
+    check('the agent\'s own plan step wins', AC._task_text(task, 'claude-desktop/arch')
+          == 'Step 1/2 · one')
+    plain = types.SimpleNamespace(agent='codex', tool_name='x')
+    check('no member, no task -> plain agent', AC._agent_of(plain) == 'codex'
+          and AC._task_text(plain, 'codex') == '')
+
+    folder = tempfile.mkdtemp(prefix='t3board_')
+    old_dir = os.environ.get('T3LAB_HARNESS_DIR')
+    os.environ['T3LAB_HARNESS_DIR'] = folder
+    path = os.path.join(folder, AC.BOARD_FILE)
+    check('no board file -> {}', AC.read_board() == {} and AC.board_rows({}) == [])
+    board = {'format': 'harness-board/1', 'updated': 1.0, 'sessions': [{
+        'session': 'a1b2c3d4', 'goal': 'Audit levels', 'document': 'A.rvt',
+        'counts': {'claimed': 2, 'review': 1, 'done': 1, 'todo': 1, 'failed': 1},
+        'tasks': [
+            {'task': 'r', 'title': 'Count rooms', 'status': 'review', 'owner': 'codex'},
+            {'task': 'd', 'title': 'Old', 'status': 'done', 'owner': 'codex'},
+            {'task': 'a', 'title': 'Fix marks', 'status': 'claimed',
+             'owner': 'claude-desktop/arch', 'document': 'a.RVT'},
+            {'task': 'b', 'title': 'Check links', 'status': 'claimed',
+             'owner': 'console-qa', 'document': 'B.rvt'},
+            {'task': 'f', 'title': 'Purge', 'status': 'failed', 'owner': 'codex'},
+            {'task': 't', 'title': 'Later', 'status': 'todo', 'owner': None}]},
+        {'session': 'empty', 'goal': 'no tasks yet', 'tasks': []}]}
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(board, f)
+    read = AC.read_board()
+    check('board read from board.json', read.get('updated') == 1.0)
+    check('board cached until the file changes', AC.read_board() is read)
+    rows = AC.board_rows(read)
+    check('one HUD block per session with tasks', [r['session'] for r in rows] == ['a1b2c3d4'])
+    check('board summary', rows[0]['summary'] == '2 working · 1 in review · 1 failed · 1/6 done',
+          rows[0]['summary'])
+    check('board rows: working, review, failed; done / todo left out',
+          rows[0]['rows'] == [('current', 'Claude · arch · Fix marks', ''),
+                              ('current', 'Console QA · Check links', 'B.rvt'),
+                              ('review', 'GPT · Count rooms', ''),
+                              ('failed', 'GPT · Purge', '')], rows[0]['rows'])
+    check('board rows capped', AC.board_rows(read, limit=2)[0]['more'] == 2)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('{"updated": 2.0, "sessions": [')           # the bridge is mid-write
+    check('half-written board keeps the last good one', AC.read_board().get('updated') == 1.0)
+    os.remove(path)
+    check('board gone -> {}', AC.read_board() == {})
+    shutil.rmtree(folder, ignore_errors=True)
+    if old_dir is None:
+        os.environ.pop('T3LAB_HARNESS_DIR', None)
+    else:
+        os.environ['T3LAB_HARNESS_DIR'] = old_dir
+
+    with open(os.path.join(LIB, 'core', 'agent_cursors_overlay.py'), encoding='utf-8') as f:
+        osrc = f.read()
+    check('the HUD polls board.json every tick', 'self._poll_board()' in osrc
+          and 'board_rows(board)' in osrc)
+    check('the HUD shows the board section', 'full.Children.Add(self._board_panel)' in osrc)
+    with open(os.path.join(LIB, 'core', 'server.py'), encoding='utf-8') as f:
+        ssrc = f.read()
+    check('the server hands the stamps to the task',
+          'task.task_ref, task.task_title, task.member = harness' in ssrc)
+
+
+def test_ui_route_and_motion():
+    print('[UI route: the pane a person would use; human-like glide]')
+    cases = (
+        ('create_sheet', {}, 'Project Browser \u203a Sheets', 'before'),
+        ('place_views_on_sheets', {}, 'Project Browser \u203a Sheets', 'before'),
+        ('export_sheets_pdf', {}, 'Project Browser \u203a Sheets', 'before'),
+        ('duplicate_view', {}, 'Project Browser \u203a Views', 'before'),
+        ('create_schedule', {}, 'Project Browser \u203a Schedules/Quantities', 'before'),
+        ('load_family', {}, 'Project Browser \u203a Families', 'before'),
+        ('famigen_create_family', {}, 'Project Browser \u203a Families', 'before'),
+        ('manage_links', {}, 'Project Browser \u203a Revit Links', 'before'),
+        ('set_parameter', {'parameter_name': 'Comments'}, 'Properties \u203a Comments', 'after'),
+        ('bulk_set_parameter', {}, 'Properties', 'after'),
+        ('send_code_to_revit', {'code': 'ViewSheet.Create(doc, tb.Id)'},
+         'Project Browser \u203a Sheets', 'before'),
+    )
+    for tool, args, label, when in cases:
+        got = AC.ui_route(tool, args)
+        check('route ' + tool, [(r['label'], r['when']) for r in got] == [(label, when)], got)
+    for tool in ('place_wall', 'move_elements', 'get_current_view_elements',
+                 'create_view_filter', 'famigen_get_schema', 'create_project_parameter'):
+        check('no pane for ' + tool, AC.ui_route(tool, {}) == [], AC.ui_route(tool, {}))
+    check('code with no API hint: none', AC.ui_route('send_code_to_revit', {'code': 'x = 1'}) == [])
+    check('what the code made picks the pane',
+          AC.ui_route('send_code_to_revit', {'code': 'x = 1'}, categories=['Sheets'])[0]['node']
+          == 'Sheets')
+
+    check('minimum-jerk: still at both ends, half way at the middle',
+          AC.ease_human(0) == 0 and AC.ease_human(1) == 1 and abs(AC.ease_human(0.5) - 0.5) < 1e-9
+          and AC.ease_human(0.1) < 0.1)
+    path = AC.glide_path((0.0, 0.0), (400.0, 0.0))
+    check('glide ends on the target', path[-1][:2] == (400.0, 0.0), path[-1])
+    check('glide arcs sideways, never more than BEND_MAX',
+          0 < max(abs(y) for _x, y, _t in path) <= AC.BEND_MAX / 2.0 + 1e-9)
+    xs = [x for x, _y, _t in path]
+    check('glide moves forward only', xs == sorted(xs))
+    steps = [b - a for a, b in zip([0.0] + xs, xs)]
+    check('slow off the mark, fast mid-way', steps[0] < steps[len(steps) // 2])
+    check('a tiny hop is one step', AC.glide_path((0, 0), (1, 1)) == [(1, 1, 1.0)])
+    frames = AC.motion_keyframes((0.0, 0.0), [(100.0, 0.0, 500, 700), (100.0, 100.0, 1200, 1200)])
+    times = [t for _x, _y, t in frames]
+    check('keyframe times never go back', times == sorted(times), times)
+    check('at each stop on arrival and until it leaves',
+          (100.0, 0.0, 500) in frames and (100.0, 0.0, 700) in frames
+          and frames[-1] == (100.0, 100.0, 1200), frames[-3:])
+
+    est = AC.dock_estimate((0, 0, 1920, 1080), (400, 150, 1900, 1000), ['browser', 'properties'])
+    check('dock estimate: Properties above Project Browser, left of the views',
+          est['properties'][1] < est['browser'][1] and est['browser'][2] < 400, est)
+    check('no gap for a dock: no guess',
+          AC.dock_estimate((0, 0, 1920, 1080), (20, 150, 1900, 1000), ['browser']) == {})
+    check('a closed pane is not guessed',
+          list(AC.dock_estimate((0, 0, 1920, 1080), (400, 150, 1900, 1000), ['browser'])) ==
+          ['browser'])
+    check('click on the row that was found',
+          AC.pane_point((0, 100, 380, 1000), 'Sheets', (30, 400, 120, 418)) == (54, 409))
+    x, y = AC.pane_point((0, 100, 380, 1000), 'Sheets')
+    check('else where Sheets usually is', 0 < x < 380 and 100 < y < 1000)
+
+    src = io.open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
+    before = src[src.index('def before('):src.index('def _changes(')]
+    notify = src[src.index('def notify('):src.index('# \u2500\u2500\u2500 Narration')]
+    check('before(): pane stops go to working() and the canvas covers them',
+          "_ui_stops(app, tool, args, action, shown)" in before
+          and "canvas=union_rect(shown + [st['rect'] for st in ui]), ui=ui" in before)
+    check('notify(): reuses them, or asks what the code made',
+          "getattr(task, '_cursor_ui', None)" in notify and 'sorted(set(made))' in notify
+          and 'ui=ui or []' in notify)
+
+
 if __name__ == '__main__':
     try:
         test_extract_ids()
@@ -1180,6 +1353,8 @@ if __name__ == '__main__':
         test_hud_redesign()
         test_stability()
         test_bar_only()
+        test_harness_hud()
+        test_ui_route_and_motion()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

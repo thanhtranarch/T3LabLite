@@ -79,8 +79,9 @@ DEFAULT_RULES = [
 ]
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class JoinFailuresPreprocessor(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.JoinServiceFailures"
+    __namespace__ = clr_namespace('JoinServiceFailures')
 
     def PreprocessFailures(self, failuresAccessor):
         for f in failuresAccessor.GetFailureMessages():
@@ -386,9 +387,12 @@ def _rescue_swallowed(document, el, cand, volumes):
     return cut
 
 
-def _fill_stats(stats, state, saved=True):
+def _fill_stats(stats, state, saved=True, switched=0):
     if stats is None:
         return
+    # Join order flipped on pairs that were already joined: a model change that
+    # the joined count does not show.
+    stats["order_switched"] = switched if saved else 0
     stats["protected"] = len(state.protected) if (state and saved) else 0
     stats["duplicates"] = len(state.duplicates) if state else 0
 
@@ -402,7 +406,7 @@ def _commit_join(transaction):
 
 def run_join(rules, scope="Active View", mode="Join", switch_order=False,
              progress_callback=None, cancel_check=None, doc=None, uidoc=None,
-             protect_embedded=False, stats=None):
+             protect_embedded=False, stats=None, selected_ids=None):
     """Execute join/unjoin operations based on rules.
 
     protect_embedded — an element that lies fully inside the other element of
@@ -411,10 +415,12 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
     stats — optional dict, filled with "protected" (pairs where an embedded
         element was kept visible) and "duplicates" (overlapping pairs left
         unjoined). Returns (joined, skipped, errors, message) as before.
+    selected_ids — "Selected Elements" scope from these ids instead of the
+        UI selection (the auto_join tool, core/tools/model.py).
     """
     document = doc or revit.doc
     ui_doc = uidoc
-    if ui_doc is None:
+    if ui_doc is None and selected_ids is None:
         try:
             ui_doc = revit.uidoc
         except Exception:
@@ -424,8 +430,10 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
         return (0, 0, 0, "No active Revit document found.")
 
     view_id = document.ActiveView.Id if scope == "Active View" and document.ActiveView else None
-    selected_ids = None
-    if scope == "Selected Elements":
+    if scope == "Selected Elements" and selected_ids is not None:
+        if not selected_ids:
+            return (0, 0, 0, "No elements selected.")
+    elif scope == "Selected Elements":
         if not ui_doc:
             return (0, 0, 0, "No active UI document.")
         sel = ui_doc.Selection.GetElementIds()
@@ -435,6 +443,7 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
 
     total_joined  = 0
     total_skipped = 0
+    total_switched = 0
     total_errors  = 0
     total_rules = len(rules)
     state = EmbedState() if (protect_embedded and mode == "Join") else None
@@ -476,7 +485,7 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
                 if cancel_check and cancel_check():
                     _commit_join(t)
                     if stats is not None:
-                        _fill_stats(stats, state)
+                        _fill_stats(stats, state, switched=total_switched)
                     return (total_joined, total_skipped, total_errors,
                             JOIN_CANCELLED_MESSAGE)
 
@@ -520,6 +529,8 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
                                 inner = check.inner if check is not None else None
                                 switched = _apply_join_order(
                                     document, el, cand, switch_order, inner)
+                                if switched and are_joined:
+                                    total_switched += 1
                                 if (check is not None and inner is None and not check.certain
                                         and (switched or not are_joined)):
                                     inner = _rescue_swallowed(document, el, cand, check.volumes)
@@ -546,7 +557,7 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
 
         _commit_join(t)
         if stats is not None:
-            _fill_stats(stats, state)
+            _fill_stats(stats, state, switched=total_switched)
         return (total_joined, total_skipped, total_errors, None)
 
     except Exception as ex:
@@ -556,3 +567,45 @@ def run_join(rules, scope="Active View", mode="Join", switch_order=False,
             _fill_stats(stats, state, saved=False)
         # Attempted joins are not saved joins after rollback or while Pending.
         return (0, total_skipped, total_errors + 1, str(ex))
+
+
+def count_pairs(rules, scope="Active View", mode="Join", doc=None, selected_ids=None):
+    """Dry run of run_join: what each rule would change, nothing written.
+
+    Same collection as run_join (scope, design options, bounding boxes); a pair
+    met by two rules counts once. Returns [{'rule', 'pairs', 'to_change',
+    'unchanged', 'other_design_option'}] (counts of element pairs).
+    """
+    document = doc or revit.doc
+    view_id = document.ActiveView.Id if scope == "Active View" and document.ActiveView else None
+    planned, out = set(), []
+    for rule in rules:
+        priority_bic = JOINABLE_CATEGORIES.get(rule.get("priority", ""))
+        joinwith_bic = JOINABLE_CATEGORIES.get(rule.get("join_with", ""))
+        row = {"rule": u"{} cuts {}".format(rule.get("priority"), rule.get("join_with")),
+               "pairs": 0, "to_change": 0, "unchanged": 0, "other_design_option": 0}
+        out.append(row)
+        if not priority_bic or not joinwith_bic:
+            continue
+        seen = set()
+        for el in _collect_elements(document, priority_bic, scope, view_id, selected_ids):
+            for cand in _get_intersecting_elements(document, el, joinwith_bic, scope, view_id):
+                key = (min(eid_value(el.Id), eid_value(cand.Id)),
+                       max(eid_value(el.Id), eid_value(cand.Id)))
+                if key in seen:
+                    continue
+                seen.add(key)
+                row["pairs"] += 1
+                if not _same_design_option(el, cand):
+                    row["other_design_option"] += 1
+                    continue
+                try:
+                    joined = JoinGeometryUtils.AreElementsJoined(document, el, cand)
+                except Exception:
+                    joined = None
+                if key not in planned and joined is not None and joined == (mode == "Unjoin"):
+                    planned.add(key)
+                    row["to_change"] += 1
+                else:
+                    row["unchanged"] += 1
+    return out

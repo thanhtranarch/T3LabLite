@@ -411,8 +411,9 @@ _CAT_HINTS = [
 # HELPER CLASSES / FUNCTIONS
 # ==============================================================================
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class WarningSwallower(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.FamiGen"
+    __namespace__ = clr_namespace('FamiGen')
 
     def PreprocessFailures(self, failuresAccessor):
         fail_list = failuresAccessor.GetFailureMessages()
@@ -538,7 +539,7 @@ class _FamiGenAction(IExternalEventHandler):
     OUTSIDE Revit API context, so Create Family is queued here. Static
     `__namespace__` is right: the class lives in lib/ (rule S15).
     """
-    __namespace__ = "T3Lab.FamiGenAction"
+    __namespace__ = clr_namespace('FamiGenAction')
 
     def __init__(self):
         self._action = None

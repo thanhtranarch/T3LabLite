@@ -49,7 +49,9 @@ Part of T3Lab Extension.
 __author__ = "Tran Tien Thanh"
 __title__ = "Drawing Clone"
 
+import io
 import json
+from core import jsonsafe
 import math
 import os
 import time
@@ -408,7 +410,7 @@ def load_presets(path):
     if not path or not os.path.isfile(path):
         return presets, last, warnings
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with io.open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (IOError, OSError, ValueError) as exc:
         warnings.append(u"Preset file could not be read (%s) - built-in presets only."
@@ -438,8 +440,8 @@ def save_presets(path, presets, last):
         folder = os.path.dirname(path)
         if folder and not os.path.isdir(folder):
             os.makedirs(folder)
-        with open(path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
+        with io.open(path, "w", encoding="utf-8") as handle:
+            handle.write(jsonsafe.dumps(payload, indent=2, sort_keys=True))
     except (IOError, OSError, TypeError, ValueError) as exc:
         return short_error(exc)
     return None
@@ -1426,6 +1428,7 @@ def read_source(doc, assembly, views_index=None):
 _ASSEMBLY_FILTER = None
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 def assembly_selection_filter():
     """ISelectionFilter that accepts AssemblyInstances only (Pick in model, D8).
 
@@ -1438,7 +1441,7 @@ def assembly_selection_filter():
         from Autodesk.Revit.UI.Selection import ISelectionFilter
 
         class AssemblyFilter(ISelectionFilter):
-            __namespace__ = "T3Lab.CloneDrawing"
+            __namespace__ = clr_namespace('CloneDrawing')
 
             def AllowElement(self, element):
                 return isinstance(element, AssemblyInstance)

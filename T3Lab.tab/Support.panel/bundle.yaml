@@ -4,5 +4,6 @@ background:
 layout:
 
   - CloudLinks
+  - Harness
   - T3LabAssistant
   - Settings

@@ -38,6 +38,7 @@ __title__  = "Assistant Memory"
 
 import io
 import json
+from core import jsonsafe
 import os
 import threading
 from datetime import datetime
@@ -88,9 +89,7 @@ def _load():
 
 def _save(data):
     try:
-        payload = json.dumps(data, ensure_ascii=True, indent=2)
-        if isinstance(payload, bytes):
-            payload = payload.decode('ascii')
+        payload = jsonsafe.dumps(data, indent=2)
         with io.open(_memory_file(), 'w', encoding='utf-8') as f:
             f.write(payload)
         return True

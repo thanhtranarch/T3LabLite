@@ -16,6 +16,7 @@ __title__   = "T3Lab Assistant"
 
 import io
 import json
+from core import jsonsafe
 import re
 import os
 import sys
@@ -234,9 +235,7 @@ def save_learned_patterns(patterns):
         # UnicodeEncodeError mid-write under IronPython 2.7 as soon as a
         # pattern carries Vietnamese, truncating the file to 0 bytes
         # (same failure class as the chat-history/tool_registry bug).
-        data = json.dumps({'patterns': patterns}, ensure_ascii=True, indent=2)
-        if isinstance(data, bytes):
-            data = data.decode('ascii')
+        data = jsonsafe.dumps({'patterns': patterns}, indent=2)
         with io.open(path, 'w', encoding='utf-8') as f:
             f.write(data)
     except Exception:
@@ -650,6 +649,16 @@ def _parse_export_params(raw, cmd=None):
         if f in cmd:
             fmt = f
             break
+
+    # A quoted Revit sheet set: bộ "Kiến trúc" / sheet set "A - Plans" (direct_export).
+    try:
+        from Services.batchout_executor import SHEET_SET
+        m = SHEET_SET.search(raw)
+        if m:
+            return {'format': fmt, 'filter': '', 'combine': False,
+                    'sheet_set': m.group(1).strip()}
+    except ImportError:
+        pass
 
     m = re.search(r'\b([A-Z])\s*[-–]?\s*(?:sheet|tờ|bản\s*vẽ)', raw, re.IGNORECASE)
     if m:

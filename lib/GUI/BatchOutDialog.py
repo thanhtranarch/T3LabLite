@@ -9,12 +9,10 @@ __author__  = "Tran Tien Thanh"
 __title__   = "BatchOut Dialog"
 
 # IMPORT LIBRARIES
-# ==================================================
 import os
 import sys
 
-# CPython engine paths are injected by lib/_cpython_bootstrap.py below;
-# it discovers the engine whatever the pyRevit clone is called.
+# CPython engine paths come from lib/_cpython_bootstrap.py below.
 
 
 _script_dir = os.path.dirname(__file__)
@@ -67,7 +65,6 @@ from Autodesk.Revit.UI import IExternalEventHandler, ExternalEvent
 from System.Collections.Generic import List
 
 
-# Import API learner and updater modules
 extension_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 lib_dir = os.path.join(extension_dir, 'lib')
 if lib_dir not in sys.path:
@@ -88,14 +85,12 @@ except Exception as _api_learner_ex:
     _api_learner_err = _api_learner_ex
 
 
-# Try to import IFC export
 try:
     from Autodesk.Revit.DB import IFCExportOptions, IFCVersion
     HAS_IFC = True
 except:
     HAS_IFC = False
 
-# Try to import Navisworks export
 try:
     from Autodesk.Revit.DB import NavisworksExportOptions
     HAS_NAVISWORKS = True
@@ -103,10 +98,8 @@ except:
     HAS_NAVISWORKS = False
 
 # DEFINE VARIABLES
-# ==================================================
 logger = script.get_logger()
-# CPython has no ScriptOutput.GetDefault; safe_output()
-# returns a no-op window instead of killing the tool.
+# CPython has no ScriptOutput.GetDefault; safe_output() returns a no-op window.
 try:
     from _cpython_bootstrap import safe_output
     output = safe_output()
@@ -114,16 +107,13 @@ except Exception:
     output = script.get_output()
 
 
-# ── Machine state, not user files ─────────────────────────────────────────
-# Export profiles stay in Documents\T3Lab_BatchOut_Profiles: they are the
-# user's own, shareable files. The crash breadcrumbs do NOT belong there: the
-# in-flight marker is written + fsync'd before EVERY native export call and
-# removed after it, and in a OneDrive-synced Documents folder that is one sync
-# upload per sheet. They are per-machine state, so they live under
-# %APPDATA%\T3LabAI\batchout. The Bad Geometry check (checks/badgeometry_check.py)
-# writes its findings to %APPDATA%\T3LabAI\diagnostics for the same reason, and
-# safe mode reads them from there — dev/test_user_data_moves.py keeps both sides
-# on the same path.
+# ── Machine state, not user files ──
+# Profiles stay in Documents\T3Lab_BatchOut_Profiles (user's shareable files).
+# Crash breadcrumbs are per-machine state under %APPDATA%\T3LabAI\batchout: the
+# marker is fsync'd around EVERY native export call = one OneDrive upload per
+# sheet in Documents. Bad Geometry findings (checks/badgeometry_check.py) live in
+# %APPDATA%\T3LabAI\diagnostics for the same reason; dev/test_user_data_moves.py
+# keeps both sides on the same path.
 CRASH_MARKER_NAME = '_export_crash_marker.json'
 CRASH_HISTORY_NAME = '_export_crash_history.json'
 LEGACY_DIAG_FOLDER = os.path.join(os.path.expanduser('~'), 'Documents', 'T3Lab_Diagnostics')
@@ -133,10 +123,8 @@ BAD_GEOMETRY_NAME = '_bad_geometry.json'
 def _adopt_legacy_file(old, new):
     """Move a TRANSIENT state file an older build left behind to its new home.
 
-    Moved, not copied (unlike user_data_path's legacy copy): the file is
-    deleted as part of normal operation, and a copy would come back from the
-    old folder after every delete — reporting the same old crash each time
-    BatchOut opens. Never raises.
+    Moved, not copied: a copy would come back from the old folder after every
+    delete and report the same old crash each time. Never raises.
     """
     try:
         if old and os.path.isfile(old) and not os.path.exists(new):
@@ -149,9 +137,8 @@ def _adopt_legacy_file(old, new):
 def crash_state_files(profiles_folder):
     """(marker, history) paths of the native-crash breadcrumbs.
 
-    The history is durable (only ever rewritten), so an older one in the
-    profiles folder is copied over once. The marker is transient, so a leftover
-    one — a crash right before this build was installed — is moved.
+    History is durable, so an older one is copied once; the transient marker
+    is moved.
     """
     history = user_data_path(
         'batchout', CRASH_HISTORY_NAME,
@@ -164,8 +151,8 @@ def crash_state_files(profiles_folder):
 def bad_geometry_file():
     """Findings of the Bad Geometry check, read by safe mode.
 
-    Same path checks/badgeometry_check.py writes (FINDINGS_FILE). Findings are
-    durable (rewritten by each scan), so an older file is copied over once.
+    Same path as checks/badgeometry_check.py FINDINGS_FILE; an older file is
+    copied once.
     """
     return user_data_path(
         'diagnostics', BAD_GEOMETRY_NAME,
@@ -173,12 +160,9 @@ def bad_geometry_file():
 
 
 def _build_view_type_labels():
-    """Display label per ViewType.
-
-    Built with getattr so a member missing from an older/newer Revit API can
-    never break module import. The first ten labels must keep their exact
-    wording — they are the hard-coded items of `view_type_filter` in the
-    UI-locked ExportManager.xaml.
+    """Display label per ViewType (getattr: a member missing in some Revit
+    build never breaks import). Also the `view_type_filter` entries, built by
+    _fill_view_type_filter() from the loaded views.
     """
     labels = {}
     for name, label in (
@@ -209,11 +193,8 @@ def _build_view_type_labels():
 
 
 def _build_non_exportable_view_types():
-    """ViewTypes that are not user output and must stay out of the Views list:
-    Revit's internal/browser pseudo-views and sheets (sheets have their own
-    mode). Everything else — legends, schedules, detail views, renderings — is a
-    real view a user can ask BatchOut to export, so it must be listed instead of
-    being silently dropped."""
+    """ViewTypes kept out of the Views list: internal/browser pseudo-views and
+    sheets (own mode). Everything else (legends, schedules, renderings) is listed."""
     types = []
     for name in ("Internal", "ProjectBrowser", "SystemBrowser",
                  "Undefined", "DrawingSheet"):
@@ -227,79 +208,21 @@ VIEW_TYPE_LABELS = _build_view_type_labels()
 NON_EXPORTABLE_VIEW_TYPES = _build_non_exportable_view_types()
 
 
-def _enum_member(enum_name, *members):
-    """First member of DB.<enum_name> this Revit build has, or None."""
-    enum = getattr(DB, enum_name, None)
-    for member in members:
-        value = getattr(enum, member, None) if enum is not None else None
-        if value is not None:
-            return value
-    return None
-
-
-def apply_revit_display_fidelity(options, for_sheets=True):
-    """Make a DWG export look like the Revit view it came from.
-
-    Returns the settings that were applied, for the log.
-
-    - Colors = TrueColorPerView ("True color (RGB values) per view"): every
-      entity carries the RGB Revit draws it in, object styles plus V/G
-      overrides and view filters. The default, IndexColors, colours each layer
-      from the export layer table instead (AIA: magenta text, orange doors,
-      blue schedule fills), which is not what the sheet looks like in Revit.
-      Falls back to TrueColor on a build without the per-view mode.
-    - PropOverrides = ByEntity: element overrides (red dashed demolition,
-      halftone, filter colour / line weight / pattern) stay on the entity
-      instead of being flattened into the category layer.
-    - LineScaling: PaperSpace for sheets (PSLTSCALE = 1, dashes sized per
-      viewport as on the sheet), ViewScale for a view exported on its own.
-    - A hatch background, when the setup turns it on, is the white paper
-      Revit shows — never forced on: it is one colour behind every hatch,
-      which Revit does not draw.
-
-    Line weights go out as Revit's own; AutoCAD draws them only with LWDISPLAY on.
-    """
-    applied = []
-    for prop, value, label in (
-            ('Colors', _enum_member('ExportColorMode', 'TrueColorPerView', 'TrueColor'),
-             'true colors'),
-            ('PropOverrides', _enum_member('PropOverrideMode', 'ByEntity'),
-             'overrides by entity'),
-            ('LineScaling', _enum_member('LineScaling',
-                                         'PaperSpace' if for_sheets else 'ViewScale'),
-             'linetype scale')):
-        if value is None or not hasattr(options, prop):
-            continue
-        try:
-            setattr(options, prop, value)
-            applied.append(label)
-        except Exception as ex:
-            logger.debug("Could not set DWG {}: {}".format(prop, ex))
-    try:
-        if getattr(options, 'UseHatchBackgroundColor', False):
-            options.HatchBackgroundColor = DB.Color(255, 255, 255)
-            applied.append('white hatch background')
-    except Exception as ex:
-        logger.debug("Could not set DWG HatchBackgroundColor: {}".format(ex))
-    return applied
+# DWG "Match Revit display": shared with the MCP / Assistant export (Services/sheet_export.py).
+from Services.sheet_export import _enum_member, apply_revit_display_fidelity  # noqa: E402
+from Services import sheet_export as _sheet_export                           # noqa: E402
+_sheet_export.logger = logger     # DWG option warnings to the pyRevit output, as before
 
 
 def detect_persistent_engine():
-    """True only when __persistentengine__ is actually baked into the loaded
-    command metadata (pyRevit bakes it at ribbon build — needs a Reload after
-    the flag is added to the script).
+    """True only when __persistentengine__ is baked into the loaded command
+    metadata (pyRevit bakes it at ribbon build — needs a Reload).
 
-    The accessor differs per pyRevit runtime build (pyrevitlib 5.1 WIP and
-    the compiled runtime DLL can be out of sync — seen 2026-07-15 where
-    EXEC_PARAMS.needs_persistent_engine raised AttributeError because this
-    machine's 2023 runtime has no ScriptRuntime.EngineConfigs):
-    - newer layout: script_runtime.EngineConfigs.PersistentEngine
-      (what EXEC_PARAMS.needs_persistent_engine reads)
-    - this runtime:  script_runtime.ScriptRuntimeConfigs.EngineConfigs,
-      a JSON string like {"clean": false, "full_frame": false,
-      "persistent": true}
-    Defaults to False — the safe direction (modal fallback) when
-    undetectable.
+    Accessor differs per pyRevit runtime build (2026-07-15: needs_persistent_engine
+    raised AttributeError on a 2023 runtime):
+    - newer: EXEC_PARAMS.needs_persistent_engine (EngineConfigs.PersistentEngine)
+    - older: script_runtime.ScriptRuntimeConfigs.EngineConfigs, JSON with "persistent"
+    Defaults to False (modal fallback) when undetectable.
     """
     try:
         return bool(EXEC_PARAMS.needs_persistent_engine)
@@ -313,25 +236,18 @@ def detect_persistent_engine():
         logger.debug("Persistent engine detection failed: {}".format(ex))
     return False
 
-# F6: BatchOut runs fine without the optional Intelligence helpers, but the
-# import above swallowed any failure silently (and it happens before `logger`
-# exists). Surface it once here so a broken/missing api_learner is visible when
-# debugging instead of just a mysteriously absent smart-adaptation feature.
+# F6: the api_learner import ran before `logger` existed; surface its failure once.
 if not HAS_API_LEARNER:
     logger.warning(
         "BatchOut Intelligence helper unavailable (api_learner); "
         "smart API adaptation disabled: {}".format(_api_learner_err))
 
-# Get Revit version information
-# Read from the Application, not the document: `revit.doc` is None when this
-# tool is launched from the Assistant pane or with no project open, and the
-# old `int(revit.doc.Application.VersionNumber)` raised at IMPORT time
-# ('NoneType' object has no attribute 'Application') so the window never opened.
+# From the Application, not the document: `revit.doc` is None from the Assistant
+# pane / with no project open, and failed at import time.
 from Snippets._host import get_revit_version
 REVIT_VERSION = get_revit_version()
 
 # CLASS/FUNCTIONS
-# ==================================================
 try:
     _Reactive = getattr(forms, 'Reactive', object)
 except Exception:
@@ -339,7 +255,7 @@ except Exception:
 
 
 class SheetItem(_Reactive):
-    """Represents a sheet item in the list - optimized for performance."""
+    """Sheet row in the list."""
     def __init__(self, sheet, is_selected=False, lazy=False):
         self._property_changed_handlers = []
         self.Sheet = sheet
@@ -428,7 +344,7 @@ class SheetItem(_Reactive):
 
 
 class ViewItem(_Reactive):
-    """Represents a view item in the list - optimized for performance."""
+    """View row in the list."""
 
     _VIEW_TYPE_MAP = VIEW_TYPE_LABELS
 
@@ -440,20 +356,18 @@ class ViewItem(_Reactive):
         self.SheetNumber = view.Name  # alias for column compatibility
         self.SheetName = ""
 
-        # ViewType is a direct property — fast, always load
+        # ViewType / Scale are direct properties — cheap, always loaded
         try:
             self.ViewType = self._VIEW_TYPE_MAP.get(view.ViewType, str(view.ViewType))
         except:
             self.ViewType = "Unknown"
         self.SheetName = self.ViewType
 
-        # Scale is a direct property — fast, always load
         try:
             self.Scale = "1:{}".format(view.Scale) if hasattr(view, 'Scale') and view.Scale else "-"
         except:
             self.Scale = "-"
 
-        # Heavy lookups deferred when lazy=True
         self.Phase = "-"
         self.ViewTemplate = "-"
         if not lazy:
@@ -523,9 +437,8 @@ class ViewItem(_Reactive):
         return "{} ({})".format(self.ViewName, self.ViewType)
 
 
-# Export queue row states. The PROGRESS cell in ExportManager.xaml colours each
-# one by matching this exact text — dev/test_batchout_live_progress.py keeps the
-# two sides in step.
+# Queue row states: ExportManager.xaml colours the PROGRESS cell by this exact
+# text (dev/test_batchout_live_progress.py).
 QUEUE_QUEUED = "Queued"
 QUEUE_EXPORTING = "Exporting..."
 QUEUE_EXPORTED = "Exported"
@@ -547,9 +460,8 @@ def _clock(seconds):
 def format_progress_summary(done, total, percent, elapsed=None, running=False):
     """Right-hand label under the queue: '3 / 12 · 25% · 00:41 · ~02:03 left'.
 
-    The estimate assumes the items left take as long as the finished ones did
-    on average, so it only shows once one item is done and while the export is
-    still running.
+    The ETA uses the average of finished items; shown only once one is done and
+    while running.
     """
     parts = []
     if total:
@@ -564,18 +476,15 @@ def format_progress_summary(done, total, percent, elapsed=None, running=False):
 
 
 class ExportPreviewItem(object):
-    """Represents an export preview item."""
+    """Export preview row for a SheetItem or ViewItem."""
     def __init__(self, item, format_name, size, orientation):
         self._property_changed_handlers = []
-        # Support both SheetItem and ViewItem
         if hasattr(item, 'SheetNumber'):
-            # It's a SheetItem
             self.SheetNumber = item.SheetNumber
             self.SheetName = item.SheetName
             self.ItemName = "{} - {}".format(item.SheetNumber, item.SheetName)
         elif hasattr(item, 'ViewName'):
-            # It's a ViewItem
-            self.SheetNumber = item.ViewName  # Use ViewName as identifier
+            self.SheetNumber = item.ViewName
             self.SheetName = item.ViewType
             self.ItemName = "{} ({})".format(item.ViewName, item.ViewType)
         else:
@@ -635,13 +544,12 @@ class ExportPreviewItem(object):
 
 
 class ExportProfile(object):
-    """Represents an export profile with all settings."""
+    """Export profile with all settings."""
     def __init__(self, name="", description=""):
         self.Name = name
         self.Description = description
         self.CreatedDate = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-        # Export format settings
         self.ExportPDF = True
         self.ExportDWG = False
         self.ExportDGN = False
@@ -650,7 +558,6 @@ class ExportProfile(object):
         self.ExportIFC = False
         self.ExportIMG = False
 
-        # PDF settings
         self.PDFPaperSize = "Use Sheet Size"
         self.PDFOrientation = "Landscape"
         self.PDFZoom = "Fit to Page"
@@ -663,7 +570,6 @@ class ExportProfile(object):
         # "Revit" (doc.Export) or "PDF24" (PDF24 Creator printer, Services/batchout_pdf24.py)
         self.PDFEngine = "Revit"
 
-        # DWG settings
         self.DWGVersion = "AutoCAD 2013"
         self.CADExportSetup = "Use setup from file"
         self.CADExportViewsOnSheets = False
@@ -673,12 +579,10 @@ class ExportProfile(object):
         # No image files next to the DWG (logos are dropped from the DWG)
         self.CADSkipImageReferences = False
 
-        # File organization
         self.OutputFolder = os.path.join(os.path.expanduser('~'), 'Documents', 'Revit Exports')
         self.SplitByFormat = False
         self.ReverseOrder = False
 
-        # Naming pattern - default to SheetNumber only for DWG batch export
         self.NamingPattern = "{SheetNumber}"
 
         # Export report (Services/batchout_report.py); ReportColumns has no UI —
@@ -688,7 +592,7 @@ class ExportProfile(object):
         self.ReportColumns = list(REPORT_DEFAULT_COLUMNS)
 
     def to_dict(self):
-        """Convert profile to dictionary for JSON serialization."""
+        """Dict for JSON."""
         return {
             'Name': self.Name,
             'Description': self.Description,
@@ -727,13 +631,8 @@ class ExportProfile(object):
 
     @staticmethod
     def from_dict(data):
-        """Create profile from dictionary.
-
-        Rejects anything that is not a profile mapping up front: the profiles
-        folder also holds bookkeeping JSON (the crash history is a *list*), and
-        calling .items() on that raised
-        "'list' object has no attribute 'items'" in the loader.
-        """
+        """Create profile from a dict; rejects non-dicts (the profiles folder
+        also holds bookkeeping JSON, e.g. the crash history list)."""
         if not isinstance(data, dict):
             raise ValueError(
                 "not a profile object (got {})".format(type(data).__name__))
@@ -744,16 +643,13 @@ class ExportProfile(object):
         return profile
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 try:
     from Services.batchout_handler import BatchOutEventHandler
 except Exception:
     import uuid
-    # Own unique namespace (rule S15): the fixed "T3Lab.BatchOut" here clashed
-    # with the type Services.batchout_handler had already registered, and
-    # BatchOut died with "Duplicate type name within an assembly".
     class BatchOutEventHandler(IExternalEventHandler):
-        __namespace__ = "T3Lab.BatchOutFallback_" + uuid.uuid4().hex[:8]
-
+        __namespace__ = clr_namespace('BatchOut')
         def __init__(self, logger):
             self._logger = logger
             self._queue = []
@@ -787,8 +683,8 @@ class _PendingExportError(RuntimeError):
 
 class ExportManagerWindow(T3WPFWindow):
     """Export Manager Window."""
-    # Click= trong DataTemplate không nằm trong namescope của window, nếu
-    # không bật cờ này handler của checkbox/nút từng dòng không bao giờ chạy.
+    # Click= trong DataTemplate nằm ngoài namescope của window: thiếu cờ này
+    # handler của từng dòng không bao giờ chạy.
     WIRE_TEMPLATED_CLICKS = True
 
     # Auto-saved "latest setup" — lives beside profiles but is not listed as one
@@ -796,7 +692,6 @@ class ExportManagerWindow(T3WPFWindow):
 
     def __init__(self):
         try:
-            # Get absolute path to XAML file from lib/GUI/Tools folder
             xaml_file_path = os.path.join(os.path.dirname(__file__), 'Tools', 'ExportManager.xaml')
             if not os.path.exists(xaml_file_path):
                 ext_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -805,35 +700,19 @@ class ExportManagerWindow(T3WPFWindow):
 
             self.doc = revit.doc
 
-            # Modeless is only safe when pyRevit keeps this engine alive.
-            # __persistentengine__ is baked into the command metadata at
-            # ribbon build time — until the user runs pyRevit Reload after
-            # the flag was added, the engine scope is torn down when this
-            # command returns and every later callback dies on empty module
-            # globals (NameError) → fatal Revit crash (seen 2026-07-14,
-            # journal session 1006). Detect the actual engine config and
-            # fall back to modal when the flag is not active yet.
+            # Modeless only when pyRevit keeps this engine alive; otherwise
+            # callbacks hit torn-down globals → fatal crash (2026-07-14,
+            # journal 1006). See detect_persistent_engine().
             self.modeless = detect_persistent_engine()
 
-            # Modeless support: window no longer blocks Revit, so export and
-            # transaction work must be marshalled back into API context via
-            # this ExternalEvent. It is used ONLY on the modeless path
-            # (see _run_in_api_context); modal mode marshals through the
-            # Dispatcher and never touches it.
+            # ExternalEvent used ONLY on the modeless path (_run_in_api_context);
+            # modal marshals through the Dispatcher.
             self._api_handler = BatchOutEventHandler(logger)
             self._api_event = None
             if self.modeless:
-                # ExternalEvent.Create() only succeeds inside a valid Revit API
-                # context — i.e. a pushbutton command executing on the UI
-                # thread. When this window is constructed from a NON-command
-                # context — the docked T3Lab Assistant pane's message handler,
-                # or the Assistant's background direct-export thread — Create
-                # throws "Attempting to create an ExternalEvent outside of a
-                # standard API execution" and the whole launch dies before the
-                # window ever appears. Degrade to modal (which needs no
-                # ExternalEvent) instead of hard-crashing. Mirrors
-                # server.ensure_external_event(), which returns the error
-                # rather than letting Create escape.
+                # Create() throws outside API context (Assistant pane handler or
+                # its direct-export thread) — degrade to modal instead of dying.
+                # Mirrors server.ensure_external_event().
                 try:
                     self._api_event = ExternalEvent.Create(self._api_handler)
                 except BaseException as ee_ex:
@@ -858,52 +737,39 @@ class ExportManagerWindow(T3WPFWindow):
             self.profiles_folder = os.path.join(os.path.expanduser('~'), 'Documents', 'T3Lab_BatchOut_Profiles')
             self.latest_setup_file = os.path.join(self.profiles_folder, self.LATEST_SETUP_FILENAME)
 
-            # Native-crash breadcrumb: which sheet+format Revit was rendering when
-            # it died. The in-flight marker is written before every native export
-            # call and removed after it returns, so a surviving marker == that
-            # exact combination killed the process. Confirmed kills are promoted
-            # into a durable history so we can skip them instead of re-crashing.
-            # Both live in %APPDATA%\T3LabAI\batchout, not in the (often
-            # OneDrive-synced) profiles folder — see crash_state_files().
+            # Native-crash breadcrumb: a marker surviving a native export call ==
+            # that sheet+format killed Revit; confirmed kills go into a durable
+            # history so they can be skipped. Paths: crash_state_files().
             self._crash_marker_file, self._crash_history_file = \
                 crash_state_files(self.profiles_folder)
             self._crash_history = self._read_crash_history()
             self._pending_crash = self._promote_crash_marker()
             self._skipped_fatal = []
-            # Items exported under safe mode — reported at the end, because such
-            # a file is NOT what a normal export would have produced.
+            # Safe-mode exports, reported at the end (not a normal export's file).
             self._safe_applied = []
             self._safe_mode = False
-            # Known-fatal items are exported anyway by default — a silently
-            # missing file is worse than a crash the user was warned about.
-            # Only an explicit choice in the pre-export prompt turns this on.
+            # Known-fatal items export anyway by default (a silently missing file
+            # is worse than a warned crash); only the pre-export prompt sets this.
             self._skip_fatal = False
-            # Every selected item+format that produced NO file, with the reason.
-            # Surfaced in the completion dialog so an export can never go
-            # missing quietly.
+            # Every item+format that produced NO file, with reason — shown in the
+            # completion dialog.
             self._failed_items = []
             # Filenames already written during THIS run (see _reserve_filename).
             self._used_filenames = set()
             self._verify_misses = 0
 
-            # Performance optimization: caches for batch loading
             self._titleblock_size_cache = {}  # Sheet ID -> (width_mm, height_mm)
             self._paper_size_cache = {}  # Sheet ID -> (size_name, orientation)
             self._titleblock_cache_loaded = False
             self._batch_updating = False
 
-            # naming pattern stored as plain object; default = sheet number only
             self.naming_pattern = type('_NP', (), {'Text': '{SheetNumber}'})()
 
 
-            # Initialize Smart API Adapter for self-learning capability
             if HAS_API_LEARNER:
                 try:
-                    # No web check here: the weekly revitapidocs.com probe that
-                    # used to run at this point was a synchronous WebClient
-                    # download on Revit's UI thread (100 s default timeout),
-                    # holding the window closed on every first open of the week
-                    # for a result that was only ever written to the debug log.
+                    # No web check here: the old weekly revitapidocs.com probe was
+                    # a sync download on the UI thread (100 s timeout).
                     self.api_adapter = SmartAPIAdapter(self.doc, REVIT_VERSION)
                 except Exception as adapter_ex:
                     logger.warning("Could not initialize Smart API Adapter: {}".format(adapter_ex))
@@ -911,23 +777,14 @@ class ExportManagerWindow(T3WPFWindow):
             else:
                 self.api_adapter = None
 
-            # Set default output folder
             default_folder = os.path.join(os.path.expanduser('~'), 'Documents', 'Revit Exports')
             self.output_folder.Text = default_folder
 
-            # Load CAD export setups
             self.load_cad_export_setups()
-
-            # Load sheet sets for filtering
             self.load_sheet_sets_for_filter()
-
-            # Load sheets
             self.load_sheets()
-
-            # Load profiles
             self.load_profiles()
 
-            # Disable formats only if native libraries are not available
             if not HAS_NAVISWORKS:
                 self.export_nwd.IsEnabled = False
                 self.export_nwd.ToolTip = "Navisworks export not available — NavisworksExportOptions missing in this Revit version"
@@ -936,28 +793,22 @@ class ExportManagerWindow(T3WPFWindow):
                 self.export_ifc.IsEnabled = False
                 self.export_ifc.ToolTip = "IFC export not available — IFCExportOptions missing in this Revit version"
 
-            # Restore auto-saved latest setup from the previous session
             self._restore_latest_setup()
 
-            # If a prior export crashed Revit mid-sheet, surface which sheet
-            # (set after _restore_latest_setup so this status wins the display)
+            # After _restore_latest_setup so this status wins the display
             self._warn_if_previous_crash()
 
-            # Attach event handler for click-to-select functionality
-            # This is done programmatically because EventSetters in Styles don't work with pyRevit
+            # In code: EventSetters in Styles don't work with pyRevit
             self.sheets_listview.PreviewMouseLeftButtonDown += self.listview_clicked
 
-            # Sync selection state → count whenever WPF native selection changes
             self.sheets_listview.SelectionChanged += self.sheets_selection_changed
 
-            # Attach event handler for tab changes to update preview
             self.main_tabs.SelectionChanged += self.tab_changed
 
-            # Auto-save latest setup on any close path (X, Close button, Alt+F4)
+            # Auto-save latest setup on any close path
             self.Closing += self._window_closing_save_setup
             self.Closed += self._window_closed_dispose
 
-            # Update button text based on current tab
             self.update_navigation_buttons()
 
         except Exception as ex:
@@ -1106,10 +957,9 @@ class ExportManagerWindow(T3WPFWindow):
     def _window_closed_dispose(self, sender, e):
         """Dispose the ExternalEvent once the window is gone.
 
-        With __persistentengine__ this window object outlives its close; an
-        undisposed ExternalEvent then survives to Revit shutdown, where its
-        stale handler/WPF proxy is destroyed mid-teardown — the 0xc0000005
-        'Invalid WPFWndProxy' exit crash (journal.0090, 2026-07-15).
+        With __persistentengine__ the window outlives its close; an undisposed
+        event crashes Revit at shutdown (0xc0000005 'Invalid WPFWndProxy',
+        journal.0090, 2026-07-15).
         """
         # Safety net: Revit must never stay locked behind a closed window.
         lock = getattr(self, '_input_lock', None)
@@ -1128,12 +978,9 @@ class ExportManagerWindow(T3WPFWindow):
         """Run a callable inside valid Revit API context.
 
         Modeless: queue through the ExternalEvent (fires when Revit idles).
-        Modal fallback: the command is still executing (blocked in
-        ShowDialog), so Dispatcher callbacks pump INSIDE the command's API
-        context — the pre-modeless behavior, safe here. The ExternalEvent
-        path would deadlock instead: Revit never goes idle while a modal
-        window blocks the command, so queued actions (lazy loading, preview,
-        even Export) would only fire after the window closes.
+        Modal: Dispatcher callbacks pump INSIDE the command's API context
+        (blocked in ShowDialog). The ExternalEvent would only fire after the
+        modal window closes — Revit never idles meanwhile.
         """
         if self.modeless:
             if self._api_event is None:
@@ -1163,7 +1010,6 @@ class ExportManagerWindow(T3WPFWindow):
         """Capture current UI settings as a profile."""
         profile = ExportProfile()
 
-        # Export formats
         profile.ExportPDF = self.export_pdf.IsChecked if self.export_pdf.IsChecked is not None else False
         profile.ExportDWG = self.export_dwg.IsChecked if self.export_dwg.IsChecked is not None else False
         profile.ExportDGN = self.export_dgn.IsChecked if self.export_dgn.IsChecked is not None else False
@@ -1172,7 +1018,6 @@ class ExportManagerWindow(T3WPFWindow):
         profile.ExportIFC = self.export_ifc.IsChecked if self.export_ifc.IsChecked is not None else False
         profile.ExportIMG = self.export_img.IsChecked if self.export_img.IsChecked is not None else False
 
-        # PDF settings
         if self.pdf_paper_size.SelectedItem:
             profile.PDFPaperSize = self.pdf_paper_size.SelectedItem.Content
         profile.PDFOrientation = "Landscape" if self.pdf_landscape.IsChecked else "Portrait"
@@ -1185,7 +1030,6 @@ class ExportManagerWindow(T3WPFWindow):
         profile.CombinePDF = self.combine_pdf.IsChecked if self.combine_pdf.IsChecked is not None else False
         profile.PDFEngine = self._pdf_engine()
 
-        # DWG settings
         if self.dwg_version.SelectedItem:
             profile.DWGVersion = self.dwg_version.SelectedItem.Content
         if self.cad_export_setup.SelectedItem:
@@ -1195,12 +1039,10 @@ class ExportManagerWindow(T3WPFWindow):
         profile.CADMatchRevitDisplay = bool(self.cad_match_revit_display.IsChecked)
         profile.CADSkipImageReferences = bool(self.cad_skip_image_references.IsChecked)
 
-        # File organization
         profile.OutputFolder = self.output_folder.Text if self.output_folder.Text else ""
         profile.SplitByFormat = self.save_split_by_format.IsChecked if self.save_split_by_format.IsChecked is not None else False
         profile.ReverseOrder = self.reverse_order.IsChecked if self.reverse_order.IsChecked is not None else False
 
-        # Naming pattern
         profile.NamingPattern = self.naming_pattern.Text if self.naming_pattern.Text else "{SheetNumber}-{SheetName}"
 
         profile.WriteReport = bool(self.write_report.IsChecked)
@@ -1216,7 +1058,6 @@ class ExportManagerWindow(T3WPFWindow):
     def apply_profile_to_ui(self, profile):
         """Apply profile settings to UI controls."""
         try:
-            # Export formats
             self.export_pdf.IsChecked = profile.ExportPDF
             self.export_dwg.IsChecked = profile.ExportDWG
             self.export_dgn.IsChecked = profile.ExportDGN
@@ -1231,20 +1072,16 @@ class ExportManagerWindow(T3WPFWindow):
             if not HAS_IFC:
                 self.export_ifc.IsChecked = False
 
-            # PDF settings
-            # Set paper size
             for i in range(self.pdf_paper_size.Items.Count):
                 if self.pdf_paper_size.Items[i].Content == profile.PDFPaperSize:
                     self.pdf_paper_size.SelectedIndex = i
                     break
 
-            # Set orientation
             if profile.PDFOrientation == "Landscape":
                 self.pdf_landscape.IsChecked = True
             else:
                 self.pdf_portrait.IsChecked = True
 
-            # Set zoom
             if profile.PDFZoom == "Fit to Page":
                 self.pdf_fit_to_page.IsChecked = True
             else:
@@ -1258,7 +1095,6 @@ class ExportManagerWindow(T3WPFWindow):
             self.combine_pdf.IsChecked = profile.CombinePDF
             self.pdf_engine.SelectedIndex = 1 if profile.PDFEngine == "PDF24" else 0
 
-            # DWG settings
             for i in range(self.dwg_version.Items.Count):
                 if self.dwg_version.Items[i].Content == profile.DWGVersion:
                     self.dwg_version.SelectedIndex = i
@@ -1274,7 +1110,6 @@ class ExportManagerWindow(T3WPFWindow):
             self.cad_match_revit_display.IsChecked = bool(profile.CADMatchRevitDisplay)
             self.cad_skip_image_references.IsChecked = bool(profile.CADSkipImageReferences)
 
-            # File organization
             self.output_folder.Text = profile.OutputFolder
             if profile.SplitByFormat:
                 self.save_split_by_format.IsChecked = True
@@ -1282,7 +1117,6 @@ class ExportManagerWindow(T3WPFWindow):
                 self.save_same_folder.IsChecked = True
             self.reverse_order.IsChecked = profile.ReverseOrder
 
-            # Naming pattern
             self.naming_pattern.Text = profile.NamingPattern
 
             self.write_report.IsChecked = bool(profile.WriteReport)
@@ -1300,38 +1134,31 @@ class ExportManagerWindow(T3WPFWindow):
             forms.alert("Error applying profile:\n{}".format(str(ex)))
 
 
-    # Pre-computed paper sizes lookup table for O(1) matching
-    # Format: (rounded_width, rounded_height) -> size_name
-    # We round dimensions to nearest 5mm for tolerance matching
+    # size_name -> (width_mm, height_mm), landscape
     PAPER_SIZES_MM = {
-        # ISO A Series (most common)
         "A0": (1189, 841),
         "A1": (841, 594),
         "A2": (594, 420),
         "A3": (420, 297),
         "A4": (297, 210),
         "A5": (210, 148),
-        # ISO B Series
         "B0": (1414, 1000),
         "B1": (1000, 707),
         "B2": (707, 500),
         "B3": (500, 353),
         "B4": (353, 250),
         "B5": (250, 176),
-        # ANSI Series (US standard)
         "ANSI A": (279, 216),
         "ANSI B": (432, 279),
         "ANSI C": (559, 432),
         "ANSI D": (864, 559),
         "ANSI E": (1118, 864),
-        # ARCH Series (Architectural)
         "ARCH A": (305, 229),
         "ARCH B": (457, 305),
         "ARCH C": (610, 457),
         "ARCH D": (914, 610),
         "ARCH E": (1219, 914),
         "ARCH E1": (1067, 762),
-        # Common named sizes
         "Letter": (279, 216),
         "Legal": (356, 216),
         "Tabloid": (432, 279),
@@ -1339,28 +1166,20 @@ class ExportManagerWindow(T3WPFWindow):
     }
 
     def _batch_load_titleblock_sizes(self):
-        """Batch load all titleblock dimensions in ONE query for performance.
-
-        This replaces the per-sheet FilteredElementCollector approach which was
-        causing O(n) queries. Now we do 1 query for ALL titleblocks and build
-        a lookup cache.
-        """
+        """Load all titleblock dimensions in ONE query (not one collector per sheet)."""
         try:
-            # Clear existing cache
             self._titleblock_size_cache = {}
 
-            # Single query to get ALL titleblocks in the document
             all_titleblocks = FilteredElementCollector(self.doc)\
                 .OfCategory(BuiltInCategory.OST_TitleBlocks)\
                 .WhereElementIsNotElementType()\
                 .ToElements()
 
-            # Build cache: OwnerViewId (Sheet ID) -> (width_mm, height_mm)
+            # OwnerViewId (sheet id) -> (width_mm, height_mm)
             for tb in all_titleblocks:
                 try:
                     owner_view_id = tb.OwnerViewId
                     if owner_view_id and owner_view_id != DB.ElementId.InvalidElementId:
-                        # Get dimensions
                         width_param = tb.get_Parameter(DB.BuiltInParameter.SHEET_WIDTH)
                         height_param = tb.get_Parameter(DB.BuiltInParameter.SHEET_HEIGHT)
 
@@ -1380,12 +1199,8 @@ class ExportManagerWindow(T3WPFWindow):
             self._titleblock_cache_loaded = True
 
     def _detect_paper_size_from_dimensions(self, width_mm, height_mm):
-        """Fast paper size detection from dimensions using pre-computed lookup.
-
-        Uses tolerance matching with O(n) worst case but optimized with
-        early exit for common sizes (A-series checked first).
-        """
-        # Determine orientation and normalize to landscape
+        """(size_name, orientation) from dimensions, ±10 mm; common sizes first."""
+        # Normalize to landscape
         if width_mm > height_mm:
             orientation = "Landscape"
         else:
@@ -1394,7 +1209,6 @@ class ExportManagerWindow(T3WPFWindow):
 
         tolerance = 10  # mm
 
-        # Check most common sizes first for early exit (A-series)
         priority_sizes = ["A3", "A1", "A2", "A0", "A4", "ARCH D", "ARCH E", "ANSI D", "ANSI E"]
 
         for size_name in priority_sizes:
@@ -1404,10 +1218,9 @@ class ExportManagerWindow(T3WPFWindow):
                     abs(height_mm - std_height) < tolerance):
                     return (size_name, orientation)
 
-        # Check remaining sizes
         for size_name, (std_width, std_height) in self.PAPER_SIZES_MM.items():
             if size_name in priority_sizes:
-                continue  # Already checked
+                continue
             if (abs(width_mm - std_width) < tolerance and
                 abs(height_mm - std_height) < tolerance):
                 return (size_name, orientation)
@@ -1456,30 +1269,23 @@ class ExportManagerWindow(T3WPFWindow):
         return DB.ExportPaperFormat.Default
 
     def get_sheet_paper_size_and_orientation(self, sheet):
-        """Auto-detect paper size and orientation from Title Block parameters.
-
-        Returns tuple: (paper_size, orientation)
-        Uses cached titleblock data for performance (batch loaded).
-        """
+        """(paper_size, orientation) from the cached Title Block dimensions."""
         try:
             self._ensure_titleblock_cache()
             sheet_id = eid_value(sheet.Id)
 
-            # Check paper size cache first
             if sheet_id in self._paper_size_cache:
                 return self._paper_size_cache[sheet_id]
 
-            # Check titleblock size cache
             if sheet_id in self._titleblock_size_cache:
                 width_mm, height_mm = self._titleblock_size_cache[sheet_id]
                 result = self._detect_paper_size_from_dimensions(width_mm, height_mm)
                 self._paper_size_cache[sheet_id] = result
                 return result
 
-            # If not in cache, the sheet has no titleblock (e.g. START VIEW or cover sheet).
-            # NEVER query FilteredElementCollector(self.doc, sheet.Id) because view-scoped
-            # collectors on sheets force Revit to initialize view graphics and delegate to
-            # RevitWorker.exe, which deadlocks/crashes Revit on complex or cloud-based start views!
+            # Not cached = no titleblock (e.g. START VIEW). NEVER use a view-scoped
+            # FilteredElementCollector(doc, sheet.Id): it initialises view graphics
+            # via RevitWorker.exe and deadlocks/crashes on complex or cloud start views.
             result = ("Use Sheet Size", "Landscape")
             self._paper_size_cache[sheet_id] = result
             return result
@@ -1491,66 +1297,52 @@ class ExportManagerWindow(T3WPFWindow):
     def load_cad_export_setups(self):
         """Load available DWG export setups from the document."""
         try:
-            # Clear existing items
             self.cad_export_setup.Items.Clear()
 
-            # Add default option
             from System.Windows.Controls import ComboBoxItem
             default_item = ComboBoxItem()
             default_item.Content = "Use setup from file (Default)"
             self.cad_export_setup.Items.Add(default_item)
 
-            # Get all export settings from the document
             collector = FilteredElementCollector(self.doc)\
                 .OfClass(ExportDWGSettings)
 
-            # Add each export setup to the combo box
             for setup in collector:
                 try:
                     setup_name = setup.Name if hasattr(setup, 'Name') else "Setup {}".format(eid_value(setup.Id))
                     item = ComboBoxItem()
                     item.Content = setup_name
-                    item.Tag = setup  # Store the setup object for later use
+                    item.Tag = setup
                     self.cad_export_setup.Items.Add(item)
                 except:
                     pass
 
-            # Select the first item (default)
             self.cad_export_setup.SelectedIndex = 0
 
         except Exception as ex:
             logger.warning("Could not load CAD export setups: {}".format(ex))
-            # Add just the default if there's an error
             from System.Windows.Controls import ComboBoxItem
             default_item = ComboBoxItem()
             default_item.Content = "Use setup from file (Default)"
             self.cad_export_setup.Items.Add(default_item)
             self.cad_export_setup.SelectedIndex = 0
 
-    # Raster-quality escalation ladder (highest -> lowest). Presentation is the
-    # default (maximum fidelity, unchanged). We only step DOWN — and only for a
-    # single sheet that has proven it crashes Revit's native PDF rasteriser at a
-    # higher rung (the fatal "Invalid array ... Arr.cpp": an internal array /
-    # memory overflow while rasterising link-heavy views). 300-DPI "High" is
-    # still print-grade, so every normal sheet keeps full Presentation quality.
+    # Raster quality, highest -> lowest. Presentation is the default; we step DOWN
+    # only for a sheet proven to crash the PDF rasteriser higher up (fatal
+    # "Invalid array ... Arr.cpp" on link-heavy views). 300-DPI "High" is print-grade.
     RASTER_LADDER = ("Presentation", "High", "Medium", "Low")
 
     def _apply_pdf_quality(self, pdf_options, level=None):
         """Force high-fidelity color + raster quality on PDF export.
 
-        Revit's vector PDF exporter rasterizes the patches under transparent
-        / overlapping filled regions (e.g. semi-transparent 'CLEAR' zones over
-        a tile hatch). At the default (low) raster quality the fine linework
-        inside those rasterized patches is dropped -> 'missing lines'. Using a
-        high raster quality keeps that linework intact. Guarded because the enum
-        / property names vary between Revit versions.
+        Revit rasterizes patches under transparent / overlapping filled regions;
+        at low raster quality their fine linework is dropped ('missing lines').
+        Guarded: enum / property names vary between Revit versions.
 
-        `level` selects the starting rung of RASTER_LADDER; None keeps the
-        default (Presentation). Whatever rung is requested, we fall further down
-        the ladder if that enum value is missing in this Revit build.
+        `level` = starting rung of RASTER_LADDER (None = Presentation); falls
+        further down if the enum value is missing in this build.
         """
-        # Raster quality — the key lever for dropped lines under transparency,
-        # and also the key lever for the memory spike that overflows Arr.cpp.
+        # Raster quality: lever for dropped lines AND the Arr.cpp memory spike
         try:
             rq_enum = getattr(DB, 'RasterQualityType', None)
             if rq_enum is not None and hasattr(pdf_options, 'RasterQuality'):
@@ -1565,7 +1357,7 @@ class ExportManagerWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug("Could not set PDF RasterQuality in Revit {}: {}".format(REVIT_VERSION, ex))
 
-        # Color depth — export in full color so nothing collapses to line/grey
+        # Full color so nothing collapses to line/grey
         try:
             color_enum = getattr(DB, 'ColorDepthType', None)
             if color_enum is not None and hasattr(pdf_options, 'ColorDepth'):
@@ -1577,19 +1369,13 @@ class ExportManagerWindow(T3WPFWindow):
 
         return pdf_options
 
-    # ── Native-crash breadcrumb ────────────────────────────────────────────
-    # Revit's own renderer can hard-crash the whole process while regenerating a
-    # sheet for export — observed on this project as either a fatal
-    # "Invalid array ... Arr.cpp" or a bare 0xc0000005 on a render worker thread,
-    # preceded by "Problems during faceting" on views whose geometry defeats the
-    # faceter. It is NOT specific to one format: the same sheets have killed both
-    # the PDF rasteriser and the DWG (VHLR) exporter, so raster quality is not a
-    # reliable lever. The fatal is uncatchable from Python, so instead we leave a
-    # durable marker naming the sheet+format we are about to hand to Revit. If the
-    # process dies, that marker survives; the next session promotes it into a
-    # crash history, which is used to queue that combination LAST and to offer
-    # safe mode for it — not to drop it. Skipping is only ever the user's
-    # explicit choice in the pre-export prompt.
+    # ── Native-crash breadcrumb ──
+    # Revit's renderer can hard-crash while regenerating a sheet ("Invalid array
+    # ... Arr.cpp" or 0xc0000005 on a render thread, after "Problems during
+    # faceting"), in PDF and DWG (VHLR) alike — uncatchable from Python. A durable
+    # marker names the sheet+format handed to Revit; if it survives, the next
+    # session promotes it to the crash history, which queues that combination
+    # LAST and offers safe mode. Skipping is only the user's explicit choice.
 
     def _read_crash_marker(self):
         """Return the in-flight crash-marker dict from a prior aborted export."""
@@ -1602,8 +1388,7 @@ class ExportManagerWindow(T3WPFWindow):
         return None
 
     def _read_crash_history(self):
-        """Return the list of sheet+format combinations that have hard-crashed
-        Revit before. Never raises — a corrupt file just means no history."""
+        """Sheet+format combinations that hard-crashed Revit before. Never raises."""
         try:
             if os.path.exists(self._crash_history_file):
                 with open(self._crash_history_file, 'r') as f:
@@ -1615,17 +1400,14 @@ class ExportManagerWindow(T3WPFWindow):
         return []
 
     def _promote_crash_marker(self):
-        """A marker left on disk means Revit died between our write and the
-        export call returning — i.e. that exact sheet+format is fatal. Record it
-        in the durable history, clear the in-flight marker, and return it so the
-        UI can tell the user what happened."""
+        """A leftover marker = that sheet+format killed Revit. Record it in the
+        history, clear the marker, and return it for the UI."""
         pc = self._read_crash_marker()
         if not pc:
             return None
         try:
-            # safe_level is part of the key: the same sheet crashing again at a
-            # STRONGER mitigation is new information, and dropping it would
-            # freeze the ladder and make us retry a proven-failed rung forever.
+            # safe_level is in the key: a crash at a STRONGER rung is new info;
+            # dropping it would retry a proven-failed rung forever.
             key = (pc.get('doc'), pc.get('sheet'), pc.get('format'), pc.get('safe_level'))
             known = set((e.get('doc'), e.get('sheet'), e.get('format'), e.get('safe_level'))
                         for e in self._crash_history)
@@ -1649,11 +1431,9 @@ class ExportManagerWindow(T3WPFWindow):
             logger.debug("Could not write crash history: {}".format(ex))
 
     def _write_crash_marker(self, sheet_number, fmt, level=None, safe_level=None):
-        """Persist which sheet+format is being handed to Revit's native exporter
-        RIGHT NOW, and which safe-mode rung (if any) was applied. Flushed +
-        fsync'd so it is durable even if the process is killed a moment later.
-        `safe_level` is what lets the next session escalate instead of repeating
-        a mitigation that has already been proven to still crash."""
+        """Persist the sheet+format handed to the native exporter RIGHT NOW and
+        its safe-mode rung (lets the next session escalate). fsync'd so it
+        survives an immediate kill."""
         try:
             folder = os.path.dirname(self._crash_marker_file)
             if not os.path.exists(folder):
@@ -1663,10 +1443,8 @@ class ExportManagerWindow(T3WPFWindow):
                 'format': fmt,
                 'raster': level,
                 'safe_level': safe_level,
-                # Rung NAME as well as its index: the index is only meaningful
-                # against the SAFE_LADDER of the build that wrote it, and this
-                # file is read by a later session (and by humans debugging a
-                # crash journal).
+                # Rung NAME too: the index only means something against the
+                # writing build's SAFE_LADDER.
                 'safe_rung': (self.SAFE_LADDER[safe_level]
                               if safe_level is not None
                               and 0 <= safe_level < len(self.SAFE_LADDER) else None),
@@ -1684,8 +1462,7 @@ class ExportManagerWindow(T3WPFWindow):
             logger.debug("Could not write crash marker: {}".format(ex))
 
     def _clear_crash_marker(self):
-        """Remove the in-flight marker once the native export call has returned
-        (i.e. Revit survived this sheet)."""
+        """Remove the marker once the native export call returned."""
         try:
             if os.path.exists(self._crash_marker_file):
                 os.remove(self._crash_marker_file)
@@ -1695,10 +1472,8 @@ class ExportManagerWindow(T3WPFWindow):
     def _is_known_fatal(self, sheet_number, fmt):
         """True if this document+sheet+format has already hard-crashed Revit.
 
-        Such a combination is still exported — it is queued last, safe mode is
-        offered for it, and the user is warned up front — because a file that
-        goes missing without a word is worse than a crash they chose to risk.
-        Skipping only happens if the user explicitly asks for it in that prompt.
+        Still exported (queued last, safe mode offered, user warned); skipped only
+        on the user's explicit choice.
         """
         try:
             title = self.doc.Title
@@ -1711,16 +1486,12 @@ class ExportManagerWindow(T3WPFWindow):
             pass
         return False
 
-    # ── Safe-mode export ──────────────────────────────────────────────────
-    # A sheet that crashes Revit's faceter is not hopeless: the fatal geometry
-    # is usually one or two elements. Safe mode temporarily neutralises them,
-    # exports, then rolls the change back so the model is byte-identical
-    # afterwards. Preferred over skipping because it still produces the file.
+    # ── Safe-mode export ──
+    # The fatal geometry is usually one or two elements: neutralise them, export,
+    # roll back (model unchanged). Still produces the file, unlike skipping.
 
     def _bad_geometry_ids(self):
-        """ElementIds that the Bad Geometry check flagged for THIS model.
-        Empty list if the check has not been run (safe mode then falls back to
-        the blunt lever, Coarse detail level)."""
+        """ElementIds the Bad Geometry check flagged for THIS model ([] if not run)."""
         try:
             findings = bad_geometry_file()
             if not os.path.exists(findings):
@@ -1734,12 +1505,9 @@ class ExportManagerWindow(T3WPFWindow):
             logger.debug("Could not read bad-geometry list: {}".format(ex))
             return []
 
-    # Categories that carry the curved, spline-driven solids behind the
-    # "Singular point in SilSolver::eval ... Hermite surface" crashes on the
-    # SPH bath sheets. Used by the 'categories' rung when the Bad Geometry
-    # check has not pinned down individual elements — and it is the only
-    # mitigation short of dropping the whole link that reaches geometry living
-    # INSIDE a link, since linked element ids cannot be passed to HideElements.
+    # Categories carrying the spline solids behind "SilSolver::eval ... Hermite
+    # surface" crashes (SPH bath sheets). Fallback for the 'categories' rung
+    # when the Bad Geometry check named nothing.
     SUSPECT_CATEGORIES = (
         DB.BuiltInCategory.OST_PlumbingFixtures,
         DB.BuiltInCategory.OST_SpecialityEquipment,
@@ -1748,33 +1516,20 @@ class ExportManagerWindow(T3WPFWindow):
         DB.BuiltInCategory.OST_Furniture,
     )
 
-    # Mitigations applied cumulatively, ordered by HOW MUCH OF THE DRAWING THEY
-    # DESTROY — least first. We only climb when the rung below has been PROVEN
-    # to still crash (recorded in the crash history), and every failed rung
-    # costs the user a whole Revit session plus a cloud-model reopen, so the
-    # order is chosen to reach a working export in as few attempts as possible.
-    #
-    # 'wireframe' sits second, not last: it hides NOTHING (every line still
-    # reaches the sheet, it only loses the hidden-line cleanup) and it is the
-    # rung most likely to work, because every fatal signature in the journals —
-    # facetFaceWithSpecifiedAlgorithm "long, thin face",  Silhouette moved
-    # outside face envelope, Cannot compute silhouette edges, SilSolver::eval —
-    # comes from hidden-line removal and face tessellation, which the Wireframe
-    # display style does not perform. Putting the category/link hides ahead of
-    # it meant an interior elevation (30-Jul crash: SPH ELEVATIONS 3, 4 —
-    # LIVING HALL / DRY KITCHEN) would have exported with its Furniture,
-    # Casework and Plumbing Fixtures stripped out — i.e. an empty drawing that
-    # still looks like a successful export.
-    #
-    # NOTE: crash history stores this as an INDEX (`safe_level`), so reordering
-    # invalidates previously recorded levels. Safe to do here — no entry in the
-    # history carries a non-null safe_level yet. Markers also record the rung
-    # NAME (`safe_rung`) from now on so the record stays readable if it moves.
+    # Cumulative mitigations, ordered by how much of the drawing they destroy —
+    # least first. We climb only past a rung PROVEN to crash (each failure costs
+    # a Revit session + cloud reopen), so few attempts matter.
+    # 'wireframe' is second: it hides NOTHING and skips hidden-line removal /
+    # face tessellation, where every fatal journal signature comes from
+    # (facetFaceWithSpecifiedAlgorithm, silhouette edges, SilSolver::eval).
+    # Hides first would have emptied interior elevations (30-Jul crash, SPH
+    # ELEVATIONS 3, 4).
+    # NOTE: history stores an INDEX (`safe_level`) — reordering invalidates old
+    # levels; markers also record the NAME (`safe_rung`).
     SAFE_LADDER = ('elements', 'wireframe', 'coarse', 'categories', 'links')
 
     def _next_safe_level(self, sheet_number, fmt):
-        """Rung to start on for this sheet+format: one above the highest rung
-        that has already crashed. 0 when nothing has been tried yet."""
+        """Rung to start on: one above the highest rung that already crashed (0 if none)."""
         highest = -1
         try:
             title = self.doc.Title
@@ -1794,15 +1549,10 @@ class ExportManagerWindow(T3WPFWindow):
         return self._next_safe_level(sheet_number, fmt) >= len(self.SAFE_LADDER)
 
     def _begin_safe_mode(self, sheet, level, fmt=None):
-        """Open a TransactionGroup, apply every mitigation up to and including
-        `level` on the SAFE_LADDER, and return (group, level_used) so the caller
-        can roll it back. Returns (None, level) if nothing could be changed.
-
-        The ladder escalates because a weaker rung has already been proven not
-        to work: 24-Jul journal.1084 shows Coarse detail alone still crashed
-        sheet 1402, with the same four section views regenerating beforehand.
-        Each crash records the rung it died on, so the next session starts one
-        rung stronger instead of repeating a known-failed attempt."""
+        """Open a TransactionGroup, apply every SAFE_LADDER rung up to `level`,
+        return (group, level_used) for the caller to roll back; (None, level)
+        if nothing changed. (24-Jul journal.1084: Coarse alone still crashed
+        sheet 1402.)"""
         views = []
         try:
             for vid in sheet.GetAllPlacedViews():
@@ -1822,9 +1572,8 @@ class ExportManagerWindow(T3WPFWindow):
             trans.Start()
 
             applied = []
-            # Escalate inside this call too: a rung that changes nothing (e.g.
-            # 'elements' with no geometry report yet) must not waste a whole
-            # Revit session, so keep climbing until something actually applies.
+            # A rung that changes nothing (e.g. 'elements' with no report) must
+            # not waste a session: keep climbing until something applies.
             top = min(level, len(self.SAFE_LADDER) - 1)
             rung = 0
             while rung <= top or not applied:
@@ -1846,9 +1595,8 @@ class ExportManagerWindow(T3WPFWindow):
 
             logger.warning("Safe mode L{} on '{}': {} (rolled back after export).".format(
                 level_used, sheet.SheetNumber, ", ".join(applied)))
-            # Surface it in the completion dialog too: a safe-mode export can be
-            # missing content (categories/links rungs) or missing its hidden-line
-            # cleanup (wireframe), and a log line nobody opens is not a warning.
+            # Also in the completion dialog: the file may miss content or
+            # hidden-line cleanup.
             self._note_safe_mode(sheet.SheetNumber, fmt,
                                  self.SAFE_LADDER[level_used], applied)
             return group, level_used
@@ -1862,12 +1610,11 @@ class ExportManagerWindow(T3WPFWindow):
             return None, level
 
     def _apply_safe_rung(self, rung, views):
-        """Apply one mitigation across `views`. Returns how many changes landed.
-        Must be called inside an open Transaction."""
+        """Apply one rung across `views`; returns the change count. Needs an open Transaction."""
         changed = 0
 
         if rung == 'elements':
-            # Surgical: hide only what the Bad Geometry check actually named.
+            # Surgical: only what the Bad Geometry check named.
             bad_ids = self._bad_geometry_ids()
             if not bad_ids:
                 return 0
@@ -1891,14 +1638,9 @@ class ExportManagerWindow(T3WPFWindow):
                         logger.debug("HideElements failed on {}: {}".format(view.Id, ex))
 
         elif rung == 'categories':
-            # Category-level hide. Two reasons this rung exists between the
-            # surgical and the blunt ones:
-            #   * it reaches geometry inside a RevitLink — linked element ids
-            #     belong to another document and cannot be passed to
-            #     HideElements, but category visibility does propagate;
-            #   * it still works when the Bad Geometry check has never been run.
-            # Prefer the categories the check actually named; fall back to the
-            # known-suspect list only when it has nothing to say.
+            # Reaches geometry inside a RevitLink (linked ids can't go to
+            # HideElements; category visibility propagates) and works without a
+            # Bad Geometry run. Check's categories first, else SUSPECT_CATEGORIES.
             cat_ids = self._bad_geometry_category_ids()
             if not cat_ids:
                 cat_ids = []
@@ -1923,8 +1665,7 @@ class ExportManagerWindow(T3WPFWindow):
                             view.Id, ex))
 
         elif rung == 'links':
-            # Every crash journal shows RVT-link graphics regenerating right
-            # before death, so drop the links out of the render entirely.
+            # Every crash journal shows RVT-link graphics regenerating right before death
             for view in views:
                 hideable = List[DB.ElementId]()
                 try:
@@ -1947,8 +1688,7 @@ class ExportManagerWindow(T3WPFWindow):
                         logger.debug("Hiding links failed on {}: {}".format(view.Id, ex))
 
         elif rung == 'coarse':
-            # Blunt: families usually swap to a simpler solid at Coarse. Proven
-            # insufficient on its own for sheet 1402, kept as a cumulative rung.
+            # Blunt: simpler family solids (alone insufficient for sheet 1402)
             for view in views:
                 try:
                     if view.DetailLevel != DB.ViewDetailLevel.Coarse:
@@ -1958,11 +1698,7 @@ class ExportManagerWindow(T3WPFWindow):
                     logger.debug("DetailLevel not settable on {}: {}".format(view.Id, ex))
 
         elif rung == 'wireframe':
-            # The rung that targets the crash most directly: Wireframe skips
-            # hidden-line removal and face tessellation, which is where every
-            # fatal signature in the journals originates. Unlike the rungs below
-            # it this hides NOTHING — the drawing loses its hidden-line cleanup,
-            # not its content — which is why it is tried before them.
+            # Most direct: skips hidden-line removal; hides nothing (see SAFE_LADDER)
             for view in views:
                 try:
                     if view.DisplayStyle != DB.DisplayStyle.Wireframe:
@@ -1974,9 +1710,7 @@ class ExportManagerWindow(T3WPFWindow):
         return changed
 
     def _bad_geometry_category_ids(self):
-        """Category ids of the elements the Bad Geometry check flagged for THIS
-        model. Lets the 'categories' rung hide exactly the categories that are
-        actually implicated rather than the generic suspect list."""
+        """Category ids of the elements the Bad Geometry check flagged for THIS model."""
         ids = []
         try:
             if not os.path.exists(self.BAD_GEOMETRY_FILE):
@@ -2092,11 +1826,8 @@ class ExportManagerWindow(T3WPFWindow):
         return False
 
     def _order_risky_last(self, items):
-        """Move items with a crash history to the END of the queue.
-
-        They are still exported — nothing is dropped by default — but if Revit
-        does die on one, every other selected sheet/view is already on disk.
-        """
+        """Move items with a crash history to the END of the queue (still
+        exported), so a crash leaves everything else already on disk."""
         safe, risky = [], []
         for item in items:
             (risky if self._is_risky_item(item) else safe).append(item)
@@ -2106,10 +1837,8 @@ class ExportManagerWindow(T3WPFWindow):
         return safe + risky
 
     def _ask_safe_mode(self, selected_items):
-        """If any selected item+format is known-fatal, ask ONCE up front how to
-        handle it. Both export choices export everything; only an explicit
-        "Skip them" leaves files out, and skipped items are then listed in the
-        completion dialog."""
+        """If any selected item+format is known-fatal, ask ONCE how to handle it.
+        Only an explicit "Skip them" leaves files out (listed at completion)."""
         self._safe_mode = False
         self._skip_fatal = False
         RUNG_LABEL = {
@@ -2180,18 +1909,14 @@ class ExportManagerWindow(T3WPFWindow):
         elif choice == FULL_OPT:
             self._safe_mode = False
         else:
-            # SAFE_OPT, or the dialog was dismissed (returns False): default to
-            # the safest choice that still exports everything.
+            # SAFE_OPT or dismissed: safest choice that still exports everything
             self._safe_mode = bool(recoverable)
 
-    # Rungs that REMOVE content from the drawing. 'wireframe' and 'coarse' are
-    # deliberately not in here: they change how the view is drawn, not what it
-    # contains, so they do not need the stronger "check this file" warning.
+    # Rungs that REMOVE content ('wireframe'/'coarse' only change how it is drawn)
     LOSSY_RUNGS = ('categories', 'links')
 
     def _note_safe_mode(self, sheet_number, fmt, rung, applied):
-        """Record that a sheet was exported under safe mode, for the completion
-        dialog. Every one of these files differs from a normal export."""
+        """Record a safe-mode export for the completion dialog."""
         label = "{}{} -> {}".format(
             sheet_number, " ({})".format(fmt) if fmt else "", ", ".join(applied))
         if rung in self.LOSSY_RUNGS:
@@ -2219,16 +1944,13 @@ class ExportManagerWindow(T3WPFWindow):
             pass
 
     def _raster_level_for(self, sheet_number):
-        """Starting rung on RASTER_LADDER for this sheet. Always None
-        (= Presentation, full quality): the crash this used to work around also
-        happens in the DWG exporter, where there is no raster setting at all, so
-        stepping raster down does not prevent it. Kept as the single place to
-        hook per-sheet quality if a future case does respond to it."""
+        """Starting RASTER_LADDER rung for this sheet. Always None (Presentation):
+        the crash also hits DWG, which has no raster setting. Kept as the hook
+        for per-sheet quality."""
         return None
 
     def _warn_if_previous_crash(self):
-        """If a prior export died mid-sheet, tell the user which sheet+format and
-        what we will do about it on this run."""
+        """If a prior export died mid-sheet, tell the user which sheet+format."""
         pc = self._pending_crash
         if not pc:
             return
@@ -2243,8 +1965,7 @@ class ExportManagerWindow(T3WPFWindow):
             else:
                 msg = "Previous export crashed on sheet '{}' ({}, a different model).".format(
                     sheet, fmt)
-            # Surfaced in the status bar only — a logger.warning here forces the
-            # pyRevit output window open every time the tool starts.
+            # Status bar only: logger.warning would pop the output window on every start
             logger.debug(msg)
             try:
                 self.status_text.Text = msg
@@ -2253,14 +1974,10 @@ class ExportManagerWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug("Could not surface previous crash: {}".format(ex))
 
-    # ── Nothing exports silently ───────────────────────────────────────────
-    # Two independent ways an item used to vanish without a word:
-    #   1. filename collision — Revit allows a Floor Plan and a Ceiling Plan to
-    #      both be named "Level 1", and a view-based naming pattern collapses
-    #      them onto one file, so the second export overwrote the first.
-    #   2. the verification check missing the file Revit actually wrote, which
-    #      only dropped the success count — but the same branch is now the one
-    #      that declares a failure, so it must not produce false negatives.
+    # ── Nothing exports silently ──
+    # 1. filename collision: a Floor Plan and Ceiling Plan both named "Level 1"
+    #    collapse onto one file (see _reserve_filename);
+    # 2. verification declares failures, so it must not give false negatives.
 
     def _reset_run_state(self):
         """Clear per-run bookkeeping (filenames used, failures recorded)."""
@@ -2290,8 +2007,7 @@ class ExportManagerWindow(T3WPFWindow):
         return confirmed
 
     def _reserve_filename(self, folder, base, ext):
-        """Return a filename in `folder` that no earlier item in this run has
-        already claimed, suffixing " (2)", " (3)", … on collision."""
+        """Filename in `folder` unclaimed in this run; " (2)", " (3)", … on collision."""
         if not hasattr(self, '_used_filenames'):
             self._used_filenames = set()
         base = base.strip() or "Unnamed"
@@ -2313,16 +2029,9 @@ class ExportManagerWindow(T3WPFWindow):
     def _verify_export(self, expected_file, prev_mtime, started_at, ext):
         """True when the export produced a file.
 
-        Falls back to looking for a file this run did not reserve that was
-        written after `started_at` — some Revit exporters decorate the name
-        themselves, and reporting a successful export as missing would be as
-        misleading as losing it.
-
-        Export() is synchronous, so the file is normally on disk before the
-        first check and the wait only covers sync lag. Once a couple of items in
-        a row have produced nothing, the wait is cut short: a format that is
-        failing across the board would otherwise add minutes of dead polling
-        over a large selection.
+        Falls back to an unreserved file written after `started_at` (some
+        exporters decorate the name). After two misses in a row the wait is cut
+        short so a failing format doesn't add minutes of polling.
         """
         timeout = 0.5 if getattr(self, '_verify_misses', 0) >= 2 else 3.0
         if self._wait_for_export_file(expected_file, prev_mtime, timeout):
@@ -2336,7 +2045,7 @@ class ExportManagerWindow(T3WPFWindow):
             self._used_filenames = used
             for path in _glob.glob(os.path.join(folder, "*" + ext)):
                 if path.lower() == expected_file.lower() or path.lower() in used:
-                    continue  # belongs to another item of this run
+                    continue
                 try:
                     if (os.path.isfile(path) and os.path.getsize(path) > 0
                             and os.path.getmtime(path) >= started_at):
@@ -2373,10 +2082,8 @@ class ExportManagerWindow(T3WPFWindow):
     def _sync_item_labels(self, items, fmt):
         """Refresh each row's cached sheet number / view name from Revit.
 
-        Per-item try/except on purpose: this used to be one bare loop around the
-        whole list, so a single unreadable row (deleted element, closed workset)
-        raised out of the export function and every other selected item was
-        dropped with nothing but a log line.
+        Per-item try/except: one unreadable row (deleted element, closed
+        workset) must not drop every other item.
         """
         for item in items:
             try:
@@ -2391,8 +2098,7 @@ class ExportManagerWindow(T3WPFWindow):
                                    fmt, "could not be read from the model: {}".format(ex))
 
     def _element_of(self, item):
-        """(element, display_name) for a SheetItem or ViewItem; (None, label) if
-        the row is neither — which is itself reported, never skipped quietly."""
+        """(element, display_name) for a SheetItem or ViewItem; (None, label) otherwise."""
         if hasattr(item, 'Sheet'):
             return item.Sheet, item.Sheet.SheetNumber
         if hasattr(item, 'View'):
@@ -2400,12 +2106,9 @@ class ExportManagerWindow(T3WPFWindow):
         return None, str(getattr(item, 'SheetNumber', 'Unknown'))
 
     def _wait_for_export_file(self, path, prev_mtime, timeout=8.0):
-        """Poll for a freshly-written export file instead of globbing the whole
-        output folder and sleeping a fixed time on every sheet. Returns True once
-        `path` exists with an mtime newer than prev_mtime (or brand new). Revit's
-        Export() is synchronous, so the file is normally already there on the
-        first check — near-zero wait, versus the old fixed 0.3s sleep + two
-        folder-wide globs (very slow on OneDrive-synced output folders)."""
+        """True once `path` exists nonempty with mtime newer than prev_mtime (or
+        new). Export() is synchronous, so usually true on the first check; no
+        folder-wide globs (slow on OneDrive)."""
         import time as _t
         deadline = _t.monotonic() + max(0.0, timeout)
         while True:
@@ -2428,13 +2131,11 @@ class ExportManagerWindow(T3WPFWindow):
 
             self.sheet_set_checklist.Children.Clear()
 
-            # Get the T3.CheckBox style from the window resources
             try:
                 t3_cb_style = self.FindResource("T3.CheckBox")
             except Exception:
                 t3_cb_style = None
 
-            # "All Sheets/Views" checkbox — checked by default
             all_cb = CheckBox()
             all_cb.Content = "All Sheets/Views"
             all_cb.IsChecked = True
@@ -2446,7 +2147,6 @@ class ExportManagerWindow(T3WPFWindow):
             self._sheet_set_all_checkbox = all_cb
             self.sheet_set_checklist.Children.Add(all_cb)
 
-            # Individual set checkboxes
             saved_set_names = self.get_saved_sheet_set_names()
             if saved_set_names:
                 from System.Windows.Controls import Separator
@@ -2481,7 +2181,6 @@ class ExportManagerWindow(T3WPFWindow):
         """Toggle the multi-select sheet set popup open/closed."""
         try:
             self.sheet_set_popup.IsOpen = not self.sheet_set_popup.IsOpen
-            # Keep toggle button appearance in sync with popup state
             if not self.sheet_set_popup.IsOpen:
                 self.sheet_set_toggle.IsChecked = False
         except Exception as ex:
@@ -2507,7 +2206,7 @@ class ExportManagerWindow(T3WPFWindow):
                 for child in self.sheet_set_checklist.Children
                 if hasattr(child, 'Tag') and child.Tag is not None
             )
-            # Uncheck "All" silently if any individual set is checked
+            # Set "All" without firing its handler
             self._sheet_set_all_checkbox.Checked -= self._sheet_set_all_checked
             self._sheet_set_all_checkbox.IsChecked = not any_checked
             self._sheet_set_all_checkbox.Checked += self._sheet_set_all_checked
@@ -2550,7 +2249,6 @@ class ExportManagerWindow(T3WPFWindow):
                 self.apply_filters()
                 return
 
-            # Union of all sheet IDs across checked sets
             all_ids = set()
             for set_name in checked_sets:
                 ids = self.get_sheet_ids_from_set(set_name)
@@ -2562,7 +2260,6 @@ class ExportManagerWindow(T3WPFWindow):
 
             self.apply_filters(sheet_set_ids=list(all_ids))
 
-            # Auto-select sheets belonging to any checked set
             selected_count = 0
             for sheet_item in self.all_sheets:
                 if sheet_item.Sheet.Id in all_ids:
@@ -2580,16 +2277,15 @@ class ExportManagerWindow(T3WPFWindow):
             logger.error("Error applying sheet set filter: {}".format(ex))
 
     def _on_item_property_changed(self, sender, args):
-        """React to any programmatic or binding changes to IsSelected on items."""
+        """Recount when an item's IsSelected changes."""
         if getattr(self, '_batch_updating', False):
             return
         if args and getattr(args, 'PropertyName', None) == "IsSelected":
             self.update_selection_count()
 
     def load_sheets(self):
-        """Load all sheets - Phase 1: instant display of names, Phase 2: progressive background load."""
+        """Phase 1: show sheet names at once; phase 2: load the rest in chunks."""
         try:
-            # Phase 1: collect sheet elements (single fast query) + display names immediately
             sheets_collector = FilteredElementCollector(self.doc)\
                 .OfCategory(BuiltInCategory.OST_Sheets)\
                 .WhereElementIsNotElementType()
@@ -2597,7 +2293,6 @@ class ExportManagerWindow(T3WPFWindow):
             sheets = [s for s in sheets_collector if isinstance(s, ViewSheet)]
             sheets.sort(key=lambda x: x.SheetNumber)
 
-            # Create minimal SheetItems (lazy=True skips all parameter accesses)
             self.all_sheets = []
             for sheet in sheets:
                 item = SheetItem(sheet, False, lazy=True)
@@ -2605,30 +2300,26 @@ class ExportManagerWindow(T3WPFWindow):
                 self.all_sheets.append(item)
             self.filtered_sheets = list(self.all_sheets)
 
-            # Show sheet names immediately
             self.update_sheets_list()
             self.status_text.Text = "Loaded {} sheets | Revit {}".format(
                 len(self.all_sheets), REVIT_VERSION)
 
-            # Phase 2: schedule chunked loading through the ExternalEvent queue.
-            # NOT Dispatcher.BeginInvoke — with a modeless window those callbacks
-            # would read the Revit API outside API context and crash Revit.
+            # Via _run_in_api_context, NOT Dispatcher.BeginInvoke: modeless
+            # callbacks would read the API outside context and crash Revit.
             self._lazy_load_index = 0
             self._run_in_api_context(self._lazy_load_chunk)
 
         except Exception as ex:
             logger.error("Error loading sheets: {}".format(ex))
-            # Không exitscript: hàm này cũng chạy trong event handler của window
-            # modeless — SystemExit bay qua biên .NET có thể làm Revit crash.
+            # Không exitscript: SystemExit qua biên .NET (window modeless) có thể crash Revit.
             forms.alert("Error loading sheets: {}".format(ex))
 
 
     def _lazy_load_chunk(self):
         """Load Revision for a batch of sheets, then schedule the next batch.
 
-        Only loads the Revision column (1 param/sheet). Size/Orientation are
-        deferred to Queue build time so startup never triggers titleblock
-        queries or view-scope FilteredElementCollector calls.
+        Size/Orientation wait until the Queue is built, so startup never
+        queries titleblocks.
         """
         CHUNK_SIZE = 80
 
@@ -2651,7 +2342,6 @@ class ExportManagerWindow(T3WPFWindow):
             if hasattr(self, 'sheets_listview') and self.sheets_listview:
                 self.sheets_listview.Items.Refresh()
 
-            # Next batch via ExternalEvent — keeps every API read in context
             self._run_in_api_context(self._lazy_load_chunk)
 
         except Exception as ex:
@@ -2664,15 +2354,11 @@ class ExportManagerWindow(T3WPFWindow):
 
 
     def load_views(self):
-        """Load all views — Phase 1: instant display, Phase 2: chunked lazy loading.
+        """Load all views — phase 1: instant display, phase 2: chunked lazy load.
 
-        Collected with OfClass(View), NOT OfCategory(OST_Views): schedules sit
-        under OST_Schedules and several view kinds carry no category at all, so
-        the category filter hid them. The old isinstance whitelist
-        (ViewPlan/ViewSection/View3D/ViewSchedule/ViewDrafting) additionally
-        dropped every Legend view — they are plain `View` instances — even though
-        the Views filter dropdown offers a "Legend" entry. Both made views
-        silently un-exportable because they never appeared in the list.
+        OfClass(View), NOT OfCategory(OST_Views): schedules are OST_Schedules and
+        some views have no category. No isinstance whitelist: Legends are plain
+        `View`s.
         """
         try:
             views_collector = FilteredElementCollector(self.doc)\
@@ -2686,12 +2372,11 @@ class ExportManagerWindow(T3WPFWindow):
                     if v.IsTemplate:
                         continue
                     if isinstance(v, ViewSheet):
-                        continue  # sheets are handled by the Sheets mode
+                        continue  # Sheets mode
                     if v.ViewType in NON_EXPORTABLE_VIEW_TYPES:
                         excluded += 1
                         continue
-                    # A revision schedule belongs to a titleblock, not to the
-                    # browser — it is not a standalone exportable view.
+                    # Titleblock revision schedules are not standalone views
                     if isinstance(v, ViewSchedule) and \
                             getattr(v, 'IsTitleblockRevisionSchedule', False):
                         excluded += 1
@@ -2706,7 +2391,6 @@ class ExportManagerWindow(T3WPFWindow):
                 logger.debug("Views list: {} exportable, {} internal/system views "
                              "excluded".format(len(views), excluded))
 
-            # lazy=True: skip Phase/ViewTemplate lookups for instant display
             self.all_views = []
             for view in views:
                 item = ViewItem(view, False, lazy=True)
@@ -2714,19 +2398,45 @@ class ExportManagerWindow(T3WPFWindow):
                 self.all_views.append(item)
             self.filtered_views = list(self.all_views)
 
+            self._fill_view_type_filter()
             self.update_items_list()
             self.status_text.Text = "Loaded {} views | Revit {}".format(
                 len(self.all_views), REVIT_VERSION)
 
-            # Phase 2: chunked Phase/ViewTemplate loading via ExternalEvent queue
+            # Phase 2: chunked Phase/ViewTemplate loading
             self._lazy_view_load_index = 0
             self._run_in_api_context(self._lazy_view_load_chunk)
 
         except Exception as ex:
             logger.error("Error loading views: {}".format(ex))
-            # Không exitscript: hàm này cũng chạy trong event handler của window
-            # modeless — SystemExit bay qua biên .NET có thể làm Revit crash.
+            # Không exitscript: SystemExit qua biên .NET (window modeless) có thể crash Revit.
             forms.alert("Error loading views: {}".format(ex))
+
+    def _fill_view_type_filter(self):
+        """Fill the view-type dropdown from the loaded views' ViewItem.ViewType
+        labels (enum names like "ThreeD" matched no row). Keeps the current pick.
+        """
+        combo = getattr(self, 'view_type_filter', None)
+        if combo is None:
+            return
+        try:
+            from System.Windows.Controls import ComboBoxItem
+            current = None
+            if combo.SelectedIndex > 0 and combo.SelectedItem is not None:
+                current = str(combo.SelectedItem.Content)
+            labels = sorted(set(v.ViewType for v in self.all_views), key=lambda s: s.lower())
+            self._filling_view_types = True
+            try:
+                combo.Items.Clear()
+                for label in ["All Types"] + labels:
+                    item = ComboBoxItem()
+                    item.Content = label
+                    combo.Items.Add(item)
+                combo.SelectedIndex = labels.index(current) + 1 if current in labels else 0
+            finally:
+                self._filling_view_types = False
+        except Exception as ex:
+            logger.debug("Could not fill the view type filter: {}".format(ex))
 
     def _lazy_view_load_chunk(self):
         """Load Phase/ViewTemplate for a batch of views, then schedule the next batch."""
@@ -2750,7 +2460,6 @@ class ExportManagerWindow(T3WPFWindow):
             if hasattr(self, 'sheets_listview') and self.sheets_listview:
                 self.sheets_listview.Items.Refresh()
 
-            # Next batch via ExternalEvent — keeps every API read in context
             self._run_in_api_context(self._lazy_view_load_chunk)
 
         except Exception as ex:
@@ -2768,7 +2477,6 @@ class ExportManagerWindow(T3WPFWindow):
         else:
             self.update_views_list()
 
-        # Update selection count
         self.update_selection_count()
 
     def update_views_list(self):
@@ -2796,7 +2504,7 @@ class ExportManagerWindow(T3WPFWindow):
                     label += " | {} selected hidden by filters".format(hidden_selected)
                 self.selection_count_text.Text = label
 
-            # Sync header checkbox (True = all, False = none, None = indeterminate)
+            # Header checkbox: True = all, False = none, None = some
             if hasattr(self, 'header_checkbox') and self.header_checkbox:
                 if total_count == 0 or selected_count == 0:
                     self.header_checkbox.IsChecked = False
@@ -2811,18 +2519,14 @@ class ExportManagerWindow(T3WPFWindow):
     def selection_mode_changed(self, sender, e):
         """Handle selection mode change (Sheets vs Views radio button)."""
         try:
-            # Determine which mode is selected
             if hasattr(self, 'sheets_radio') and self.sheets_radio.IsChecked:
                 self.selection_mode = "sheets"
-                # Show sheets
                 if not self.all_sheets:
                     self.load_sheets()
                 else:
                     self.update_items_list()
-                # Update UI visibility - Hide view type filter
                 if hasattr(self, 'view_type_filter'):
                     self.view_type_filter.Visibility = Visibility.Collapsed
-                # Update column headers for Sheets mode
                 if hasattr(self, 'col_number'):
                     self.col_number.Header = "Sheet Number"
                     self.col_name.Header = "Sheet Name"
@@ -2832,16 +2536,13 @@ class ExportManagerWindow(T3WPFWindow):
                     self.col_orientation.Header = "Orientation"
             elif hasattr(self, 'views_radio') and self.views_radio.IsChecked:
                 self.selection_mode = "views"
-                # Show views
                 if not self.all_views:
-                    # First load queries the document → run in API context
+                    # First load queries the document → API context
                     self._run_in_api_context(self.load_views)
                 else:
                     self.update_items_list()
-                # Update UI visibility - Show view type filter
                 if hasattr(self, 'view_type_filter'):
                     self.view_type_filter.Visibility = Visibility.Visible
-                # Update column headers for Views mode
                 if hasattr(self, 'col_number'):
                     self.col_number.Header = "View Name"
                     self.col_name.Header = "View Type"
@@ -2853,24 +2554,16 @@ class ExportManagerWindow(T3WPFWindow):
             logger.error("Error changing selection mode: {}".format(ex))
 
     def listview_clicked(self, sender, e):
-        """Handle click on ListView — only blocks TextBox clicks from toggling the row.
-
-        Selection sync is now handled automatically by the XAML TwoWay binding
-        (ListViewItem.IsSelected ↔ SheetItem.IsSelected) and the
-        sheets_selection_changed event handler.
-        """
+        """Stop TextBox clicks from toggling the row; selection sync is the
+        TwoWay IsSelected binding + sheets_selection_changed."""
         try:
             from System.Windows.Controls import TextBox
             from System.Windows.Media import VisualTreeHelper
 
-            # Check if the click was on or inside a TextBox
-            # If so, don't let it bubble up to the ListViewItem selection
             cur = e.OriginalSource
             while cur is not None:
                 if isinstance(cur, TextBox):
-                    # Click was in a textbox, stop here to prevent row toggle
                     e.Handled = True
-                    # Still let the TextBox get focus
                     sender_tb = cur
                     sender_tb.Focus()
                     return
@@ -2882,12 +2575,7 @@ class ExportManagerWindow(T3WPFWindow):
             logger.debug("Error handling listview click: {}".format(ex))
 
     def sheets_selection_changed(self, sender, e):
-        """React to WPF native selection changes (click, Ctrl+click, Shift+click, arrow keys).
-
-        Because ListViewItem.IsSelected is TwoWay-bound to SheetItem.IsSelected,
-        the data model is already updated when this fires. We just need to
-        refresh the count display and export preview.
-        """
+        """WPF selection changed; the TwoWay IsSelected binding already updated the model."""
         try:
             if getattr(self, '_batch_updating', False):
                 return
@@ -2897,16 +2585,13 @@ class ExportManagerWindow(T3WPFWindow):
             logger.debug("Error handling sheets selection changed: {}".format(ex))
 
     def row_checkbox_clicked(self, sender, e):
-        """Handle direct click on row CheckBox."""
         try:
             # The ONLY writer of the model: the row CheckBox is bound OneWay
             # (through the hidden row_selected_text bridge in the XAML).
             if hasattr(sender, 'DataContext') and sender.DataContext is not None:
                 sender.DataContext.IsSelected = bool(sender.IsChecked)
 
-            # SheetItem is a plain Python object without CLR
-            # INotifyPropertyChanged; re-read every visible row so the ticks
-            # always show the model.
+            # SheetItem has no INotifyPropertyChanged: re-read every row.
             self.sheets_listview.Items.Refresh()
 
             self.update_selection_count()
@@ -2915,43 +2600,35 @@ class ExportManagerWindow(T3WPFWindow):
             logger.debug("Error handling row checkbox click: {}".format(ex))
 
     def listview_item_double_clicked(self, sender, e):
-        """Handle double-click on ListView item - same as single click for now."""
-        # Double-click just toggles like single click
-        # This prevents accidental double-click from causing issues
+        """No-op, so a double-click does not toggle twice."""
         pass
 
     def on_listview_size_changed(self, sender, e):
-        """Resize Sheet Name and Custom Filename columns to fill available ListView width with ZERO gaps."""
+        """Size Sheet Name + Custom Filename columns to fill the ListView (zero gap)."""
         try:
             col_num_w = int(self.col_number.Width) if hasattr(self, 'col_number') and self.col_number.Width > 0 else 220
-            # Fixed columns: checkbox (40) + number (col_num_w) + rev (70) + size (70) + orientation (90) + scrollbar/borders (8)
+            # checkbox + number + rev + size + orientation + scrollbar/borders
             fixed = 40 + col_num_w + 70 + 70 + 90 + 8
             available = sender.ActualWidth - fixed
             if available <= 0:
                 return
             col_name_width = int(available * 0.38)
             self.col_name.Width = col_name_width
-            # The last column takes ALL remaining width so there is zero gap to the right edge
+            # Last column takes the rest: zero gap at the right edge
             self.col_custom_filename.Width = max(100, int(available - col_name_width))
         except Exception:
             pass
 
     def window_content_rendered(self, sender, e):
-        """Force one column-fill pass once the window has its final rendered size.
-
-        The Selection tab's ListView populates its ItemsSource during __init__,
-        before the window is shown, so the first SizeChanged on sheets_listview
-        can fire with a stale/intermediate width and leave a gap between the
-        last column and the scrollbar. Re-run the same fill logic now that
-        ContentRendered guarantees layout is final.
-        """
+        """Re-run the column fill once layout is final: the first SizeChanged
+        (ItemsSource set in __init__) can see a stale width and leave a gap."""
         try:
             self.on_listview_size_changed(self.sheets_listview, None)
         except Exception:
             pass
 
     def header_checkbox_clicked(self, sender, e):
-        """Handle header checkbox click to select/deselect all items."""
+        """Select / deselect all visible items."""
         try:
             items = self.filtered_sheets if self.selection_mode == "sheets" else self.filtered_views
             if not items:
@@ -2980,20 +2657,14 @@ class ExportManagerWindow(T3WPFWindow):
                 else:
                     self.status_text.Text = "Deselected all views"
 
-            # Update selection count
             self.update_selection_count()
-            # Update export preview if on Queue tab
             self.update_export_preview_if_needed()
         except Exception as ex:
             logger.debug("Error in header_checkbox_clicked: {}".format(ex))
 
 
     def get_saved_sheet_set_names(self):
-        """Get names of all saved ViewSheetSets from the document.
-
-        ViewSheetSets are created in Revit's Print dialog and contain saved sets of sheets.
-        Uses FilteredElementCollector for reliable access without touching PrintManager state.
-        """
+        """Names of saved ViewSheetSets (collector, so PrintManager state is untouched)."""
         try:
             collector = FilteredElementCollector(self.doc).OfClass(ViewSheetSet)
             return [print_set.Name for print_set in collector]
@@ -3002,15 +2673,7 @@ class ExportManagerWindow(T3WPFWindow):
             return []
 
     def get_sheet_ids_from_set(self, set_name):
-        """Get all sheet IDs from a saved ViewSheetSet.
-
-        Args:
-            set_name: Name of the saved ViewSheetSet
-
-        Returns:
-            List of ElementIds for sheets in the set
-        Uses FilteredElementCollector for reliable access without touching PrintManager state.
-        """
+        """ElementIds of the views in the named ViewSheetSet ([] if not found)."""
         try:
             collector = FilteredElementCollector(self.doc).OfClass(ViewSheetSet)
             for print_set in collector:
@@ -3024,7 +2687,6 @@ class ExportManagerWindow(T3WPFWindow):
     def save_current_selection_as_vs_set(self):
         """Save current selection as a new View/Sheet Set."""
         try:
-            # Get currently selected items
             if self.selection_mode == "sheets":
                 selected_items = [s for s in self.filtered_sheets if s.IsSelected]
                 mode_name = "Sheet"
@@ -3038,7 +2700,6 @@ class ExportManagerWindow(T3WPFWindow):
                     title="No Selection")
                 return
 
-            # Prompt for set name
             set_name = forms.ask_for_string(
                 prompt="Enter a name for the new {}/Sheet Set:".format(mode_name),
                 title="Save {}/Sheet Set".format(mode_name),
@@ -3076,11 +2737,12 @@ class ExportManagerWindow(T3WPFWindow):
             forms.alert("Error saving View/Sheet Set:\n{}".format(str(ex)), title="Error")
 
     def search_sheets(self, sender, e):
-        """Filter sheets by search text."""
         self.apply_filters()
 
     def filter_by_size(self, sender, e):
-        """Filter sheets by size."""
+        """Filter sheets by size / views by view type."""
+        if getattr(self, '_filling_view_types', False):
+            return      # _fill_view_type_filter is rebuilding the dropdown
         self.apply_filters()
 
     def filter_by_sheet_set(self, sender, e):
@@ -3089,7 +2751,6 @@ class ExportManagerWindow(T3WPFWindow):
 
 
     def save_vs_set_clicked(self, sender, e):
-        """Handle Save V/S Set button click."""
         try:
             # Creates a ViewSheetSet inside a Transaction — needs API context
             self._run_in_api_context(self.save_current_selection_as_vs_set)
@@ -3098,15 +2759,13 @@ class ExportManagerWindow(T3WPFWindow):
             logger.error("Error handling Save V/S Set: {}".format(ex))
 
     def refresh_clicked(self, sender, e):
-        """Reload document data — picks up sheets/views created or renamed
-        while this modeless window has been open."""
+        """Reload sheets/views created or renamed while this modeless window was open."""
         self.status_text.Text = "Refreshing..."
         self._run_in_api_context(self._do_refresh)
 
     def _do_refresh(self):
         """Re-collect sheets/views/sets from the model, preserving current selection."""
         try:
-            # Remember what is ticked so the reload doesn't lose the selection
             selected_sheet_ids = set(eid_value(s.Sheet.Id) for s in self.all_sheets if s.IsSelected)
             selected_view_ids = set(eid_value(v.View.Id) for v in self.all_views if v.IsSelected)
             had_views = bool(self.all_views)
@@ -3116,11 +2775,9 @@ class ExportManagerWindow(T3WPFWindow):
             self._paper_size_cache = {}
             self._titleblock_cache_loaded = False
 
-            # Reload document-driven dropdowns
             self.load_cad_export_setups()
             self.load_sheet_sets_for_filter()
 
-            # Reload sheet list (always loaded) and restore ticks
             self.load_sheets()
             for item in self.all_sheets:
                 if eid_value(item.Sheet.Id) in selected_sheet_ids:
@@ -3133,7 +2790,6 @@ class ExportManagerWindow(T3WPFWindow):
                     if eid_value(item.View.Id) in selected_view_ids:
                         item.IsSelected = True
 
-            # Rebuild the visible list for the active mode
             self.apply_filters()
             self.update_selection_count()
 
@@ -3146,27 +2802,20 @@ class ExportManagerWindow(T3WPFWindow):
             self.status_text.Text = "Refresh failed — see pyRevit log"
 
     def apply_filters(self, sheet_set_ids=None):
-        """Apply search and filters.
-
-        Args:
-            sheet_set_ids: Optional list of ElementIds to filter sheets by (from ViewSheetSet)
-        """
-        # Check if controls are initialized (prevents error during XAML loading)
+        """Apply search + filters; sheet_set_ids optionally limits sheets to a ViewSheetSet."""
+        # Not yet hydrated (called during XAML loading)
         if not hasattr(self, 'search_textbox'):
             return
 
         search_text = self.search_textbox.Text.lower() if self.search_textbox.Text else ""
 
         if self.selection_mode == "sheets":
-            # Apply filters for sheets
             self.filtered_sheets = []
             for sheet in self.all_sheets:
-                # Check sheet set filter first (if provided)
                 if sheet_set_ids is not None:
                     if sheet.Sheet.Id not in sheet_set_ids:
                         continue
 
-                # Check search text
                 if search_text:
                     if search_text not in sheet.SheetNumber.lower() and \
                        search_text not in sheet.SheetName.lower():
@@ -3176,30 +2825,26 @@ class ExportManagerWindow(T3WPFWindow):
 
             self.update_items_list()
 
-            # Update status message based on filters
             if sheet_set_ids is not None:
                 # Status is set in filter_by_sheet_set method
                 pass
             else:
                 self.status_text.Text = "Found {} sheets".format(len(self.filtered_sheets))
         else:
-            # Get selected view type filter
+            # Index 0 = "All Types", read by position (2026-10-10: a text test had
+            # drifted from the XAML label and filtered every view out).
             view_type_filter = None
-            if hasattr(self, 'view_type_filter') and self.view_type_filter.SelectedItem:
-                type_text = self.view_type_filter.SelectedItem.Content
-                if type_text != "All Views":
-                    view_type_filter = type_text
+            combo = getattr(self, 'view_type_filter', None)
+            if combo is not None and combo.SelectedIndex > 0 and combo.SelectedItem is not None:
+                view_type_filter = str(combo.SelectedItem.Content)
 
-            # Apply filters for views
             self.filtered_views = []
             for view in self.all_views:
-                # Check search text
                 if search_text:
                     if search_text not in view.ViewName.lower() and \
                        search_text not in view.ViewType.lower():
                         continue
 
-                # Check view type filter
                 if view_type_filter:
                     if view.ViewType != view_type_filter:
                         continue
@@ -3210,7 +2855,6 @@ class ExportManagerWindow(T3WPFWindow):
             self.status_text.Text = "Found {} views".format(len(self.filtered_views))
 
     def browse_output_folder(self, sender, e):
-        """Browse for output folder."""
         dialog = FolderBrowserDialog()
         dialog.Description = "Select output folder for exports"
         dialog.SelectedPath = self.output_folder.Text
@@ -3219,7 +2863,7 @@ class ExportManagerWindow(T3WPFWindow):
             self.output_folder.Text = dialog.SelectedPath
             self.status_text.Text = "Output folder: {}".format(dialog.SelectedPath)
 
-    # ── Accordion toggle helpers ──────────────────────────────────────────
+    # ── Accordion toggle helpers ──
     def _toggle_format_panel(self, body_name, arrow_name, border_name):
         """Expand or collapse a format settings panel."""
         try:
@@ -3265,11 +2909,8 @@ class ExportManagerWindow(T3WPFWindow):
     def img_header_clicked(self, sender, e):
         self._toggle_format_panel("img_settings_body", "img_expand_arrow",
                                   "img_panel_border")
-    # ─────────────────────────────────────────────────────────────────────
 
     def format_changed(self, sender, e):
-        """Handle format checkbox change."""
-        # Update status to show selected formats
         formats = []
         if self.export_pdf.IsChecked:
             formats.append("PDF")
@@ -3289,7 +2930,6 @@ class ExportManagerWindow(T3WPFWindow):
         if formats:
             self.status_text.Text = "Selected formats: {}".format(", ".join(formats))
 
-        # Update export preview if on Create tab
         self.update_export_preview_if_needed()
 
     def _pdf_engine(self):
@@ -3323,12 +2963,9 @@ class ExportManagerWindow(T3WPFWindow):
             logger.debug("PDF24 status check failed: {}".format(ex))
 
     def pdf_auto_detect_changed(self, sender, e):
-        """Handle PDF auto-detect checkbox change."""
         try:
-            # Enable/disable manual controls based on auto-detect state
             is_auto = self.pdf_auto_detect_size.IsChecked
 
-            # Disable manual controls when auto-detect is enabled
             self.pdf_paper_size.IsEnabled = not is_auto
             self.pdf_landscape.IsEnabled = not is_auto
             self.pdf_portrait.IsEnabled = not is_auto
@@ -3343,17 +2980,12 @@ class ExportManagerWindow(T3WPFWindow):
 
 
     def edit_filename_clicked(self, sender, e):
-        """Queue the filename pattern dialog — it reads doc parameters, needs API context."""
+        """Queue the filename pattern dialog (reads doc parameters: API context)."""
         self._run_in_api_context(self._edit_filename_api)
 
     def _edit_filename_api(self):
-        """Open the parameter selector dialog to edit filename pattern.
-
-        This is triggered by the 'Edit filename' button in DWG Options section.
-        After editing, the sample filename is displayed in the dwg_filename_sample TextBox.
-        """
+        """Edit the filename pattern via ParameterSelectorDialog and re-apply it to every item."""
         try:
-            # Import the parameter selector dialog
             try:
                 from GUI.ParameterSelectorDialog import ParameterSelectorDialog
             except ImportError:
@@ -3362,31 +2994,22 @@ class ExportManagerWindow(T3WPFWindow):
                     del sys.modules['ParameterSelectorDialog']
                 from ParameterSelectorDialog import ParameterSelectorDialog
 
-            # Determine element type based on current selection mode
             element_type = 'sheet' if self.selection_mode == 'sheets' else 'view'
 
-            # Show the parameter selector dialog
             pattern = ParameterSelectorDialog.show_dialog(self.doc, element_type)
 
             if pattern:
-                # Update the naming pattern
                 self.naming_pattern.Text = pattern
 
-                # Update the sample display in DWG Options (if exists)
                 if hasattr(self, 'dwg_filename_sample') and self.dwg_filename_sample:
                     self.dwg_filename_sample.Text = pattern
 
-                # Auto-apply the pattern to ALL items
                 items_list = self.all_sheets if self.selection_mode == 'sheets' else self.all_views
 
-                # Apply the naming pattern to each item
                 for item in items_list:
-                    # Generate filename using the current naming pattern
                     filename = self.get_export_filename(item)
-                    # Set it to the CustomFilename property
                     item.CustomFilename = filename
 
-                # Refresh the ListView to show the updated CustomFilename values
                 self.sheets_listview.Items.Refresh()
 
                 self.status_text.Text = "Filename pattern updated: {}".format(pattern)
@@ -3397,13 +3020,10 @@ class ExportManagerWindow(T3WPFWindow):
 
 
     def reverse_order_changed(self, sender, e):
-        """Handle reverse order checkbox change."""
-        # Reverse the filtered sheets list
         self.filtered_sheets.reverse()
         self.update_sheets_list()
 
     def nav_toggle_clicked(self, sender, e):
-        """Handle sidebar toggle clicks."""
         try:
             target_index = -1
             if sender.Name == "nav_toggle_selection": target_index = 0
@@ -3417,7 +3037,7 @@ class ExportManagerWindow(T3WPFWindow):
     def switch_to_view(self, index):
         """Switch to the given wizard tab (0=Selection, 1=Format, 2=Queue+Settings)."""
         try:
-            # Enforce validation when navigating away from the Selection tab (index 0) to other tabs
+            # Leaving the Selection tab needs at least one item ticked
             if index > 0 and self.main_tabs.SelectedIndex == 0:
                 if self.selection_mode == "sheets":
                     selected_items = [s for s in self.all_sheets if s.IsSelected]
@@ -3443,7 +3063,6 @@ class ExportManagerWindow(T3WPFWindow):
             if index is None:
                 index = self.main_tabs.SelectedIndex
 
-            # Set the active toggle button to checked, and all others to unchecked
             self.nav_toggle_selection.IsChecked = (index == 0)
             self.nav_toggle_format.IsChecked = (index == 1)
             self.nav_toggle_queue.IsChecked = (index == 2)
@@ -3500,7 +3119,6 @@ class ExportManagerWindow(T3WPFWindow):
             logger.debug("Error updating export preview: {}".format(ex))
 
     def go_back(self, sender, e):
-        """Navigate to previous tab."""
         idx = self.main_tabs.SelectedIndex
         if idx > 0:
             self.switch_to_view(idx - 1)
@@ -3516,12 +3134,10 @@ class ExportManagerWindow(T3WPFWindow):
             if self._export_running:
                 return
             self._export_running = True
-            # Freeze the whole window before export: Revit's PDF exporter
-            # pumps messages mid-export, so a click landing on this modeless
-            # window would re-enter WPF handlers inside Execute (fatal crash).
+            # Freeze the window: Revit's PDF exporter pumps messages, so a click
+            # would re-enter WPF handlers inside Execute (fatal crash).
             self.IsEnabled = False
-            # Modeless window: export must run inside API context. If Revit is
-            # busy (user mid-command), the event fires once Revit is idle.
+            # Runs in API context; fires once Revit is idle.
             self.status_text.Text = "Export queued — waiting for Revit..."
             if not self._run_in_api_context(self.start_export):
                 self._export_running = False
@@ -3530,25 +3146,21 @@ class ExportManagerWindow(T3WPFWindow):
     def build_export_preview(self):
         """Build the export preview list."""
         try:
-            # Ensure titleblock cache is populated before size detection runs.
-            # This is deferred from startup to avoid triggering Revit graphic regeneration.
+            # Deferred from startup: filling it triggers a graphics regeneration.
             self._ensure_titleblock_cache()
 
-            # Get selected items based on mode
             if self.selection_mode == "sheets":
                 selected_items = [s for s in self.all_sheets if s.IsSelected]
-                # Sync cached sheet numbers with live values from Revit before building preview
+                # Cached numbers/names may be stale: re-read from Revit
                 for sheet_item in selected_items:
                     sheet_item.SheetNumber = sheet_item.Sheet.SheetNumber
                     sheet_item.SheetName = sheet_item.Sheet.Name
             else:
                 selected_items = [v for v in self.all_views if v.IsSelected]
-                # Sync cached view names with live values from Revit before building preview
                 for view_item in selected_items:
                     view_item.ViewName = view_item.View.Name
                     view_item.SheetNumber = view_item.View.Name
 
-            # Get selected formats
             formats = []
             if self.export_pdf.IsChecked:
                 formats.append("PDF")
@@ -3565,25 +3177,19 @@ class ExportManagerWindow(T3WPFWindow):
             if self.export_img.IsChecked:
                 formats.append("IMG")
 
-            # Check if auto-detect is enabled
             is_auto_detect = self.pdf_auto_detect_size.IsChecked if hasattr(self, 'pdf_auto_detect_size') and self.pdf_auto_detect_size.IsChecked is not None else False
 
-            # Get selected manual paper size
             manual_size = "Use Sheet Size"
             if hasattr(self, 'pdf_paper_size') and self.pdf_paper_size.SelectedItem:
                 manual_size = self.pdf_paper_size.SelectedItem.Content
 
-            # Build preview items
             self.export_items = []
             for item in selected_items:
-                # Determine paper size and orientation for this item
                 if (is_auto_detect or manual_size == "Use Sheet Size") and self.selection_mode == "sheets" and hasattr(item, 'Sheet'):
-                    # Auto-detect from Title Block / Use Sheet Size
                     detected_size, detected_orientation = self.get_sheet_paper_size_and_orientation(item.Sheet)
                     size = detected_size
                     orientation = detected_orientation
                 else:
-                    # Use manual settings
                     size = manual_size
                     orientation = "Landscape" if self.pdf_landscape.IsChecked else "Portrait"
 
@@ -3591,7 +3197,6 @@ class ExportManagerWindow(T3WPFWindow):
                     preview_item = ExportPreviewItem(item, fmt, size, orientation)
                     self.export_items.append(preview_item)
 
-            # Update preview list
             self.export_preview_list.ItemsSource = to_items_source(self.export_items)
             self.progress_text.Text = "Ready to export {} items".format(len(self.export_items))
         except Exception as ex:
@@ -3600,16 +3205,10 @@ class ExportManagerWindow(T3WPFWindow):
                 self.progress_text.Text = "Error preparing preview: {}".format(ex)
 
     def get_export_filename(self, item):
-        """Generate export filename based on naming pattern.
-
-        Always reads live values from the Revit item (sheet or view) to ensure the filename
-        reflects the current state of the item (e.g., if name changed).
-        Supports both SheetItem and ViewItem.
-        Now supports ALL parameters dynamically.
-        """
+        """Filename from the naming pattern, read live from the sheet/view (SheetItem or
+        ViewItem); any element parameter can be a {placeholder}."""
         pattern = self.naming_pattern.Text
 
-        # Get project info
         try:
             project_info = self.doc.ProjectInformation
             project_number = project_info.Number or ""
@@ -3624,7 +3223,6 @@ class ExportManagerWindow(T3WPFWindow):
             client_name = ""
             project_status = ""
 
-        # Get the actual Revit element (sheet or view)
         element = None
         if hasattr(item, 'Sheet'):
             element = item.Sheet
@@ -3632,13 +3230,12 @@ class ExportManagerWindow(T3WPFWindow):
             sheet_name = element.Name
         elif hasattr(item, 'View'):
             element = item.View
-            sheet_number = element.Name  # Use view name as "number"
-            sheet_name = item.ViewType  # Use view type as "name"
+            sheet_number = element.Name  # view name as "number"
+            sheet_name = item.ViewType  # view type as "name"
         else:
             sheet_number = "Unknown"
             sheet_name = "Unknown"
 
-        # Build a dictionary of all standard replacements
         replacements = {
             "{SheetNumber}": sheet_number,
             "{SheetName}": sheet_name,
@@ -3652,16 +3249,13 @@ class ExportManagerWindow(T3WPFWindow):
             "{Time}": datetime.now().strftime("%H%M%S"),
         }
 
-        # Only the placeholders actually present in the pattern need resolving.
-        # For the common case (e.g. "{SheetNumber}") this lets us skip iterating
-        # every parameter on the element — a real per-sheet saving on big models.
+        # Resolve only placeholders in the pattern: "{SheetNumber}" alone skips
+        # iterating every parameter (real per-sheet saving on big models).
         import re as _re
         pattern_refs = set(_re.findall(r'\{([^{}]+)\}', pattern))
         standard_keys = set(k[1:-1] for k in replacements.keys())
         needs_dynamic_params = bool(pattern_refs - standard_keys)
 
-        # Get ALL parameters from the element dynamically — only when the naming
-        # pattern references a non-standard parameter placeholder.
         if element and needs_dynamic_params:
             try:
                 for param in element.Parameters:
@@ -3669,7 +3263,6 @@ class ExportManagerWindow(T3WPFWindow):
                         param_name = param.Definition.Name
                         param_value = ""
 
-                        # Get parameter value based on storage type
                         if param.HasValue:
                             if param.StorageType == DB.StorageType.String:
                                 param_value = param.AsString() or ""
@@ -3686,12 +3279,9 @@ class ExportManagerWindow(T3WPFWindow):
                                     except:
                                         param_value = str(eid_value(elem_id))
 
-                        # Add to replacements dictionary
-                        # Support both {ParamName} format
                         replacements["{" + param_name + "}"] = param_value
 
                     except Exception as param_ex:
-                        # Skip problematic parameters
                         logger.debug("Could not read parameter {}: {}".format(
                             param.Definition.Name if hasattr(param, 'Definition') else 'unknown',
                             str(param_ex)
@@ -3700,9 +3290,7 @@ class ExportManagerWindow(T3WPFWindow):
             except Exception as params_ex:
                 logger.warning("Could not iterate parameters: {}".format(str(params_ex)))
 
-        # Add common sheet-specific built-in parameters explicitly — only when
-        # the naming pattern references one of them (skips ~7 get_Parameter
-        # calls per sheet for simple patterns like "{SheetNumber}").
+        # Sheet built-ins only when needed (~7 get_Parameter calls per sheet)
         if needs_dynamic_params and hasattr(item, 'Sheet'):
             try:
                 rev_param = item.Sheet.get_Parameter(DB.BuiltInParameter.SHEET_CURRENT_REVISION)
@@ -3746,7 +3334,6 @@ class ExportManagerWindow(T3WPFWindow):
             except:
                 replacements["{IssueDate}"] = ""
 
-        # Add view-specific parameters explicitly
         elif hasattr(item, 'View'):
             try:
                 replacements["{ViewType}"] = item.ViewType
@@ -3774,12 +3361,10 @@ class ExportManagerWindow(T3WPFWindow):
             except:
                 replacements["{Level}"] = ""
 
-        # Replace all placeholders in the pattern
         filename = pattern
         for placeholder, value in replacements.items():
             filename = filename.replace(placeholder, str(value))
 
-        # Remove invalid characters
         invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
         for char in invalid_chars:
             filename = filename.replace(char, '_')
@@ -3818,13 +3403,11 @@ class ExportManagerWindow(T3WPFWindow):
     def _begin_live_progress(self):
         """Mark the whole queue Queued and let the window repaint during the run.
 
-        Modeless: start_export runs inside ExternalEvent.Execute, so the window
-        only repaints if this thread pumps messages between two exports. A pump
-        with input live would hand Revit and BatchOut every click queued during
-        the native call, mid-API-call. ThreadInputLock first disables every
-        window of the thread — the state ShowDialog puts Revit in for the modal
-        path, where this pump has always run. No lock (no ctypes, no window):
-        nothing pumps and the queue shows its result when Execute returns.
+        Modeless: start_export runs inside ExternalEvent.Execute, so repainting
+        needs a message pump between exports, and a pump with input live would
+        deliver queued clicks mid-API-call. ThreadInputLock disables every window
+        of the thread first (what ShowDialog does on the modal path). No lock:
+        nothing pumps and the queue updates when Execute returns.
         """
         self._export_started_at = time.time()
         self._live_progress_running = True
@@ -3842,10 +3425,7 @@ class ExportManagerWindow(T3WPFWindow):
 
     def _end_live_progress(self):
         """Close out the run: rows never reached say so, Revit gets input back.
-
-        Runs before the summary dialog and again from start_export's finally;
-        only the first call does anything.
-        """
+        Idempotent (called before the summary and again in start_export's finally)."""
         if not getattr(self, '_live_progress_running', False):
             return
         self._live_progress_running = False
@@ -3864,13 +3444,11 @@ class ExportManagerWindow(T3WPFWindow):
     def _flush_ui(self):
         """Let WPF render pending changes so the queue moves while exporting.
 
-        The pump is a nested dispatcher frame: it delivers every Win32 message
-        waiting on Revit's UI thread. Modal: ShowDialog has already disabled
-        Revit's windows, so only painting gets through. Modeless: start_export
-        runs inside ExternalEvent.Execute, and Revit's native PDF exporter pumps
-        its own loop per sheet — with input live that re-entrancy is the fatal
-        0xc0000005 class. Pump there only while _begin_live_progress holds the
-        input lock; otherwise the window repaints when Execute returns.
+        A nested dispatcher frame delivers every waiting Win32 message. Modal:
+        ShowDialog disabled Revit's windows, so only painting gets through.
+        Modeless: inside ExternalEvent.Execute, with input live, re-entrancy is
+        the fatal 0xc0000005 class, so pump only while _begin_live_progress
+        holds the input lock.
         """
         if self.modeless:
             lock = getattr(self, '_input_lock', None)
@@ -3882,8 +3460,8 @@ class ExportManagerWindow(T3WPFWindow):
             pass
 
     def _update_progress(self, value, text):
-        """Overall bar + status line; while exporting the right-hand label also
-        shows done/total, elapsed time and an estimate of the time left."""
+        """Overall bar + status line; while exporting the right label adds
+        done/total, elapsed and time-left estimate."""
         try:
             pct = max(0, min(100, int(value)))
             self.overall_progress.Value = pct
@@ -3903,7 +3481,6 @@ class ExportManagerWindow(T3WPFWindow):
         self._flush_ui()
 
     def start_export(self):
-        """Start the export process."""
         total_exported = 0
         try:
             if not any(getattr(self, name).IsChecked for name in (
@@ -3915,7 +3492,6 @@ class ExportManagerWindow(T3WPFWindow):
                 return
             self._ensure_titleblock_cache()
 
-            # Get selected items based on mode
             if self.selection_mode == "sheets":
                 selected_items = [s for s in self.all_sheets if s.IsSelected]
                 if not selected_items:
@@ -3929,36 +3505,30 @@ class ExportManagerWindow(T3WPFWindow):
                     return
                 item_type_name = "views"
 
-            # Check if reverse order is enabled
             if self.reverse_order.IsChecked:
                 selected_items.reverse()
 
-            # Get output folder
             output_folder = self.output_folder.Text
             if not output_folder:
                 forms.alert("Please select an output folder.", title="No Output Folder")
                 return
 
-            # Create output folder if it doesn't exist
             if not os.path.exists(output_folder):
                 os.makedirs(output_folder)
 
-            # Check if split by format
             split_by_format = self.save_split_by_format.IsChecked
 
             # Remember this setup for the next session
             self.save_latest_setup()
 
-            # Disable buttons during export
             self.next_button.IsEnabled = False
             self.back_button.IsEnabled = False
             self.status_text.Text = "Exporting..."
 
-            # Rebuild for every run: a previous run leaves completed statuses,
-            # and selection or formats may have changed since the last preview.
+            # Rebuild every run: old statuses; selection/formats may have changed.
             self.build_export_preview()
 
-            # Export to each format — overall progress tracked per-sheet via _overall_counter
+            # Overall progress is per item via _overall_counter
             total_exported = 0
             self._overall_total = len(self.export_items)
             self._overall_counter = 0
@@ -3972,8 +3542,8 @@ class ExportManagerWindow(T3WPFWindow):
             # Risky items last so a native crash cannot cost the rest of the batch
             selected_items = self._order_risky_last(selected_items)
 
-            # From here the queue repaints after every item (all dialogs that
-            # need the user come before this line or after _end_live_progress).
+            # Queue repaints per item from here: user dialogs go before this
+            # line or after _end_live_progress.
             self._begin_live_progress()
 
             def confirmed_count(format_name, count, expected):
@@ -3990,8 +3560,7 @@ class ExportManagerWindow(T3WPFWindow):
                 count = self.export_to_dwg(selected_items, folder)
                 total_exported += confirmed_count("DWG", count, len(selected_items))
 
-                # Free whatever the DWG phase allocated before the raster-heavy
-                # PDF phase begins — link-heavy sheets already push Revit hard.
+                # Free DWG-phase memory before the raster-heavy PDF phase.
                 GC.Collect()
                 GC.WaitForPendingFinalizers()
 
@@ -4058,8 +3627,8 @@ class ExportManagerWindow(T3WPFWindow):
             self.next_button.IsEnabled = True
             self.back_button.IsEnabled = True
 
-            # Sheets skipped because they previously hard-crashed Revit need to
-            # be called out — silently missing files would be worse than a crash.
+            # Name every skipped/safe-mode/unconfirmed item: a quietly missing or
+            # simplified file is the failure the user cannot see.
             skip_note = ""
             if self._skipped_fatal:
                 skip_note = (
@@ -4070,10 +3639,6 @@ class ExportManagerWindow(T3WPFWindow):
                     "let BatchOut try them again.".format(
                         "\n  ".join(self._skipped_fatal), self._crash_history_file))
 
-            # Safe-mode files look like ordinary exports but are not: they were
-            # produced with views temporarily simplified (and the change rolled
-            # back afterwards), so they have to be named before the user files
-            # them as final issue drawings.
             safe_note = ""
             if self._safe_applied:
                 safe_note = (
@@ -4081,8 +3646,6 @@ class ExportManagerWindow(T3WPFWindow):
                     "left untouched (rolled back). Review these files before "
                     "issuing them.".format("\n  ".join(self._safe_applied)))
 
-            # Anything that produced no file must be named — a quietly missing
-            # export is the one failure mode the user cannot see for themselves.
             fail_note = ""
             if self._failed_items:
                 shown = self._failed_items[:20]
@@ -4094,7 +3657,6 @@ class ExportManagerWindow(T3WPFWindow):
                               "view/format pairs simply cannot be exported by Revit "
                               "(e.g. a schedule to DWG) and will always fail here.")
 
-            # Ask if user wants to open output folder
             if forms.alert("{}{}{}{}{}\n\nDo you want to open the output folder?".format(
                               summary, fail_note, safe_note, skip_note, report_note),
                           title=outcome,
@@ -4114,8 +3676,7 @@ class ExportManagerWindow(T3WPFWindow):
             self.next_button.IsEnabled = True
             self.back_button.IsEnabled = True
         finally:
-            # Unfreeze the window (frozen in go_next) on every exit path,
-            # including the early validation returns above
+            # Unfreeze (frozen in go_next) on every exit path, early returns too
             try:
                 self._end_live_progress()
             finally:
@@ -4150,29 +3711,20 @@ class ExportManagerWindow(T3WPFWindow):
         return "\n\nReport ({} rows): {}".format(len(rows), path)
 
     def export_to_dwg(self, items, output_folder):
-        """Export items (sheets or views) to DWG format with version-aware API usage.
-
-        Supports Revit 2022-2026 with appropriate API handling for each version.
-        """
+        """Export items (sheets or views) to DWG."""
         try:
-            # Sync cached values with live values from Revit
             self._sync_item_labels(items, "DWG")
 
-            # Get selected export setup (if any)
             selected_setup = None
             selected_setup_name = None
             if self.cad_export_setup.SelectedIndex > 0:
-                # User selected a specific setup (not the default)
                 selected_item = self.cad_export_setup.SelectedItem
                 if hasattr(selected_item, 'Tag') and selected_item.Tag:
                     selected_setup = selected_item.Tag
                     selected_setup_name = selected_item.Content
 
-            # Create DWG export options.
-            # DWGExportOptions has no instance method to load a named setup's
-            # settings after construction - GetPredefinedOptions is the only
-            # API that returns an options object pre-populated with a named
-            # ExportDWGSettings' layers/colors/line weights/etc.
+            # GetPredefinedOptions is the only API that loads a named setup's
+            # layers/colours/line weights into an options object.
             if selected_setup:
                 try:
                     dwg_options = DWGExportOptions.GetPredefinedOptions(
@@ -4184,17 +3736,15 @@ class ExportManagerWindow(T3WPFWindow):
             else:
                 dwg_options = DWGExportOptions()
 
-            # "Match Revit display" (default on): colours, overrides and
-            # linetype scale as the view shows them, whatever the setup says.
-            # A setup on IndexColors + ByLayer paints Revit's black linework in
-            # the layer table's colours (magenta text, orange doors, ...).
-            # Off: the selected setup is used exactly as saved (CAD standard).
+            # "Match Revit display" (default on): colours, overrides and linetype
+            # scale as the view shows them (an IndexColors + ByLayer setup paints
+            # black linework in layer colours). Off: the setup exactly as saved.
             if self.cad_match_revit_display.IsChecked:
                 applied = apply_revit_display_fidelity(
                     dwg_options, for_sheets=(self.selection_mode == "sheets"))
                 logger.debug("DWG match Revit display: {}".format(", ".join(applied)))
 
-            # Set AutoCAD version (overrides whatever the setup/default specifies)
+            # Overrides the setup's AutoCAD version
             dwg_version_index = self.dwg_version.SelectedIndex
             if dwg_version_index == 0:
                 dwg_options.FileVersion = ACADVersion.R2013
@@ -4203,7 +3753,6 @@ class ExportManagerWindow(T3WPFWindow):
             else:
                 dwg_options.FileVersion = ACADVersion.R2007
 
-            # VERSION-AWARE: Apply CAD export options
             # ExportingAreas availability varies by version
             export_views_on_sheets = self.cad_export_views_on_sheets.IsChecked
             try:
@@ -4215,7 +3764,6 @@ class ExportManagerWindow(T3WPFWindow):
             except Exception as ex:
                 logger.debug("ExportingAreas not supported in Revit {}: {}".format(REVIT_VERSION, ex))
 
-            # Export links as external references
             export_links_as_external = self.cad_export_links_as_external.IsChecked
             try:
                 if hasattr(dwg_options, 'MergedViews'):
@@ -4232,17 +3780,14 @@ class ExportManagerWindow(T3WPFWindow):
                 safe_group = None
                 element_name = str(getattr(item, 'SheetNumber', 'Unknown'))
                 try:
-                    # Get the actual element (sheet or view)
                     element, element_name = self._element_of(item)
                     if element is None:
                         self._note_failure(element_name, "DWG",
                                            "row is neither a sheet nor a view")
                         continue
 
-                    # This sheet has hard-crashed Revit's DWG exporter before.
-                    # Safe mode neutralises the fatal geometry first; if it is
-                    # unavailable we still export (queued last), because a
-                    # missing file the user was never told about is worse.
+                    # Known fatal: safe mode first; without it still export (queued
+                    # last) — an unannounced missing file is worse.
                     safe_level = None
                     if self._is_known_fatal(item.SheetNumber, "DWG"):
                         if self._skip_fatal:
@@ -4259,7 +3804,6 @@ class ExportManagerWindow(T3WPFWindow):
                                 "being exported without mitigation.".format(
                                     item.SheetNumber))
 
-                    # Mark as in-progress (orange) before the export call
                     self.update_export_item_progress(item.SheetNumber, "DWG", 50, "Exporting...")
                     self._update_progress(
                         int(self._overall_counter * 100.0 / max(1, self._overall_total)),
@@ -4268,52 +3812,39 @@ class ExportManagerWindow(T3WPFWindow):
 
                     filename = item.CustomFilename or self.get_export_filename(item)
 
-                    # Remove extension if present
                     if filename.lower().endswith('.dwg'):
                         filename = filename[:-4]
 
-                    # Never reuse a name already written in this run — otherwise
-                    # two views sharing a name overwrite each other's file.
+                    # Unique per run, or two views sharing a name overwrite each other
                     filename = self._reserve_filename(output_folder, filename, ".dwg")
 
-                    # Expected output + its current mtime, so a stale file left by
-                    # an earlier aborted run cannot be mistaken for a fresh export.
+                    # mtime now, so a stale file from an aborted run is not taken as fresh
                     expected_file = os.path.join(output_folder, filename + ".dwg")
+                    prev_mtime = os.path.getmtime(expected_file) if os.path.exists(expected_file) else None
+                    started_at = time.time()
+
+                    # Export(folder, name, ICollection<ElementId>, DWGExportOptions)
+                    view_ids = List[DB.ElementId]()
+                    view_ids.Add(element.Id)
+
                     folder_before = None
                     if skip_images:
                         safe_group = self._begin_hide_images(element, safe_group)
                         folder_before = batchout_refs.snapshot(output_folder)
 
-                    prev_mtime = os.path.getmtime(expected_file) if os.path.exists(expected_file) else None
-                    started_at = time.time()
-
-                    # VERSION-AWARE: Export API handling
-                    # All versions 2022-2026 support ICollection<ElementId> signature
-                    # Signature: Export(String folder, String name, ICollection<ElementId> views, DWGExportOptions options)
-                    view_ids = List[DB.ElementId]()
-                    view_ids.Add(element.Id)
-
-                    # Breadcrumb: DWG export regenerates the sheet's views through
-                    # Revit's hidden-line/faceting pipeline, which can hard-crash
-                    # the process (uncatchable). If it does, this file names the
-                    # sheet that killed it so the next session can skip it.
+                    # Breadcrumb: DWG faceting can hard-crash Revit (uncatchable);
+                    # the marker names the sheet for the next session.
                     self._write_crash_marker(item.SheetNumber, "DWG",
                                              safe_level=safe_level)
 
-                    # Use Smart API Adapter if available for intelligent export
                     if self.api_adapter:
-                        # Smart adapter automatically handles version differences
                         self.api_adapter.export_dwg(output_folder, filename, view_ids, dwg_options)
                     else:
-                        # Fallback to direct export call
                         if REVIT_VERSION >= 2022:
-                            # Revit 2022-2026: Use ICollection<ElementId> signature
                             self.doc.Export(output_folder, filename, view_ids, dwg_options)
                         else:
-                            # Fallback for older versions (if needed)
                             self.doc.Export(output_folder, filename, view_ids, dwg_options)
 
-                    # Export call returned -> Revit survived this sheet.
                     self._clear_crash_marker()
 
                     if folder_before is not None:
@@ -4326,8 +3857,6 @@ class ExportManagerWindow(T3WPFWindow):
                         for path in failed:
                             logger.warning("Could not delete image reference file: {}".format(path))
 
-                    # Verify a FRESH file was written (not a leftover from an
-                    # earlier aborted run).
                     if self._verify_export(expected_file, prev_mtime, started_at, ".dwg"):
                         exported_count += 1
                         self._overall_counter += 1
@@ -4357,9 +3886,8 @@ class ExportManagerWindow(T3WPFWindow):
             return 0
 
     def export_to_dgn(self, items, output_folder):
-        """Export items (sheets or views) to DGN (MicroStation) format."""
+        """Export items (sheets or views) to DGN (MicroStation)."""
         try:
-            # Sync cached values with live values from Revit
             self._sync_item_labels(items, "DGN")
 
             dgn_options = DGNExportOptions()
@@ -4429,35 +3957,25 @@ class ExportManagerWindow(T3WPFWindow):
             return 0
 
     def export_to_pdf(self, items, output_folder):
-        """Export items (sheets or views) to PDF format using Revit's native PDF export with version-aware API usage.
-
-        Supports Revit 2022-2026 with appropriate API handling for each version.
-        """
+        """Export items (sheets or views) to PDF (combined or one file per item)."""
         try:
             import time
             import glob
 
-            # Sync cached values with live values from Revit
             self._sync_item_labels(items, "PDF")
 
             if self._pdf_engine() == "PDF24":
                 return self._export_pdf_with_pdf24(items, output_folder)
 
-            # Check if combine PDF is enabled
             combine_pdf = self.combine_pdf.IsChecked
 
             exported_count = 0
 
             if combine_pdf:
-                # Export all items to a single PDF
                 included_items = []
                 try:
-                    # Get all element IDs as System.Collections.Generic.List.
-                    # A combined export is ONE native call, so a single fatal
-                    # sheet takes the entire job (and the Revit session) with it —
-                    # but dropping pages silently is not ours to decide. Every
-                    # selected item goes in unless the user explicitly chose to
-                    # skip the known-fatal ones in the pre-export prompt.
+                    # ONE native call: a fatal sheet kills the whole job, but pages
+                    # are only dropped if the user chose to skip known-fatal ones.
                     element_ids = List[DB.ElementId]()
                     for item in items:
                         number = getattr(item, 'SheetNumber', None)
@@ -4493,17 +4011,13 @@ class ExportManagerWindow(T3WPFWindow):
                     expected_file = os.path.join(output_folder, filename + ".pdf")
                     before_output = self._native_output_stamp(expected_file)
 
-                    # Create PDF export options
                     pdf_options = PDFExportOptions()
                     pdf_options.Combine = True
-                    # Set filename (learned from pyRevit)
                     pdf_options.FileName = filename
 
                     # Keep linework under transparent filled regions from dropping
                     self._apply_pdf_quality(pdf_options)
 
-                    # VERSION-AWARE: Apply PDF settings
-                    # Use Smart API Adapter if available for intelligent configuration
                     if self.api_adapter:
                         pdf_options = self.api_adapter.configure_pdf_options(
                             pdf_options,
@@ -4513,7 +4027,6 @@ class ExportManagerWindow(T3WPFWindow):
                             hide_unreferenced_tags=self.pdf_hide_unreferenced_tags.IsChecked
                         )
                     else:
-                        # Fallback to manual configuration
                         try:
                             if self.pdf_hide_ref_planes.IsChecked:
                                 pdf_options.HideReferencePlane = True
@@ -4538,7 +4051,6 @@ class ExportManagerWindow(T3WPFWindow):
                         except Exception as ex:
                             logger.debug("HideUnreferencedViewTags not supported in Revit {}: {}".format(REVIT_VERSION, ex))
 
-                    # Configure paper size, orientation, and zoom for combined PDF
                     is_auto = self.pdf_auto_detect_size.IsChecked
                     manual_size = self.pdf_paper_size.SelectedItem.Content if self.pdf_paper_size.SelectedItem else "Use Sheet Size"
                     
@@ -4553,7 +4065,7 @@ class ExportManagerWindow(T3WPFWindow):
                         except Exception as ex:
                             logger.debug("Failed to set combined PDF orientation: {}".format(ex))
                             
-                        # Only set Zoom if PaperFormat is not Default
+                        # Zoom only when PaperFormat is not Default
                         try:
                             if self.pdf_fit_to_page.IsChecked:
                                 pdf_options.ZoomType = DB.ZoomType.FitToPage
@@ -4563,32 +4075,23 @@ class ExportManagerWindow(T3WPFWindow):
                         except Exception as ex:
                             logger.debug("Failed to set combined PDF zoom: {}".format(ex))
                     else:
-                        # Auto-detect or Use Sheet Size: Use Default format so Revit uses sheet size
+                        # Default format: Revit uses the sheet size
                         try:
                             pdf_options.PaperFormat = DB.ExportPaperFormat.Default
                         except Exception as ex:
                             logger.debug("Failed to set combined PDF paper format to Default: {}".format(ex))
 
-                    # Breadcrumb for the combined job. A combined export is one
-                    # native call over every sheet, so if it dies we can only
-                    # record the job, not the individual sheet that killed it —
-                    # export individually (uncheck Combine) to pinpoint that.
+                    # Breadcrumb names the job, not the sheet (uncheck Combine to pinpoint).
                     self._write_crash_marker(filename, "PDF-combined",
                                              self._raster_level_for(None) or "Presentation")
 
-                    # VERSION-AWARE: Export using Revit's native PDF export
-                    # Use Smart API Adapter if available for intelligent export (handles method overload resolution)
                     if self.api_adapter:
-                        # Smart adapter automatically handles version differences and method overload resolution
                         export_result = self.api_adapter.export_pdf(output_folder, filename, element_ids, pdf_options)
                     else:
-                        # Fallback to direct export call
-                        # Revit 2022-2026 signature: Export(String folder, IList<ElementId> viewIds, PDFExportOptions options)
-                        # NOTE: PDF export does NOT take a filename parameter in the Export() method (unlike DWG/DXF)
-                        # Instead, filename is set via PDFExportOptions.FileName property (learned from pyRevit)
+                        # Export(folder, IList<ElementId>, options): no name argument,
+                        # the filename comes from PDFExportOptions.FileName
                         export_result = self.doc.Export(output_folder, element_ids, pdf_options)
 
-                    # Export call returned -> Revit survived the combined job.
                     self._clear_crash_marker()
                     if not export_result:
                         raise RuntimeError(
@@ -4604,8 +4107,7 @@ class ExportManagerWindow(T3WPFWindow):
                         for item in included_items:
                             self.update_export_item_progress(item.SheetNumber, "PDF", 100)
                     else:
-                        # One native call for every page: if no file landed, none
-                        # of the selected items were exported. Name them all.
+                        # One call for every page: no file means none exported
                         for item in included_items:
                             self._note_failure(getattr(item, 'SheetNumber', 'Unknown'),
                                                "PDF", "combined PDF produced no new or updated nonempty output")
@@ -4617,23 +4119,19 @@ class ExportManagerWindow(T3WPFWindow):
                                            "PDF", "combined PDF failed: {}".format(ex))
 
             else:
-                # Export each item individually
                 sheets_since_gc = 0
                 for item in items:
                     safe_group = None
                     element_name = str(getattr(item, 'SheetNumber', 'Unknown'))
                     try:
-                        # Get the actual element (sheet or view)
                         element, element_name = self._element_of(item)
                         if element is None:
                             self._note_failure(element_name, "PDF",
                                                "row is neither a sheet nor a view")
                             continue
 
-                        # This sheet has hard-crashed Revit's PDF rasteriser
-                        # before. Safe mode neutralises the geometry first when
-                        # a rung is left; otherwise it still goes out (queued
-                        # last) rather than disappearing from the output.
+                        # Known fatal: safe mode while a rung is left, else still
+                        # exported (queued last) rather than silently dropped.
                         safe_level = None
                         if self._is_known_fatal(item.SheetNumber, "PDF"):
                             if self._skip_fatal:
@@ -4658,37 +4156,27 @@ class ExportManagerWindow(T3WPFWindow):
 
                         filename = item.CustomFilename or self.get_export_filename(item)
 
-                        # Remove extension if present
                         if filename.lower().endswith('.pdf'):
                             filename = filename[:-4]
 
-                        # Unique per run: a Floor Plan and a Ceiling Plan may share
-                        # a name, and the second export used to overwrite the first.
+                        # Unique per run: plans may share a name and overwrite each other
                         filename = self._reserve_filename(output_folder, filename, ".pdf")
 
-                        # Expected output path + its current mtime (one stat, not
-                        # a whole-folder glob) so a fresh write can be detected.
+                        # mtime now (one stat, no folder glob) to detect a fresh write
                         expected_file = os.path.join(output_folder, filename + ".pdf")
                         prev_mtime = os.path.getmtime(expected_file) if os.path.exists(expected_file) else None
                         started_at = time.time()
 
-                        # Create PDF export options
                         pdf_options = PDFExportOptions()
-                        # IMPORTANT: Use Combine = True even for single sheets to force Revit to use our filename
-                        # When Combine = False, Revit ignores FileName and uses sheet number/name
+                        # Combine=True even for one sheet: with False Revit ignores FileName
                         pdf_options.Combine = True
-                        # Set filename to match DWG naming pattern
                         pdf_options.FileName = filename
 
-                        # Full quality by default; only a sheet that previously
-                        # crashed Revit's rasteriser starts one rung lower so it
-                        # can export at all. Keeps linework under transparent
-                        # filled regions from dropping on every normal sheet.
+                        # Full quality (keeps linework under transparent filled regions);
+                        # only a sheet that crashed the rasteriser starts one rung lower.
                         raster_level = self._raster_level_for(item.SheetNumber)
                         self._apply_pdf_quality(pdf_options, raster_level)
 
-                        # VERSION-AWARE: Apply PDF settings
-                        # Use Smart API Adapter if available for intelligent configuration
                         if self.api_adapter:
                             pdf_options = self.api_adapter.configure_pdf_options(
                                 pdf_options,
@@ -4698,7 +4186,6 @@ class ExportManagerWindow(T3WPFWindow):
                                 hide_unreferenced_tags=self.pdf_hide_unreferenced_tags.IsChecked
                             )
                         else:
-                            # Fallback to manual configuration
                             try:
                                 if self.pdf_hide_ref_planes.IsChecked:
                                     pdf_options.HideReferencePlane = True
@@ -4723,7 +4210,6 @@ class ExportManagerWindow(T3WPFWindow):
                             except Exception as ex:
                                 logger.debug("HideUnreferencedViewTags not supported in Revit {}: {}".format(REVIT_VERSION, ex))
 
-                        # Determine paper size and orientation for this individual sheet/view item
                         is_auto = self.pdf_auto_detect_size.IsChecked
                         manual_size = self.pdf_paper_size.SelectedItem.Content if self.pdf_paper_size.SelectedItem else "Use Sheet Size"
                         
@@ -4731,7 +4217,6 @@ class ExportManagerWindow(T3WPFWindow):
                         sheet_orientation = None
                         
                         if (is_auto or manual_size == "Use Sheet Size") and hasattr(item, 'Sheet'):
-                            # Auto-detect
                             detected_size, detected_orientation = self.get_sheet_paper_size_and_orientation(item.Sheet)
                             sheet_size = detected_size
                             sheet_orientation = detected_orientation
@@ -4739,7 +4224,6 @@ class ExportManagerWindow(T3WPFWindow):
                             sheet_size = manual_size
                             sheet_orientation = "Landscape" if self.pdf_landscape.IsChecked else "Portrait"
                             
-                        # Apply to options
                         if sheet_size and sheet_size != "Use Sheet Size":
                             try:
                                 pdf_options.PaperFormat = self.get_paper_format_enum(sheet_size)
@@ -4751,7 +4235,6 @@ class ExportManagerWindow(T3WPFWindow):
                             except Exception as ex:
                                 logger.debug("Failed to set individual PDF orientation: {}".format(ex))
                                 
-                            # Set Zoom
                             try:
                                 if self.pdf_fit_to_page.IsChecked:
                                     pdf_options.ZoomType = DB.ZoomType.FitToPage
@@ -4766,38 +4249,27 @@ class ExportManagerWindow(T3WPFWindow):
                             except Exception as ex:
                                 logger.debug("Failed to set individual PDF paper format to Default: {}".format(ex))
 
-                        # Create System.Collections.Generic.List for element IDs
                         element_ids = List[DB.ElementId]()
                         element_ids.Add(element.Id)
 
-                        # Breadcrumb: if the native export below hard-crashes
-                        # Revit (uncatchable fatal), this file names the sheet
-                        # that killed it so the next session can recover it.
+                        # Breadcrumb: names the sheet if the native call hard-crashes Revit
                         self._write_crash_marker(item.SheetNumber, "PDF",
                                                  raster_level or "Presentation",
                                                  safe_level=safe_level)
 
-                        # VERSION-AWARE: Export using Revit's native PDF export
-                        # Use Smart API Adapter if available for intelligent export (handles method overload resolution)
                         if self.api_adapter:
-                            # Smart adapter automatically handles version differences and method overload resolution
                             export_result = self.api_adapter.export_pdf(output_folder, filename, element_ids, pdf_options)
                         else:
-                            # Fallback to direct export call
-                            # Revit 2022-2026 signature: Export(String folder, IList<ElementId> viewIds, PDFExportOptions options)
-                            # NOTE: PDF export does NOT take a filename parameter in the Export() method (unlike DWG/DXF)
-                            # Instead, filename is set via PDFExportOptions.FileName property (learned from pyRevit)
+                            # no name argument: see the combined branch
                             export_result = self.doc.Export(output_folder, element_ids, pdf_options)
 
-                        # Export call returned -> Revit survived this sheet; drop
-                        # the breadcrumb so it is not mistaken for a fresh crash.
+                        # Survived: drop the breadcrumb so it is not taken for a crash
                         self._clear_crash_marker()
 
                         if not export_result:
                             raise RuntimeError("Revit reported PDF export failure; any output file was kept for review")
 
-                        # Confirm the file landed by polling for it (no fixed
-                        # sleep, no folder-wide glob — much faster on OneDrive).
+                        # Polls for the file (no fixed sleep or glob: fast on OneDrive)
                         if self._verify_export(expected_file, prev_mtime, started_at, ".pdf"):
                             exported_count += 1
                             self._overall_counter += 1
@@ -4810,10 +4282,8 @@ class ExportManagerWindow(T3WPFWindow):
                             self._note_failure(item.SheetNumber, "PDF",
                                                "Revit wrote no PDF file")
 
-                        # Reclaim native raster buffers periodically (every 10
-                        # sheets) rather than every sheet — a full GC on Revit's
-                        # large heap is not free, so batch it to keep exports fast
-                        # while still capping memory growth.
+                        # Reclaim raster buffers every 10 sheets: a full GC on Revit's
+                        # heap is not free, but memory growth must be capped.
                         sheets_since_gc += 1
                         if sheets_since_gc >= 10:
                             sheets_since_gc = 0
@@ -4908,7 +4378,8 @@ class ExportManagerWindow(T3WPFWindow):
                     if element is None:
                         self._note_failure(label, "PDF", "row is neither a sheet nor a view")
                         continue
-                    self.update_export_item_progress(item.SheetNumber, "PDF", 50, "Printing to PDF24...")
+                    # A QUEUE_* state, or _end_live_progress never closes the row out.
+                    self.update_export_item_progress(item.SheetNumber, "PDF", 50, QUEUE_EXPORTING)
                     self._update_progress(
                         int(self._overall_counter * 100.0 / max(1, self._overall_total)),
                         "Printing {} to PDF24...".format(element_name))
@@ -5134,15 +4605,10 @@ class ExportManagerWindow(T3WPFWindow):
         return kept
 
     def export_to_dwf(self, items, output_folder):
-        """Export items (sheets or views) to DWF format using Revit's native DWF export with version-aware API usage.
-
-        Supports Revit 2022-2026 with appropriate API handling for each version.
-        """
+        """Export items (sheets or views) to DWF."""
         try:
-            # Sync cached values with live values from Revit
             self._sync_item_labels(items, "DWF")
 
-            # Create DWF export options
             dwf_options = DWFExportOptions()
 
             exported_count = 0
@@ -5150,7 +4616,6 @@ class ExportManagerWindow(T3WPFWindow):
             for item in items:
                 element_name = str(getattr(item, 'SheetNumber', 'Unknown'))
                 try:
-                    # Get the actual element (sheet or view)
                     element, element_name = self._element_of(item)
                     if element is None:
                         self._note_failure(element_name, "DWF",
@@ -5173,14 +4638,11 @@ class ExportManagerWindow(T3WPFWindow):
 
                     filename = item.CustomFilename or self.get_export_filename(item)
 
-                    # Remove extension if present
                     if filename.lower().endswith('.dwf'):
                         filename = filename[:-4]
                     filename = self._reserve_filename(output_folder, filename, ".dwf")
 
-                    # VERSION-AWARE: Export handling
-                    # Revit 2022-2026 all support ViewSet for DWF export
-                    # Signature: Export(String folder, String name, ViewSet views, DWFExportOptions options)
+                    # Export(folder, name, ViewSet, DWFExportOptions)
                     view_set = DB.ViewSet()
                     view_set.Insert(element)
 
@@ -5192,7 +4654,6 @@ class ExportManagerWindow(T3WPFWindow):
                     self.doc.Export(output_folder, filename, view_set, dwf_options)
                     self._clear_crash_marker()
 
-                    # Verify a fresh file was created
                     if self._verify_export(expected_file, prev_mtime, started_at, ".dwf"):
                         exported_count += 1
                         self._overall_counter += 1
@@ -5217,15 +4678,13 @@ class ExportManagerWindow(T3WPFWindow):
             return 0
 
     def export_to_nwd(self, items, output_folder):
-        """Export items (sheets or views) to Navisworks NWD format with version-aware API usage."""
+        """Export items (sheets or views) to Navisworks NWC."""
         if not HAS_NAVISWORKS:
             return 0
 
         try:
-            # Sync cached values with live values from Revit
             self._sync_item_labels(items, "NWC")
 
-            # Create Navisworks export options
             nwd_options = NavisworksExportOptions()
 
             exported_count = 0
@@ -5233,7 +4692,6 @@ class ExportManagerWindow(T3WPFWindow):
             for item in items:
                 element_name = str(getattr(item, 'SheetNumber', 'Unknown'))
                 try:
-                    # Get the actual element (sheet or view)
                     element, element_name = self._element_of(item)
                     if element is None:
                         self._note_failure(element_name, "NWC",
@@ -5263,7 +4721,6 @@ class ExportManagerWindow(T3WPFWindow):
                     prev_mtime = os.path.getmtime(expected_file) if os.path.exists(expected_file) else None
                     started_at = time.time()
 
-                    # Export view
                     nwd_options.ExportScope = DB.NavisworksExportScope.View
                     nwd_options.ViewId = element.Id
 
@@ -5295,15 +4752,13 @@ class ExportManagerWindow(T3WPFWindow):
             return 0
 
     def export_to_ifc(self, items, output_folder):
-        """Export to IFC format with version-aware API usage."""
+        """Export the whole model to one IFC file."""
         if not HAS_IFC:
             return 0
 
         try:
-            # Sync cached values with live values from Revit
             self._sync_item_labels(items, "IFC")
 
-            # Create IFC export options — version read from UI
             ifc_options = IFCExportOptions()
             ifc_ver_map = {0: IFCVersion.IFC2x2, 1: IFCVersion.IFC2x3, 2: IFCVersion.IFC4}
             ifc_ver_index = self.ifc_version.SelectedIndex if hasattr(self, 'ifc_version') else 1
@@ -5312,8 +4767,7 @@ class ExportManagerWindow(T3WPFWindow):
 
             exported_count = 0
 
-            # For IFC, export the entire model once
-            # Note: IFC export requires a transaction (unique requirement compared to other formats)
+            # Unlike the other formats, IFC export needs a transaction
             if len(items) > 0:
                 trans = None
                 try:
@@ -5324,12 +4778,10 @@ class ExportManagerWindow(T3WPFWindow):
                         "Exporting entire model to IFC..."
                     )
 
-                    # Generate filename using naming pattern similar to combined PDF
-                    # Use first and last item for combined exports
+                    # Named from first + last item, like the combined PDF
                     if len(items) > 1:
                         first_item = items[0]
                         last_item = items[-1]
-                        # Get names from actual Revit elements
                         if hasattr(first_item, 'Sheet'):
                             first_name = first_item.Sheet.SheetNumber
                             last_name = last_item.Sheet.SheetNumber
@@ -5338,16 +4790,13 @@ class ExportManagerWindow(T3WPFWindow):
                             last_name = last_item.View.Name[:20]
                         filename = "{}-{}_Model_IFC".format(first_name, last_name)
                     elif len(items) == 1:
-                        # Use the naming pattern for single item
                         filename = self.get_export_filename(items[0]) + "_IFC"
                     else:
                         filename = "Model_IFC_Export"
 
-                    # Remove extension if present
                     if filename.lower().endswith('.ifc'):
                         filename = filename[:-4]
 
-                    # Clean filename - remove invalid chars and extra spaces
                     invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
                     for char in invalid_chars:
                         filename = filename.replace(char, '_')
@@ -5356,9 +4805,7 @@ class ExportManagerWindow(T3WPFWindow):
                     expected_file = os.path.join(output_folder, filename + ".ifc")
                     before_output = self._native_output_stamp(expected_file)
 
-                    # IFC export needs to be wrapped in a transaction. One native
-                    # call for the whole model, so the breadcrumb records the job
-                    # rather than a single sheet.
+                    # One call for the whole model: the breadcrumb records the job.
                     self._write_crash_marker(filename, "IFC")
                     trans = Transaction(self.doc, "T3Lab: Export IFC")
                     trans.Start()
@@ -5404,12 +4851,11 @@ class ExportManagerWindow(T3WPFWindow):
             return 0
 
     def export_to_images(self, items, output_folder):
-        """Export items (sheets or views) to image format using Revit's native image export with version-aware API usage."""
+        """Export items (sheets or views) to PNG/JPEG images."""
         try:
             import time
             import glob
 
-            # Sync cached values with live values from Revit
             self._sync_item_labels(items, "IMG")
 
             exported_count = 0
@@ -5417,7 +4863,6 @@ class ExportManagerWindow(T3WPFWindow):
             for item in items:
                 element_name = str(getattr(item, 'SheetNumber', 'Unknown'))
                 try:
-                    # Get the actual element (sheet or view)
                     element, element_name = self._element_of(item)
                     if element is None:
                         self._note_failure(element_name, "IMG",
@@ -5440,17 +4885,14 @@ class ExportManagerWindow(T3WPFWindow):
 
                     filename = item.CustomFilename or self.get_export_filename(item)
 
-                    # Remove extension if present
                     if filename.lower().endswith(('.png', '.jpg')):
                         filename = filename.rsplit('.', 1)[0]
 
-                    # Clean filename - remove invalid chars and extra spaces
                     invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
                     for char in invalid_chars:
                         filename = filename.replace(char, '_')
                     filename = filename.strip()
 
-                    # Read image options from UI
                     use_fit_to_page = not (hasattr(self, 'img_zoom_to') and self.img_zoom_to.IsChecked)
                     fit_pixels = 1080
                     zoom_percent = 50
@@ -5479,10 +4921,8 @@ class ExportManagerWindow(T3WPFWindow):
                     shaded_fmt = ImageFileType.JPEGLossless if shaded_idx == 1 else ImageFileType.PNG
                     nonshaded_fmt = ImageFileType.JPEGLossless if nonshaded_idx == 1 else ImageFileType.PNG
 
-                    # Revit picks the shaded or non-shaded file type per view, so
-                    # both extensions have to be watched. Globbing only "*.png"
-                    # missed every JPEG export: the file stayed under Revit's own
-                    # decorated name and the item was reported as not exported.
+                    # Revit picks the shaded or non-shaded type per view: watch both
+                    # extensions (a "*.png"-only glob reported every JPEG as missing).
                     img_exts = set()
                     for fmt in (shaded_fmt, nonshaded_fmt):
                         img_exts.add('.jpg' if fmt == ImageFileType.JPEGLossless else '.png')
@@ -5497,7 +4937,6 @@ class ExportManagerWindow(T3WPFWindow):
                         existing_images |= set(glob.glob(
                             os.path.join(output_folder, "*" + ext)))
 
-                    # Create image export options for each sheet
                     img_options = ImageExportOptions()
                     if use_fit_to_page:
                         img_options.ZoomType = DB.ZoomFitType.FitToPage
@@ -5512,29 +4951,24 @@ class ExportManagerWindow(T3WPFWindow):
                     img_options.ShadowViewsFileType = shaded_fmt
                     img_options.ExportRange = DB.ExportRange.SetOfViews
 
-                    # Set the view IDs using System.Collections.Generic.List
                     view_ids = List[DB.ElementId]()
                     view_ids.Add(element.Id)
                     img_options.SetViewsAndSheets(view_ids)
 
-                    # Export using Revit's native image export
                     self._write_crash_marker(item.SheetNumber, "IMG")
                     self.doc.ExportImage(img_options)
                     self._clear_crash_marker()
 
-                    # Wait briefly for file system to update
                     time.sleep(0.3)
 
-                    # Get list of image files after export (both extensions)
                     current_images = set()
                     for ext in img_exts:
                         current_images |= set(glob.glob(
                             os.path.join(output_folder, "*" + ext)))
                     new_images = current_images - existing_images
 
-                    # Handle Revit's automatic filename modification: it appends
-                    # " - Sheet - A101 - ..." decorations, so rename back to the
-                    # requested name — keeping whichever extension Revit chose.
+                    # Revit appends " - Sheet - A101 - ..." to the name: rename back,
+                    # keeping the extension Revit chose.
                     expected_file = None
                     if new_images:
                         actual_file = sorted(new_images)[0]
@@ -5542,8 +4976,7 @@ class ExportManagerWindow(T3WPFWindow):
                         expected_file = os.path.join(output_folder, filename + actual_ext)
                         if os.path.normcase(actual_file) != os.path.normcase(expected_file):
                             try:
-                                # Target is the name this run reserved for this
-                                # item, so replacing it is the intended overwrite.
+                                # Name reserved by this run: overwrite intended
                                 if os.path.exists(expected_file):
                                     os.remove(expected_file)
                                 os.rename(actual_file, expected_file)
@@ -5581,11 +5014,9 @@ class ExportManagerWindow(T3WPFWindow):
 
 
     def minimize_button_clicked(self, sender, e):
-        """Minimize the window."""
         self.WindowState = WindowState.Minimized
 
     def maximize_button_clicked(self, sender, e):
-        """Toggle between maximize and restore."""
         if self.WindowState == WindowState.Maximized:
             self.WindowState = WindowState.Normal
             self.btn_maximize.ToolTip = "Maximize"
@@ -5594,16 +5025,14 @@ class ExportManagerWindow(T3WPFWindow):
             self.btn_maximize.ToolTip = "Restore"
 
     def close_button_clicked(self, sender, e):
-        """Close the window."""
         self.Close()
 
 
-# MAIN SCRIPT
-# ==================================================
+# ── MAIN SCRIPT ──
 
 
 def show_batchout_dialog():
-    """Show Export Manager window with automatic modeless/modal handling."""
+    """Show the window modeless, or modal when the persistent engine is not active."""
     if not revit.doc:
         forms.alert("Please open a Revit document first.", exitscript=True)
         return None

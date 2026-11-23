@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-style="t3space">
+  <!-- bang task harness: mot task chia cho hai agent, task dang chay la tin hieu -->
+  <rect x="3" y="12" width="9" height="8" rx="2" stroke="#000000"/>
+  <rect x="20" y="4" width="9" height="8" rx="2" stroke="#000000"/>
+  <path d="M12 16h4M16 8v16M16 8h4M16 24h4" stroke="#666666"/>
+  <rect x="20" y="20" width="9" height="8" rx="2" stroke="#EA680C"/>
+</svg>

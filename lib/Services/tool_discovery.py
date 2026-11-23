@@ -18,6 +18,7 @@ import os
 import re
 import io
 import json
+from core import jsonsafe
 
 from core.extension_paths import tab_dirs
 
@@ -273,9 +274,7 @@ def save_registry(reg):
         d = os.path.dirname(path)
         if not os.path.exists(d):
             os.makedirs(d)
-        data = json.dumps(reg, ensure_ascii=True, indent=2, sort_keys=True)
-        if isinstance(data, bytes):                     # py2 str
-            data = data.decode('ascii')
+        data = jsonsafe.dumps(reg, indent=2, sort_keys=True)
         with io.open(path, 'w', encoding='utf-8') as f:
             f.write(data)
     except Exception:

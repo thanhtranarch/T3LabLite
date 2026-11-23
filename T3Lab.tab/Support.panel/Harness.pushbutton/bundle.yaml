@@ -1,0 +1,8 @@
+title: "Harness"
+tooltip: "Plan work for several AI agents on one model, follow it live and review it: opens Harness Studio in your browser."
+description: |
+  The BIM Harness task board as a canvas: tasks, who does them, what waits for what
+  Review finished tasks in one place
+  Same board as MCP Control > Harness
+author: "Tran Tien Thanh"
+version: "1.0.0"

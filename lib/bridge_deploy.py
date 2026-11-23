@@ -23,11 +23,19 @@ import time
 
 BRIDGE = 'bridge.py'
 # (lib/core name, deployed name). skills.json -> t3lab_capabilities;
-# mcp_providers.py -> external providers; hub_store.py -> t3lab_hub. A missing
-# source is skipped: the bridge runs without it, feature off.
+# mcp_providers.py -> external providers; hub_store.py -> t3lab_hub; tool_cli.py ->
+# the argument check, t3lab_verify and the CLI (docs/cli.md); harness_*.py ->
+# t3lab_harness + Harness Studio (docs/harness.md); toolhub_recipes.py ->
+# t3lab_recipe. A missing source is skipped: the bridge runs without it, feature off.
 COMPANIONS = (('skills_registry.json', 'skills.json'),
               ('mcp_providers.py', 'mcp_providers.py'),
-              ('hub_store.py', 'hub_store.py'))
+              ('hub_store.py', 'hub_store.py'),
+              ('tool_cli.py', 'tool_cli.py'),
+              ('harness_store.py', 'harness_store.py'),
+              ('harness_agents.py', 'harness_agents.py'),
+              ('harness_studio.py', 'harness_studio.py'),
+              ('harness_studio.html', 'harness_studio.html'),
+              ('../Intelligence/toolhub/recipes.py', 'toolhub_recipes.py'))
 SOURCE_FILE = 'bridge_source.txt'
 
 

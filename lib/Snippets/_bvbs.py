@@ -54,6 +54,7 @@ Part of T3Lab Extension.
 
 __author__ = "Tran Tien Thanh"
 
+import io
 import json
 import math
 import os
@@ -115,7 +116,10 @@ def ascii_text(text):
         if ch in _ASCII_TWINS:
             out.append(_ASCII_TWINS[ch])
             continue
-        decomposed = unicodedata.normalize("NFKD", ch)
+        try:
+            decomposed = unicodedata.normalize("NFKD", ch)
+        except Exception:                  # IronPython: half of a non-BMP pair (emoji)
+            decomposed = "?"
         stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
         if not stripped:
             continue                       # a bare combining mark
@@ -350,7 +354,7 @@ def _write_lines(path, lines):
     # character ever slip through, the file differs from the lines the checksum
     # was computed on and verify_file() reports it instead of an exception
     # killing the export half-way.
-    with open(path, "w", encoding="ascii", errors="replace", newline="\r\n") as fh:
+    with io.open(path, "w", encoding="ascii", errors="replace", newline="\r\n") as fh:
         for line in lines:
             fh.write(line + "\n")
 
@@ -433,9 +437,10 @@ def write_verified(path, records):
         except OSError:
             pass
         return 0, skipped, problems
+    from Snippets._compat import replace_file      # os.replace is missing on IronPython 2.7
     try:
-        os.replace(tmp, path)
-    except OSError as exc:
+        replace_file(tmp, path)
+    except (IOError, OSError) as exc:
         try:
             os.remove(tmp)
         except OSError:
@@ -509,7 +514,7 @@ def load_weight_table(path=None):
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "data", "rebar_weights.json")
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with io.open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         table = data.get("kg_per_m", {})
         return {str(k): float(v) for k, v in table.items() if float(v) > 0}

@@ -62,8 +62,9 @@ class FamilyBuildError(Exception):
     """A family could not be created; the message is shown to the user."""
 
 
+from Snippets._compat import clr_namespace   # per-load .NET type name (CLAUDE.md rule 5)
 class _WarningSwallower(IFailuresPreprocessor):
-    __namespace__ = "T3Lab.FamilyBuilder"
+    __namespace__ = clr_namespace('FamilyBuilder')
 
     def PreprocessFailures(self, failuresAccessor):
         for failure in failuresAccessor.GetFailureMessages():
@@ -74,7 +75,7 @@ class _WarningSwallower(IFailuresPreprocessor):
 
 class _OverwriteLoadOptions(IFamilyLoadOptions):
     """Reload over an already loaded family, overwriting its parameter values."""
-    __namespace__ = "T3Lab.FamilyBuilder"
+    __namespace__ = clr_namespace('FamilyBuilder')
 
     def OnFamilyFound(self, familyInUse, overwriteParameterValues):
         try:                                   # IronPython: out param is a StrongBox

@@ -20,6 +20,7 @@ from __future__ import unicode_literals
 import json
 import time
 
+from core import jsonsafe            # ASCII JSON that IronPython can build too
 from Intelligence.toolhub import config
 
 SESSION_FILE = 'session.json'
@@ -48,7 +49,7 @@ def _post(path, payload, http=None, bearer=None):
         headers['Authorization'] = 'Bearer ' + bearer
     try:
         status, text = (http or _default_http)(
-            'POST', url + path, json.dumps(payload), headers, config.HTTP_TIMEOUT)
+            'POST', url + path, jsonsafe.dumps(payload), headers, config.HTTP_TIMEOUT)
     except Exception as ex:
         raise AuthError('The Tool Hub is not reachable ({}). Check the network and try again.'
                         .format(ex))

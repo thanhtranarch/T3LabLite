@@ -13,7 +13,7 @@ Layout: %APPDATA%/T3LabAI/projects/<pid>/project.json
 The active project id lives in settings.json ("active_project", managed
 by T3LabAISettings). No project selected = fully legacy behavior.
 
-All JSON writes use the ensure_ascii + io.open(utf-8) pattern
+All JSON writes use core.jsonsafe (ASCII) + io.open(utf-8)
 (IronPython 2.7 safe with Vietnamese text/paths).
 
 Author: Tran Tien Thanh
@@ -24,6 +24,7 @@ import copy
 import hashlib
 import io
 import json
+from core import jsonsafe
 import os
 import shutil
 import threading
@@ -31,9 +32,7 @@ import time
 
 
 def _write_json(path, data):
-    payload = json.dumps(data, ensure_ascii=True, indent=2)
-    if isinstance(payload, bytes):
-        payload = payload.decode('ascii')
+    payload = jsonsafe.dumps(data, indent=2)
     with io.open(path, 'w', encoding='utf-8') as f:
         f.write(payload)
 

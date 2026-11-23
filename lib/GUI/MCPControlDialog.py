@@ -12,6 +12,8 @@ Layout — tabs, ordered by who needs them:
                 AI app, ask it; manual config folded at the bottom.
   Advanced      auto-start, port, security (read-only, confirmations, code
                 execution), file task watcher, teaching capture.
+  Harness       the task board several AI agents share, and the tasks that
+                wait for the person's review (docs/harness.md).
 The footer always states how ready the whole chain is. It has no button:
 Start/Stop Server sits in Step 1 and the title-bar X closes the window, so a
 footer "Start Server" / "Done" only repeated them.
@@ -35,7 +37,7 @@ try:
 except Exception:
     WindowState = None
 
-from GUI.WPF_Base import T3WPFWindow
+from GUI.WPF_Base import T3WPFWindow, set_items_source
 
 _XAML = os.path.join(os.path.dirname(__file__), 'Tools', 'MCPControl.xaml')
 
@@ -61,6 +63,12 @@ except Exception:
 CLIENT_KEYS = [key for key, _label in CLIENTS]
 
 DEFAULT_PORT = 48884
+
+try:
+    from Services import harness_settings
+except Exception as _harness_err:
+    harness_settings = None
+    _HARNESS_ERR_MSG = str(_harness_err)
 
 def _get_logger():
     # pyrevit.script imports pyrevit.revit at module level. When the CPython
@@ -115,6 +123,26 @@ def _apply_btn_style(btn, style_key, resources=None):
                 return
     except Exception:
         pass
+
+
+class HarnessRow(object):
+    """One task of an open harness session; plain str attributes for the grid."""
+
+    def __init__(self, row):
+        self.row = row
+        self.title = row.get('title') or row.get('task') or ''
+        self.status_text = row.get('status_text') or ''
+        self.owner = row.get('owner') or ''
+        self.document = row.get('document') or ''
+
+
+def _grid_rows(grid, selected=True):
+    """Selected rows (or every row) of a grid as the Python row objects."""
+    try:
+        items = grid.SelectedItems if selected else grid.Items
+        return [item for item in items] if grid is not None else []
+    except Exception:
+        return []
 
 
 # ─── Status helpers shared with embedded widgets ───────────────────────────────
@@ -219,6 +247,7 @@ class MCPControlWindow(T3WPFWindow):
         self._server_state  = {}
         self._server_error  = None     # last Start/Stop failure, shown in step 1
         self._client_states = {}
+        self._app_client_states = {}   # the picked app's rows (footer when not Revit)
         self._active_doc_ok = False
         self._auto_start    = True
 
@@ -367,6 +396,27 @@ class MCPControlWindow(T3WPFWindow):
         if refresh_btn:
             refresh_btn.Click += self._on_refresh
 
+        # Harness tab · the shared task board
+        self.harness_grid         = self.FindName('harness_grid')
+        self._harness_empty       = self.FindName('harness_empty')
+        self._harness_summary     = self.FindName('harness_summary_label')
+        self._harness_accept_btn  = self.FindName('harness_accept_btn')
+        self._harness_redo_btn    = self.FindName('harness_redo_btn')
+        self._harness_dot         = self.FindName('harness_status_dot')
+        self._harness_status      = self.FindName('harness_status_label')
+        harness_refresh_btn       = self.FindName('harness_refresh_btn')
+        harness_studio_btn        = self.FindName('harness_studio_btn')
+        if self.harness_grid:
+            self.harness_grid.SelectionChanged += self._on_harness_selection
+        if self._harness_accept_btn:
+            self._harness_accept_btn.Click += self._on_harness_accept
+        if self._harness_redo_btn:
+            self._harness_redo_btn.Click += self._on_harness_redo
+        if harness_refresh_btn:
+            harness_refresh_btn.Click += self._on_harness_refresh
+        if harness_studio_btn:
+            harness_studio_btn.Click += self._on_harness_studio
+
         self._init_port()
         self._refresh_all()
 
@@ -387,6 +437,8 @@ class MCPControlWindow(T3WPFWindow):
         except Exception as ex:
             logger.debug('Tab switch failed: {}'.format(ex))
             return
+        if self._tab_control.SelectedIndex == 2:
+            self._refresh_harness()         # the board changes while the window is open
 
     # ── Small helpers ──────────────────────────────────────────────────────────
 
@@ -432,7 +484,8 @@ class MCPControlWindow(T3WPFWindow):
                               ('AI clients',  self._refresh_clients),
                               ('security',    self._refresh_security),
                               ('watcher',     self._refresh_watcher),
-                              ('teaching',    self._refresh_teaching)):
+                              ('teaching',    self._refresh_teaching),
+                              ('harness',     self._refresh_harness)):
             try:
                 refresh()
             except Exception as ex:
@@ -537,6 +590,7 @@ class MCPControlWindow(T3WPFWindow):
                     status = MCPService.client_status(key, server=self._app)
                 except Exception as ex:
                     status = {'error': str(ex)}
+            self._app_client_states[key] = status
             self._apply_client_row(
                 widgets, status, 'T3Lab' if revit else server_name,
                 'Rewrite the T3Lab entry — use after changing the port' if revit
@@ -605,7 +659,24 @@ class MCPControlWindow(T3WPFWindow):
         connected = sum(1 for s in self._client_states.values() if s.get('configured'))
         error     = state.get('error') or (None if state.get('running') else self._server_error)
 
-        if not HAS_SERVICE:
+        if HAS_SERVICE and self._app != 'revit':
+            # Another Autodesk app: its add-in is Step 1, not the Revit server
+            # (t3lab_dev 5d7d852: with AutoCAD picked it read "Server stopped").
+            app_label, server_name = self._app_spec()
+            states = self._app_client_states
+            done = sum(1 for s in states.values() if s.get('configured'))
+            if not self._addin_installed:
+                tone, text, tip = ('T3.Warning.Accent',
+                                   '{} add-in not installed'.format(app_label),
+                                   'Step 1 — install the T3Lab add-in for {}.'.format(app_label))
+            elif done == 0:
+                tone, text, tip = ('T3.Warning.Accent', 'No AI app connected',
+                                   'Step 2 — connect the AI app you use to {}.'.format(app_label))
+            else:
+                tone, text = 'T3.Success.Accent', 'Ready · {}'.format(server_name)
+                tip = '{} of {} AI apps connected. Restart an app if it was open while you connected it.'.format(
+                    done, len(states) or len(CLIENT_KEYS))
+        elif not HAS_SERVICE:
             tone, text, tip = ('T3.Danger.Accent', 'Service unavailable',
                                'The MCP service failed to load: {}'.format(_SVC_ERR_MSG))
         elif error:
@@ -1010,6 +1081,98 @@ class MCPControlWindow(T3WPFWindow):
             logger.info('Sandbox document set: {}'.format(
                 info.get('title') if info else ''))
         self._refresh_teaching()
+
+
+    # ── Harness · the shared task board ──────────────────────────────────────
+
+    def _harness_say(self, text, tone='T3.TextMuted'):
+        """Tab status line: dot + words, never colour alone."""
+        self._set_dot(self._harness_dot, tone)
+        if self._harness_status is not None:
+            self._harness_status.Text = text
+
+    def _refresh_harness(self):
+        if harness_settings is None:
+            for btn in (self._harness_accept_btn, self._harness_redo_btn):
+                if btn is not None:
+                    btn.IsEnabled = False
+            self._harness_say('Harness unavailable: {} — restart Revit and try again.'.format(
+                _HARNESS_ERR_MSG), 'T3.Danger.Accent')
+            return
+        board = harness_settings.read_board()
+        sessions = harness_settings.list_harness_sessions(board)
+        rows = [HarnessRow(r) for r in harness_settings.harness_rows(sessions)]
+        set_items_source(self.harness_grid, rows)
+        if self._harness_empty is not None:
+            from System.Windows import Visibility
+            self._harness_empty.Visibility = (Visibility.Visible if not rows
+                                              else Visibility.Collapsed)
+        if self._harness_summary is not None:
+            self._harness_summary.Text = harness_settings.harness_summary(
+                sessions, harness_settings.harness_master(board))
+        self._update_harness_buttons()
+
+    def _selected_harness_row(self):
+        rows = _grid_rows(self.harness_grid)
+        return rows[0].row if rows else None
+
+    def _update_harness_buttons(self):
+        row = self._selected_harness_row()
+        waiting = bool(row) and row.get('status') == 'review'
+        for btn in (self._harness_accept_btn, self._harness_redo_btn):
+            if btn is not None:
+                btn.IsEnabled = waiting
+
+    def _on_harness_selection(self, sender, e):
+        self._update_harness_buttons()
+        row = self._selected_harness_row()
+        if row and row.get('status') != 'review':
+            self._harness_say('"{}" is {} — only a task that waits for review can be accepted '
+                              'or sent back.'.format(row.get('title'),
+                                                     row.get('status_text', '').lower()))
+
+    def _on_harness_refresh(self, sender, e):
+        self._refresh_harness()
+        if harness_settings is not None:
+            waiting = len([r for r in _grid_rows(self.harness_grid, selected=False)
+                           if r.row.get('status') == 'review'])
+            self._harness_say('{} task{} waiting for review.'.format(
+                waiting, '' if waiting == 1 else 's'))
+
+    def _on_harness_studio(self, sender, e):
+        if harness_settings is None:
+            return
+        try:
+            harness_settings.open_studio()
+        except Exception as ex:
+            logger.error('Harness Studio failed to start: {}'.format(ex))
+            self._harness_say('Could not start Harness Studio: {} — check that Python 3 is '
+                              'installed (Connect tab).'.format(ex), 'T3.Danger.Accent')
+            return
+        self._harness_say('Harness Studio is opening in your browser.', 'T3.Success.Accent')
+
+    def _on_harness_accept(self, sender, e):
+        self._harness_review('accept')
+
+    def _on_harness_redo(self, sender, e):
+        self._harness_review('redo')
+
+    def _harness_review(self, verdict):
+        row = self._selected_harness_row()
+        if row is None or harness_settings is None:
+            return
+        try:
+            code, payload = harness_settings.harness_review(row.get('session'), row.get('task'),
+                                                            verdict)
+        except Exception as ex:
+            logger.error('Harness review failed: {}'.format(ex))
+            self._harness_say('Could not start the bridge: {} — check that Python 3 is installed '
+                              '(Connect tab).'.format(ex), 'T3.Danger.Accent')
+            return
+        failed = code != 0 or (isinstance(payload, dict) and payload.get('error'))
+        self._refresh_harness()
+        self._harness_say(harness_settings.describe_harness_result(verdict, code, payload, row),
+                          'T3.Danger.Accent' if failed else 'T3.Success.Accent')
 
 
 def show_mcp_control_dialog():

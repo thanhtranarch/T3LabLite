@@ -123,6 +123,10 @@ jobs:
         run: python3 lite_guard/test_tool_specs.py
       - name: Test the bridge argument check, t3lab_verify and Lite's policy on spec tools
         run: python3 lite_guard/test_bridge_contract.py
+      - name: Test the bridge CLI (tools, help, typed flags, verify, skill; same gate as MCP)
+        run: python3 lite_guard/test_tool_cli.py
+      - name: Test Tool Hub recipes over MCP and the CLI (t3lab_recipe)
+        run: python3 lite_guard/test_bridge_recipes.py
       - name: Test the read-back after a model write
         run: python3 lite_guard/test_write_verify.py
       - name: Test switching the active model without a click (doc_switch, switch_active_document, list_open_documents)

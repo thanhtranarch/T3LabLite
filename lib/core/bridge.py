@@ -59,6 +59,11 @@ on top of the in-Revit server's manifest):
   - t3lab_harness         -> the BIM Harness task board shared by several AI
                              apps (docs/harness.md); `bridge.py harness ...` is
                              its CLI and Harness Studio.
+  - t3lab_recipe          -> Tool Hub team recipes; every step is one tools/call.
+
+CLI for agents with a shell (docs/cli.md): `bridge.py tools | help | call |
+instances | verify | skill`. A CLI call takes the same path as an MCP
+tools/call (_answer).
 """
 
 import sys
@@ -409,6 +414,24 @@ def _tool_payload(response):
         return json.loads(response['result']['content'][0]['text'])
     except Exception:
         return None
+
+
+def _call_failure(response, payload):
+    """Error text of a tools/call answer ('' when it succeeded): a JSON-RPC
+    error, isError, or a payload with `error`."""
+    if not isinstance(response, dict):
+        return 'no answer'
+    if response.get('error'):
+        return '{}'.format((response['error'] or {}).get('message') or 'error')
+    if isinstance(payload, dict) and payload.get('error'):
+        return '{}'.format(payload['error'])
+    result = response.get('result')
+    if isinstance(result, dict) and result.get('isError'):
+        try:
+            return '{}'.format(result['content'][0]['text'])[:500] or 'tool error'
+        except Exception:
+            return 'tool error'
+    return ''
 
 
 def _tool_response(request_id, payload):
@@ -981,8 +1004,13 @@ def _handle_tools_list(request, current, token):
     except Exception:
         tools = _load_cached_tools()
     return {'jsonrpc': '2.0', 'id': request.get('id'),
-            'result': {'tools': _annotate_large_results(
-                tools + BRIDGE_TOOLS + ([HARNESS_TOOL_DEF] if _hb is not None else []))}}
+            'result': {'tools': _annotate_large_results(_with_bridge_tools(tools))}}
+
+
+def _with_bridge_tools(tools):
+    """Server tools + the bridge's own, as tools/list shows them."""
+    return (list(tools) + BRIDGE_TOOLS + ([HARNESS_TOOL_DEF] if _hb is not None else [])
+            + ([RECIPE_TOOL_DEF] if _recipe_rows() else []))
 
 
 def _annotate_large_results(tools):
@@ -1234,6 +1262,108 @@ def _verify_files(args):
                           since_min=args.get('since_minutes'), max_files=VERIFY_MAX_FILES)
     except (TypeError, ValueError) as ex:
         return {'error': 'Bad option: {}'.format(ex), 'error_code': 'bad_arguments'}
+
+
+# ─── Tool Hub recipes (Intelligence/toolhub/recipes.py, same file as t3lab_dev) ───
+RECIPE_TOOL = 't3lab_recipe'
+# Listed only while the catalog holds a published recipe: Lite lists every bridge
+# tool (no toolsets here), so an empty catalog costs no tokens. Callable either way.
+RECIPE_TOOL_DEF = {
+    'name': RECIPE_TOOL,
+    'description': ('Team recipes (reviewed tool sequences from Tool Hub): list, show the '
+                    'steps, or run one with its inputs. A recipe that changes the model runs '
+                    'only with confirm=true, after the person saw the steps; each step is '
+                    'checked and confirmed in Revit like a direct call.'),
+    'inputSchema': {'type': 'object', 'properties': {
+        'action': {'type': 'string', 'enum': ['list', 'show', 'run']},
+        'slug': {'type': 'string'},
+        'inputs': {'type': 'object'},
+        'confirm': {'type': 'boolean'}},
+        'required': ['action']}}
+
+
+def _load_recipes():
+    """recipes.py by path (stdlib only): deployed next to the bridge as
+    toolhub_recipes.py, else the in-extension file. None = feature off."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (os.path.join(here, 'toolhub_recipes.py'),
+                 os.path.join(here, '..', 'Intelligence', 'toolhub', 'recipes.py')):
+        if not os.path.isfile(path):
+            continue
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location('toolhub_recipes', path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        except Exception:
+            return None
+    return None
+
+
+_rc = _load_recipes()
+
+
+def _recipe_rows():
+    """{slug: row} of published recipes whose payload matches its review hash,
+    from the Assistant's Tool Hub cache (%APPDATA%/T3LabAI/toolhub/catalog.json)."""
+    if _rc is None:
+        return {}
+    try:
+        with open(os.path.join(_data_dir(), 'toolhub', 'catalog.json'), encoding='utf-8') as f:
+            rows = (json.load(f) or {}).get('rows') or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return dict((s, r) for s, r in rows.items()
+                if isinstance(r, dict) and r.get('kind') == 'recipe'
+                and r.get('status') == 'published' and _rc.verified_payload(r) is not None)
+
+
+def _run_recipe_tool(args, current, token):
+    """t3lab_recipe: list | show | run. Each step goes through _answer, so the
+    argument check, the harness write check and Revit's policy see it."""
+    if _rc is None:
+        return _hub_error('Tool Hub recipes are not next to the bridge.', 'recipes_unavailable',
+                          hint='Restart Revit (it refreshes the bridge files), then the AI app.')
+    rows = _recipe_rows()
+    action = '{}'.format(args.get('action') or 'list').lower()
+    if action == 'list':
+        return {'recipes': [dict(slug=s, name=r.get('name'), title_vi=r.get('title_vi'),
+                                 description=r.get('description'),
+                                 changes_model=bool(_rc.verified_payload(r).get('is_write', True)))
+                            for s, r in sorted(rows.items())],
+                'note': 'The signed-in T3Lab Assistant syncs the catalog; empty = nothing '
+                        'synced yet.'}
+    row = rows.get(args.get('slug') or '')
+    if row is None:
+        return _hub_error('No published recipe "{}".'.format(args.get('slug') or ''),
+                          'recipe_not_found', recipes=sorted(rows))
+    payload = _rc.verified_payload(row)
+    steps = ((payload.get('plan') or {}).get('steps')) or []
+    if action == 'show':
+        return {'slug': row.get('slug'), 'name': row.get('name'),
+                'changes_model': bool(payload.get('is_write', True)),
+                'inputs_schema': payload.get('inputs_schema'),
+                'steps': [{'tool': s.get('tool'), 'args': s.get('args')} for s in steps]}
+    if action != 'run':
+        return _hub_error('action must be list, show or run.', 'bad_arguments')
+    if payload.get('is_write', True) and args.get('confirm') is not True:
+        return _hub_error('This recipe changes the model ({} steps: {}). Show the steps to the '
+                          'person, then run again with confirm=true.'.format(
+                              len(steps), ', '.join(s.get('tool') or '?' for s in steps)),
+                          'confirmation_required', nothing_ran=True)
+
+    def execute(tool, arguments):
+        if tool == RECIPE_TOOL:
+            return {'error': 'A recipe step cannot call {}.'.format(tool)}
+        resp = _answer(_call_request(1, tool, arguments), current, token)
+        result = _tool_payload(resp)
+        if isinstance(result, dict):
+            return result
+        failed = _call_failure(resp, result)
+        return {'error': failed} if failed else {'result': result}
+
+    return _rc.run(row, args.get('inputs') or {}, execute)
 
 
 def _hub_response(request_id, payload):
@@ -1797,6 +1927,21 @@ def _cli_json(rest):
     return '{}'
 
 
+CLI_AGENT = 'cli'       # in HUMAN_AGENTS: the person at this terminal
+
+
+def _cli_current(rest):
+    """`current` of a CLI run: --agent= / T3LAB_AGENT names the caller, else
+    'cli'; transport cli (the harness lets it act as owner, change the setup)."""
+    try:
+        port = int(_cli_value(rest, 'port') or PORT_MIN)
+    except ValueError:
+        port = PORT_MIN
+    agent = (_cli_value(rest, 'agent') or os.environ.get('T3LAB_AGENT', '')).strip()
+    return {'port': port, 'client': (agent or CLI_AGENT)[:40], 'agent_explicit': True,
+            'transport': 'cli'}
+
+
 def _harness_cli(argv):
     """bridge.py harness <action> [--json '{...}'] [--session=<id>] [--agent=<id>]
     [--port=N]: the board from a terminal, as the person at this machine
@@ -1828,13 +1973,7 @@ def _harness_cli(argv):
         mode = _cli_value(argv, 'write-mode')
         if mode:
             args['write_mode'] = mode
-    try:
-        port = int(_cli_value(argv, 'port') or PORT_MIN)
-    except ValueError:
-        port = PORT_MIN
-    agent = _cli_value(argv, 'agent') or os.environ.get('T3LAB_AGENT', '') or 'cli'
-    current = {'port': port, 'client': agent.strip()[:40], 'agent_explicit': True,
-               'transport': 'cli'}
+    current = _cli_current(argv)
     token = _read_token()
     if args['action'] == 'studio':
         return _harness_studio(argv, current, token)
@@ -1890,6 +2029,211 @@ def _harness_loop(args, current, token, sleep=time.sleep, max_idle_rounds=30):
     return 1
 
 
+# ─── CLI for agents with a shell (docs/cli.md; pattern from HKUDS/CLI-Anything,
+# ideas only): discover with tools / help, call with typed flags, lean output,
+# verify exported files. A call is one tools/call through _answer, as from an AI app.
+CLI_COMMANDS = ('call', 'instances', 'tools', 'help', 'verify', 'skill')
+# Lines of tool_cli.SKILL_MD (shared with t3lab_dev, unchanged) about dev-only
+# features -> Lite's text. lite_guard/test_tool_cli.py fails when one stops matching.
+SKILL_LITE = (
+    ('- `B capabilities` - your tier, skills, the open documents.\n',
+     '- `B call list_open_documents` - the models open in this Revit window.\n'),
+    ('- Pin the document on edits: `--revit_document="<title>"`.\n',
+     '- Edits go to the active model: `B call switch_active_document '
+     '--path_or_title="<title>"` first.\n'),
+    ('- Cut results carry `result_id`: `B call t3lab_result --result_id=<id> --key=<list> '
+     '--offset=<n>`,\n  or `--action=export --format=csv` to write the whole list to a file '
+     'instead of reading it.\n',
+     '- Very long lists are shortened to fit: filter the query instead of paging.\n'),
+)
+
+
+def _cli_positional(rest):
+    """Words after the command that are not flags (nor the value of --json)."""
+    out, skip = [], False
+    for arg in rest:
+        if skip:
+            skip = False
+        elif arg == '--json':
+            skip = True
+        elif not arg.startswith('--'):
+            out.append(arg)
+    return out
+
+
+def _cli_render(out, rest):
+    """--out=pretty (default) | compact | tsv, --pick=a,b on lists of rows."""
+    if _tc is None:
+        return json.dumps(out, ensure_ascii=False, indent=2)
+    fields = _cli_value(rest, 'pick')
+    if fields:
+        out = _tc.pick(out, fields.split(','))
+    return _tc.render(out, _cli_value(rest, 'out', 'pretty').lower())
+
+
+def _cli_manifest(current, token, refresh=False):
+    """Every tool tools/list shows: the cache (Revit may be closed) + the
+    bridge's; live tools/list when asked or when nothing is cached."""
+    if refresh or not _load_cached_tools():
+        _handle_tools_list({'jsonrpc': '2.0', 'id': 'cli', 'method': 'tools/list'},
+                           current, token)
+    return [t for t in _with_bridge_tools(_load_cached_tools()) if isinstance(t, dict)]
+
+
+def _cli_flags(name, rest, args, current, token):
+    """Merge --param=value flags into args (typed by the schema); an error
+    payload when a flag or the merged arguments break the contract."""
+    if _tc is None:
+        return None
+    schema = _tc.schema_of(_cli_manifest(current, token), name)
+    flags, errors = _tc.parse_flags(rest, schema or {})
+    args.update(flags)
+    if schema is None:
+        return None
+    problems = _tc.arg_problems(schema, args)
+    seen = set((p['kind'], p['param']) for p in problems)
+    problems += [p for p in _tc.arg_problems(schema, flags, strict=True)
+                 if p['kind'] == 'unknown' and ('unknown', p['param']) not in seen]
+    if not errors and not problems:
+        return None
+    text = _tc.problems_text(name, problems) if problems else 'Nothing ran.'
+    return _hub_error('; '.join(errors + [text]) if errors else text, 'bad_arguments',
+                      nothing_ran=True, expected_parameters=_tc.params_line(schema),
+                      hint='bridge.py help {}'.format(name))
+
+
+def _cli_unavailable():
+    _say(json.dumps(_hub_error('tool_cli.py is not next to the bridge.', 'cli_unavailable',
+                               hint='Restart Revit: it refreshes the bridge files.')))
+    return 1
+
+
+def _discover_cmd(cmd, positional, rest, current, token):
+    """tools [words] [--limit=N] [--refresh] | help <tool>."""
+    if _tc is None:
+        return _cli_unavailable()
+    tools = _cli_manifest(current, token, refresh='--refresh' in rest)
+    if cmd == 'tools':
+        limit = _cli_value(rest, 'limit', '15')
+        found = _tc.search(tools, ' '.join(positional), int(limit) if limit.isdigit() else 15)
+        if not _load_cached_tools():
+            found['note'] = ('Bridge tools only: open Revit with T3Lab once, then the Revit '
+                             'tools are listed too (also while Revit is closed).')
+        _say(_cli_render(found, rest))
+        return 0
+    name = (positional or [''])[0]
+    tool = next((t for t in tools if t.get('name') == name), None)
+    if tool is None:
+        near = _tc.search(tools, name.replace('_', ' '), 5)
+        _say(json.dumps(_hub_error('No tool "{}".'.format(name), 'unknown_tool',
+                                   candidates=near.get('tools') if isinstance(
+                                       near.get('tools'), list) else []),
+                        ensure_ascii=False, indent=2))
+        return 2
+    _say(_tc.help_text(tool))
+    return 0
+
+
+def _verify_cmd(rest):
+    """verify <file|folder|pattern>... [--ext=pdf,dwg] [--since=<min>]
+    [--expect=<n>] [--min-bytes=<n>]: exit 0 only when every file passes."""
+    if _tc is None:
+        return _cli_unavailable()
+    paths = _cli_positional(rest)
+    if not paths:
+        _say('usage: bridge.py verify <file|folder|pattern>... [--ext=pdf] [--since=30] '
+             '[--expect=N]')
+        return 2
+    try:
+        since, expect = _cli_value(rest, 'since'), _cli_value(rest, 'expect')
+        report = _tc.verify(paths, exts=_cli_value(rest, 'ext') or None,
+                            expect=int(expect) if expect else None,
+                            since_min=float(since) if since else None,
+                            min_bytes=int(_cli_value(rest, 'min-bytes', '1') or 1),
+                            max_files=VERIFY_MAX_FILES)
+    except ValueError:
+        _say(json.dumps(_hub_error('--since / --expect / --min-bytes must be numbers.',
+                                   'bad_arguments')))
+        return 2
+    _say(_cli_render(report, rest))
+    return 0 if report['ok'] else 1
+
+
+def _skill_md():
+    """tool_cli.SKILL_MD with its dev-only lines replaced (SKILL_LITE)."""
+    text = _tc.SKILL_MD
+    for old, new in SKILL_LITE:
+        text = text.replace(old, new)
+    return text
+
+
+def _skill_cmd(rest):
+    """skill: print the t3lab-cli SKILL.md; --install=<skills dir> writes
+    <dir>/t3lab-cli/SKILL.md (tool_cli.write_skill's layout, Lite's text)."""
+    if _tc is None:
+        return _cli_unavailable()
+    folder = _cli_value(rest, 'install')
+    if not folder:
+        _say(_skill_md())
+        return 0
+    try:
+        target = os.path.join(folder, _tc.SKILL_NAME)
+        os.makedirs(target, exist_ok=True)
+        path = os.path.join(target, 'SKILL.md')
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(_skill_md())
+    except OSError as ex:
+        _say(json.dumps(_hub_error('Cannot write the skill: {}'.format(ex), 'io_error')))
+        return 1
+    _say(json.dumps({'installed': path}, ensure_ascii=False))
+    return 0
+
+
+def _cli(argv):
+    """bridge.py <command> ...: one tools/call through _answer, output on stdout.
+    Exit 0 ok, 1 tool / Revit error, 2 bad syntax or arguments (nothing ran)."""
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    cmd, rest = argv[0], argv[1:]
+    if cmd == 'verify':
+        return _verify_cmd(rest)
+    if cmd == 'skill':
+        return _skill_cmd(rest)
+    positional = _cli_positional(rest)
+    current = _cli_current(rest)
+    token = _read_token()
+    if cmd in ('tools', 'help'):
+        return _discover_cmd(cmd, positional, rest, current, token)
+    if cmd == 'instances':
+        name, args = 'list_revit_instances', {}
+    else:                                           # call
+        if not positional:
+            _say('usage: bridge.py call <tool> [--param=value ...] [--json \'{...}\'] '
+                 '[--agent=..]   (bridge.py help <tool>)')
+            return 2
+        try:
+            args = json.loads(_cli_json(rest))
+        except ValueError:
+            args = None
+        if not isinstance(args, dict):
+            _say(json.dumps(_hub_error('--json is not a valid JSON object.', 'bad_arguments')))
+            return 2
+        name = positional[0]
+        refused = _cli_flags(name, rest, args, current, token)
+        if refused:
+            _say(_cli_render(refused, rest))
+            return 2
+    resp = _answer(_call_request(1, name, args), current, token)
+    payload = _tool_payload(resp)
+    out = payload if payload is not None else resp
+    _say(_cli_render(out, rest))
+    if not _call_failure(resp, payload):
+        return 0
+    return 2 if isinstance(out, dict) and out.get('error_code') == 'bad_arguments' else 1
+
+
 def _handle(request, current, token):
     """One request -> response. Modern requests (version in params._meta)
     are checked here and their results get the modern fields."""
@@ -1899,6 +2243,21 @@ def _handle(request, current, token):
     response = _dispatch(request, current, token)
     if declared is not None:
         response = _finish_modern(response, request.get('method'))
+    return response
+
+
+def _answer(request, current, token):
+    """What stdio sends back for one request: handled, errors as JSON-RPC
+    errors, result capped. The CLI and recipe steps use it too."""
+    try:
+        response = _handle(request, current, token)
+    except Exception as e:
+        response = _rpc_error(request.get('id'),
+                              'T3Lab Revit server connection failed: {}'.format(e))
+    try:
+        response = _cap_result(response)
+    except Exception:
+        pass          # a guard failure must never eat the response itself
     return response
 
 
@@ -1938,6 +2297,9 @@ def _dispatch(request, current, token):
             args = (request.get('params') or {}).get('arguments') or {}
             if name == VERIFY_TOOL:
                 return _tool_response(request.get('id'), _verify_files(args))
+            if name == RECIPE_TOOL:
+                return _tool_response(request.get('id'),
+                                      _run_recipe_tool(args, current, token))
             refused = (_arg_error(name, args)
                        or _harness_write_error(name, current, args, token))
             if refused is not None:
@@ -1962,6 +2324,8 @@ def main():
         sys.exit(_hub_cli(sys.argv[2:]))
     if sys.argv[1:2] == ['harness']:
         sys.exit(_harness_cli(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] in CLI_COMMANDS:
+        sys.exit(_cli(sys.argv[1:]))
     port = PORT_MIN
     # Read port from arguments if provided
     for arg in sys.argv[1:]:
@@ -2014,18 +2378,7 @@ def main():
         if not isinstance(request, dict) or 'id' not in request:
             continue
 
-        try:
-            response = _handle(request, current, token)
-        except Exception as e:
-            response = _rpc_error(
-                request.get('id'),
-                f"T3Lab Revit server connection failed: {str(e)}")
-
-        try:
-            response = _cap_result(response)
-        except Exception:
-            pass          # a guard failure must never eat the response itself
-
+        response = _answer(request, current, token)
         sys.stdout.write(json.dumps(response) + '\n')
         sys.stdout.flush()
 

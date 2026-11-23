@@ -71,6 +71,8 @@ python lite_guard/test_audit_ipy_compat.py
 python lite_guard/test_compat_replace_file.py
 python lite_guard/test_tool_specs.py
 python lite_guard/test_bridge_contract.py
+python lite_guard/test_tool_cli.py
+python lite_guard/test_bridge_recipes.py
 python lite_guard/test_write_verify.py
 python lite_guard/test_doc_switch.py
 python lite_guard/test_sheet_export.py
@@ -137,4 +139,5 @@ python dev/test_icons_t3space.py
 
 10. **A new AI tool = one `ToolSpec` in `lib/core/tools/<domain>.py`** (`docs/ai-tools.md`):
    - It feeds the MCP registry, dispatch, `_WRITE_TOOLS`, confirmation (`is_destructive` -> `core/mcp_policy.py`), the read-only list, Assistant subsets, read-back and titles. Never hand-add the tool to those lists. Test: `python lite_guard/test_tool_specs.py`.
+   - Agents with a shell reach it through the bridge CLI (`bridge.py tools / help / call / verify`, `docs/cli.md`); a CLI call and every `t3lab_recipe` step take the MCP `tools/call` path (`_answer`), never a shortcut.
    - The MCP server runs IronPython 2.7, so every module it can import must pass `python lite_guard/audit_ipy_compat.py --quiet`. Use `Snippets._compat.fold` / `replace_file`, `io.open` and `core.jsonsafe.dumps`; no f-strings.

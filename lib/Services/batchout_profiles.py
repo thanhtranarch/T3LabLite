@@ -67,7 +67,7 @@ def list_profiles(folder):
         path = os.path.join(folder, filename)
         try:
             data = read_profile_file(path)
-        except (OSError, ValueError):
+        except (EnvironmentError, ValueError):     # IOError is not an OSError on 2.7
             continue
         found.append((str(data['Name']).strip(), path, data))
     found.sort(key=lambda entry: entry[0].lower())

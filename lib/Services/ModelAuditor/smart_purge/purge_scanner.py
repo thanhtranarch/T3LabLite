@@ -8,6 +8,7 @@ Copyright (c) 2025 T3Lab
 __author__ = "T3Lab"
 
 from Autodesk.Revit.DB import *
+from Snippets._compat import elem_name as _elem_name   # IronPython hides ElementType.Name
 
 try:
     from .revit_utils import _eid_int
@@ -173,7 +174,7 @@ class BasePurgeScanner(object):
         if is_loadable_family and hasattr(element, 'FamilyName'):
             try:
                 family = element.FamilyName
-                type_name = element.Name if hasattr(element, 'Name') else ""
+                type_name = (_elem_name(element) or "")
                 if family and type_name:
                     # Show as "Family: TypeName" (e.g. "Window-Fixed: 600x900mm")
                     name = "{}: {}".format(family, type_name)
@@ -185,8 +186,8 @@ class BasePurgeScanner(object):
                 pass
         
         # For system families (Wall, Floor, Roof) or if above failed, use Name directly
-        if (not name or name == "Unknown") and hasattr(element, 'Name'):
-            base_name = element.Name
+        if not name or name == "Unknown":
+            base_name = _elem_name(element)
             
             # Check if this is a system type (WallType, FloorType, etc.) with generic name
             try:

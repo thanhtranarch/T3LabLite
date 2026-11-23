@@ -16,6 +16,7 @@ from Autodesk.Revit.DB import (
     BuiltInParameter
 )
 from Autodesk.Revit import DB
+from Snippets._compat import elem_name as _elem_name   # IronPython hides ElementType.Name
 
 try:
     from .purge_scanner import BasePurgeScanner
@@ -176,7 +177,7 @@ class WallTypeScanner(BasePurgeScanner):
                 return True
             
             # Check name pattern
-            name = wall_type.Name if hasattr(wall_type, 'Name') else ""
+            name = (_elem_name(wall_type) or "")
             if name.startswith('<') and name.endswith('>'):
                 return True
             
@@ -188,7 +189,7 @@ class WallTypeScanner(BasePurgeScanner):
     def _is_default_type(self, wall_type):
         """Check if wall type is a default type to protect"""
         try:
-            name = wall_type.Name if hasattr(wall_type, 'Name') else ""
+            name = (_elem_name(wall_type) or "")
             
             # Check against default names
             for default_name in DEFAULT_WALL_TYPES:
@@ -325,7 +326,7 @@ class FloorTypeScanner(BasePurgeScanner):
                 return True
             
             # Check name pattern
-            name = floor_type.Name if hasattr(floor_type, 'Name') else ""
+            name = (_elem_name(floor_type) or "")
             if name.startswith('<') and name.endswith('>'):
                 return True
             
@@ -337,7 +338,7 @@ class FloorTypeScanner(BasePurgeScanner):
     def _is_default_type(self, floor_type):
         """Check if floor type is a default type to protect"""
         try:
-            name = floor_type.Name if hasattr(floor_type, 'Name') else ""
+            name = (_elem_name(floor_type) or "")
             
             # Check against default names
             for default_name in DEFAULT_FLOOR_TYPES:
@@ -471,7 +472,7 @@ class RoofTypeScanner(BasePurgeScanner):
                 return True
             
             # Check name pattern
-            name = roof_type.Name if hasattr(roof_type, 'Name') else ""
+            name = (_elem_name(roof_type) or "")
             if name.startswith('<') and name.endswith('>'):
                 return True
             
@@ -483,7 +484,7 @@ class RoofTypeScanner(BasePurgeScanner):
     def _is_default_type(self, roof_type):
         """Check if roof type is a default type to protect"""
         try:
-            name = roof_type.Name if hasattr(roof_type, 'Name') else ""
+            name = (_elem_name(roof_type) or "")
             
             # Check against default names
             for default_name in DEFAULT_ROOF_TYPES:

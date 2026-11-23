@@ -113,9 +113,11 @@ def write_report(path, rows, columns=None, fmt=None):
     table = [['' if row.get(key) is None else row.get(key) for key in columns]
              for row in rows]
     if normalize_format(fmt or os.path.splitext(path)[1].lstrip('.')) == 'CSV':
-        # utf-8-sig: Excel needs the BOM to read Vietnamese sheet names.
+        # Excel needs the BOM to read Vietnamese sheet names.
         # io.open: also runs under IronPython (MCP export_sheets).
-        with io.open(path, 'w', encoding='utf-8-sig', newline='') as f:
+        # The BOM is written once by hand: IronPython's utf-8-sig adds one per write.
+        with io.open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(u'\ufeff')
             writer = csv.writer(f)
             writer.writerow(headers)
             writer.writerows(table)

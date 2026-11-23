@@ -22,7 +22,10 @@ def eid_value(element_id):
         try:
             return int(element_id.IntegerValue)   # Revit 2023 and earlier
         except Exception:
-            return -1
+            try:
+                return int(element_id)        # IronPython long / System.Int64
+            except Exception:
+                return -1
 
 
 # Cached constructor strategy: None = not probed yet, False = ElementId(int)

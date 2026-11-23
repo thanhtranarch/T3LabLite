@@ -163,6 +163,23 @@ for rel in ('Snippets/finish_floors.py', 'Snippets/wall_tools.py', 'Snippets/_li
     check('{}: .NET class namespace is per load'.format(rel),
           lines and all('clr_namespace(' in l for l in lines), lines)
 
+
+# IronPython 2.7 runtime traps fixed in the shared modules (same checks as t3lab_dev).
+def _src(rel):
+    return open(os.path.join(LIB, *rel.split('/')), encoding='utf-8').read()
+
+
+check('smart_purge reads type names through elem_name (default types stay protected)',
+      "hasattr(wall_type, 'Name')" not in _src(
+          'Services/ModelAuditor/smart_purge/purge_scanner_elements.py'))
+check('CSV report: BOM written once', "encoding='utf-8-sig'" not in _src(
+    'Services/batchout_report.py'))
+check('profile scan catches IOError on 2.7', 'except (EnvironmentError, ValueError)' in _src(
+    'Services/batchout_profiles.py'))
+check('JSON with accented text (IronPython)', 'ensure_ascii=False' in _src('Snippets/_cad_plan.py')
+      and 'jsonsafe.dumps' in _src('Snippets/xlsx_table.py')
+      and 'jsonsafe.dumps(info)' in _src('Snippets/excel_table_revit.py'))
+
 print('')
 if FAILURES:
     print('{} FAILED: {}'.format(len(FAILURES), ', '.join(FAILURES)))

@@ -49,11 +49,12 @@ def _revit_version(doc):
 
 def floor_type_label(floor_type):
     """'Family: Type' as both windows list floor types."""
+    from Snippets._compat import elem_name      # IronPython hides ElementType.Name
     try:
         p = floor_type.LookupParameter("Type Name")
-        type_name = p.AsString() if p else floor_type.Name
+        type_name = p.AsString() if p else elem_name(floor_type)
     except Exception:
-        type_name = floor_type.Name
+        type_name = elem_name(floor_type)
     return u"{}: {}".format(floor_type.FamilyName or u"", type_name or u"")
 
 

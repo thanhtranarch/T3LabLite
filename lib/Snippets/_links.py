@@ -74,9 +74,9 @@ def eid_int(element_id):
     if element_id is None:
         return -1
     try:
-        return element_id.Value          # Revit 2024+
+        return int(element_id.Value)     # Revit 2024+ (System.Int64 under IronPython)
     except AttributeError:
-        return element_id.IntegerValue   # Revit 2023
+        return int(element_id.IntegerValue)   # Revit 2023
 
 
 def new_element_id(value):

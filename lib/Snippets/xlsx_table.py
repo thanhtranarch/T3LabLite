@@ -869,7 +869,8 @@ class Table(object):
             'h': [round(h, 4) for h in self.row_heights_in],
             'm': self.merges,
         }
-        raw = json.dumps(payload, sort_keys=True, default=list).encode('utf-8')
+        from core import jsonsafe           # = ensure_ascii=True, also under IronPython
+        raw = jsonsafe.dumps(payload, sort_keys=True, default=list).encode('utf-8')
         return hashlib.sha1(raw).hexdigest()
 
 

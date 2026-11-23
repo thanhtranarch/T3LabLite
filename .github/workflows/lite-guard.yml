@@ -123,6 +123,8 @@ jobs:
         run: python3 lite_guard/test_bridge_contract.py
       - name: Test the read-back after a model write
         run: python3 lite_guard/test_write_verify.py
+      - name: Test switching the active model without a click (doc_switch, switch_active_document, list_open_documents)
+        run: python3 lite_guard/test_doc_switch.py
       - name: Test export_sheets (PDF / DWG / DXF / DGN by sheet set, BatchOut modules)
         run: python3 lite_guard/test_sheet_export.py
       - name: Test Batch Link (link step shared with the link_models tool)

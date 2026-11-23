@@ -55,7 +55,8 @@ except Exception as _svc_err:
 try:
     CLIENTS = [(key, label) for key, label, _fmt in MCPService.clients()]
 except Exception:
-    CLIENTS = [('claude', 'Claude Desktop'), ('chatgpt', 'ChatGPT (Codex)'),
+    CLIENTS = [('claude', 'Claude Desktop'), ('claudecode', 'Claude Code'),
+               ('chatgpt', 'ChatGPT (Codex)'),
                ('antigravity', 'Antigravity')]
 CLIENT_KEYS = [key for key, _label in CLIENTS]
 
@@ -511,7 +512,7 @@ class MCPControlWindow(T3WPFWindow):
             self._doc_label.Text = 'No model open — open one in Revit first'
 
     def _refresh_clients(self):
-        """Refresh every AI app row (Claude Desktop, ChatGPT/Codex, Antigravity)."""
+        """Refresh every AI app row (Claude Desktop, Claude Code, ChatGPT/Codex, Antigravity)."""
         if not HAS_SERVICE:
             for widgets in self._client_widgets.values():
                 self._set_dot(widgets.get('indicator'), 'T3.TextDisabled')

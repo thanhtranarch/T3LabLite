@@ -167,11 +167,19 @@ def _find_python_executable():
         except Exception:
             pass
 
+    # 3) The private copy T3Lab unpacked itself (Services/python_installer.py).
+    if not found:
+        try:
+            from Services import python_installer
+            found = python_installer.find() or None
+        except Exception:
+            found = None
+
     if found:
         paths.set_setting('python_executable', found)
         return found
 
-    # 3) Give up — return the bare command name and let the OS PATH try.
+    # 4) Give up — return the bare command name and let the OS PATH try.
     # Not cached: it isn't a real resolved path, so nothing to reuse.
     return 'python' if is_windows else 'python3'
 
@@ -416,12 +424,13 @@ def _host_outcome(code, result):
 # differ:
 #
 #   Claude Desktop   claude_desktop_config.json          JSON  "mcpServers"
+#   Claude Code      ~/.claude.json (user scope)         JSON  "mcpServers"
 #   ChatGPT (Codex)  ~/.codex/config.toml                TOML  [mcp_servers.X]
 #   Antigravity      ~/.gemini/antigravity-ide/
 #                        mcp_config.json                 JSON  "mcpServers"
 #
-# Cursor, Windsurf and Claude Code use the same JSON shape as Claude Desktop,
-# so config_snippet(fmt='json') can be pasted into those by hand as well.
+# Cursor and Windsurf use the same JSON shape as Claude Desktop, so
+# config_snippet(fmt='json') can be pasted into those by hand as well.
 #
 # ChatGPT note: the ChatGPT app's own "Connectors" (developer mode) only accept
 # a PUBLIC https MCP endpoint — a local stdio bridge cannot be registered there.
@@ -554,6 +563,26 @@ def _claude_candidates():
     return [os.path.join(_home(), '.config', 'Claude', 'claude_desktop_config.json')]
 
 
+def _claude_code_candidates():
+    """Claude Code keeps its user-scope servers ("mcpServers", every project)
+    in ~/.claude.json, or in $CLAUDE_CONFIG_DIR/.claude.json when that is set."""
+    out = []
+    config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
+    if config_dir:
+        out.append(os.path.join(config_dir, '.claude.json'))
+    out.append(os.path.join(_home(), '.claude.json'))
+    return out
+
+
+def _claude_code_installed():
+    """~/.claude.json sits in the home folder, which always exists: Claude
+    Code is here when its file or its ~/.claude folder is."""
+    if any(os.path.isfile(c) for c in _claude_code_candidates()):
+        return True
+    config_dir = os.environ.get('CLAUDE_CONFIG_DIR')
+    return os.path.isdir(config_dir or os.path.join(_home(), '.claude'))
+
+
 def _codex_candidates():
     """Codex reads $CODEX_HOME/config.toml, defaulting to ~/.codex/config.toml."""
     out = []
@@ -590,6 +619,13 @@ AI_CLIENTS = [
      'setting': 'claude_desktop_config',
      'candidates': _claude_candidates,
      'agent': 'claude-desktop'},
+    {'key': 'claudecode',
+     'label': 'Claude Code',
+     'fmt': 'json',
+     'setting': 'claude_code_config',
+     'candidates': _claude_code_candidates,
+     'installed': _claude_code_installed,
+     'agent': 'claude-code'},
     {'key': 'chatgpt',
      'label': 'ChatGPT (Codex)',
      'fmt': 'toml',
@@ -706,7 +742,12 @@ def _read_json_config(path):
         raw = f.read().strip()
     if not raw:
         return {}
-    return _json.loads(raw)
+    # Key order survives a rewrite under IronPython 2.7 too (unordered dict).
+    try:
+        from collections import OrderedDict
+        return _json.loads(raw, object_pairs_hook=OrderedDict)
+    except ImportError:
+        return _json.loads(raw)
 
 
 def _write_text(path, text):
@@ -1598,6 +1639,10 @@ class MCPService(object):
 
         try:
             python = _find_python_executable()
+            if fresh_addin is not None and not os.path.isfile(python):
+                # A click on Connect: fetch a Python now (startup does it in
+                # the background, see auto_connect_clients).
+                python = MCPService.install_python()[0] or python
             path   = _resolve_client_path(spec)
             if name in _BRIDGE_SERVERS:
                 port = 0
@@ -1681,13 +1726,16 @@ class MCPService(object):
         Revit startup: write the T3Lab entry into every AI app installed on
         this PC that does not have it yet, so nobody clicks Connect.
 
-        Never creates a config for an app that is not installed (its config
-        folder must exist), never touches an entry that is already there
-        (a second Revit on another port leaves the first one's entry), never
-        downloads, and needs a real Python 3 for the bridge. t3lab-autocad is
+        Never creates a config for an app that is not installed, never touches
+        an entry that is already there (a second Revit on another port leaves
+        the first one's entry), never downloads an add-in. t3lab-autocad is
         written too when its add-in is already installed. Everything
         configure_client refuses (Claude Desktop running, a file that does not
         parse) is skipped and tried again at the next start.
+
+        With something to connect and no Python 3 for the bridge, nothing is
+        written and the one result carries 'need_python': True -- startup.py
+        then runs install_python() in the background and calls this again.
 
         Returns:
             list[dict]: label, server, ok, message -- one per entry written or
@@ -1696,33 +1744,71 @@ class MCPService(object):
         out = []
         if not MCPService.auto_connect_enabled():
             return out
-        try:
-            if not os.path.isfile(_find_python_executable()):
-                return [{'label': 'AI apps', 'server': MCP_SERVER_NAME, 'ok': False,
-                         'message': 'no Python 3 found for the MCP bridge'}]
-        except Exception as ex:
-            return [{'label': 'AI apps', 'server': MCP_SERVER_NAME, 'ok': False,
-                     'message': str(ex)}]
         servers = ['revit']
         if os.path.isfile(_app_bridge_path('autocad')):
             servers.append('autocad')
-        note = MCPService.last_addin_note
+        pending = []
         for spec in AI_CLIENTS:
             for server in servers:
                 try:
                     status = MCPService.client_status(spec['key'], server=server)
-                    folder = os.path.dirname(status.get('path') or '')
-                    if (status.get('configured') or status.get('error')
-                            or not folder or not os.path.isdir(folder)):
+                    if status.get('configured') or status.get('error'):
                         continue
-                    ok, msg = MCPService.configure_client(
-                        spec['key'], port=port, server=server, fresh_addin=None)
-                except Exception as ex:
-                    ok, msg = False, str(ex)
-                out.append({'label': spec['label'], 'server': SERVERS[server],
-                            'ok': ok, 'message': msg})
+                    if 'installed' in spec:
+                        here = spec['installed']()
+                    else:
+                        folder = os.path.dirname(status.get('path') or '')
+                        here = bool(folder) and os.path.isdir(folder)
+                    if here:
+                        pending.append((spec, server))
+                except Exception:
+                    continue
+        if not pending:
+            return out
+        try:
+            has_python = os.path.isfile(_find_python_executable())
+        except Exception:
+            has_python = False
+        if not has_python:
+            return [{'label': 'AI apps', 'server': MCP_SERVER_NAME, 'ok': False,
+                     'need_python': True,
+                     'message': 'no Python 3 found for the MCP bridge'}]
+        note = MCPService.last_addin_note
+        for spec, server in pending:
+            try:
+                ok, msg = MCPService.configure_client(
+                    spec['key'], port=port, server=server, fresh_addin=None)
+            except Exception as ex:
+                ok, msg = False, str(ex)
+            out.append({'label': spec['label'], 'server': SERVERS[server],
+                        'ok': ok, 'message': msg})
         MCPService.last_addin_note = note
         return out
+
+    @staticmethod
+    def install_python():
+        """
+        No Python 3 on this PC: unpack the newest official one into
+        %APPDATA%/T3LabAI/python for the bridge (Services/python_installer.py).
+        mcp_paths.json "auto_install_python": false turns it off.
+
+        Returns:
+            (path: str, message: str) -- path is '' when nothing was installed.
+        """
+        try:
+            paths = _get_paths_module()
+            settings = paths.load_settings()
+            if settings.get('auto_install_python') is False:
+                return '', 'Python download is turned off (auto_install_python)'
+            from Services import python_installer
+            if not python_installer.supported():
+                return '', 'Python can only be installed by T3Lab on Windows'
+            exe = python_installer.find() or python_installer.install(
+                source=settings.get('python_package_url'))
+            paths.set_setting('python_executable', exe)
+            return exe, 'Python installed for the MCP bridge: {}'.format(exe)
+        except Exception as ex:
+            return '', 'Python was not installed: {}'.format(ex)
 
     # ── Backwards-compatible Claude Desktop wrappers ──────────────────────────
 

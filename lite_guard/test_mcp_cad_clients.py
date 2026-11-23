@@ -38,6 +38,7 @@ class Env(object):
         self.paths = {
             'claude': os.path.join(self.dir, 'Claude', 'claude_desktop_config.json'),
             'chatgpt': os.path.join(self.dir, 'codex', 'config.toml'),
+            'claudecode': os.path.join(self.dir, 'cc', '.claude.json'),
             'antigravity': os.path.join(self.dir, 'ag', 'mcp_config.json'),
         }
         self.bridge = os.path.join(self.dir, 'T3LabCAD', 'bridge.py')

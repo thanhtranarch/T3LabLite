@@ -92,3 +92,5 @@ jobs:
         run: python3 lite_guard/test_mcp_shadowing.py
       - name: Test MCP Control never destroys a config file it cannot read
         run: python3 lite_guard/test_mcp_config_safety.py
+      - name: Test the private Python for the MCP bridge and Claude Code auto-connect
+        run: python3 lite_guard/test_python_installer.py

@@ -456,6 +456,24 @@ def refresh_mcp_bridge():
     return deploy.refresh()
 
 
+def _log_auto_connect(results):
+    for c in results:
+        _log("MCP auto-connect %s (%s): %s" % (
+            c['label'], c['server'],
+            'connected, restart the app' if c['ok'] else 'skipped, ' + c['message']))
+
+
+def _install_python_then_connect(service):
+    """Background: a private Python 3 for the MCP bridge, then the AI apps."""
+    try:
+        exe, message = service.install_python()
+        _log("MCP bridge: %s" % message)
+        if exe:
+            _log_auto_connect(service.auto_connect_clients())
+    except Exception as exc:
+        _log("MCP bridge: Python was not installed: %s" % exc)
+
+
 def main():
     # ─── 0. FIX: "The input string '3.12.3' was not in a correct format" ───────
     try:
@@ -601,14 +619,19 @@ def main():
             MCPService.start_server()
 
         # ─── 8b. Connect the installed AI apps by themselves ───────────────────
-        # Claude Desktop, ChatGPT (Codex), Antigravity: an app without the
+        # Claude Desktop, Claude Code, ChatGPT (Codex), Antigravity: an app without the
         # T3Lab entry gets it here, so nobody opens MCP Control to click
         # Connect (owner, 2026-11-23). mcp_paths.json "auto_connect_clients":
         # false turns it off.
-        for _c in MCPService.auto_connect_clients():
-            _log("MCP auto-connect %s (%s): %s" % (
-                _c['label'], _c['server'],
-                'connected, restart the app' if _c['ok'] else 'skipped, ' + _c['message']))
+        _connected = MCPService.auto_connect_clients()
+        _log_auto_connect(_connected)
+        if any(_c.get('need_python') for _c in _connected):
+            # No Python 3 on this PC: fetch one off Revit's thread (a 17 MB
+            # download), then connect. IronPython threads keep running.
+            import threading
+            _t = threading.Thread(target=_install_python_then_connect, args=(MCPService,))
+            _t.daemon = True
+            _t.start()
     except Exception:
         pass
 

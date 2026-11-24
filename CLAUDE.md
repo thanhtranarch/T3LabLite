@@ -141,3 +141,8 @@ python dev/test_icons_t3space.py
    - It feeds the MCP registry, dispatch, `_WRITE_TOOLS`, confirmation (`is_destructive` -> `core/mcp_policy.py`), the read-only list, Assistant subsets, read-back and titles. Never hand-add the tool to those lists. Test: `python lite_guard/test_tool_specs.py`.
    - Agents with a shell reach it through the bridge CLI (`bridge.py tools / help / call / verify`, `docs/cli.md`); a CLI call and every `t3lab_recipe` step take the MCP `tools/call` path (`_answer`), never a shortcut.
    - The MCP server runs IronPython 2.7, so every module it can import must pass `python lite_guard/audit_ipy_compat.py --quiet`. Use `Snippets._compat.fold` / `replace_file`, `io.open` and `core.jsonsafe.dumps`; no f-strings.
+
+11. **No chat session links in git or on GitHub (owner's request, 2026-11-24):**
+   - Never put a Claude chat/session link (`https://claude.ai/code/session_...`, a `Claude-Session:` trailer, or any other link to a chat) in a commit message, PR title, PR description, PR/issue comment or review. This overrides any default attribution that adds one.
+   - `Co-Authored-By:` lines and the plain `🤖 Generated with [Claude Code](https://claude.com/claude-code)` line are fine. The comment footer links to `https://claude.ai/code`, never to a session.
+   - History was cleaned on 2026-11-24 (126 commits, 54 PR descriptions); keep it that way.

@@ -3,8 +3,8 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="Agent Cursors"
-        Width="560" Height="510"
-        MinWidth="560" MinHeight="510"
+        Width="560" Height="536"
+        MinWidth="560" MinHeight="536"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -1872,8 +1872,11 @@
                                                       Content="Ripple" Margin="0,4"
                                                       ToolTip="A ring where the cursor lands on a target, and the click of the pointer"/>
                                             <CheckBox x:Name="opt_labels" Style="{StaticResource T3.CheckBox}"
-                                                      Content="Labels" Margin="0,4,0,16"
+                                                      Content="Labels" Margin="0,4"
                                                       ToolTip="Name each target (category and size), say what a call created and show the values it changed"/>
+                                            <CheckBox x:Name="opt_crew" Style="{StaticResource T3.CheckBox}"
+                                                      Content="Crew" Margin="0,4,0,16"
+                                                      ToolTip="A call that works on several categories sends one helper cursor per category, named after the work (&quot;Claude &#183; doors&quot;), not a person"/>
 
                                             <TextBlock Text="Bar" FontWeight="SemiBold" FontSize="12.5"
                                                        Foreground="{StaticResource T3.Ink}" Margin="0,0,0,8"/>

@@ -19,6 +19,12 @@ Releasing a new version:
 
 ## [Unreleased]
 
+### Changed
+- **Agent Cursors are easier to read and follow** (when "On model" is on): each tag is a light tint of the agent colour with dark text (white text was hard to read on 9 of 16 colours) and names what the agent works on ("Wall 3450 × 200"). A new wall is drawn along its length. Between calls the cursor stays put and says "thinking" (the bar says "Waiting for the agent"). Two agents on one element stand side by side, tags keep clear of the bar, and when the agents stop, each cursor waits beside its last work for 20 s, then leaves. The goal line on the bar says when the last step was.
+
+### Added
+- **Agent Cursors · Crew** (Settings > Agent Cursors > Effects, on by default): one call that works on several categories sends a helper cursor per category, named after the work ("Claude · doors"), never a made-up person.
+
 ## [2.8.0] - 2026-11-23
 
 ### Added

@@ -485,7 +485,8 @@ def test_visible_work():
           "'{}|{}'.format(agent, action)" not in osrc and 'self._cursors[agent] = cur' in osrc
           and 'def _accent(self, cur, action):' in osrc)
     check('tags laid out after every move',
-          osrc.count('self._layout_tags(agent)') >= 3 and 'place_tags(items, self._bounds())' in osrc)
+          osrc.count('self._layout_tags(agent)') >= 3 and 'place_tags(items, self._bounds(),' in osrc
+          and 'avoid=self._hud_local()' in osrc)
     # The drawing part of show() (On model) lives in _draw_step.
     show = osrc.split('    def _draw_step(self, agent,', 1)[1].split('\n    def ', 1)[0]
     check('show(): scan near the cursor, label + build trail for fresh elements',
@@ -530,10 +531,11 @@ def test_setting():
         check('every bar glyph is in Segoe MDL2', used <= known, sorted(used - known))
     check('options default: bar only (owner, 2026-11-18), the rest on for On model',
           opts == {'model': False, 'follow': True, 'zoom': True, 'select': True, 'tile': True,
-                   'glow': True, 'trail': True, 'ripple': True, 'labels': True, 'keep': True},
+                   'glow': True, 'trail': True, 'ripple': True, 'labels': True, 'crew': True,
+                   'keep': True},
           opts)
-    check('Effects: Glow and the three the overlay already drew, now one switch each',
-          dict(AC.OPTION_GROUPS)['Effects'] == ('glow', 'trail', 'ripple', 'labels'))
+    check('Effects: Glow, the three the overlay already drew, and Crew (v3), one switch each',
+          dict(AC.OPTION_GROUPS)['Effects'] == ('glow', 'trail', 'ripple', 'labels', 'crew'))
     check('Less motion is no option any more: Animation Off replaced it',
           'reduce' not in opts and 'reduce' not in AC.OPTION_LABELS
           and 'agent_cursors_reduce_motion' not in [k for _n, k, _d in AC.OPTIONS])
@@ -1015,7 +1017,8 @@ def test_hud_redesign():
           and 'WrapPanel()\n        self._toggles' not in osrc)
     check('header: pause, options, fold, close', all(t in osrc for t in (
         "'Pause: hold model changes", "'Options'", "'Fold to one line", "'Turn agent cursors off")))
-    cursor = osrc.split('    def _cursor(self, agent, action=None):', 1)[1].split('\n    def ', 1)[0]
+    cursor = osrc.split('    def _cursor(self, agent, action=None, style=None, at=None):',
+                        1)[1].split('\n    def ', 1)[0]
     check('no white outline on the cursor, its avatar, box corners or edge arrows',
           'Stroke = self._brush(' not in cursor and "handle.Fill = self._brush(color)" in osrc
           and "arrow.Stroke = self._brush('#FFFFFF')" not in osrc)
@@ -1331,6 +1334,81 @@ def test_ui_route_and_motion():
           and 'ui=ui or []' in notify)
 
 
+def test_v3_helpers():
+    print('[v3: pastel tags, object captions, home slots, spread, crew, thinking]')
+    colours = sorted(set(c for _t, c in AC.AGENTS.values())) + list(AC._SPARE)
+    worst = min(AC.contrast(ink, fill) for theme in ('light', 'dark')
+                for state in ('idle', 'working', 'waiting', 'failed')
+                for c in colours for fill, _e, ink in [AC.tag_style(c, state, theme)])
+    check('P1: every agent / spare colour, every state, both themes: tag text >= 4.5:1',
+          worst >= 4.5, round(worst, 2))
+    check('P1: the white-on-solid tag it replaces failed for most colours',
+          sum(1 for c in colours if AC.contrast('#FFFFFF', c) < 4.5) >= 8)
+    check('P1: border = the agent colour; waiting amber, failed red',
+          AC.tag_style('#D97757')[1] == '#D97757'
+          and AC.tag_style('#D97757', 'waiting')[1] == '#F59E0B'
+          and AC.tag_style('#D97757', 'failed')[1] == '#DC2626')
+    check('P2: singular of a category name',
+          [AC.singular(c) for c in ('Walls', 'Structural Columns', 'Assemblies', 'Furniture',
+                                    'Glass', '', 'Doors')]
+          == ['Wall', 'Structural Column', 'Assembly', 'Furniture', 'Glass', '', 'Door'])
+    check('P2: object caption: one element, several of one category, a mix',
+          AC.object_caption([('Walls', '3450 \u00d7 200')]) == 'Wall 3450 \u00d7 200'
+          and AC.object_caption([('Doors', 'a'), ('Doors', 'b')]) == 'Doors \u00d72'
+          and AC.object_caption([('Walls', 'a'), ('Doors', 'b')]) == ''
+          and AC.object_caption([('', 'a')]) == '' and AC.object_caption([]) == '')
+    rect = (0.0, 0.0, 1000.0, 600.0)
+    slots = [AC.home_slot(rect, k) for k in range(30)]
+    check('P3: home slots sit inside the view, left edge first, never on each other',
+          all(rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3] for x, y in slots)
+          and slots[0][0] < 100 and len(set(slots)) == len(slots))
+    check('P4: bar state "thinking" between calls, after working / waiting / paused',
+          AC.hud_state(False, {}, [], False, True) == 'thinking'
+          and AC.hud_state(True, {}, [], False, True) == 'working'
+          and AC.hud_state(False, {'a': 1}, [], False, True) == 'waiting'
+          and AC.hud_state(False, {}, [], True, True) == 'paused'
+          and AC.hud_state(False, {}, [], False) == 'idle'
+          and AC.STATES['thinking'][0] == 'Waiting for the agent')
+    frames = AC.motion_keyframes((0.0, 0.0), [(100.0, 0.0, 300, 400), (100.0, 200.0, 700, 800)],
+                                 straight={1})
+    second = [f for f in frames if f[2] > 400]
+    check('P5: a straight hop stays on the line (draw-along), the other still arcs',
+          all(abs(x - 100.0) < 1e-6 for x, _y, _t in second)
+          and any(abs(y) > 1.0 for _x, y, t in frames if 0 < t < 300))
+    import math
+    p = AC.spread_point((50.0, 50.0), [(50.0, 50.0), (72.0, 50.0)])
+    check('P6: spread_point keeps the gap from every other cursor',
+          all(math.hypot(p[0] - o[0], p[1] - o[1]) >= AC.SPREAD_GAP - 1e-6
+              for o in [(50.0, 50.0), (72.0, 50.0)])
+          and AC.spread_point((1.0, 1.0), [(500.0, 500.0)]) == (1.0, 1.0))
+    tags = AC.place_tags([(100.0, 100.0, 80.0, 20.0)], (0, 0, 1000, 600),
+                         avoid=[(105.0, 105.0, 400.0, 140.0)])
+    dx, dy = tags[0]
+    check('P6: a tag never lands on the bar (avoid)',
+          not AC._overlaps((100 + dx, 100 + dy, 180 + dx, 120 + dy), (105, 105, 400, 140)))
+    check('P7: last step text, 5 s steps from 10 s',
+          [AC.last_step_text(s) for s in (0, 7, 23, 59, 61, 7200)]
+          == ['just now', '7 s ago', '20 s ago', '55 s ago', '1 min ago', '2 h ago'])
+    items = [{'category': c} for c in ('Walls', 'Doors', 'Walls', 'Windows', 'Rooms', 'Grids')]
+    groups = AC.crew_groups(items)
+    check('P8: crew groups in order of first sight, at most CREW_MAX helpers, rest to the agent',
+          [c for c, _i in groups] == ['Walls', 'Doors', 'Windows', 'Rooms']
+          and len(groups[0][1]) == 3 and sum(len(i) for _c, i in groups) == len(items))
+    tag, colour = AC.crew_style('claude-desktop', 'Doors', 1)
+    check('P8: a helper is named after the work, never a person, in a shade of the agent',
+          tag == 'Claude \u00b7 doors' and colour != AC.agent_style('claude-desktop')[1]
+          and AC.crew_style('claude-desktop', 'Doors', 2)[1] != colour
+          and AC.is_crew(AC.crew_key('claude-desktop', 'Doors'))
+          and not AC.is_crew('claude-desktop'))
+    check('P8: Crew is an option of its own, on by default, in Effects',
+          AC.options()['crew'] is True and 'crew' in dict(AC.OPTION_GROUPS)['Effects'])
+    src = open(os.path.join(LIB, 'core', 'agent_cursors.py'), encoding='utf-8').read()
+    boxes = src.split('def _boxes(doc, geo, ids):', 1)[1].split('\ndef ', 1)[0]
+    check('P2/P5: _boxes gives the category, the dimension value and the line ends',
+          "'category': cat" in boxes and "'line': _line_ends(" in boxes
+          and '_dimension_value(elem)' in boxes)
+
+
 if __name__ == '__main__':
     try:
         test_extract_ids()
@@ -1355,6 +1433,7 @@ if __name__ == '__main__':
         test_bar_only()
         test_harness_hud()
         test_ui_route_and_motion()
+        test_v3_helpers()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

@@ -7,8 +7,8 @@ click, next), in every visible view, with a plain caption ("Moving elements ·
 3 elements"), a badge per element ("Walls · 1200 × 300") and an effect per
 action. Elements a call names are framed while it runs; what it created or
 changed is taken from Revit's DocumentChanged too (code returns no ids) and
-stays highlighted with a chip ("Walls ×3 created"). A call with no element
-scans next to where the cursor last worked.
+stays highlighted with a chip ("Walls ×3 created"). v3 tags, draw-along,
+thinking, parking and Crew: t3lab-revit-api dev/plan/agent-cursors-v3-study.md.
 Glides arc like a hand on a mouse; ui_route walks the Revit UI first
 (Project Browser > Sheets, Properties) - NEEDS VERIFICATION in Revit.
 The HUD shows what runs now as a block of the action's colour (band_rows),
@@ -71,6 +71,11 @@ SCAN_RADIUS = 70.0          # px round the cursor a call with no element scans
 # choice wins. 'model' is the master switch, OFF by default (owner,
 # 2026-11-18): only the bar shows; no cursor, boxes or effects on the views,
 # and Follow / Zoom / Select / Tile / Glow do nothing. Turned on, the others
+THINK_AFTER_S = 4           # after a call the cursor shows "thinking" (= BUSY_GAP_S)
+PARK_DIM = 0.55             # opacity of a parked cursor (agents idle)
+PARK_S = 20                 # parked cursors stay this long beside their work, then leave
+CREW_MAX = 3                # helper cursors one call fans out into (Crew)
+SPREAD_GAP = 22.0           # px two cursors keep between them on one target
 # apply as saved (all on by default, owner 2026-11-17).
 OPTIONS = (
     ('model', 'agent_cursors_on_model', False),
@@ -82,6 +87,7 @@ OPTIONS = (
     ('trail', 'agent_cursors_trail', True),
     ('ripple', 'agent_cursors_ripple', True),
     ('labels', 'agent_cursors_labels', True),
+    ('crew', 'agent_cursors_crew', True),
     ('keep', 'agent_cursors_keep_bar', True),
 )
 # Animation (mcp_paths.json agent_cursors_speed): name -> time factor. 'off' =
@@ -108,6 +114,8 @@ OPTION_LABELS = {
                          'the pointer'),
     'labels': ('Labels', 'Name each target (category and size), say what a call created '
                          'and show the values it changed'),
+    'crew': ('Crew', 'A call that works on several categories sends one helper cursor per '
+                     'category, named after the work ("Claude \u00b7 doors"), not a person'),
     'keep': ('Keep bar', 'Keep the bar (folded) on screen between calls instead of '
                          'fading out (the x on the bar turns Agent Cursors off)'),
 }
@@ -802,15 +810,16 @@ def glide_path(p0, p1, bend=BEND, samples=GLIDE_SAMPLES):
     return out
 
 
-def motion_keyframes(start, sched, seed=0):
+def motion_keyframes(start, sched, seed=0, straight=()):
     """[(x, y, ms)] for a tour sched [(x, y, arrive_ms, leave_ms)] from
     `start`: each hop an arc (glide_path, the side alternating), each stop
     held until it leaves. Linear keyframes between them read as one smooth
-    human motion."""
+    human motion. Hops into the indexes in `straight` are straight lines
+    (the cursor drawing a wall along its length)."""
     frames = [(start[0], start[1], 0)]
     pos, t = start, 0
     for k, (x, y, arrive, leave) in enumerate(sched):
-        bend = BEND if (seed + k) % 2 == 0 else -BEND
+        bend = 0.0 if k in straight else BEND if (seed + k) % 2 == 0 else -BEND
         for px, py, tau in glide_path(pos, (x, y), bend):
             frames.append((px, py, int(round(t + (arrive - t) * tau))))
         if leave > arrive:
@@ -975,12 +984,13 @@ def scan_points(anchor, rect, seed, n=3, radius=SCAN_RADIUS):
     return pts
 
 
-def place_tags(items, rect=None, gap=12.0, margin=4.0):
+def place_tags(items, rect=None, gap=12.0, margin=4.0, avoid=()):
     """Where each cursor's tag goes: [(dx, dy)] from its pointer tip, for
     items [(x, y, tag_w, tag_h)] in priority order. Right-below by default;
     flipped left / above when it would leave rect (l, t, r, b), and moved to
-    the next free spot when it would cover a tag placed before it."""
-    placed, out = [], []
+    the next free spot when it would cover a tag placed before it or one of
+    the `avoid` boxes (the bar)."""
+    placed, out = [tuple(a) for a in avoid or ()], []
     for x, y, w, h in items:
         spots = [(gap, gap), (-w - margin, gap), (gap, -h - margin), (-w - margin, -h - margin)]
         for k in (1, 2, 3):
@@ -1225,6 +1235,125 @@ def offscreen_markers(rect, points, margin=18.0):
     return out
 
 
+# ─── Cursor tags, parking, crew (v3; plan in t3lab-revit-api dev/plan/) ─────
+
+_TAG_STATE = {'waiting': '#F59E0B', 'failed': '#DC2626'}
+_TAG_GROUND = {'light': '#FFFFFF', 'dark': '#1E2430'}
+_TAG_INK = {'light': '#1F2937', 'dark': '#F8FAFC'}
+TAG_WASH = {'light': 46, 'dark': 110}       # >= 4.5:1 with the ink for every colour
+
+
+def tag_style(color, state='idle', theme='light'):
+    """(fill, border, ink) of a cursor tag: the agent colour as a pastel wash,
+    a 1 px border in the full colour and dark ink (light ink on a dark
+    theme). White text on the solid colour was 2.2-3.6:1 for 9 of 16 colours
+    (2026-11-25); this is 10:1 light, 6:1 dark. waiting = amber, failed = red."""
+    theme = 'dark' if theme == 'dark' else 'light'
+    base = _TAG_STATE.get(state, color)
+    return blend(base, _TAG_GROUND[theme], TAG_WASH[theme]), base, _TAG_INK[theme]
+
+
+_SINGULAR = {'Furniture': 'Furniture', 'Casework': 'Casework', 'Topography': 'Topography',
+             'Toposolid': 'Toposolid', 'Mass': 'Mass', 'Parking': 'Parking',
+             'Railings': 'Railing', 'Ceilings': 'Ceiling'}
+
+
+def singular(category):
+    """'Walls' -> 'Wall', 'Structural Columns' -> 'Structural Column',
+    'Assemblies' -> 'Assembly'; the last word only."""
+    words = '{}'.format(category or '').split()
+    if not words:
+        return ''
+    last = words[-1]
+    if last in _SINGULAR:
+        last = _SINGULAR[last]
+    elif last.endswith('ies') and len(last) > 4:
+        last = last[:-3] + 'y'
+    elif last.endswith('s') and not last.endswith('ss') and len(last) > 2:
+        last = last[:-1]
+    return ' '.join(words[:-1] + [last])
+
+
+def object_caption(items):
+    """What a call works on, as Mila's tags say it: 'Wall 3450 × 200' for one
+    element, 'Walls ×3' for several of one category, '' for a mix (the call
+    caption stays). items = [(category, size)]."""
+    items = [(c or '', s or '') for c, s in items or ()]
+    cats = set(c for c, _s in items)
+    if not items or len(cats) != 1 or not items[0][0]:
+        return ''
+    cat = items[0][0]
+    if len(items) == 1:
+        return '{} {}'.format(singular(cat), items[0][1]).strip()
+    return '{} \u00d7{}'.format(cat, len(items))
+
+
+def home_slot(rect, slot, gap=44.0, margin=28.0):
+    """Where a new cursor waits: down the left edge of rect (l, t, r, b), one
+    slot per agent, the next column when the edge is full. Mila's cursors
+    wait over empty paper; ours used to be born mid-view on top of the work."""
+    left, top, right, bottom = rect
+    rows = max(1, int((bottom - top - 2 * margin - 40) // gap))
+    col, row = divmod(max(0, slot), rows)
+    x = min(left + margin + col * 140.0, right - margin)
+    return (x, top + margin + 40 + row * gap)
+
+
+def spread_point(point, others, gap=SPREAD_GAP):
+    """`point`, or the nearest spot round it at least `gap` px from every
+    point in `others`: two agents on one element sit side by side."""
+    import math
+    others = list(others or ())
+
+    def clear(p):
+        return all(math.hypot(p[0] - o[0], p[1] - o[1]) >= gap for o in others)
+    if clear(point):
+        return point
+    for ring in (1, 2, 3):
+        for k in range(8):
+            ang = math.pi / 4.0 * k + (math.pi / 8.0 if ring % 2 == 0 else 0.0)
+            cand = (point[0] + ring * gap * math.cos(ang), point[1] + ring * gap * math.sin(ang))
+            if clear(cand):
+                return cand
+    return point
+
+
+def crew_groups(items, limit=CREW_MAX + 1):
+    """[(category, [item])] of box items (dicts with 'category'), in the
+    order the categories first appear; past `limit` groups the rest join the
+    first (the agent's own cursor). One group = no crew."""
+    order, groups = [], {}
+    for item in items or ():
+        cat = item.get('category') or ''
+        if cat not in groups:
+            order.append(cat)
+            groups[cat] = []
+        groups[cat].append(item)
+    out = [(c, groups[c]) for c in order]
+    if len(out) > limit:
+        head, rest = out[:limit], out[limit:]
+        head[0] = (head[0][0], head[0][1] + [i for _c, its in rest for i in its])
+        out = head
+    return out
+
+
+def crew_key(agent, category):
+    return '{}~crew~{}'.format(agent, category)
+
+
+def is_crew(key):
+    return '~crew~' in '{}'.format(key)
+
+
+def crew_style(agent, category, k):
+    """(tag, colour) of the k-th helper cursor (k >= 1): named after the work,
+    never a made-up person ("Claude · doors"), in a shade of the agent colour."""
+    tag, color = agent_style(agent)
+    shade = (blend(color, '#000000', 190) if k % 2 else blend(color, '#FFFFFF', 200))
+    work = '{}'.format(category or 'elements').strip().lower() or 'elements'
+    return ('{} \u00b7 {}'.format(tag, work), shade)
+
+
 # ─── HUD helpers (core/agent_cursors_overlay.py) ─────────────────────────────
 
 # state -> (label, palette key of its colour)
@@ -1232,6 +1361,7 @@ STATES = {
     'working': ('Working', 'warn'),
     'waiting': ('Waiting for your OK', 'warn'),
     'paused': ('Paused', 'info'),
+    'thinking': ('Waiting for the agent', 'info'),
     'idle': ('Idle', 'ok'),
 }
 
@@ -1252,7 +1382,7 @@ OPTION_GROUPS = (
     ('Show', ('model',)),
     ('View', ('follow', 'zoom', 'tile')),
     ('Selection', ('select',)),
-    ('Effects', ('glow', 'trail', 'ripple', 'labels')),
+    ('Effects', ('glow', 'trail', 'ripple', 'labels', 'crew')),
     ('Bar', ('keep',)),
 )
 
@@ -1420,13 +1550,28 @@ def count_bar(counts, width=COUNT_BAR_W, gap=1.0, minimum=3.0):
         pinned.update(small)
 
 
-def hud_state(working, waiting, asks, paused):
-    """working | waiting | paused | idle — what the bar's status pill says."""
+def hud_state(working, waiting, asks, paused, thinking=False):
+    """working | waiting | paused | thinking | idle — what the bar's status
+    pill says. thinking = between two calls of a session: the agent's model
+    is deciding its next step (Mila's "waiting for the model")."""
     if asks or waiting:
         return 'waiting'
     if paused:
         return 'paused'
-    return 'working' if working else 'idle'
+    if working:
+        return 'working'
+    return 'thinking' if thinking else 'idle'
+
+
+def last_step_text(seconds):
+    """'just now' · '7 s ago' · '25 s ago' (5 s steps from 10 s: the bar
+    redraws only when the text changes) · '3 min ago'."""
+    s = max(0, int(seconds))
+    if s < 2:
+        return 'just now'
+    if 10 <= s < 60:
+        s = s // 5 * 5
+    return '{} ago'.format(ago_text(s))
 
 
 def status_text(state, seconds=None):
@@ -1642,9 +1787,39 @@ def _shown_in(doc, view, ids):
         return set(ids)
 
 
+def _line_ends(elem, geo, persp, right, up):
+    """Screen px (start, end) of a line-based element (wall, beam, grid,
+    detail line) for the draw-along, else None."""
+    try:
+        curve = getattr(elem, 'Curve', None)        # grids, detail / model lines
+        if curve is None:
+            curve = getattr(elem.Location, 'Curve', None)
+        if curve is None or not curve.IsBound:
+            return None
+        ends = []
+        for k in (0, 1):
+            p = _xyz(curve.GetEndPoint(k))
+            ends.append(project_perspective(p, persp, geo['rect']) if persp else
+                        project(p, geo['origin'], right, up, geo['w'], geo['h'], geo['rect']))
+        if None in ends:
+            return None
+        return tuple(ends)
+    except Exception:
+        return None
+
+
+def _dimension_value(elem):
+    """'320' for a one-segment dimension (Mila: "cota 320"), else ''."""
+    try:
+        return '{}'.format(elem.ValueString or '') if elem.NumberOfSegments == 0 else ''
+    except Exception:
+        return ''
+
+
 def _boxes(doc, geo, ids):
-    """[{'id', 'box', 'size', 'label'}] of the ids shown in one view
-    (orthographic or perspective), at most MAX_TARGETS."""
+    """[{'id', 'box', 'size', 'label', 'category', 'line'}] of the ids shown
+    in one view (orthographic or perspective), at most MAX_TARGETS. line =
+    screen (start, end) of a line-based element, else None."""
     out = []
     persp = geo.get('persp')
     if not (geo.get('ortho') or persp) or not ids:
@@ -1690,8 +1865,9 @@ def _boxes(doc, geo, ids):
                 cat = elem.Category.Name if elem.Category is not None else ''
             except Exception:
                 cat = ''
-            out.append({'id': i, 'box': box, 'size': size_label(w, h),
-                        'label': badge_text(cat, size_label(w, h))})
+            size = (_dimension_value(elem) if cat == 'Dimensions' else '') or size_label(w, h)
+            out.append({'id': i, 'box': box, 'size': size, 'label': badge_text(cat, size),
+                        'category': cat, 'line': _line_ends(elem, geo, persp, right, up)})
         except Exception:
             continue
     return out
@@ -2238,7 +2414,8 @@ def before(app, task):
                     'working', agent, action, describe_call(tool, args, len(ids)), tool,
                     geos[active]['rect'], task_text=_task_text(task, agent),
                     targets=[b['box'] for b in boxes[:MAX_STOPS]],
-                    canvas=union_rect(shown + [st['rect'] for st in ui]), ui=ui)
+                    canvas=union_rect(shown + [st['rect'] for st in ui]), ui=ui,
+                    subject=object_caption([(b['category'], b['size']) for b in boxes]))
             elif _state.get('overlay') is not None:
                 # No view to draw in (no document, a view window too small):
                 # the bar, once it is up, still shows the call.

@@ -93,6 +93,9 @@ class Fake(metaclass=_Meta):
         self._handlers.append(handler)
         return self
 
+    def __iter__(self):
+        return iter(list(self._items))
+
     def Add(self, item):
         self._items.append(item)
 
@@ -293,12 +296,16 @@ def test_running_band():
     check('one agent: no agent mark on its band',
           not any(kind(n) == 'Path' for n in walk(band)))
     cur = ov._cursors['claude-desktop']
+    fill, edge, ink = AC.tag_style(AC.agent_style('claude-desktop')[1], 'working', ov._theme)
     check('cursor tag: the action icon only, in the tag\'s ink (no block, no colour)',
           cur['glyph'].Text == AC.action_style('create')[1]
-          and brush(cur['glyph'].Foreground)[0] == '#FFFFFF'
+          and brush(cur['glyph'].Foreground)[0] == ink
           and repr(cur['glyph'].Visibility) == 'Visibility.Visible'
           and 'chip' not in cur and cur['glyph'] in cur['pill'].Child.Children._items)
-    check('tag keeps no coloured edge', 'BorderBrush' not in cur['pill'].__dict__)
+    check('tag (v3 P1): pastel wash of the agent colour, 1 px border in it, dark ink',
+          brush(cur['pill'].Background) == (fill, 255) and brush(cur['pill'].BorderBrush)
+          == (AC.agent_style('claude-desktop')[1], 255)
+          and all(brush(cur[k].Foreground)[0] == ink for k in ('name', 'state')))
     check('a new cursor fades in and its tag grows out of the tip',
           frames(moves(cur['group'], OPACITY)) == [0.0, 1.0]
           and frames(moves(cur['pill'], SCALE_X)) == [0.6, 1.0] and 'new' not in cur)
@@ -404,20 +411,30 @@ def test_motion_on_change_only():
     callbacks = []
     ov.host = types.SimpleNamespace(callbacks={'idle': lambda: callbacks.append('idle')})
     ov._enter_summary()
+    cur = ov._cursors['claude-desktop']
+    others = [n for n in ov.canvas.Children._items if n is not cur['group']]
+    check('agents idle (v3 P3): the cursor parks dimmed, its name only; Glow off at once',
+          frames(moves(cur['group'], OPACITY)) == [1.0, AC.PARK_DIM] and callbacks == ['idle']
+          and cur['state'].Text == '' and repr(cur['glyph'].Visibility) == 'Visibility.Collapsed'
+          and ov.win.IsVisible is True and moves(ov.canvas, OPACITY) is None)
+    check('and everything else on the views fades out',
+          all(frames(moves(n, OPACITY))[-1] == 0.0 for n in others))
+    ov._summary -= AC.PARK_S
+    ov._on_tick(None, None)
     fade = moves(ov.canvas, OPACITY)
-    check('agents idle: the cursors fade out, Glow goes off at once',
-          frames(fade) == [1.0, 0.0] and callbacks == ['idle'] and ov._cursors
-          and ov.win.IsVisible is True)
+    check('parked PARK_S: the cursors fade out (owner, 2026-11-17: they never stay)',
+          frames(fade) == [1.0, 0.0] and ov._leaving is not None)
     ov.working('claude-desktop', 'read', 'Listing views', 'list_views', RECT, canvas=RECT)
-    check('a call during the fade keeps its cursor',
+    check('a call during the fade keeps its cursor, at full opacity',
           ov._leaving is None and moves(ov.canvas, OPACITY) is None and ov.canvas.Opacity == 1.0
-          and 'claude-desktop' in ov._cursors)
+          and 'claude-desktop' in ov._cursors and cur['group'].Opacity == 1.0)
     for handler in fade.Completed._handlers:
         handler(None, None)
     check('the stale fade does not clear the views afterwards',
           'claude-desktop' in ov._cursors and ov.win.IsVisible is True)
     finish(ov, 'claude-desktop', 'read', 'list_views')
     ov._enter_summary()
+    ov._fade_out()
     for handler in moves(ov.canvas, OPACITY).Completed._handlers:
         handler(None, None)
     check('fade finished: cursors and boxes gone, canvas window hidden',
@@ -961,6 +978,100 @@ def test_ui_route_sheets():
     check('a failed call with a route still ends on the bar', 'claude-desktop' not in ov._working)
 
 
+def test_v3_cursors():
+    print('[v3: home slot, object tag, stay put, thinking, draw-along, spread, last step, crew]')
+    AC.set_speed('calm')
+    ov = new_overlay()
+    ov.working('claude-desktop', 'read', 'Listing views', 'list_views', RECT, canvas=RECT)
+    cur = ov._cursors['claude-desktop']
+    check('P3: a new cursor waits in its home slot on the left edge, not mid-view',
+          (cur['tx'].X, cur['tx'].Y) == AC.home_slot(ov._bounds(), 0))
+    start = (cur['x'], cur['y'])
+    finish(ov, 'claude-desktop', 'read', 'list_views')
+    check('P4/B2: a call with nothing to point at: the cursor stays where it is',
+          (cur['x'], cur['y']) == start)
+    check('P4: right after the call the tag says what it did, no "thinking" yet',
+          cur['thinking'] is False and 'thinking' not in cur['state'].Text)
+    cur['shown_at'] -= AC.THINK_AFTER_S
+    ov._on_tick(None, None)
+    check('P4: a while after the call: "thinking", pulsing',
+          cur['thinking'] is True and cur['state'].Text.endswith('thinking\u2026')
+          and frames(moves(cur['state'], OPACITY)) == [1.0, 0.35, 1.0])
+    ov._feed[0]['t'] -= OV.BUSY_GAP_S + 1
+    check('P4: the bar says "Waiting for the agent" between calls, then Idle',
+          ov._state() == 'thinking')
+    ov._feed[0]['t'] -= AC.IDLE_HIDE_S
+    check('P4: ... and Idle once the agents count as idle', ov._state() == 'idle')
+    ov.working('claude-desktop', 'create', 'Creating wall', 'create_wall', RECT, canvas=RECT)
+    check('P4: the next call ends "thinking"',
+          cur['thinking'] is False and moves(cur['state'], OPACITY) is None)
+
+    wall = {'id': 1, 'box': (300.0, 200.0, 700.0, 220.0), 'size': '4000 \u00d7 200',
+            'label': 'Walls \u00b7 4000 \u00d7 200', 'category': 'Walls',
+            'line': ((300.0, 210.0), (700.0, 210.0))}
+    ov.show('claude-desktop', 'create', 'create_wall', False, snap([wall]),
+            created='Walls \u00d71 created', fresh=[1])
+    check('P2: the tag names the thing it made, as Mila\'s do',
+          cur['state'].Text == ' \u00b7 Wall 4000 \u00d7 200', cur['state'].Text)
+    along = [n for n in ov.canvas.Children._items if kind(n) == 'Line']
+    check('P5: a new wall is drawn along: a line from its start grows to its end',
+          len(along) == 1 and (along[0].X1, along[0].Y1, along[0].X2, along[0].Y2)
+          == (200.0, 160.0, 600.0, 160.0)
+          and frames(moves(along[0], SCALE_X))[-1] == 1.0)
+    xs = frames(moves(cur['tx'], MOVE_X))
+    ys = frames(moves(cur['tx'], MOVE_Y))
+    check('P5: the cursor visits start then end and rests on the end (straight, no arc)',
+          xs[-1] == 600.0 and 200.0 in xs and all(abs(y - 160.0) < 1e-6 for y in ys[-12:]),
+          (xs[-12:], ys[-12:]))
+    AC.set_option('trail', False)
+    ov2 = new_overlay()
+    ov2.show('claude-desktop', 'create', 'create_wall', False, snap([wall]))
+    check('P5: Trail off: no draw-along line',
+          not [n for n in ov2.canvas.Children._items if kind(n) == 'Line'])
+    AC.set_option('trail', True)
+
+    ov.working('codex', 'modify', 'Moving wall', 'move_element', RECT, canvas=RECT)
+    ov.show('codex', 'modify', 'move_element', False, snap([dict(wall, line=None)]))
+    other = ov._cursors['codex']
+    import math
+    check('P6: a second agent on the same element sits beside the first, not on it',
+          math.hypot(other['x'] - cur['x'], other['y'] - cur['y']) >= AC.SPREAD_GAP - 1e-6)
+
+    ov._goals['claude-desktop'] = 'Draw the plan'
+    ov._feed = [st for st in ov._feed if st['agent'] == 'claude-desktop']
+    ov._feed[0]['t'] = OV.time.time() - 23
+    ov._refresh_hud()
+    check('P7: the goal row says when the agent last did something',
+          any('last step 20 s ago' in t for t in texts(ov._full)), texts(ov._full))
+    check('P7: the bar redraws once that text would change',
+          not ov._stale_hud() and (ov._feed[0].__setitem__('t', ov._feed[0]['t'] - 10)
+                                   or ov._stale_hud()))
+
+    ov = new_overlay()
+    door = {'id': 2, 'box': (800.0, 400.0, 840.0, 440.0), 'size': '900 \u00d7 2100',
+            'label': 'Doors \u00b7 900 \u00d7 2100', 'category': 'Doors', 'line': None}
+    ov.show('claude-desktop', 'create', 'send_code_to_revit', False, snap([wall, door]))
+    helpers = [k for k in ov._cursors if AC.is_crew(k)]
+    check('P8: a call on two categories: one helper cursor for the second',
+          helpers == [AC.crew_key('claude-desktop', 'Doors')], list(ov._cursors))
+    helper = ov._cursors[helpers[0]] if helpers else {}
+    check('P8: the helper is named after the work, tours its own element, then fades',
+          helper and helper['name'].Text == 'Claude \u00b7 doors'
+          and helper['x'] == 720.0 and frames(moves(helper['group'], OPACITY))[-1] == 0.0)
+    check('P8: the agent keeps the first category and says so',
+          ov._cursors['claude-desktop']['state'].Text == ' \u00b7 Wall 4000 \u00d7 200')
+    ov.working('claude-desktop', 'read', 'Listing views', 'list_views', RECT, canvas=RECT)
+    check('P8: the next call of the agent takes its helpers away',
+          not [k for k in ov._cursors if AC.is_crew(k)])
+    AC.set_option('crew', False)
+    try:
+        ov = new_overlay()
+        ov.show('claude-desktop', 'create', 'send_code_to_revit', False, snap([wall, door]))
+        check('P8: Crew off: one cursor visits both', list(ov._cursors) == ['claude-desktop'])
+    finally:
+        AC.set_option('crew', True)
+
+
 if __name__ == '__main__':
     try:
         test_running_band()
@@ -976,6 +1087,7 @@ if __name__ == '__main__':
         test_ui_route_sheets()
         test_settings_window()
         test_ironpython_syntax()
+        test_v3_cursors()
     finally:
         shutil.rmtree(_TMP, ignore_errors=True)
     print()

@@ -20,7 +20,9 @@ from core.agent_cursors import (
     hud_state, motion_keyframes, motion_off, offscreen_markers, on_model, options,
     place_tags, plan_progress, read_board, scan_points, set_enabled, set_hud_offset,
     set_option, short_text, should_collapse, speed_factor, status_text, tour_schedule,
-    union_box, union_rect)
+    union_box, union_rect,
+    PARK_DIM, PARK_S, THINK_AFTER_S, crew_groups, crew_key, crew_style, home_slot,
+    is_crew, last_step_text, object_caption, spread_point, tag_style)
 
 
 class OverlayHost(object):
@@ -673,12 +675,18 @@ class _Overlay(object):
     def _state(self):
         # A run of calls stays "Working" in the gaps between them.
         recent = [st['t'] for st in self._feed[:1] if not st.get('kind')]
-        busy = self._working or bool(recent and time.time() - recent[0] < BUSY_GAP_S)
-        return hud_state(busy, self._waiting, self._asks, self._paused)
+        quiet = time.time() - recent[0] if recent else None
+        busy = self._working or bool(quiet is not None and quiet < BUSY_GAP_S)
+        # Then, until the agents count as idle: the agent's model is deciding (P4).
+        thinking = (quiet is not None and quiet < IDLE_HIDE_S and self._summary is None
+                    and self._replay is None)
+        return hud_state(busy, self._waiting, self._asks, self._paused, thinking)
 
     def _refresh_hud(self):
         from System.Windows import Visibility
         state = self._state()
+        self._drawn['state'] = state
+        self._drawn['ago'] = self._ago_texts()
         idle_s = time.time() - self._last if state == 'idle' else 0
         folded = should_collapse(self._folded, idle_s, self._hover, self._asks)
         self._full.Visibility = Visibility.Collapsed if folded else Visibility.Visible
@@ -842,10 +850,16 @@ class _Overlay(object):
             if len(agents) > 1:
                 label = u'{} · {}'.format(agent_style(agent)[0], label)
             right = None
+            parts = []
             if progress:
-                right = self._text(u'Step {}/{}'.format(min(progress[0] + 1, progress[1]),
-                                                        progress[1]),
-                                   11.5, bold=False, color=self._c('text2'))
+                parts.append(u'Step {}/{}'.format(min(progress[0] + 1, progress[1]),
+                                                  progress[1]))
+            ago = self._drawn.get('ago', {}).get(agent)
+            if ago:
+                parts.append(ago)               # P7: "last step 7 s ago"
+            if parts:
+                right = self._text(u' \u00b7 '.join(parts), 11.5, bold=False,
+                                   color=self._c('text2'))
             line = self._text(u'Goal · ' + short_text(label, 52), 11.5, bold=False,
                               color=self._c('text2'))
             full.Children.Add(self._line_row(line, right, 10))
@@ -1205,11 +1219,12 @@ class _Overlay(object):
 
     # ── cursors ──────────────────────────────────────────────────────────────
 
-    def _cursor(self, agent, action=None):
+    def _cursor(self, agent, action=None, style=None, at=None):
         """Minimal cursor (owner, 2026-11-17): a bare pointer tip in the
-        agent's colour and one tag, "Claude · Moving 12 walls". One per
+        agent's colour and one tag, "Claude · Wall 3450 × 200". One per
         agent: the action only changes the icon at the head of the tag (two
-        cursors of one agent sat on top of each other, 2026-11-17)."""
+        cursors of one agent sat on top of each other, 2026-11-17).
+        style = (tag, colour) for a crew cursor; at = where it starts."""
         cur = self._cursors.get(agent)
         if cur is not None:
             if action:
@@ -1220,7 +1235,8 @@ class _Overlay(object):
         from System.Windows.Media import TranslateTransform, ScaleTransform, Geometry
         from System.Windows.Media.Effects import DropShadowEffect
         from System.Windows.Shapes import Path, Ellipse
-        tag, color = agent_style(agent)
+        tag, color = style or agent_style(agent)
+        fill, edge, ink = tag_style(color, 'idle', self._theme)
 
         group = Canvas()
         arrow = Path()
@@ -1235,18 +1251,22 @@ class _Overlay(object):
 
         spin = Ellipse()                    # pulses in the tag while the call runs
         spin.Width = spin.Height = 6
-        spin.Fill = self._brush('#FFFFFF')
+        spin.Fill = self._brush(ink)
         spin.Margin = Thickness(0, 0, 5, 0)
         spin.Visibility = Visibility.Collapsed
-        glyph = self._text('', 10, color='#FFFFFF', glyph=True)     # the action (_accent)
+        glyph = self._text('', 10, color=ink, glyph=True)     # the action (_accent)
         glyph.Margin = Thickness(0, 0, 5, 0)
         glyph.Visibility = Visibility.Collapsed
-        name = self._text(tag, 11, color='#FFFFFF')
-        state = self._text('', 11, bold=False, color='#FFFFFF')     # " · what it does"
+        name = self._text(tag, 11, color=ink)
+        state = self._text('', 11, bold=False, color=ink)     # " · what it does"
         pill = Border()
         pill.CornerRadius = CornerRadius(6)
-        pill.Padding = Thickness(7, 1, 7, 2)
-        pill.Background = self._brush(color)
+        pill.Padding = Thickness(6, 0, 6, 1)
+        # Pastel wash + 1 px border in the agent colour + dark ink (tag_style):
+        # white on the solid colour failed 4.5:1 for 9 of 16 colours.
+        pill.Background = self._brush(fill)
+        pill.BorderBrush = self._brush(edge)
+        pill.BorderThickness = Thickness(1)
         pill.Child = self._row(spin, glyph, name, state)
         Canvas.SetLeft(pill, 12)
         Canvas.SetTop(pill, 12)
@@ -1255,16 +1275,19 @@ class _Overlay(object):
         tx = TranslateTransform()
         group.RenderTransform = tx
         self.canvas.Children.Add(group)
-        # A new cursor starts mid-view (a little apart per agent), not in a corner.
-        slot = len(self._cursors)
-        x, y = 40.0 + 36 * slot, 40.0 + 24 * slot
+        # A new cursor waits in a slot down the left edge (home_slot), not
+        # mid-view on top of the work (B3); a crew cursor starts at its agent.
+        slot = len([k for k in self._cursors if not is_crew(k)])
+        x, y = 40.0, 80.0 + 44 * slot
         bounds = self._bounds()
-        if bounds is not None:
-            x = (bounds[0] + bounds[2]) / 2.0 + 36 * slot
-            y = (bounds[1] + bounds[3]) / 2.0 + 24 * slot
+        if at is not None:
+            x, y = at
+        elif bounds is not None:
+            x, y = home_slot(bounds, slot)
         cur = {'group': group, 'tx': tx, 'press': press, 'spin': spin, 'pill': pill,
-               'glyph': glyph, 'name': name, 'state': state, 'color': color,
-               'caption': '', 'x': x, 'y': y, 'action': None, 'new': True}
+               'glyph': glyph, 'name': name, 'state': state, 'color': color, 'tag': tag,
+               'caption': '', 'x': x, 'y': y, 'action': None, 'new': True,
+               'shown_at': None, 'thinking': False}
         tx.X, tx.Y = cur['x'], cur['y']
         self._cursors[agent] = cur
         if action:
@@ -1323,9 +1346,116 @@ class _Overlay(object):
             except Exception:
                 w, h = 160.0, 20.0
             items.append((cur['x'], cur['y'], w, h))
-        for key, (dx, dy) in zip(keys, place_tags(items, self._bounds())):
+        for key, (dx, dy) in zip(keys, place_tags(items, self._bounds(),
+                                                   avoid=self._hud_local())):
             Canvas.SetLeft(self._cursors[key]['pill'], dx)
             Canvas.SetTop(self._cursors[key]['pill'], dy)
+
+    def _others(self, agent):
+        """Where the other agents' cursors stand (B4: spread_point)."""
+        return [self._at(c) for k, c in self._cursors.items()
+                if k != agent and not is_crew(k)]
+
+    def _hud_local(self):
+        """[the bar's box in canvas DIP] while it is on screen, else [] (B6:
+        a tag never lands behind the bar)."""
+        try:
+            if not self.hud.IsVisible:
+                return []
+            x = float(self.hud.Left) - float(self.win.Left)
+            y = float(self.hud.Top) - float(self.win.Top)
+            w, h = float(self.hud.ActualWidth), float(self.hud.ActualHeight)
+            if not (w > 0 and h > 0):
+                return []
+            return [(x, y, x + w, y + h)]
+        except Exception:
+            return []
+
+    def _think(self, cur):
+        """Between two calls: the cursor stays where it is and its tag says
+        "thinking" with a soft pulse (B2: it used to scan random points).
+        Mila's "waiting for the model"."""
+        if cur.get('thinking'):
+            return
+        cur['thinking'] = True
+        cur['state'].Text = u' \u00b7 thinking\u2026'
+        if not self._reduce():
+            from System.Windows.Media.Animation import RepeatBehavior
+            anim = self._anim(((1.0, 0), (0.35, 600), (1.0, 1200)))
+            anim.RepeatBehavior = RepeatBehavior.Forever
+            cur['state'].BeginAnimation(_opacity_property(), anim)
+
+    def _park(self, cur):
+        """Agents idle: the cursor stays beside its last work, dimmed, the tag
+        its name only (Mila's authorship map); it leaves after PARK_S."""
+        from System.Windows import Visibility
+        self._cursor_state(cur, 'idle', '')
+        cur['shown_at'] = None
+        cur['state'].Text = ''
+        cur['glyph'].Visibility = Visibility.Collapsed
+        cur['action'] = None
+        group = cur['group']
+        group.BeginAnimation(_opacity_property(), None)
+        if self._reduce():
+            group.Opacity = PARK_DIM
+        else:
+            group.BeginAnimation(_opacity_property(),
+                                 self._anim(((1.0, 0), (PARK_DIM, 420))))
+
+    def _drop_crew(self, agent=None):
+        """Take the crew cursors of `agent` (None: all) off the canvas."""
+        for key in [k for k in self._cursors if is_crew(k)
+                    and (agent is None or k.startswith(u'{}~crew~'.format(agent)))]:
+            cur = self._cursors.pop(key)
+            cur['group'].BeginAnimation(_opacity_property(), None)
+            self.canvas.Children.Remove(cur['group'])
+
+    def _draw_along(self, p0, p1, color, start_ms, ms, hold_ms):
+        """A line that grows from p0 to p1 behind the cursor while it glides
+        along a new wall / beam / grid (Mila: the wall grows from the cursor)."""
+        from System.Windows.Shapes import Line
+        line = Line()
+        line.X1, line.Y1, line.X2, line.Y2 = p0[0], p0[1], p1[0], p1[1]
+        line.Stroke = self._brush(color, 220)
+        line.StrokeThickness = 3
+        self.canvas.Children.Insert(0, line)
+        ms = max(1, int(ms))
+        self._scale_anim(line, p0[0], p0[1], ((0.0, 0), (0.0, start_ms), (1.0, start_ms + ms)))
+        end = start_ms + ms + hold_ms
+        line.BeginAnimation(_opacity_property(), self._anim(
+            ((1.0, 0), (1.0, end), (0.0, end + 600)), self._remover(line)))
+
+    def _crew(self, agent, action, groups, here, hold, failed):
+        """Crew (P8): each further category of one call gets a helper cursor
+        in a shade of the agent colour, named after the work, that tours its
+        own boxes at the same time and leaves after the step. Revit ran the
+        call as one; the helpers only split what it touched."""
+        acolor = action_style(action)[2]
+        reduce = self._reduce()
+        fx = self._effects()
+        for k, (cat, items) in enumerate(groups, 1):
+            key = crew_key(agent, cat)
+            cur = self._cursor(key, action, style=crew_style(agent, cat, k), at=here)
+            self._cursor_state(cur, 'failed' if failed else 'idle', object_caption(
+                [(i.get('category'), i['size']) for i in items]))
+            cur['shown_at'] = None          # helpers never "think"
+            boxes = [self._local(i['box']) for i in items[:MAX_STOPS]]
+            pts = [((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0) for b in boxes]
+            sched = self._ui_schedule(['box'] * len(pts), pts)
+            for b, item, st in zip(boxes, items, sched):
+                self._draw_box(b[0], b[1], b[2], b[3], item.get('label') or item['size'],
+                               action, st[2], fresh=True)
+            if not reduce and fx['trail']:
+                self._trail(here[0], here[1], pts[0][0], pts[0][1], acolor, -BEND)
+            self._tour(cur, sched, seed=k)
+            if not reduce and fx['ripple']:
+                for x, y, arrive, _leave in sched:
+                    self._ripple(x, y, acolor, arrive)
+                self._press(cur, [st[2] for st in sched])
+            self._wake(cur)
+            end = sched[-1][3] + hold
+            cur['group'].BeginAnimation(_opacity_property(), self._anim(
+                ((1.0, 0), (1.0, end), (0.0, end + 500))))
 
     def _cursor_state(self, cur, state, caption=None):
         """idle | working (spinner) | waiting (amber, pulsing) | failed (red);
@@ -1336,9 +1466,14 @@ class _Overlay(object):
         pill.Opacity = 1.0
         spin.BeginAnimation(_opacity_property(), None)
         spin.Visibility = Visibility.Collapsed
-        pill.Background = self._brush({'waiting': '#F59E0B', 'failed': '#DC2626'}.get(
-            state, cur['color']))
-        ink = '#1F2937' if state == 'waiting' else '#FFFFFF'
+        cur['state'].BeginAnimation(_opacity_property(), None)
+        cur['state'].Opacity = 1.0
+        cur['thinking'] = False
+        cur['shown_at'] = time.time() if state in ('idle', 'failed') else None
+        fill, edge, ink = tag_style(cur['color'], state, self._theme)
+        pill.Background = self._brush(fill)
+        pill.BorderBrush = self._brush(edge)
+        spin.Fill = self._brush(ink)
         for part in ('glyph', 'name', 'state'):
             cur[part].Foreground = self._brush(ink)
         if state == 'waiting':
@@ -1360,7 +1495,7 @@ class _Overlay(object):
             anim.RepeatBehavior = RepeatBehavior.Forever
             pill.BeginAnimation(_opacity_property(), anim)
 
-    def _tour(self, cur, sched, shake=False, seed=0):
+    def _tour(self, cur, sched, shake=False, seed=0, straight=()):
         """Glide through sched [(x, y, arrive_ms, leave_ms)] like a hand on a
         mouse: each hop a gentle arc on a minimum-jerk profile
         (motion_keyframes), one keyframe path per axis (a second
@@ -1373,7 +1508,7 @@ class _Overlay(object):
         def at(ms):
             return KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(ms))
         start = self._at(cur)
-        path = motion_keyframes(start, sched, seed)
+        path = motion_keyframes(start, sched, seed, straight)
         for axis, prop in ((0, TranslateTransform.XProperty), (1, TranslateTransform.YProperty)):
             anim = DoubleAnimationUsingKeyFrames()
             for frame in path:
@@ -1782,12 +1917,14 @@ class _Overlay(object):
         self._timer.Start()
 
     def working(self, agent, action, caption, tool_name, rect, task_text='',
-                targets=(), canvas=None, ui=()):
+                targets=(), canvas=None, ui=(), subject=''):
         """A call has started: spin, say "Working", count the seconds. With a
         plan, the cursor names the current task and the call goes underneath.
         targets = screen boxes of the elements the call names: framed until
         it ends, the cursor goes to the first. None: the cursor stays where
-        it last worked. rect None = no view to draw in: the bar only."""
+        it last worked. rect None = no view to draw in: the bar only.
+        subject = what the targets are ("Wall 3450 × 200", object_caption):
+        the cursor tag says it, the bar keeps the call caption."""
         self._end_summary()
         self._stop_replay()             # a live call wins over a replay
         if task_text:
@@ -1798,7 +1935,8 @@ class _Overlay(object):
             self._bar_only()            # the default: the bar, nothing on the model
         elif rect is not None:
             try:
-                self._draw_working(agent, action, caption, rect, targets, canvas, ui)
+                self._draw_working(agent, action, subject or caption, rect, targets, canvas,
+                                   ui)
             except Exception:
                 pass            # the drawing is decoration: the bar still says Working
         self._last = time.time()
@@ -1810,6 +1948,7 @@ class _Overlay(object):
         (framed until it ends), then Properties for an edit."""
         if canvas or not self.win.IsVisible or self._origin == (0.0, 0.0):
             self._place(canvas or rect)
+        self._drop_crew(agent)
         cur = self._cursor(agent, action)
         self._cursor_state(cur, 'working', caption)
         self._wake(cur)
@@ -1833,6 +1972,7 @@ class _Overlay(object):
                 points.append(self._ui_local(st)[0])
                 panes.append((len(points) - 1, st))
         if points:
+            points[-1] = spread_point(points[-1], self._others(agent))
             reduce = self._reduce()
             sched = self._ui_schedule(kinds, points)
             seed = self._actions
@@ -2009,13 +2149,13 @@ class _Overlay(object):
 
     def _effects(self):
         """The Effects switches for the call being drawn, read once per call:
-        {'trail', 'ripple', 'labels'} (agent_cursors.OPTIONS; on when unreadable).
+        {'trail', 'ripple', 'labels', 'crew'} (agent_cursors.OPTIONS; on when unreadable).
         Glow is the main thread's (agent_cursors_glow)."""
         try:
             opts = options()
         except Exception:
             opts = {}
-        self._fx = dict((name, bool(opts.get(name, True))) for name in ('trail', 'ripple', 'labels'))
+        self._fx = dict((name, bool(opts.get(name, True))) for name in ('trail', 'ripple', 'labels', 'crew'))
         return self._fx
 
     def _reduce(self):
@@ -2124,6 +2264,7 @@ class _Overlay(object):
         f = speed_factor()
         reduce = self._reduce()
         fx = self._effects()
+        self._drop_crew(agent)
         cur = self._cursor(agent, action)
         self._clear_focus(agent)
         self._cursor_state(cur, 'failed' if failed else 'idle', caption)
@@ -2142,6 +2283,21 @@ class _Overlay(object):
                 b = self._local(item['box'])
                 stops.append((((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0), 'gone', b, item))
             ghosts.extend(geo['ghosts'])
+        # Crew (P8): a call on several categories sends a helper per further
+        # category; this cursor keeps the first.
+        crew = []
+        if fx['crew'] and not failed and action in ('create', 'modify', 'delete'):
+            groups = crew_groups([st[3] for st in stops if st[1] == 'box'])
+            if len(groups) > 1:
+                mine = set(id(i) for i in groups[0][1])
+                crew = groups[1:]
+                stops = [st for st in stops if st[1] != 'box' or id(st[3]) in mine]
+        # The tag names the thing, as Mila's do: "Wall 3450 × 200" (P2).
+        if not failed and action in ('create', 'modify', 'delete'):
+            subject = object_caption([(st[3].get('category'), st[3]['size'])
+                                      for st in stops if st[1] == 'box'])
+            if subject:
+                self._cursor_state(cur, 'idle', subject)
         boxes = [st for st in stops if st[1] == 'box']
         fresh_ids = set(fresh)
         fresh_boxes = [st[2] for st in boxes if st[3].get('id') in fresh_ids]
@@ -2160,8 +2316,22 @@ class _Overlay(object):
         head_pts = [self._ui_local(st)[0] for st in head]
         if head_pts and abs(head_pts[0][0] - here[0]) + abs(head_pts[0][1] - here[1]) < 30:
             head, head_pts = head[1:], head_pts[1:]
+        # Draw-along (P5): a new wall / beam / grid is visited start then end,
+        # straight, with a line growing behind the cursor.
+        along = action == 'create' and not failed and not reduce and fx['trail']
+        lines, arrive_at = [], []
         if stops:
-            points = [st[0] for st in stops[:MAX_STOPS]]
+            points = []
+            for st in stops[:MAX_STOPS]:
+                ends = st[3].get('line') if along and st[1] == 'box' else None
+                if ends:
+                    a = self._local((ends[0][0], ends[0][1], ends[0][0], ends[0][1]))[:2]
+                    b = self._local((ends[1][0], ends[1][1], ends[1][0], ends[1][1]))[:2]
+                    points.extend([a, b])
+                    lines.append((len(points) - 2, a, b))
+                else:
+                    points.append(st[0])
+                arrive_at.append(len(points) - 1)
         elif ui and followed:
             # The view it opened (a new sheet): into it, as a double-click would.
             points = [((active_local[0] + active_local[2]) / 2.0,
@@ -2171,12 +2341,11 @@ class _Overlay(object):
             if not head_pts:        # already there: it clicks again as the call lands
                 head, head_pts = [ui[0]], [self._ui_local(ui[0])[0]]
         else:
-            # Nothing to point at (a read, a list, a review): a small scan
-            # next to where this cursor last worked, not across the view.
-            slot = sorted(self._cursors).index(agent)
-            n = 1 if failed or reduce else (3 if action in ('read', 'view', 'export', 'code') else 2)
-            points = scan_points((cur['x'], cur['y']), active_local,
-                                 self._actions * 31 + slot * 7 + 1, n)
+            # Nothing to point at (a read, a list, a review): the cursor stays
+            # where it last worked and clicks once (B2: no random hops).
+            points = scan_points((cur['x'], cur['y']), active_local, 0, 1)
+        if points:
+            points[-1] = spread_point(points[-1], self._others(agent))     # B4
         all_pts = head_pts + points
         sched = self._ui_schedule(['ui'] * len(head_pts) + ['box'] * len(points), all_pts)
         ui_sched, sched_all = sched[:len(head_pts)], sched
@@ -2187,7 +2356,8 @@ class _Overlay(object):
         change_by_id = dict(changes)
         clash_ids = dict(clashes)
         for k, (_pt, kind, b, item) in enumerate(stops):
-            arrive = sched[min(k, len(sched) - 1)][2]
+            at = arrive_at[k] if k < len(arrive_at) else len(sched) - 1
+            arrive = sched[min(at, len(sched) - 1)][2]
             if kind == 'box':
                 self._draw_box(b[0], b[1], b[2], b[3], item.get('label') or item['size'],
                                action, arrive,
@@ -2219,14 +2389,21 @@ class _Overlay(object):
         if not reduce and fx['trail']:
             self._trail(here[0], here[1], all_pts[0][0], all_pts[0][1], acolor,
                         BEND if seed % 2 == 0 else -BEND)
-        self._tour(cur, sched_all, shake=failed and not reduce, seed=seed)
-        self._layout_tags(agent)
+        for ia, a, b in lines:
+            if ia + 1 < len(sched):
+                start = sched[ia][3]
+                self._draw_along(a, b, acolor, start, sched[ia + 1][2] - start, hold)
+        straight = set(len(head_pts) + ia + 1 for ia, _a, _b in lines)
+        self._tour(cur, sched_all, shake=failed and not reduce, seed=seed, straight=straight)
         if not reduce and fx['ripple']:
             ring = '#DC2626' if failed else acolor
             for x, y, arrive, _leave in sched_all:
                 self._ripple(x, y, ring, arrive)
             self._press(cur, [st[2] for st in sched_all])
         self._wake(cur)
+        if crew:
+            self._crew(agent, action, crew, here, hold, failed)
+        self._layout_tags(agent)
 
     def _log_step(self, agent, action, tool_name, failed, caption, detail, changes, clashes,
                   record):
@@ -2370,15 +2547,38 @@ class _Overlay(object):
             return False
 
     def _enter_summary(self, keep=False):
-        """Agents idle: cursors, boxes and Glow leave (owner, 2026-11-17: they
-        stayed after the agent stopped); the bar lists each agent's counts
-        and Keep bar keeps only the bar (folded). They fade out; a call that
+        """Agents idle: boxes, effects and Glow leave at once; each cursor
+        parks beside its last work, dimmed, its name only, for PARK_S, then
+        leaves too (owner, 2026-11-17: they must not stay after the agent
+        stopped; v3 P3: a short authorship map first). The bar lists each
+        agent's counts and Keep bar keeps only the bar (folded). A call that
         arrives meanwhile keeps them (_end_summary)."""
         self._summary = time.time()
         self._resting = keep
         fn = (self.host.callbacks if self.host is not None else {}).get('idle')
         if fn is not None:
             fn()                        # Glow off the model (main thread)
+        self._drop_crew()
+        if not self._cursors:
+            self._leave()
+            return
+        groups = [c['group'] for c in self._cursors.values()]
+        reduce = self._reduce()
+        for child in list(self.canvas.Children):
+            if any(child is g for g in groups):
+                continue
+            if reduce:
+                self.canvas.Children.Remove(child)
+            else:
+                child.BeginAnimation(_opacity_property(), self._anim(
+                    ((1.0, 0), (0.0, 420)), self._remover(child)))
+        for cur in self._cursors.values():
+            self._park(cur)
+
+    def _fade_out(self):
+        """Parked long enough: the cursors fade, then the canvas goes."""
+        if self._leaving is not None:
+            return
         if self._reduce() or not self._cursors:
             self._leave()
             return
@@ -2510,8 +2710,13 @@ class _Overlay(object):
             if self._working or self._waiting or self._asks or self._replay is not None:
                 self._last = now
                 return
-            if self.hud.IsVisible and self._fold_due():
-                self._refresh_hud()             # idle long enough: fold to one line
+            for key, cur in list(self._cursors.items()):
+                # A call ended a while ago and no next one yet: "thinking" (P4).
+                if (self._summary is None and not cur.get('thinking') and cur.get('shown_at')
+                        and now - cur['shown_at'] >= THINK_AFTER_S and not is_crew(key)):
+                    self._think(cur)
+            if self.hud.IsVisible and (self._fold_due() or self._stale_hud()):
+                self._refresh_hud()             # folded / status or "ago" text moved on
             if self.hud.IsMouseOver:
                 self._last = now            # reading the HUD / toggling
                 if self._summary is not None:
@@ -2519,6 +2724,8 @@ class _Overlay(object):
             elif self._summary is not None:
                 if now - self._summary >= SUMMARY_S and not self._keep():
                     self.hide()
+                elif self._cursors and now - self._summary >= PARK_S:
+                    self._fade_out()            # parked long enough (P3)
             elif now - self._last >= IDLE_HIDE_S:
                 keep = self._keep()
                 if self._actions or keep:
@@ -2528,6 +2735,24 @@ class _Overlay(object):
                     self.hide()
         except Exception:
             pass
+
+    def _stale_hud(self):
+        """The status pill or a "last step … ago" text would read differently
+        now than when the bar was drawn."""
+        return (self._drawn.get('state') != self._state()
+                or self._drawn.get('ago') != self._ago_texts())
+
+    def _ago_texts(self):
+        """{agent: 'last step 7 s ago'} for the agents with a goal or a plan (P7)."""
+        out = {}
+        now = time.time()
+        for agent in self._agents():
+            if not (self._goals.get(agent) or plan_progress(self._plans.get(agent))):
+                continue
+            last = [st['t'] for st in self._feed if st.get('agent') == agent and not st.get('kind')]
+            if last:
+                out[agent] = u'last step ' + last_step_text(now - last[0])
+        return out
 
     def _fold_due(self):
         from System.Windows import Visibility
